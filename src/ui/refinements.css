@@ -1,12 +1,42 @@
 /* Viewport-aware desktop board: keep the end-turn controls near the battlefield. */
 @media (min-width: 1091px) {
-  .hj-game { --desktop-board: clamp(340px, calc((100dvh - 550px) * .692307 + 43px), 510px); }
-  .hj-game .game-container { max-width: calc(var(--desktop-board) + 560px); }
-  .hj-game .play-layout { grid-template-columns: 228px var(--desktop-board) 248px; gap: 20px; }
-  .hj-game .piece strong { font-size: clamp(18px, calc(var(--desktop-board) * .052), 25px); }
-  .hj-game .large-piece .piece strong { font-size: 34px; }
-  .hj-game .site-header { padding-inline: max(24px, calc((100% - var(--desktop-board) - 516px) / 2)); }
+  .hj-game {
+    --desktop-board: clamp(340px, calc((100dvh - 550px) * 0.692307 + 43px), 510px);
+  }
+  .hj-game .game-container {
+    max-width: calc(var(--desktop-board) + 560px);
+  }
+  .hj-game .play-layout {
+    grid-template-columns: 228px var(--desktop-board) 248px;
+    gap: 20px;
+  }
+  .hj-game .piece strong {
+    font-size: clamp(18px, calc(var(--desktop-board) * 0.052), 25px);
+  }
+  .hj-game .large-piece .piece strong {
+    font-size: 34px;
+  }
+  .hj-game .site-header {
+    padding-inline: max(24px, calc((100% - var(--desktop-board) - 516px) / 2));
+  }
 }
-.hj-game .ability-copy, .hj-game .codex-card > p, .hj-game .rule-steps p { color: #64755f; }
-.hj-game .hand-card-main p, .hj-game .battle-log li { color: #748369; }
-.hj-game .board-legend, .hj-game .row-labels, .hj-game .column-labels { color: #7b886e; }
+.hj-game .ability-copy,
+.hj-game .codex-card > p,
+.hj-game .rule-steps p {
+  color: #64755f;
+}
+.hj-game .hand-card-main p,
+.hj-game .battle-log li {
+  color: #748369;
+}
+.hj-game .board-legend,
+.hj-game .row-labels,
+.hj-game .column-labels {
+  color: #7b886e;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hj-game .shot-core {
+    display: none;
+  }
+}

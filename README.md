@@ -67,6 +67,8 @@ docs/             规则契约与架构/嵌入说明
 
 ## 验证
 
+源码使用Prettier统一格式化；`npm run format`整理源码，`npm run format:check`检查格式。
+
 ```bash
 npm run check        # TypeScript严格检查
 npm test             # 棋子、回合、寻路、特殊结算、随机性和存档行为

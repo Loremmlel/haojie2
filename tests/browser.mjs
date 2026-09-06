@@ -6,19 +6,32 @@ import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 
 await mkdir('artifacts', { recursive: true });
-assert.deepEqual(await readdir('dist'), ['index.html'], 'Production output must be exactly one HTML');
+assert.deepEqual(
+  await readdir('dist'),
+  ['index.html'],
+  'Production output must be exactly one HTML',
+);
 const html = await readFile('dist/index.html', 'utf8');
 assert.doesNotMatch(html, /<script[^>]+src\s*=|<link[^>]+rel=["']stylesheet/i);
-const executablePath = process.env.BROWSER_PATH || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
-const browser = await chromium.launch({ executablePath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+const executablePath =
+  process.env.BROWSER_PATH || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
+const browser = await chromium.launch({
+  executablePath,
+  headless: true,
+  args: ['--no-sandbox', '--disable-dev-shm-usage'],
+});
 const url = pathToFileURL(resolve('dist/index.html')).href;
-const checks = [], errors = [], network = [];
+const checks = [],
+  errors = [],
+  network = [];
 async function open(viewport, reducedMotion = 'no-preference') {
   const context = await browser.newContext({ viewport, reducedMotion, acceptDownloads: true });
   await context.setOffline(true);
   const page = await context.newPage();
-  page.on('pageerror', error => errors.push(error.message));
-  page.on('request', request => { if (/^https?:/.test(request.url())) network.push(request.url()); });
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('request', (request) => {
+    if (/^https?:/.test(request.url())) network.push(request.url());
+  });
   await page.goto(url);
   await page.getByRole('heading', { name: '豪杰棋局II' }).waitFor();
   assert.equal(await page.getByRole('gridcell').count(), 117);
@@ -38,7 +51,7 @@ try {
   await page.locator('[data-cell="3,7"]').click();
   assert.match(await page.locator('[data-cell="6,6"]').getAttribute('aria-label'), /35生命/);
   assert.match(await page.locator('[data-cell="3,7"]').getAttribute('aria-label'), /空格/);
-  assert.ok(await page.locator('.effects-layer .fx').count() > 0);
+  assert.ok((await page.locator('.effects-layer .fx').count()) > 0);
   checks.push('attack targeting, kill growth, death retaliation and visual events');
   await page.getByRole('button', { name: '悔棋', exact: true }).click();
   assert.match(await page.locator('[data-cell="6,6"]').getAttribute('aria-label'), /45生命/);
@@ -93,7 +106,10 @@ try {
   await context.close();
   const mobile = await open({ width: 390, height: 844 }, 'reduce');
   await demo(mobile.page);
-  assert.equal(await mobile.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.equal(
+    await mobile.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    true,
+  );
   await mobile.page.screenshot({ path: 'artifacts/mobile.png', fullPage: true });
   await mobile.page.getByRole('button', { name: '攻击', exact: true }).click();
   await mobile.page.locator('[data-cell="3,7"]').click();
@@ -103,7 +119,12 @@ try {
   assert.deepEqual(network, [], 'Offline HTML must never request network resources');
   assert.deepEqual(errors, [], 'No uncaught browser exceptions');
   checks.push('zero external network requests and zero uncaught browser exceptions');
-  await writeFile('artifacts/browser-report.json', JSON.stringify({ passed: checks, errors, externalRequests: network }, null, 2));
+  await writeFile(
+    'artifacts/browser-report.json',
+    JSON.stringify({ passed: checks, errors, externalRequests: network }, null, 2),
+  );
   console.log(`Browser acceptance passed: ${checks.length} scenarios`);
   for (const check of checks) console.log(`  ✓ ${check}`);
-} finally { await browser.close(); }
+} finally {
+  await browser.close();
+}
