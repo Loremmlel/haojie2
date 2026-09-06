@@ -25,7 +25,7 @@ export interface GameEvent {
 }
 export interface GameState {
   version: 1; seed: number; rng: number; serial: number; ply: number; active: Player;
-  turns: Record<Player, number>; bases: Record<Player, number>;
+  turns: Record<Player, number>; bases: Record<Player, number>; baseEffects: Record<Player, Effect[]>;
   hands: Record<Player, Card[]>; bonus: Record<Player, number>;
   deployRows: Record<Player, number[]>; units: Unit[]; pending: Reaction[];
   log: string[]; events: GameEvent[]; winner?: Player | 'draw';
