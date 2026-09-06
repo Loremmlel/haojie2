@@ -7,7 +7,10 @@ export function ensure(condition: unknown, message: string): asserts condition {
 export const faction = (p: Player) => p === 1 ? '苍穹方' : '赤焰方';
 export const activeEffect = (s: GameState, e: Effect) => e.from <= s.ply && e.until > s.ply;
 export function emit(s: GameState, event: Omit<GameEvent, 'id'>, message?: string): void {
-  s.events.push({ ...event, id: `e${s.serial++}` });
+  const snapshot = { ...event, id: `e${s.serial++}` };
+  if (event.from) snapshot.from = { x:event.from.x, y:event.from.y };
+  if (event.to) snapshot.to = { x:event.to.x, y:event.to.y };
+  s.events.push(snapshot);
   if (message) { s.log.push(`${s.ply} · ${message}`); if (s.log.length > 160) s.log.shift(); }
 }
 /** Xorshift32 is part of the saved state. Undo restores randomness, too. */
@@ -18,7 +21,7 @@ export function random(s: GameState): number {
 }
 export function template(kind: Kind, owner: Player, born: number, at: Point, id = 'preview'): Unit {
   const d = definition(kind);
-  return { id, kind, owner, ...at, hp:d.health, maxHp:d.health, born, spent:0, attacked:[], charge:0,
+  return { id, kind, owner, x:at.x, y:at.y, hp:d.health, maxHp:d.health, born, spent:0, attacked:[], charge:0,
     lastCharge:-1, fired:false, upgrades:0, kills:0, attackBonus:0, rangeBonus:0, guardUsed:false, effects:[] };
 }
 export function addUnit(s: GameState, kind: Kind, owner: Player, at: Point): Unit {
