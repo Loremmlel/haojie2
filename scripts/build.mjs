@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { mkdir, writeFile, readdir } from 'node:fs/promises';
+import { mkdir, writeFile, readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -16,12 +16,14 @@ export async function buildGame() {
   const styles = result.outputFiles.find(f => f.path.endsWith('.css'))?.text ?? '';
   if (!script || result.outputFiles.some(f => !/\.(js|css)$/.test(f.path))) throw new Error('Build must contain only one script and inline styles.');
   if (Object.values(result.metafile.outputs).some(o => o.imports.some(i => i.external))) throw new Error('External runtime imports are forbidden.');
+  const notices = await Promise.all(['react', 'react-dom', 'scheduler'].map(async name => `${name}\n${await readFile(`node_modules/${name}/LICENSE`, 'utf8')}`));
   const html = `<!doctype html>
 <html lang="zh-CN"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#f5f4ef">
 <meta name="description" content="豪杰棋局：26种棋子、117格战场，同屏双人回合制战棋。离线可玩，支持悔棋与存档。">
 <title>豪杰棋局 II · 双人回合制战棋</title>
+<!-- Bundled third-party notices\n${notices.join('\n\n').replace(/-->/g, '-- >')} -->
 <style>html,body{margin:0;min-height:100%;background:#f5f4ef}#root{min-height:100vh}${styles.replace(/<\/style/gi, '<\\/style')}</style>
 </head><body><div id="root"></div><noscript>豪杰棋局需要启用JavaScript，但不需要联网。</noscript>
 <script>${script.replace(/<\/script/gi, '<\\/script')}</script>
