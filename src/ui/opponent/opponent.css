@@ -82,7 +82,7 @@
 .hj-game [aria-disabled='true'] .card-actions {
   opacity: 0.6;
 }
-@media (max-width: 820px) {
+@container haojie (max-width: 820px) {
   .hj-game .opponent-bar {
     gap: 8px;
     padding: 10px;
@@ -100,5 +100,40 @@
   .hj-game .opponent-bar .secondary {
     padding: 6px 9px;
     font-size: 10px;
+  }
+}
+
+@container haojie (min-width: 1100px) {
+  .hj-game .opponent-bar {
+    padding: 9px 11px;
+    margin: 0;
+    gap: 6px 10px;
+    flex-wrap: wrap;
+  }
+  .hj-game .opponent-bar > div {
+    flex-basis: calc(100% - 32px);
+  }
+  .hj-game .opponent-bar .secondary {
+    padding: 5px 10px;
+  }
+  .hj-game .opponent-bar .text-button {
+    margin-left: auto;
+  }
+}
+
+@container haojie (max-width: 1279px) and (min-width: 821px) {
+  .hj-game .hand-rail > .opponent-bar {
+    grid-column: 1 / -1;
+  }
+}
+@container haojie (max-width: 820px) {
+  .hj-game .hand-rail > .opponent-bar {
+    order: -1;
+    width: 100%;
+  }
+}
+@container haojie (min-width: 1100px) {
+  .hj-game .hand-rail > .opponent-bar {
+    flex-shrink: 0;
   }
 }

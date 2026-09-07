@@ -27,83 +27,93 @@ export function HaojieGame(props: HaojieGameProps) {
         onOpen={game.setModal}
       />
       <main className="game-container">
-        <div className="match-heading">
-          <p className="eyebrow">
-            <span />
-            {game.match.mode === 'ai' ? 'LOCAL AI DUEL' : 'LOCAL TWO-PLAYER DUEL'}
-          </p>
-          <p>
-            普通召唤 × 26 <i /> 终极召唤 × 28
-          </p>
-        </div>
-        <OpponentBar
-          ended={!!state.winner}
-          match={game.match}
-          busy={game.computer.busy}
-          thinking={game.computer.thinking}
-          paused={game.computer.paused || !!session.future.length}
-          backend={game.computer.backend}
-          onToggle={() =>
-            game.computer.paused || session.future.length
-              ? game.resumeComputer()
-              : game.computer.pause()
-          }
-          onNew={() => game.setModal('new')}
-        />
-        <Scoreboard state={state} human={game.match.mode === 'ai' ? game.match.human : undefined} />
-        <VictoryBanner state={state} onNewGame={() => game.setModal('new')} />
-        <div className="play-layout">
-          <Inspector
-            state={state}
-            selectedId={game.selectedId}
-            cardId={game.cardId}
-            intent={game.intent}
-            activeIntent={game.activeIntent}
-            actions={game.actions}
-            setSelectedId={game.setSelectedId}
-            setIntent={game.setIntent}
-            chooseAction={game.chooseAction}
-            onRules={() => game.setModal('rules')}
-          />
-          <Battlefield
-            state={state}
-            intent={game.intent}
-            activeIntent={game.activeIntent}
-            selectedId={game.selectedId}
-            onCell={game.onCell}
-            events={game.events}
-            canUndo={!!session.past.length}
-            canRedo={!!session.future.length}
-            rewind={game.rewind}
-            run={game.run}
-            onCancel={game.cancel}
-            endError={game.endError}
-            readOnly={game.computer.busy}
-          />
-          <aside className="hand-rail">
-            <HandPanel
+        <div className="game-layout">
+          <div className="match-overview">
+            <div className="match-heading">
+              <p className="eyebrow">
+                <span />
+                {game.match.mode === 'ai' ? 'LOCAL AI DUEL' : 'LOCAL TWO-PLAYER DUEL'}
+              </p>
+              <p>
+                普通召唤 × 26 <i /> 终极召唤 × 28
+              </p>
+            </div>
+            <Scoreboard
               state={state}
+              human={game.match.mode === 'ai' ? game.match.human : undefined}
+            />
+          </div>
+          <div className="play-layout">
+            <Inspector
+              state={state}
+              selectedId={game.selectedId}
               cardId={game.cardId}
-              chooseCard={game.chooseCard}
+              intent={game.intent}
+              activeIntent={game.activeIntent}
+              actions={game.actions}
+              setSelectedId={game.setSelectedId}
+              setIntent={game.setIntent}
+              chooseAction={game.chooseAction}
+              onRules={() => game.setModal('rules')}
+            />
+            <Battlefield
+              state={state}
+              intent={game.intent}
+              activeIntent={game.activeIntent}
+              selectedId={game.selectedId}
+              onCell={game.onCell}
+              events={game.events}
+              canUndo={!!session.past.length}
+              canRedo={!!session.future.length}
+              rewind={game.rewind}
               run={game.run}
+              onCancel={game.cancel}
+              endError={game.endError}
               readOnly={game.computer.busy}
             />
-            <BattleLog
-              state={state}
-              saveStatus={game.saveStatus}
-              onOpen={() => game.setModal('log')}
-            />
-            <SaveTools live={game.live} onImport={game.importSession} onError={game.setNotice} />
-          </aside>
+            <aside className="hand-rail">
+              <OpponentBar
+                ended={!!state.winner}
+                match={game.match}
+                busy={game.computer.busy}
+                thinking={game.computer.thinking}
+                paused={game.computer.paused || !!session.future.length}
+                backend={game.computer.backend}
+                onToggle={() =>
+                  game.computer.paused || session.future.length
+                    ? game.resumeComputer()
+                    : game.computer.pause()
+                }
+                onNew={() => game.setModal('new')}
+              />
+              <VictoryBanner state={state} onNewGame={() => game.setModal('new')} />
+
+              <div className="hand-scroll" tabIndex={0} aria-label="手牌与战报">
+                <HandPanel
+                  state={state}
+                  cardId={game.cardId}
+                  chooseCard={game.chooseCard}
+                  run={game.run}
+                  readOnly={game.computer.busy}
+                />
+                <BattleLog
+                  state={state}
+                  saveStatus={game.saveStatus}
+                  onOpen={() => game.setModal('log')}
+                />
+              </div>
+              <SaveTools live={game.live} onImport={game.importSession} onError={game.setNotice} />
+            </aside>
+          </div>
+          <footer className="game-footer">
+            <span>
+              <i className="live-dot" />
+              浩劫2.1 · 离线单HTML · 双人 / 本地AI
+            </span>
+            <button onClick={() => game.setModal('rules')}>规则与实施说明</button>
+            <span>SEED {state.seed}</span>
+          </footer>
         </div>
-        <footer className="game-footer">
-          <span>
-            <i className="live-dot" />
-            浩劫2.1 · 离线单HTML · 双人 / 本地AI
-          </span>
-          <button onClick={() => game.setModal('rules')}>规则与实施说明</button>
-          <span>SEED {state.seed}</span>
-        </footer>
       </main>
       <Feedback events={game.events} notice={game.notice} onDismiss={() => game.setNotice('')} />
       <GameDialogs

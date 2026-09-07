@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
+import { verifyWorkbench } from './layout.mjs';
 const renderOnly = process.env.HAOJIE_RENDER_ONLY === '1';
 await mkdir('artifacts', { recursive: true });
 execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/ai-fixtures.ts']);
@@ -69,22 +70,10 @@ try {
   else await page.goto(pathToFileURL(resolve('dist/index.html')).href);
   await page.getByRole('gridcell').first().waitFor();
   await installExportProbe();
-  const widths = [];
-  for (const width of [900, 1090, 1100, 1279, 1280, 1440, 1680]) {
-    await page.setViewportSize({ width, height: 900 });
-    const box = await page.locator('.board').boundingBox();
-    widths.push({ viewport: width, board: Math.round(box.width) });
-    assert.equal(
-      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
-      true,
-      `overflow at ${width}`,
-    );
-  }
-  for (let i = 1; i < widths.length; i++)
-    assert.ok(widths[i].board >= widths[i - 1].board - 1, JSON.stringify(widths));
-  assert.ok(widths.find((w) => w.viewport === 1440).board >= 620, JSON.stringify(widths));
-  await writeFile('artifacts/layout-report.json', JSON.stringify(widths, null, 2));
-  scenario('board never shrinks at 1090/1100/1280 breakpoints and exceeds 620px at 1440px');
+  await verifyWorkbench(page, { renderOnly });
+  scenario(
+    'wide workbench fits all 117 square cells and controls without page scrolling; sidebars scroll independently',
+  );
   await page.setViewportSize({ width: 1440, height: 1080 });
   await page.evaluate(() => {
     const Native = window.Worker;
