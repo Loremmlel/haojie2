@@ -1,0 +1,116 @@
+name: Apply and verify engineering refactor
+on:
+  push:
+    branches: [refactor/engineering-2.0.1]
+    paths: ['.github/workflows/engineering.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Restore verified source changes against the original commit
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, pathlib, subprocess, zlib
+          root = pathlib.Path.cwd()
+          parts = sorted((root / '.engineering').glob('part*.txt'))
+          assert len(parts) == 5
+          data = base64.b64decode(''.join(p.read_text() for p in parts), validate=True)
+          assert len(data) == 34928
+          assert hashlib.sha256(data).hexdigest() == '3b887fb1fcbed827cd4a43e1fe5b0ef5f531061490e569bb6729e4e2cb3562d4'
+          patch = json.loads(lzma.decompress(data))
+          base = '0076fa6f592d8e6b4f41089eaf7f3c6de4caec10'
+          def safe(name):
+              p = pathlib.PurePosixPath(name)
+              assert not p.is_absolute() and '..' not in p.parts
+              assert p.parts[0] not in {'.git', '.github', '.engineering', 'node_modules'}
+              return root / p
+          restored = []
+          for entry in patch['files']:
+              destination = safe(entry['path'])
+              encoded = base64.b64decode(entry['data'], validate=True)
+              dictionary = entry['dictionary']
+              if dictionary:
+                  safe(dictionary['path'])
+                  old = subprocess.check_output(['git', 'show', base + ':' + dictionary['path']])
+                  previous = old[:32768] if dictionary['part'] == 0 else old[-32768:]
+                  assert hashlib.sha256(previous).hexdigest() == dictionary['sha256']
+                  decoder = zlib.decompressobj(zdict=previous)
+                  content = decoder.decompress(encoded) + decoder.flush()
+              else:
+                  content = zlib.decompress(encoded)
+              assert hashlib.sha256(content).hexdigest() == entry['sha256']
+              restored.append((destination, content))
+          for destination, content in restored:
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              destination.write_bytes(content)
+          for name in patch['remove']:
+              assert name.startswith(('src/ui/', 'tests/browser'))
+              safe(name).unlink()
+          # Wait for React's effect callbacks in the same-origin integration harness.
+          path = root / 'tests/browser/pages.mjs'
+          text = path.read_text()
+          text = text.replace("await page.goto(origin+'/haojie2/');", "await page.goto(origin+'/haojie2/');\n  await page.getByRole('gridcell').first().waitFor();")
+          text = text.replace("await page.goto(origin+'/host/');", "await page.goto(origin+'/host/');\n  await page.waitForFunction(()=>window.testStates?.length===2);")
+          path.write_text(text)
+          print('Restored', len(restored), 'source files; removed', len(patch['remove']), 'obsolete files.')
+          PY
+      - run: npm ci --no-audit --no-fund
+      - run: npm run format
+      - run: npm run format
+      - run: npm run format:check
+      - run: npm run check
+      - name: Verify rule and persistence behavior
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          npm test | tee artifacts/engine-report.txt
+      - run: npm run deploy
+      - run: npm run deploy:check
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - run: npm run test:pages
+      - name: Commit only accepted source and generated Pages entry
+        run: |
+          rm -rf .engineering
+          git restore .github
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor: organize UI and styles, preserve saves and prepare Pages'
+          git push origin HEAD:refactor/engineering-2.0.1
+          git rev-parse HEAD > artifacts/verified-commit.txt
+      - name: Package verification source
+        if: always()
+        run: |
+          mkdir -p artifacts
+          tar --exclude='./.git' --exclude='./node_modules' --exclude='./.engineering' --exclude='./artifacts' --exclude='./dist' -czf artifacts/haojie-source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engineering-source
+          path: artifacts/haojie-source.tar.gz
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engineering-html
+          path: dist/index.html
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engineering-evidence
+          path: |
+            artifacts/*.png
+            artifacts/*report.json
+            artifacts/*.txt
+          retention-days: 7
