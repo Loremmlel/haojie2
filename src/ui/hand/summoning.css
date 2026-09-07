@@ -54,7 +54,7 @@
   line-height: 1.6;
   padding: 7px !important;
 }
-@media (max-width: 820px) {
+@container haojie (max-width: 820px) {
   .hj-game .summon-controls {
     display: grid;
     grid-template-columns: 1fr 1fr;

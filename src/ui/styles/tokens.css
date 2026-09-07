@@ -1,5 +1,6 @@
 /* styles/tokens.css — feature-owned rules; responsive states stay with their component. */
 .hj-game {
+  container: haojie / inline-size;
   --paper: #f5f4ef;
   --panel: #fffef9;
   --ink: #243c3e;
@@ -62,7 +63,7 @@
   float: right;
   font-weight: 400;
 }
-@media (max-width: 820px) {
+@container haojie (max-width: 820px) {
   .hj-game summary {
     font-size: 11px;
   }

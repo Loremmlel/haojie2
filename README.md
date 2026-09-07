@@ -123,3 +123,7 @@ CI产物：`haojie2-single-html`、`source-snapshot`、`acceptance-evidence`。�
 HTTP同源续局与多实例嵌入验收：`npm run test:pages`。组件与样式定位见`docs/ENGINEERING.md`；原始规则文档保留在`docs/source/`。
 
 AI固定种子对局采样：`npm run bench:ai -- hard,medium`。样本不代表经过统计验证的难度胜率；完整2.1变化见`docs/CHANGELOG-2.1.md`。
+
+### 宽屏棋局
+
+容器宽度达到1100px时，采用全宽、一屏棋局：比分与控制在左，AI状态与手牌在右，中央9×13棋盘按可用高度等比适配。页面和棋盘不滚动，侧栏内容过长时独立滚动。手机/窄屏保持自然文档流。布局修正不更改AI算法、游戏规则或现有存档。

@@ -70,7 +70,7 @@
   background: var(--line);
   margin: 0 1px;
 }
-@media (max-width: 820px) {
+@container haojie (max-width: 820px) {
   .hj-game .site-header {
     height: 75px;
     padding: 0 17px;
@@ -107,7 +107,7 @@
     margin: 0 1px;
   }
 }
-@media (max-width: 450px) {
+@container haojie (max-width: 450px) {
   .hj-game .site-header {
     padding: 0 13px;
     gap: 7px;
@@ -157,7 +157,7 @@
   font-size: 8px;
   letter-spacing: 1.65px;
 }
-@media (max-width: 820px) {
+@container haojie (max-width: 820px) {
   .hj-game .brand h1 {
     font-size: 23px;
     letter-spacing: 4px;
@@ -168,5 +168,23 @@
   .hj-game .brand p {
     font-size: 6px;
     letter-spacing: 1px;
+  }
+}
+
+@container haojie (min-width: 1100px) {
+  .hj-game .site-header {
+    height: 56px;
+    padding: 0 20px;
+  }
+  .hj-game .brand-mark {
+    width: 34px;
+    height: 34px;
+  }
+  .hj-game .brand h1 {
+    font-size: 24px;
+  }
+  .hj-game .brand p {
+    margin-top: 1px;
+    font-size: 7px;
   }
 }

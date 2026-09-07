@@ -73,7 +73,7 @@
 .hj-game .charge-meter i.filled {
   background: #b9a067;
 }
-@media (max-width: 820px) {
+@container haojie (max-width: 820px) {
   .hj-game .live-stats {
     display: flex;
     justify-content: space-between;
@@ -96,7 +96,7 @@
     font-size: 11px;
   }
 }
-@media (max-width: 450px) {
+@container haojie (max-width: 450px) {
   .hj-game .live-stats span {
     font-size: 7px;
   }
@@ -155,7 +155,7 @@
   border-color: var(--side);
   color: var(--side);
 }
-@media (max-width: 820px) {
+@container haojie (max-width: 820px) {
   .hj-game .operation-state {
     font-size: 8px;
     padding-top: 5px;
@@ -172,5 +172,30 @@
   .hj-game .stack-selector button {
     min-width: 26px;
     min-height: 25px;
+  }
+}
+
+@container haojie (min-width: 1100px) {
+  .hj-game .live-stats {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
+    padding: 8px 0;
+  }
+  .hj-game .live-stats > div,
+  .hj-game .live-stats > div:nth-child(n + 4) {
+    grid-column: auto;
+  }
+  .hj-game .live-stats b {
+    font-size: 14px;
+  }
+  .hj-game .live-stats span {
+    gap: 2px;
+    font-size: 9px;
+  }
+  .hj-game .live-stats span svg {
+    width: 11px;
+  }
+  .hj-game .status-tags:empty {
+    display: none;
   }
 }

@@ -44,7 +44,7 @@ export function Inspector({
     : [];
 
   return (
-    <aside className="inspection-rail">
+    <aside className="inspection-rail" tabIndex={0} aria-label="棋子详情与操作">
       <section className="panel inspector">
         <div className="panel-heading">
           <h2>{reaction ? '待结算效果' : card ? '召唤详情' : '棋子情报'}</h2>

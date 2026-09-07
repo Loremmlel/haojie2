@@ -52,13 +52,15 @@ export function Battlefield({
           </button>
         )}
       </div>
-      <Board
-        state={s}
-        intent={activeIntent}
-        selectedId={selectedId}
-        onCell={onCell}
-        events={events}
-      />
+      <div className="board-viewport">
+        <Board
+          state={s}
+          intent={activeIntent}
+          selectedId={selectedId}
+          onCell={onCell}
+          events={events}
+        />
+      </div>
       <div className="command-bar">
         <div className="history-actions">
           <button aria-label="悔棋" disabled={!canUndo} onClick={() => rewind()}>
