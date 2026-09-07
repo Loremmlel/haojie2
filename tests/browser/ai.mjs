@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { verifyWorkbench } from './layout.mjs';
+import { verifyPacing } from './pacing.mjs';
 const renderOnly = process.env.HAOJIE_RENDER_ONLY === '1';
 await mkdir('artifacts', { recursive: true });
 execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/ai-fixtures.ts']);
@@ -42,7 +43,7 @@ const exported = async () => {
 const load = async (name) => {
   await page.locator('input[type=file]').setInputFiles(`artifacts/ai-fixtures/${name}.json`);
 };
-const waitForState = async (predicate, max = 200) => {
+const waitForState = async (predicate, max = 1500) => {
   let s;
   for (let n = 0; n < max; n++) {
     s = await exported();
@@ -118,6 +119,7 @@ try {
   scenario(
     'all three modes finish AI opening through the inline offline Worker without receiving true RNG',
   );
+  await verifyPacing({ page, load, exported, waitForState, scenario });
   await load('thinking');
   await button('暂停AI').click();
   const frozen = await exported();
