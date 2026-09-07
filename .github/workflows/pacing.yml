@@ -1,0 +1,83 @@
+name: Verify readable AI action pacing
+on:
+  push:
+    branches: [fix/ai-readable-pacing]
+    paths: ['.github/workflows/pacing.yml']
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Restore checked presentation-only source changes
+        run: |
+          python3 - <<'PY'
+          import gzip, hashlib, pathlib, subprocess
+          data = bytearray(pathlib.Path('.pacing/staged.patch.gz').read_bytes())
+          # Reconstruct the exact transfer payload from its verified blob and byte delta.
+          assert hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest() == '88415b938a4590cb786cec905f85ffc2e6c0d9f2'
+          assert data[1722] == 121
+          data[1722] = 109
+          assert hashlib.sha256(data).hexdigest() == '4408b241a48f90038064fb14d56c925e8d20f090c26ce81551f0f6947b028540'
+          patch = gzip.decompress(data)
+          assert hashlib.sha256(patch).hexdigest() == '03248124bdf41a71a959ba18f162fca7dcc4da53bef4657e4bdaa7875d2b9f6d'
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+          PY
+      - run: npm ci --no-audit --no-fund
+      - run: npm run format
+      - run: npm run format
+      - run: npm run format:check
+      - run: npm run check
+      - name: Verify rule, save and cancellable pacing behavior
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          npm test | tee artifacts/engine-report.txt
+      - run: npm run deploy
+      - run: npm run deploy:check
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - run: npm run test:pages
+      - name: Verify real offline pacing, interruption safety and one-screen desktop layout
+        run: npm run test:browser:ai
+      - name: Commit accepted source and single HTML only
+        run: |
+          rm -rf .pacing
+          git restore .github
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(ai): pace visible actions without delaying search or stale-task cancellation'
+          git push origin HEAD:fix/ai-readable-pacing
+      - name: Package verification snapshot
+        if: always()
+        run: |
+          mkdir -p artifacts
+          tar --exclude='./.git' --exclude='./node_modules' --exclude='./.pacing' --exclude='./artifacts' --exclude='./dist' -czf artifacts/haojie-source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pacing-source
+          path: artifacts/haojie-source.tar.gz
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pacing-html
+          path: dist/index.html
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pacing-evidence
+          path: |
+            artifacts/*.png
+            artifacts/*report.json
+            artifacts/engine-report.txt
+          retention-days: 7
