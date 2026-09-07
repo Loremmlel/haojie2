@@ -45,10 +45,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run format
       - name: Normalize the browser test after its first formatting pass
-        run: |
-          cp tests/browser.mjs /tmp/browser-before-format.mjs
-          npx prettier --write tests/browser.mjs
-          diff -u /tmp/browser-before-format.mjs tests/browser.mjs || true
+        run: npx prettier --write tests/browser.mjs
       - run: npm run format:check
       - run: npm run check
       - name: Run all rule and save behavior tests
@@ -60,8 +57,10 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Verify actual offline file HTML in Chromium
         run: npm run test:browser
-      - name: Commit only verified source files
+      - name: Commit only verified game sources without modifying workflows
         run: |
+          git restore --source=HEAD -- .github/workflows
+          git diff --exit-code -- .github/workflows
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
