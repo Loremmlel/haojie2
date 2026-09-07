@@ -2,4 +2,3 @@
 export * from './engine';
 export { HaojieGame } from './ui/Game';
 export type { HaojieGameProps } from './ui/Game';
-import './ui/refinements.css';

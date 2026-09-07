@@ -42,14 +42,24 @@ npm run build
 
 **旧1.0存档不自动迁移。** 第四属性和操作规则变更会改变旧局面的含义，不能只加字段后假装兼容。2.0使用独立的 `haojie.session.v2` 本地存储键，旧键不删除；导入旧档时明确拒绝并说明原因，原文件不被改写。
 
-## 来源缺口与实施解释
+## 2.0.1工程更新与作者补充
 
-有两项不能从原文获得完整定义：
+冲锋号令储存期限已确认**8回合**；善铁和相关合成属于暂缓的**3.0神龛模式**，不再作为当前2.x未完成项。三张炎魔之心合成炎魔之王维持原规则。
 
-- 末尾“3张善铁合成”：未定义善铁牌、结果名称和 `3n / 3n+1` 的判定对象，**没有擅自加入随机池或替换成其他配方**。前面的“三张炎魔之心合成炎魔之王”是独立、完整的规则，已实现。
-- 冲锋号令没有储存期限：功能已实现，暂不自动过期，卡面和图鉴明确显示“储限未注明”，并非作者已经确认无限期。
+Game.tsx改为页面组合根；组件、存档、控制流程和样式按功能拆分。保留原生CSS/SVG，不增加组件库或动画库；详细成本收益和目录归属见[工程说明](docs/ENGINEERING.md)。
 
-武器槽位数量、部分持续效果的结算边界、多目标命中顺序等未明细项，采用了可执行但未冒充作者确认的解释。详见 [规则契约与未决项](docs/RULES.md)；游戏内规则页也能查看。
+### GitHub Pages
+
+保持Settings → Pages → Deploy from a branch → **main / (root)**。根index.html是完整游戏发布物，.nojekyll禁用Jekyll，不再以README作首页。更新源码后运行：
+
+```bash
+npm run deploy       # 生成dist/index.html，并准备根目录的发布入口
+npm run deploy:check # 验证根入口与源码构建逐字节一致，CI也会检查
+```
+
+随后把源码与index.html一同提交推送；Pages不会自动运行package.json里的脚本。详情见[发布与存档](docs/PAGES.md)。
+
+**重新部署不会主动丢存档。** 同一浏览器、同一origin及兼容的schema继续读`haojie.session.v2`。不是云存档；换设备/域名、清除站点数据等仍需导入导出。旧2.0号令卡按抽取回合补成8回合期限，撤销历史一并兼容修正，不更换存储键。
 
 ## 嵌入现有网站
 
@@ -92,3 +102,5 @@ npm run test:browser
 CI产物：`haojie2-single-html`、`source-snapshot`、`acceptance-evidence`。部署动画、弹道和音效不会驱动规则计时；音效默认关闭，界面遵守系统“减少动态效果”设置。
 
 运行时依赖仍只有React与ReactDOM；构建用esbuild，规则测试用Node测试运行器+tsx，浏览器验收用Playwright。所有依赖已固定在lockfile，第三方运行时许可包含在发行HTML里。
+
+HTTP同源续局与多实例嵌入验收：`npm run test:pages`。组件与样式定位见`docs/ENGINEERING.md`；原始规则文档保留在`docs/source/`。

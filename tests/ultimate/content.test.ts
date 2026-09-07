@@ -327,7 +327,7 @@ test('U17 advances exactly one unit, enabling fresh summon plus next-turn execut
     s.units.some((u) => u.id === enemy.id),
     false,
   );
-  assert.equal(definition('u17').spell, -1);
+  assert.equal(definition('u17').spell, 8);
 });
 test('U18 ignores attacks <=10, retaliates after real damage, does not loop forever', () => {
   let s = fixture();
