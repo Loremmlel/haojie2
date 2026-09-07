@@ -71,7 +71,7 @@ async function open(viewport, reducedMotion = 'no-preference') {
   });
   if (renderOnly) await p.setContent(html);
   else await p.goto(pathToFileURL(resolve('dist/index.html')).href);
-  await p.getByRole('heading', { name: '浩劫2.0', exact: true }).waitFor();
+  await p.getByRole('heading', { name: '浩劫2.1', exact: true }).waitFor();
   return { p, context };
 }
 try {
@@ -275,7 +275,7 @@ try {
   assert.deepEqual(await readState(), beforeInvalid);
   if (!renderOnly) {
     await page.reload();
-    await page.getByRole('heading', { name: '浩劫2.0', exact: true }).waitFor();
+    await page.getByRole('heading', { name: '浩劫2.1', exact: true }).waitFor();
     assert.deepEqual(await readState(), beforeInvalid);
     scenario('file:// local save reloads and malformed imports never replace the current match');
   } else

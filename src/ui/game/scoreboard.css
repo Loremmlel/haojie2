@@ -148,7 +148,7 @@
   font-size: 10px;
   color: var(--gold);
 }
-@media (max-width: 1090px) and (min-width: 821px) {
+@media (max-width: 1279px) and (min-width: 821px) {
   .hj-game .scoreboard {
     grid-template-columns: 1fr 95px 1fr;
   }

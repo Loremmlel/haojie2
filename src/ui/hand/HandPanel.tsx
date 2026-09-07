@@ -9,11 +9,13 @@ export function HandPanel({
   cardId,
   chooseCard,
   run,
+  readOnly = false,
 }: {
   state: GameState;
   cardId: string | null;
   chooseCard: (id: string) => void;
   run: (command: Command) => void;
+  readOnly?: boolean;
 }) {
   const hand = s.hands[s.active],
     reaction = s.pending[0],
@@ -27,7 +29,7 @@ export function HandPanel({
         </h2>
         <Icon name="spark" size={17} />
       </div>
-      <SummonControls state={s} run={run} />
+      <SummonControls state={s} run={run} readOnly={readOnly} />
       <p className="hand-intro">
         <span className={`tiny-side p${s.active}`} />
         {faction(s.active)}
@@ -41,7 +43,7 @@ export function HandPanel({
             owner={s.active}
             turn={s.turns[s.active]}
             selected={c.id === cardId}
-            disabled={!!reaction || !!s.winner}
+            disabled={readOnly || !!reaction || !!s.winner}
             onChoose={chooseCard}
           />
         ))}
@@ -55,7 +57,7 @@ export function HandPanel({
       {craftCards.length >= 3 && s.phase === 'play' && (
         <button
           className="craft-button"
-          disabled={!!reaction}
+          disabled={readOnly || !!reaction}
           onClick={() => run({ type: 'craft', cardIds: craftCards.slice(0, 3).map((c) => c.id) })}
         >
           <Icon name="spark" />

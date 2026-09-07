@@ -2,3 +2,5 @@
 export * from './engine';
 export { HaojieGame } from './ui/Game';
 export type { HaojieGameProps } from './ui/Game';
+
+export type { MatchSettings } from './match/settings';

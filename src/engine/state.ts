@@ -1,3 +1,4 @@
+import { simulationRandom } from './random';
 import { definition, isStored, SUMMON_POOL, ULTIMATE_POOL } from './catalog';
 import type {
   Card,
@@ -45,7 +46,9 @@ export function emit(s: GameState, event: Omit<GameEvent, 'id'>, message?: strin
     if (s.log.length > 180) s.log.shift();
   }
 }
-export function random(s: GameState) {
+export function random(s: GameState, boundaries: readonly number[] = [0, 1]) {
+  const supplied = simulationRandom(s, boundaries);
+  if (supplied !== undefined) return supplied;
   let x = s.rng;
   x ^= x << 13;
   x ^= x >>> 17;
@@ -109,9 +112,17 @@ export function draw(s: GameState, owner: Player, count: number, ultimate = fals
   const result: Card[] = [];
   for (let i = 0; i < count; i++) {
     const pool = ultimate ? ULTIMATE_POOL : SUMMON_POOL;
-    let kind = pool[Math.floor(random(s) * pool.length)];
-    if (kind === 3 && random(s) >= 1 / 3) kind = '3p';
-    if (kind === 'u12' && random(s) >= 0.1) kind = 'u12p';
+    let kind =
+      pool[
+        Math.floor(
+          random(
+            s,
+            Array.from({ length: pool.length + 1 }, (_, i) => i / pool.length),
+          ) * pool.length,
+        )
+      ];
+    if (kind === 3 && random(s, [0, 1 / 3, 1]) >= 1 / 3) kind = '3p';
+    if (kind === 'u12' && random(s, [0, 0.1, 1]) >= 0.1) kind = 'u12p';
     const group = kind === 'u25' ? `group${s.serial++}` : undefined;
     const d = definition(kind),
       limit = d.spell ?? d.weapon;

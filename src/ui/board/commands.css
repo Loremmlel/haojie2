@@ -69,11 +69,11 @@
   color: #9aa18f;
   margin-top: 7px;
 }
-@media (max-width: 1090px) and (min-width: 821px) {
+@media (max-width: 1279px) and (min-width: 821px) {
   .hj-game .instruction-bar,
   .hj-game .command-bar,
   .hj-game .turn-hint {
-    max-width: 510px;
+    max-width: 620px;
     margin-left: auto;
     margin-right: auto;
   }

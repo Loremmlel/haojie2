@@ -1,3 +1,5 @@
+import type { MatchSettings } from '../../match/settings';
+import { MatchOptions } from '../opponent/MatchOptions';
 import { useState } from 'react';
 import type { GameState } from '../../engine';
 import type { GameModal } from '../game/types';
@@ -11,13 +13,16 @@ export function GameDialogs({
   state: s,
   onClose,
   startGame,
+  match,
 }: {
   modal: GameModal;
   state: GameState;
   onClose: () => void;
-  startGame: (seedText: string, demo: boolean) => void;
+  match: MatchSettings;
+  startGame: (seedText: string, demo: boolean, match: MatchSettings) => void;
 }) {
   const [seedText, setSeedText] = useState('');
+  const [settings, setSettings] = useState(match);
   return (
     <>
       {modal === 'codex' && <Codex onClose={() => onClose()} />}
@@ -45,6 +50,7 @@ export function GameDialogs({
             <Icon name="sword" size={44} />
             <span>26普通召唤 · 28终极召唤 · 117格战场</span>
           </div>
+          <MatchOptions value={settings} onChange={setSettings} />
           <label className="seed-field">
             对局种子<span>留空随机</span>
             <input
@@ -55,11 +61,17 @@ export function GameDialogs({
               placeholder="例如 20260907"
             />
           </label>
-          <button className="primary full-width" onClick={() => startGame(seedText, false)}>
+          <button
+            className="primary full-width"
+            onClick={() => startGame(seedText, false, settings)}
+          >
             开始正式对局
             <Icon name="arrow" />
           </button>
-          <button className="secondary full-width" onClick={() => startGame(seedText, true)}>
+          <button
+            className="secondary full-width"
+            onClick={() => startGame(seedText, true, settings)}
+          >
             载入演示棋局
           </button>
           <p className="fine-print">

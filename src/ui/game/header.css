@@ -170,8 +170,3 @@
     letter-spacing: 1px;
   }
 }
-@media (min-width: 1091px) {
-  .hj-game .site-header {
-    padding-inline: max(24px, calc((100% - var(--desktop-board) - 516px) / 2));
-  }
-}

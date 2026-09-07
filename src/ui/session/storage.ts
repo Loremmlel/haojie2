@@ -51,7 +51,7 @@ export function writeStoredSession(
     return 'saved';
   } catch {
     try {
-      storage.setItem(key, JSON.stringify(createSession(session.present)));
+      storage.setItem(key, JSON.stringify(createSession(session.present, session.match)));
       return 'snapshot';
     } catch {
       return 'unavailable';

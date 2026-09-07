@@ -247,9 +247,9 @@
   font-size: 8px;
   font-variant-numeric: tabular-nums;
 }
-@media (max-width: 1090px) and (min-width: 821px) {
+@media (max-width: 1279px) and (min-width: 821px) {
   .hj-game .board-shell {
-    max-width: 510px;
+    max-width: 620px;
     margin: auto;
   }
 }

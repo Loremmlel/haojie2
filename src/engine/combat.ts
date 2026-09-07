@@ -145,7 +145,7 @@ export function kill(
       ![...s.hands[1], ...s.hands[2]].some((c) => c.group === u.group));
   if (!groupFinal) return;
   const enabled = !u.silenced;
-  const denyHead = enabled && u.kind === 20 && random(s) < 0.5;
+  const denyHead = enabled && u.kind === 20 && random(s, [0, 0.5, 1]) < 0.5;
   const enemyKill =
     source.owner !== undefined && source.owner !== u.owner && source.kind !== 'expire';
   if (enemyKill && !denyHead) {
@@ -524,14 +524,18 @@ export function performAttack(
   let amount = options.amount ?? stats.attack;
   if (!u.silenced) {
     if (u.kind === 1) {
-      const r = random(s);
+      const r = random(s, [0, 1 / 12, 1 / 3, 1]);
       amount += r < 1 / 12 ? 60 : r < 1 / 3 ? 20 : 0;
     }
     if (u.kind === 'u1') {
-      const r = random(s);
+      const r = random(s, [0, 1 / 5, 1 / 5 + 1 / 3, 1]);
       amount = r < 1 / 5 ? 100 : r < 1 / 5 + 1 / 3 ? amount * 2 : amount;
     }
-    if (u.kind === 'u8' && random(s) < Math.min(1, 0.2 + 0.2 * u.kills)) amount *= 2;
+    if (
+      u.kind === 'u8' &&
+      random(s, [0, Math.min(1, 0.2 + 0.2 * u.kills), 1]) < Math.min(1, 0.2 + 0.2 * u.kills)
+    )
+      amount *= 2;
     if (u.kind === 'u27' && !t.unit) amount = 10;
   }
   const lifesteal = !u.silenced && u.kind === 'u8' ? 0.2 + 0.2 * u.kills : 0;

@@ -1,3 +1,4 @@
+import { OpponentBar } from './opponent/OpponentBar';
 import { Battlefield } from './board/Battlefield';
 import { BattleLog } from './feedback/BattleLog';
 import { Feedback } from './feedback/Feedback';
@@ -29,13 +30,27 @@ export function HaojieGame(props: HaojieGameProps) {
         <div className="match-heading">
           <p className="eyebrow">
             <span />
-            LOCAL TWO-PLAYER DUEL
+            {game.match.mode === 'ai' ? 'LOCAL AI DUEL' : 'LOCAL TWO-PLAYER DUEL'}
           </p>
           <p>
             普通召唤 × 26 <i /> 终极召唤 × 28
           </p>
         </div>
-        <Scoreboard state={state} />
+        <OpponentBar
+          ended={!!state.winner}
+          match={game.match}
+          busy={game.computer.busy}
+          thinking={game.computer.thinking}
+          paused={game.computer.paused || !!session.future.length}
+          backend={game.computer.backend}
+          onToggle={() =>
+            game.computer.paused || session.future.length
+              ? game.resumeComputer()
+              : game.computer.pause()
+          }
+          onNew={() => game.setModal('new')}
+        />
+        <Scoreboard state={state} human={game.match.mode === 'ai' ? game.match.human : undefined} />
         <VictoryBanner state={state} onNewGame={() => game.setModal('new')} />
         <div className="play-layout">
           <Inspector
@@ -63,6 +78,7 @@ export function HaojieGame(props: HaojieGameProps) {
             run={game.run}
             onCancel={game.cancel}
             endError={game.endError}
+            readOnly={game.computer.busy}
           />
           <aside className="hand-rail">
             <HandPanel
@@ -70,6 +86,7 @@ export function HaojieGame(props: HaojieGameProps) {
               cardId={game.cardId}
               chooseCard={game.chooseCard}
               run={game.run}
+              readOnly={game.computer.busy}
             />
             <BattleLog
               state={state}
@@ -82,7 +99,7 @@ export function HaojieGame(props: HaojieGameProps) {
         <footer className="game-footer">
           <span>
             <i className="live-dot" />
-            浩劫2.0 · 离线单HTML · 同屏双人
+            浩劫2.1 · 离线单HTML · 双人 / 本地AI
           </span>
           <button onClick={() => game.setModal('rules')}>规则与实施说明</button>
           <span>SEED {state.seed}</span>
@@ -93,6 +110,7 @@ export function HaojieGame(props: HaojieGameProps) {
         key={game.modal ?? 'closed'}
         modal={game.modal}
         state={state}
+        match={game.match}
         onClose={() => game.setModal(null)}
         startGame={game.newGame}
       />

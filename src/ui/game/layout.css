@@ -81,16 +81,7 @@
   color: #95a189;
   border-radius: 4px;
 }
-@media (min-width: 1400px) {
-  .hj-game .game-container {
-    max-width: 1250px;
-  }
-  .hj-game .play-layout {
-    grid-template-columns: 250px minmax(340px, 1fr) 270px;
-    gap: 23px;
-  }
-}
-@media (max-width: 1090px) and (min-width: 821px) {
+@media (max-width: 1279px) and (min-width: 821px) {
   .hj-game .play-layout {
     grid-template-columns: 205px minmax(330px, 1fr);
     gap: 18px;
@@ -167,12 +158,27 @@
     z-index: auto;
   }
 }
-@media (min-width: 1091px) {
+
+/* The board owns the central space. Do not derive its width from viewport height. */
+@media (min-width: 1280px) {
   .hj-game .game-container {
-    max-width: calc(var(--desktop-board) + 560px);
+    max-width: 1500px;
   }
   .hj-game .play-layout {
-    grid-template-columns: 228px var(--desktop-board) 248px;
-    gap: 20px;
+    grid-template-columns: minmax(200px, 1fr) minmax(620px, 740px) minmax(220px, 1fr);
+    gap: 22px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .hj-game .inspection-rail,
+  .hj-game .hand-rail {
+    position: sticky;
+    top: 16px;
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    padding-bottom: 4px;
   }
 }

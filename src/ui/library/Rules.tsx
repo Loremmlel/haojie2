@@ -76,6 +76,15 @@ export function Rules({ onClose }: { onClose: () => void }) {
           策反先结算伤害，目标存活且未被免疫才换边；本回合疲劳，下一己方回合即可行动。奶妈临终行动、伤害转化、小屋召唤和SZF弹出会明确提示由哪一方处理。
         </p>
       </section>
+      <section className="rules-key">
+        <h3>本地AI与人机悔棋</h3>
+        <p>
+          新对局可选择简单、中等、困难AI和自己的阵营。AI只读取公开局面，不知道未来抽牌或暴击；不增加资源，也不会替你处理临终行动。
+        </p>
+        <p>
+          人机悔棋退回最近的玩家决策点，连同电脑回应一起撤销。暂停可停止思考；新开局或载入后旧任务不会继续落子。对战设置随存档保存，旧v2存档默认同屏双人。
+        </p>
+      </section>
       <details className="interpretations">
         <summary>
           已确认规则与剩余实施解释<span>展开查看</span>

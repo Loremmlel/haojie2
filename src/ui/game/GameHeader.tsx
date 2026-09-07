@@ -18,7 +18,7 @@ export function GameHeader({
         </span>
         <div>
           <h1>
-            浩劫<span>2.0</span>
+            浩劫<span>2.1</span>
           </h1>
           <p>HAOJIE · THE RECKONING</p>
         </div>

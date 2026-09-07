@@ -61,7 +61,7 @@ export function Match() {
 }
 ```
 
-入口导入作用域CSS，不重置宿主`body`。设置`storageKey={null}`关闭组件自动持久化；宿主通过回调负责保存。`initialState`只在首次挂载读取，需要替换整个对局用新的React `key`。每个嵌入实例用不同存储键；页面同时有多实例时应由宿主限制快捷键作用域，当前默认按单活动棋盘设计。
+入口导入作用域CSS，不重置宿主`body`。设置`storageKey={null}`关闭组件自动持久化；宿主通过回调负责保存。`initialState`只在首次挂载读取，需要替换整个对局用新的React `key`。每个嵌入实例用不同存储键；页面同时有多实例时，快捷键已按聚焦的游戏实例隔离。
 
 只复用引擎：
 
@@ -91,3 +91,13 @@ CSS与各功能就近，styles/index.css保持单一可审阅的顺序，motion.
 已把快捷键限制在当前获得焦点的游戏实例；宿主输入及其他游戏不受影响。多个实例应使用不同storageKey或设为null。版本发布与schema分离，2.0.1保持v2存档；旧号令期限的兼容修正位于engine/migrations.ts，跨所有历史快照统一处理。
 
 结构选型见ENGINEERING.md，Pages生成入口与本机续局语义见PAGES.md。
+
+## 2.1：AI和人机历史的边界
+
+`src/ai`在引擎外生成/评分/搜索命令，`src/match`保存模式设置及人类决策撤销；React opponent/useComputer只做Worker调度、取消与命令提交。引擎可选模拟RandomSource在WeakMap里短暂生效，不改变正式命令的随机行为，不被序列化。
+
+AI接收显式白名单Observation，不接收真seed/rng或Session；小随机分支按概率展开，复杂随机采样。正式执行与假想局面不一致则重新规划；不会按真实存档预测将来的抽卡。
+
+`Session.match`可选，缺省同屏双人；`humanAnchor`保存超长AI回合之前的人类决策。旧schema和storageKey不变。对外Props新增initialMatch只影响初次挂载/新实例，与initialState一致；不改变原onStateChange只传GameState的契约。
+
+标准单文件构建先打包独立Worker，把它内联进主包并以Blob启动。宿主未注入内联常量或Worker不支持时，以相同搜索Generator分片运行；没有偷偷请求worker.js。每次任务都检查取消编号和状态引用。完整搜索与预算边界见AI.md。

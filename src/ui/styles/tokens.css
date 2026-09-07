@@ -70,8 +70,3 @@
     display: none;
   }
 }
-@media (min-width: 1091px) {
-  .hj-game {
-    --desktop-board: clamp(340px, calc((100dvh - 550px) * 0.692307 + 43px), 510px);
-  }
-}

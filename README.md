@@ -1,6 +1,6 @@
-# 浩劫 2.0 · haojie2
+# 浩劫 2.1 · haojie2
 
-React + TypeScript 同屏双人回合制战棋。**生产构建只有一个 `dist/index.html`**：React、样式、图标、棋子和特效全部内联，运行时无 CDN、外部字体、图片或 API 请求。游戏引擎不依赖 React、DOM、网络、本地存储或系统时间。
+React + TypeScript 回合制战棋，支持同屏双人与三档本地AI。**生产构建只有一个 `dist/index.html`**：React、样式、图标、棋子和特效全部内联，运行时无 CDN、外部字体、图片或 API 请求。游戏引擎不依赖 React、DOM、网络、本地存储或系统时间。
 
 规则依据本次提供的 [《浩劫.docx》](docs/source/浩劫.docx)，原文件和逐段文本均已归档。项目显示名称为 **浩劫**，仓库与包名保持 `haojie2`，不更改现有仓库地址。
 
@@ -21,9 +21,19 @@ npm run build
 
 将 `dist/index.html` 复制到任意目录并在现代浏览器打开即可；运行游戏不需要 Node.js。也可把该文件作为现有网站的静态页面。受管理的浏览器可能禁止 `file://`，这种情况应通过网站访问，而不是绕过浏览器策略。
 
-正式对局从空棋盘开始，双方基地300生命，苍穹方先手。**先选择普通或终极召唤，完成所有召唤后点“完成召唤，开始行动”。**“新对局 → 载入演示棋局”可直接体验装备、法师、叠放、伤害和悔棋。双方轮流操作同一设备，手牌公开。
+正式对局从空棋盘开始，双方基地300生命，苍穹方先手。**先选择普通或终极召唤，完成所有召唤后点“完成召唤，开始行动”。**“新对局 → 载入演示棋局”可直接体验装备、法师、叠放、伤害和悔棋。同屏双人轮流操作同一设备；人机模式由电脑控制另一方。两种模式手牌均公开。
 
-## 本次更新
+## 2.1：本地AI与宽屏棋盘
+
+“新对局”中可选择**同屏双人 / 人机对战**、**简单 / 中等 / 困难**，以及自己执先或执后。AI完全在浏览器本地运行，不使用在线模型、账号或服务器。普通和终极棋子共享同一套规则和合法命令接口，不给困难AI额外资源或更好的抽牌。
+
+简单采用单步评分，中等加入回合内束搜索，困难增加预算受限的对手回应检查。小型随机分支按概率枚举，大型分支有限采样；规划器不会接收真实seed或rng。详见[AI算法与限制](docs/AI.md)。
+
+人机模式的悔棋会退回最近一个玩家可决策节点，撤销随后的电脑回应；重做恢复实际结果，不重新掷骰。思考可暂停，新开局/导入/悔棋会取消旧任务。设置随v2存档保存，旧文件缺省为同屏双人。当前页面中的暂停状态不永久写进存档，刷新后可继续AI回合。
+
+宽屏改为棋盘优先：不再按窗口高度把棋盘缩到340px；中等宽度延后切三栏，宽屏中央列620–740px。允许自然纵向滚动，避免格子被压得难以操作。布局按功能CSS维护，没有另加巨大版本覆盖表。
+
+## 2.x棋子与规则内容
 
 | 模块       | 实现                                                                                                                                                                        |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -70,7 +80,12 @@ npm run deploy:check # 验证根入口与源码构建逐字节一致，CI也会�
 import { HaojieGame } from './haojie/src';
 
 export default function GamePage() {
-  return <HaojieGame storageKey="my-site.haojie.match" />;
+  return (
+    <HaojieGame
+      storageKey="my-site.haojie.match"
+      initialMatch={{ mode: 'ai', human: 1, difficulty: 'medium' }}
+    />
+  );
 }
 ```
 
@@ -82,7 +97,7 @@ let state = createGame(20260907);
 state = applyCommand(state, { type: 'summon', ultimate: false });
 ```
 
-React入口支持 `initialState`、`storageKey={null}`、`onStateChange`。样式以 `.hj-game` 限定，独立页面对 `body` 的重置不进入组件。详见 [架构与接入](docs/ARCHITECTURE.md)。当前没有联网房间、AI对手或服务端，未来可复用引擎并另行建立权威服务端。
+React入口支持 `initialState`、`initialMatch`、`storageKey={null}`、`onStateChange`。样式以 `.hj-game` 限定，独立页面对 `body` 的重置不进入组件。详见 [架构与接入](docs/ARCHITECTURE.md)。当前有本地AI，但没有联网房间或服务端；将来联网仍需另行建立权威服务端。宿主自己打包而未注入Worker代码时，AI自动使用分片计算。
 
 ## 验证与维护
 
@@ -93,9 +108,11 @@ npm test
 npm run build
 npx playwright install chromium
 npm run test:browser
+npm run test:pages
+npm run test:browser:ai
 ```
 
-测试按 `core`、`ultimate`、`session` 分类，每种棋子有稳定的行为断言，不依赖React内部实现和像素快照。浏览器测试从生产HTML开始，执行真实按钮操作，包括装备、法术、复活、虹吸、冲撞、改判、克隆控制、胜负、悔棋和手机布局。
+测试按 `core`、`ultimate`、`session`、`ai` 分类，每种棋子有稳定的行为断言，不依赖React内部实现和像素快照。浏览器测试从生产HTML开始，执行真实按钮操作，包括装备、法术、复活、虹吸、冲撞、改判、克隆控制、胜负、悔棋和手机布局。
 
 默认浏览器验收使用 **网络离线的 `file://` 页面**。特定沙箱禁用页面导航时，可使用 `HAOJIE_RENDER_ONLY=1 npm run test:browser` 在内存里渲染同一成品，报告明确标记 `in-memory-render-only`，不把它冒充本地文件和自动存档验收。GitHub CI仍运行默认完整模式。
 
@@ -104,3 +121,5 @@ CI产物：`haojie2-single-html`、`source-snapshot`、`acceptance-evidence`。�
 运行时依赖仍只有React与ReactDOM；构建用esbuild，规则测试用Node测试运行器+tsx，浏览器验收用Playwright。所有依赖已固定在lockfile，第三方运行时许可包含在发行HTML里。
 
 HTTP同源续局与多实例嵌入验收：`npm run test:pages`。组件与样式定位见`docs/ENGINEERING.md`；原始规则文档保留在`docs/source/`。
+
+AI固定种子对局采样：`npm run bench:ai -- hard,medium`。样本不代表经过统计验证的难度胜率；完整2.1变化见`docs/CHANGELOG-2.1.md`。

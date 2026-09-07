@@ -126,7 +126,7 @@
   display: block;
   margin-top: 5px;
 }
-@media (max-width: 1090px) and (min-width: 821px) {
+@media (max-width: 1279px) and (min-width: 821px) {
   .hj-game .hand-cards {
     display: grid;
     grid-template-columns: 1fr 1fr;

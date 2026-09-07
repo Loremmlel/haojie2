@@ -18,6 +18,7 @@ export function Battlefield({
   run,
   onCancel,
   endError,
+  readOnly = false,
 }: {
   state: GameState;
   intent: Intent;
@@ -31,6 +32,7 @@ export function Battlefield({
   run: (command: Command) => void;
   onCancel: () => void;
   endError: string | null;
+  readOnly?: boolean;
 }) {
   const reaction = s.pending[0],
     minions = s.hands[s.active].filter((c) => !isStored(definition(c.kind))).length;
@@ -70,7 +72,7 @@ export function Battlefield({
         {reaction ? (
           <button
             className="secondary finish-button"
-            disabled={reaction.kind === 'bounce'}
+            disabled={readOnly || reaction.kind === 'bounce'}
             onClick={() => run({ type: 'react' })}
           >
             {reaction.kind === 'bounce' ? '必须弹出空地' : '放弃此效果'}
