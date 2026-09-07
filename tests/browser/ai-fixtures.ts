@@ -19,3 +19,11 @@ r.units = [];
 add(r, 1, 1, 3, 4);
 r.pending.push({ kind: 'death-shot', owner: 2, source: healer, amount: 20 });
 save('human-reaction', r, hard);
+
+// A predictable repeated attack sequence, used to observe public board pacing and cancellation.
+const paced = fixture();
+paced.heads = { 1: 0, 2: 0 };
+const archer = add(paced, 23, 1, 4, 7);
+archer.born = 1; // Independent of deployment fatigue: this is its active six-shot turn.
+add(paced, 'grave', 2, 4, 8);
+save('pacing', paced, { mode: 'ai', human: 2, difficulty: 'medium' });

@@ -3,9 +3,10 @@ import { AiClient } from '../../ai/client';
 import { DIFFICULTIES } from '../../ai/difficulty';
 import { decisionOwner, fingerprint, observe } from '../../ai/observation';
 import type { Decision, PlanStep } from '../../ai/types';
-import type { Command, Session } from '../../engine';
+import type { Command, Player, Session } from '../../engine';
 import { matchSettings, ownsComputerDecision } from '../../match/history';
 import type { GameModal } from '../game/types';
+import { actionDelay, waitForPresentation } from './pacing';
 interface Port {
   session: Session;
   live: { current: Session };
@@ -18,6 +19,8 @@ export function useComputer({ session, live, apply, modal, notice }: Port) {
   const client = useRef<AiClient | null>(null),
     revision = useRef(0),
     cache = useRef<PlanStep[]>([]);
+  const presentation = useRef<AbortController | null>(null);
+  const lastAction = useRef<{ command: Command; ply: number; owner: Player } | null>(null);
   const port = useRef({ apply, notice });
   port.current = { apply, notice };
   const budget = useRef({ ply: -1, nodes: 0, ms: 0, commands: 0 });
@@ -29,6 +32,9 @@ export function useComputer({ session, live, apply, modal, notice }: Port) {
     match = matchSettings(session);
   function cancel(pause = false) {
     revision.current++;
+    presentation.current?.abort();
+    presentation.current = null;
+    lastAction.current = null;
     client.current?.cancel();
     cache.current = [];
     budget.current = { ply: -1, nodes: 0, ms: 0, commands: 0 };
@@ -37,6 +43,7 @@ export function useComputer({ session, live, apply, modal, notice }: Port) {
   }
   useEffect(() => {
     if (!busy || paused || modal || session.future.length) {
+      lastAction.current = null;
       setThinking(false);
       return;
     }
@@ -47,10 +54,15 @@ export function useComputer({ session, live, apply, modal, notice }: Port) {
     if (budget.current.ply !== source.ply)
       budget.current = { ply: source.ply, nodes: 0, ms: 0, commands: 0 };
     setThinking(true);
+    const startedDecision = performance.now();
+    const abort = new AbortController();
+    presentation.current = abort;
+    const previous = lastAction.current;
+    const first = !previous || previous.ply !== source.ply || previous.owner !== player;
     let alive = true;
     const timer = setTimeout(
       async () => {
-        if (!alive) return;
+        if (!alive || abort.signal.aborted) return;
         try {
           const predicted = cache.current[0];
           let command: Command | null = null;
@@ -96,11 +108,28 @@ export function useComputer({ session, live, apply, modal, notice }: Port) {
           )
             return;
           if (!command) throw new Error('没有找到合法操作。');
+          const minimum = actionDelay(command, {
+            first,
+            previous: first ? null : previous.command,
+            events: source.events,
+          });
+          setThinking(false);
+          await waitForPresentation(minimum - (performance.now() - startedDecision), abort.signal);
+          // Pausing/undo/import can happen after planning, while we are only presenting a pause.
+          if (
+            !alive ||
+            abort.signal.aborted ||
+            id !== revision.current ||
+            live.current.present !== source ||
+            !ownsComputerDecision(live.current)
+          )
+            return;
           if (++budget.current.commands > 200) {
             setPaused(true);
             port.current.notice('AI本轮操作较多，已暂停。可以继续计算或悔棋。');
             return;
           }
+          lastAction.current = { command, ply: source.ply, owner: player };
           port.current.apply(command);
         } catch (e) {
           if (!alive || (e instanceof DOMException && e.name === 'AbortError')) return;
@@ -113,11 +142,13 @@ export function useComputer({ session, live, apply, modal, notice }: Port) {
           if (alive && id === revision.current) setThinking(false);
         }
       },
-      match.difficulty === 'easy' ? 160 : 100,
+      0, // Start computing promptly; presentation and search run on overlapping clocks.
     );
     return () => {
       alive = false;
       clearTimeout(timer);
+      abort.abort();
+      if (presentation.current === abort) presentation.current = null;
       revision.current++;
       client.current?.cancel();
     };
@@ -130,6 +161,7 @@ export function useComputer({ session, live, apply, modal, notice }: Port) {
     [],
   );
   function resume() {
+    lastAction.current = null;
     cache.current = [];
     budget.current = { ply: -1, nodes: 0, ms: 0, commands: 0 };
     setPaused(false);
