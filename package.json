@@ -1,6 +1,6 @@
 {
   "name": "haojie2",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,9 +8,12 @@
     "build": "node scripts/build.mjs",
     "check": "tsc --noEmit",
     "test": "tsx --test tests/*/*.test.ts",
-    "test:browser": "node tests/browser.mjs",
+    "test:browser": "node tests/browser/game.mjs",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "deploy": "node scripts/pages.mjs",
+    "deploy:check": "node scripts/pages.mjs --check",
+    "test:pages": "node tests/browser/pages.mjs"
   },
   "dependencies": {
     "react": "19.2.0",

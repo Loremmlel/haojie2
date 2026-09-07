@@ -81,3 +81,13 @@ esbuild把React、ReactDOM、CSS与游戏代码打成IIFE并内联进唯一HTML�
 `tests/core`维护普通库和基础规则，`tests/ultimate`维护终极库，`tests/session`维护历史、状态图与跨能力交互。测试不按每个修复堆一组重复回归，不绑定CSS排列或React内部状态。
 
 浏览器验收默认离线`file://`，测试真实DOM操作、手机视口和导出导入；产出PNG和JSON证据，不用截图像素作为脆弱断言。仅当环境不允许页面导航时使用明确标识的内存渲染模式做布局/交互辅助验证，最终CI仍走默认文件模式。
+
+## 2.0.1工程组织补充
+
+UI入口仍为`src/index.ts`的HaojieGame及同名Props，Game.tsx仅组合视图。game/useGameController协调意图；session/useGameSession持有会话及声音/事件生命周期；session/storage提供可测试存储适配；SaveTools负责文件导入导出。各展示组件显式传props，不自行修改规则状态。
+
+CSS与各功能就近，styles/index.css保持单一可审阅的顺序，motion.css最后处理减少动态效果。原styles.css、v2.css、refinements.css已移除，不再追加版本补丁样式。公开入口不需要宿主另导入散落样式文件。
+
+已把快捷键限制在当前获得焦点的游戏实例；宿主输入及其他游戏不受影响。多个实例应使用不同storageKey或设为null。版本发布与schema分离，2.0.1保持v2存档；旧号令期限的兼容修正位于engine/migrations.ts，跨所有历史快照统一处理。
+
+结构选型见ENGINEERING.md，Pages生成入口与本机续局语义见PAGES.md。

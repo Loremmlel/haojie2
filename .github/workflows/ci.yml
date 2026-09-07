@@ -1,7 +1,7 @@
 name: Verify and build single HTML
 on:
   push:
-    branches: [main, feat/haojie-2-rules-and-ultimate]
+    branches: [main]
     paths-ignore: ['README.md', 'docs/**']
   pull_request:
   workflow_dispatch:
@@ -35,10 +35,11 @@ jobs:
       - run: |
           set -o pipefail
           npm test | tee artifacts/engine-report.txt
-      - run: npm run build
+      - run: npm run deploy:check
       - name: Install browser for acceptance testing
         run: npx playwright install --with-deps chromium
       - run: npm run test:browser
+      - run: npm run test:pages
       - name: Upload the playable standalone HTML
         uses: actions/upload-artifact@v4
         with:
@@ -53,7 +54,7 @@ jobs:
           name: acceptance-evidence
           path: |
             artifacts/*.png
-            artifacts/browser-report.json
+            artifacts/*report.json
             artifacts/engine-report.txt
           if-no-files-found: ignore
           retention-days: 7

@@ -1,4 +1,4 @@
-import type { GameEvent } from '../engine';
+import type { GameEvent } from '../../engine';
 /** Optional synthesized audio: no media downloads and no autoplay. */
 export class Soundscape {
   private context: AudioContext | null = null;

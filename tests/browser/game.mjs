@@ -8,7 +8,7 @@ import { chromium } from 'playwright';
 
 const renderOnly = process.env.HAOJIE_RENDER_ONLY === '1';
 await mkdir('artifacts', { recursive: true });
-execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser-fixtures.ts'], {
+execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/fixtures.ts'], {
   stdio: 'inherit',
 });
 assert.deepEqual(await readdir('dist'), ['index.html']);
@@ -258,12 +258,14 @@ try {
   await page.locator('.interpretations summary').click();
   assert.ok(
     await page
-      .getByText(/善铁.*输入/)
+      .getByText(/善铁.*3.0神龛模式/)
       .first()
       .isVisible(),
   );
   await button('关闭弹窗').click();
-  scenario('59-entry searchable codex, 28 ultimate entries, four weapons and source-gap rules');
+  scenario(
+    '59-entry searchable codex, 28 ultimate entries, four weapons and confirmed/deferred rules',
+  );
   const beforeInvalid = await readState();
   await page.locator('input[type=file]').setInputFiles({
     name: 'bad.json',

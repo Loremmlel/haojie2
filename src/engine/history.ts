@@ -1,4 +1,5 @@
 import { applyCommand } from './game';
+import { normalizeHornStorage } from './migrations';
 import { definition, isStored } from './catalog';
 import { cells, inside, key, basePoint, equal } from './geometry';
 import type { Command, GameState, Player, Unit } from './types';
@@ -336,5 +337,5 @@ export function parseSession(text: string): Session {
     !value.future.every(validState)
   )
     throw new Error('存档结构不兼容或数据损坏，当前棋局未被替换。');
-  return value as Session;
+  return normalizeHornStorage(value as Session);
 }

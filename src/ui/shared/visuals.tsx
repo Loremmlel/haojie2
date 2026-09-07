@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
-import { definition } from '../engine';
-import type { Kind, Player } from '../engine';
+import type { Kind, Player } from '../../engine';
+import { definition } from '../../engine';
 const paths: Record<string, string> = {
   sword: 'M14 3h7v7L9 22l-7-7L14 3Zm0 0 7 7M3 13l8 8M3 21l3-3',
   shield: 'M12 3 3 7v5c0 5 9 10 9 10s9-5 9-10V7l-9-4Zm0 5v9m-4-5h8',

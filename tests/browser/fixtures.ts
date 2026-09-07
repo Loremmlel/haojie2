@@ -1,9 +1,9 @@
 /** Test-only saved matches. No scenario overrides or cheats are included in the shipped game. */
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { createGame, createSession } from '../src/engine';
-import { addEffect } from '../src/engine/state';
-import { fixture, add, card, seedFor } from './helpers';
-import type { GameState } from '../src/engine';
+import { createGame, createSession } from '../../src/engine';
+import { addEffect } from '../../src/engine/state';
+import { fixture, add, card, seedFor } from '../helpers';
+import type { GameState } from '../../src/engine';
 mkdirSync('artifacts/fixtures', { recursive: true });
 function save(name: string, s: GameState) {
   writeFileSync(`artifacts/fixtures/${name}.json`, JSON.stringify(createSession(s)));
