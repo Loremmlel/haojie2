@@ -1,7 +1,7 @@
 name: Verify and build single HTML
 on:
   push:
-    branches: [main]
+    branches: [main, feat/haojie-2-rules-and-ultimate]
     paths-ignore: ['README.md', 'docs/**']
   pull_request:
   workflow_dispatch:
@@ -32,7 +32,9 @@ jobs:
           retention-days: 7
       - run: npm run format:check
       - run: npm run check
-      - run: npm test
+      - run: |
+          set -o pipefail
+          npm test | tee artifacts/engine-report.txt
       - run: npm run build
       - name: Install browser for acceptance testing
         run: npx playwright install --with-deps chromium
@@ -52,5 +54,6 @@ jobs:
           path: |
             artifacts/*.png
             artifacts/browser-report.json
+            artifacts/engine-report.txt
           if-no-files-found: ignore
           retention-days: 7

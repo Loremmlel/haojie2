@@ -62,7 +62,7 @@ export function Rune({
   const d = definition(kind);
   return (
     <span
-      className={`rune p${owner} ${d.spell ? 'spell-rune' : ''} ${large ? 'large' : ''}`}
+      className={`rune p${owner} ${d.spell !== undefined ? 'spell-rune' : ''} ${large ? 'large' : ''}`}
       aria-hidden="true"
     >
       <span className="rune-orbit" />

@@ -9,7 +9,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: string |
     return { error: error.message };
   }
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('Haojie UI failure', error, info.componentStack);
+    console.error('浩劫 UI failure', error, info.componentStack);
   }
   render() {
     if (this.state.error)
