@@ -5,6 +5,15 @@ import { pathToFileURL } from 'node:url';
 
 /** Bundle both JavaScript and CSS into one HTML. No CDN, chunks or runtime fetches. */
 export async function buildGame() {
+  const worker = await build({
+    entryPoints: ['src/ai/worker.ts'],
+    bundle: true,
+    write: false,
+    format: 'iife',
+    platform: 'browser',
+    target: ['es2022'],
+    minify: true,
+  });
   const result = await build({
     entryPoints: ['src/main.tsx'],
     bundle: true,
@@ -16,7 +25,10 @@ export async function buildGame() {
     minify: true,
     sourcemap: false,
     legalComments: 'inline',
-    define: { 'process.env.NODE_ENV': '"production"' },
+    define: {
+      'process.env.NODE_ENV': '"production"',
+      __HAOJIE_AI_WORKER__: JSON.stringify(worker.outputFiles[0].text),
+    },
     metafile: true,
     logLevel: 'warning',
   });
@@ -35,8 +47,8 @@ export async function buildGame() {
 <html lang="zh-CN"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#f5f4ef">
-<meta name="description" content="浩劫：26种普通召唤、28种终极召唤、117格战场，同屏双人回合制战棋。离线可玩，支持悔棋与存档。">
-<title>浩劫 2.0 · 双人回合制战棋</title>
+<meta name="description" content="浩劫：26种普通召唤、28种终极召唤、117格战场，双人/三档本地AI回合制战棋。离线可玩，支持悔棋与存档。">
+<title>浩劫 2.1 · 双人 / AI对战</title>
 <!-- Bundled third-party notices\n${notices.join('\n\n').replace(/-->/g, '-- >')} -->
 <style>html,body{margin:0;min-height:100%;background:#f5f4ef}#root{min-height:100vh}${styles.replace(/<\/style/gi, '<\\/style')}</style>
 </head><body><div id="root"></div><noscript>浩劫需要启用JavaScript，但不需要联网。</noscript>

@@ -12,7 +12,8 @@ export function randomSeed(): number {
     : Date.now() >>> 0 || 1;
 }
 function boot(props: HaojieGameProps, key: string | null) {
-  const fallback = () => createSession(props.initialState ?? createGame(randomSeed()));
+  const fallback = () =>
+    createSession(props.initialState ?? createGame(randomSeed()), props.initialMatch);
   if (props.initialState || !key || typeof window === 'undefined')
     return { session: fallback(), notice: '', writable: true };
   try {

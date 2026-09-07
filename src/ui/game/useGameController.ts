@@ -1,3 +1,6 @@
+import { matchSettings, ownsComputerDecision, rewindMatch } from '../../match/history';
+import { LOCAL_MATCH, type MatchSettings } from '../../match/settings';
+import { useComputer } from '../opponent/useComputer';
 import { useMemo, useRef, useState } from 'react';
 import type { ActionSpec, Command, Point, Session } from '../../engine';
 import {
@@ -9,9 +12,7 @@ import {
   createSession,
   occupants,
   reactionAction,
-  redo,
   targetAt,
-  undo,
   unitActions,
 } from '../../engine';
 import { randomSeed, useGameSession } from '../session/useGameSession';
@@ -35,12 +36,32 @@ export function useGameController(props: HaojieGameProps) {
     unit = s.units.find((u) => u.id === selectedId),
     card = hand.find((c) => c.id === cardId),
     reaction = s.pending[0];
-  const activeIntent = reaction ? startIntent(reactionAction(s)!) : intent;
+  const computer = useComputer({
+    session,
+    live,
+    apply: (c) => {
+      game.execute(c);
+      cancel();
+      setSelectedId(c.unitId ?? null);
+    },
+    modal,
+    notice: setNotice,
+  });
+  const activeIntent =
+    reaction && !ownsComputerDecision(session) ? startIntent(reactionAction(s)!) : intent;
   const actions = useMemo(
-    () => (card ? cardActions(s, card) : unit ? unitActions(s, unit) : []),
+    () =>
+      ownsComputerDecision(session)
+        ? []
+        : card
+          ? cardActions(s, card)
+          : unit
+            ? unitActions(s, unit)
+            : [],
     [s, card, unit],
   );
   const endError = useMemo(() => {
+    if (ownsComputerDecision(session)) return '当前由AI决策。';
     try {
       applyCommand(s, { type: 'end' });
       return null;
@@ -54,19 +75,25 @@ export function useGameController(props: HaojieGameProps) {
     setCardId(null);
   }
   function replace(next: Session, explicit = false) {
+    computer.cancel();
     game.replace(next, explicit);
     cancel();
   }
   function rewind(forward = false) {
-    const next = forward ? redo(live.current) : undo(live.current);
+    const next = rewindMatch(live.current, forward);
     if (next === live.current) return;
     replace(next);
+    if (ownsComputerDecision(next)) computer.pause();
     setNotice(
       forward ? '已重做，随机结果保持不变。' : '已悔棋，人头、武器、效果计时与随机数全部恢复。',
     );
   }
   useGameHotkeys(scope, !!modal, rewind, cancel);
   function run(c: Command) {
+    if (ownsComputerDecision(live.current)) {
+      setNotice('当前由AI决策，可查看棋盘或悔棋。');
+      return;
+    }
     try {
       const before = live.current,
         next = game.execute(c);
@@ -88,6 +115,7 @@ export function useGameController(props: HaojieGameProps) {
     }
   }
   function chooseAction(a: ActionSpec) {
+    if (ownsComputerDecision(live.current)) return;
     const error = actionError(s, a);
     if (error) {
       setNotice(error);
@@ -97,7 +125,7 @@ export function useGameController(props: HaojieGameProps) {
     else setIntent(startIntent(a));
   }
   function chooseCard(id: string) {
-    if (reaction) return;
+    if (reaction || ownsComputerDecision(live.current)) return;
     const c = hand.find((c) => c.id === id);
     if (!c) return;
     setCardId(id);
@@ -137,16 +165,19 @@ export function useGameController(props: HaojieGameProps) {
   function importSession(next: Session) {
     replace(next, true);
     setSelectedId(null);
+    computer.resume();
     setNotice('浩劫存档已载入，包含完整悔棋历史。');
   }
-  function newGame(seedText: string, demo: boolean) {
+  function newGame(seedText: string, demo: boolean, match: MatchSettings = LOCAL_MATCH) {
     try {
       replace(
         createSession(
           demo ? createDemoGame() : createGame(seedText.trim() ? Number(seedText) : randomSeed()),
+          match,
         ),
         true,
       );
+      computer.resume();
       setSelectedId(null);
       setModal(null);
       setNotice(
@@ -160,6 +191,12 @@ export function useGameController(props: HaojieGameProps) {
   }
   return {
     ...game,
+    computer,
+    match: matchSettings(session),
+    resumeComputer: () => {
+      if (live.current.future.length) replace({ ...live.current, future: [] });
+      computer.resume();
+    },
     scope,
     state: s,
     controller,

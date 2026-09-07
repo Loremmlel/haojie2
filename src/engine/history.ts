@@ -1,3 +1,4 @@
+import { validMatch, type MatchSettings } from '../match/settings';
 import { applyCommand } from './game';
 import { normalizeHornStorage } from './migrations';
 import { definition, isStored } from './catalog';
@@ -5,12 +6,15 @@ import { cells, inside, key, basePoint, equal } from './geometry';
 import type { Command, GameState, Player, Unit } from './types';
 export interface Session {
   format: 'haojie-session-v2';
+  match?: MatchSettings;
+  humanAnchor?: GameState;
   present: GameState;
   past: GameState[];
   future: GameState[];
 }
 const LIMIT = 60;
-export const createSession = (present: GameState): Session => ({
+export const createSession = (present: GameState, match?: MatchSettings): Session => ({
+  ...(match ? { match: { ...match } } : {}),
   format: 'haojie-session-v2',
   present,
   past: [],
@@ -20,6 +24,10 @@ export function dispatch(s: Session, c: Command): Session {
   return {
     ...s,
     present: applyCommand(s.present, c),
+    ...(s.match?.mode === 'ai' &&
+    (s.present.pending[0]?.owner ?? s.present.active) === s.match.human
+      ? { humanAnchor: s.present }
+      : {}),
     past: [...s.past, s.present].slice(-LIMIT),
     future: [],
   };
@@ -330,6 +338,8 @@ export function parseSession(text: string): Session {
   if (
     !object(value) ||
     value.format !== 'haojie-session-v2' ||
+    (value.match !== undefined && !validMatch(value.match)) ||
+    (value.humanAnchor !== undefined && !validState(value.humanAnchor)) ||
     !validState(value.present) ||
     !list(value.past, LIMIT) ||
     !list(value.future, LIMIT) ||

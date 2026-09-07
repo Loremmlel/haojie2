@@ -4,9 +4,11 @@ import { Icon } from '../shared/visuals';
 export function SummonControls({
   state: s,
   run,
+  readOnly = false,
 }: {
   state: GameState;
   run: (command: Command) => void;
+  readOnly?: boolean;
 }) {
   const reaction = s.pending[0];
   if (s.phase !== 'summon' || s.winner) return null;
@@ -18,7 +20,7 @@ export function SummonControls({
       </p>
       <button
         className="secondary"
-        disabled={s.summonSlots <= 0 || !!reaction}
+        disabled={readOnly || s.summonSlots <= 0 || !!reaction}
         onClick={() => run({ type: 'summon' })}
       >
         <Icon name="plus" />
@@ -26,7 +28,7 @@ export function SummonControls({
       </button>
       <button
         className="ultimate-summon"
-        disabled={s.summonSlots <= 0 || s.heads[s.active] < 2 || !!reaction}
+        disabled={readOnly || s.summonSlots <= 0 || s.heads[s.active] < 2 || !!reaction}
         onClick={() => run({ type: 'summon', ultimate: true })}
       >
         <Icon name="spark" />
@@ -34,7 +36,7 @@ export function SummonControls({
       </button>
       <button
         className="primary"
-        disabled={s.summonSlots !== 0 || !!reaction}
+        disabled={readOnly || s.summonSlots !== 0 || !!reaction}
         onClick={() => run({ type: 'begin' })}
       >
         完成召唤，开始行动

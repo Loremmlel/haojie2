@@ -50,3 +50,9 @@ npm run test:pages
 - [配置发布来源及GITHUB_TOKEN注意事项](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
 - [自定义Pages工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
 - [MDN localStorage](https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage)
+
+## 2.1人机模式
+
+同一单文件产物现在内联AI Worker及分片降级代码；页面运行不下载模型/Worker资产，不新增后端。模式、难度和人类阵营保存在Session.match，继续使用haojie.session.v2。旧v2局面缺少设置时作为同屏双人恢复。人机悔棋同时撤销电脑回应，并可重新做回实际历史；AI思考线程不在存档中，刷新后按公开当前局面重新规划。
+
+发布前额外运行npm run test:browser:ai；CI仍校验生成的index.html，源码更新时不要漏更新发布物。减少动态效果或关闭音效不会关闭AI，也不会改变规则概率。

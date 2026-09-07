@@ -20,3 +20,5 @@
 @import '../library/codex.css';
 @import '../library/rules.css';
 @import 'motion.css';
+
+@import '../opponent/opponent.css';

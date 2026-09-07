@@ -91,7 +91,7 @@ try {
   const raw = '{broken-old-save';
   await page.evaluate((raw) => localStorage.setItem('haojie.session.v2', raw), raw);
   await page.reload();
-  await page.getByRole('heading', { name: '浩劫2.0', exact: true }).waitFor();
+  await page.getByRole('heading', { name: '浩劫2.1', exact: true }).waitFor();
   assert.equal(await page.evaluate(() => localStorage.getItem('haojie.session.v2')), raw);
   assert.match(await page.locator('.log-footer').innerText(), /暂停/);
   await page.getByRole('button', { name: '新对局', exact: true }).click();

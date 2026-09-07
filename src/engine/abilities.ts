@@ -364,7 +364,7 @@ export function cast(s: GameState, c: Command, ctx: Resolution) {
     );
   }
   for (const mage of s.units.filter((u) => u.owner !== owner && u.kind === 'u3' && passive(s, u)))
-    if (random(s) < 1 / 3) {
+    if (random(s, [0, 1 / 3, 1]) < 1 / 3) {
       s.hands[owner] = s.hands[owner].filter((v) => v.id !== card.id);
       emit(
         s,

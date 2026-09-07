@@ -376,7 +376,7 @@
 }
 @media (min-width: 1091px) {
   .hj-game .piece strong {
-    font-size: clamp(18px, calc(var(--desktop-board) * 0.052), 25px);
+    font-size: clamp(18px, 2.1vw, 25px);
   }
   .hj-game .large-piece .piece strong {
     font-size: 34px;

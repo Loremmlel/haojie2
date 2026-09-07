@@ -57,7 +57,7 @@
   border-bottom: 1px solid #e8efde;
   line-height: 1.8;
 }
-@media (max-width: 1090px) and (min-width: 821px) {
+@media (max-width: 1279px) and (min-width: 821px) {
   .hj-game .save-tools {
     grid-column: 1/-1;
   }

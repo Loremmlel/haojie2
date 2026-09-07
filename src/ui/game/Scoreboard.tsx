@@ -2,7 +2,7 @@ import type { GameState, Player } from '../../engine';
 import { faction } from '../../engine';
 import { Icon, playerStyle } from '../shared/visuals';
 
-export function Scoreboard({ state: s }: { state: GameState }) {
+export function Scoreboard({ state: s, human }: { state: GameState; human?: Player }) {
   const reaction = s.pending[0],
     controller = reaction?.owner ?? s.active;
   return (
@@ -20,7 +20,9 @@ export function Scoreboard({ state: s }: { state: GameState }) {
             <div className="player-name">
               <h2>{faction(p)}</h2>
               <span>PLAYER 0{p}</span>
-              {controller === p && <b>{reaction ? '结算中' : '你的回合'}</b>}
+              {controller === p && (
+                <b>{reaction ? '结算中' : human && human !== p ? 'AI回合' : '你的回合'}</b>
+              )}
             </div>
             <div className="base-readout">
               <strong>{s.bases[p]}</strong>

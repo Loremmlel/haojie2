@@ -1,6 +1,6 @@
 {
   "name": "haojie2",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,7 +13,9 @@
     "format:check": "prettier --check .",
     "deploy": "node scripts/pages.mjs",
     "deploy:check": "node scripts/pages.mjs --check",
-    "test:pages": "node tests/browser/pages.mjs"
+    "test:pages": "node tests/browser/pages.mjs",
+    "test:browser:ai": "node tests/browser/ai.mjs",
+    "bench:ai": "tsx scripts/ai/benchmark.ts"
   },
   "dependencies": {
     "react": "19.2.0",
