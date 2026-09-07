@@ -90,52 +90,53 @@ export function Board({
     [focus, setFocus] = useState<Point>({ x: 5, y: 7 }),
     [reduced, setReduced] = useState(false);
   useEffect(() => {
-    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const change = () => setReduced(media.matches);
+    const m = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const change = () => setReduced(m.matches);
     change();
-    media.addEventListener('change', change);
-    return () => media.removeEventListener('change', change);
+    m.addEventListener('change', change);
+    return () => m.removeEventListener('change', change);
   }, []);
   const choices = useMemo(
     () => new Set(ALL_CELLS.filter((p) => canChoose(s, intent, p)).map((p) => `${p.x},${p.y}`)),
     [s, intent],
   );
-  const owner = s.pending[0]?.owner ?? s.active;
-  const acting = 'unitId' in intent ? s.units.find((u) => u.id === intent.unitId) : undefined;
-  const previewKind =
-    'cardId' in intent ? s.hands[s.active].find((c) => c.id === intent.cardId)?.kind : undefined;
+  const owner = s.pending[0]?.owner ?? s.active,
+    tone = intentTone(intent);
+  const draft = intent.kind === 'select' ? intent.draft : null;
+  const acting = draft?.unitId ? s.units.find((u) => u.id === draft.unitId) : undefined;
+  const currentCard = draft?.cardId
+    ? s.hands[s.active].find((c) => c.id === draft.cardId)
+    : undefined;
   const previewSize =
-    intent.kind === 'deploy' && previewKind
-      ? (definition(previewKind).size ?? 1)
-      : intent.kind === 'cast' && previewKind === 8
+    draft?.type === 'deploy' && currentCard
+      ? (definition(currentCard.kind).size ?? 1)
+      : currentCard?.kind === 8
         ? 2
         : 0;
   const preview = hover && previewSize && choices.has(`${hover.x},${hover.y}`) ? hover : null;
-  const tone = s.pending.length ? 'attack' : intentTone(intent);
-  function navigate(event: React.KeyboardEvent<HTMLButtonElement>, p: Point) {
-    const delta: Record<string, Point> = {
+  function navigate(e: React.KeyboardEvent<HTMLButtonElement>, p: Point) {
+    const dirs: Record<string, Point> = {
       ArrowUp: { x: 0, y: -1 },
       ArrowDown: { x: 0, y: 1 },
       ArrowLeft: { x: -1, y: 0 },
       ArrowRight: { x: 1, y: 0 },
     };
-    const d = delta[event.key];
+    const d = dirs[e.key];
     if (!d) return;
-    event.preventDefault();
-    const next = {
-      x: Math.max(1, Math.min(9, p.x + d.x)),
-      y: Math.max(1, Math.min(13, p.y + d.y)),
-    };
-    ref.current?.querySelector<HTMLButtonElement>(`[data-cell="${next.x},${next.y}"]`)?.focus();
+    e.preventDefault();
+    const n = { x: Math.max(1, Math.min(9, p.x + d.x)), y: Math.max(1, Math.min(13, p.y + d.y)) };
+    ref.current?.querySelector<HTMLButtonElement>(`[data-cell="${n.x},${n.y}"]`)?.focus();
   }
+  const format = (n: number) => (Number.isInteger(n) ? n : Math.round(n * 10) / 10);
   return (
-    <section className="board-shell" aria-label="对战棋盘" style={playerStyle(owner)}>
+    <section className="board-shell" aria-label="浩劫对战棋盘" style={playerStyle(owner)}>
       <div className="board-topline">
         <span>
-          <i className="live-dot" /> {faction(owner)}视野
+          <i className="live-dot" />
+          {faction(owner)} · {s.phase === 'summon' ? '召唤阶段' : '行动阶段'}
         </span>
         <span>
-          9 × 13 <b> / </b> 117格
+          9 × 13 <b>/</b> 117格
         </span>
       </div>
       <div className="board-frame">
@@ -150,7 +151,7 @@ export function Board({
           ))}
         </div>
         <div
-          className={`board ${intent.kind !== 'none' || s.pending.length ? 'targeting' : ''}`}
+          className={`board ${intent.kind !== 'none' ? 'targeting' : ''}`}
           ref={ref}
           role="grid"
           aria-label="九列十三行战场，方向键选择格子，回车操作"
@@ -161,11 +162,12 @@ export function Board({
               {Array.from({ length: 9 }, (_, col) => {
                 const p = { x: col + 1, y: row + 1 },
                   t = targetAt(s, p),
-                  valid = choices.has(`${p.x},${p.y}`);
-                const selected = t?.id === selectedId;
+                  stack = s.units.filter((u) => cells(u).some((c) => c.x === p.x && c.y === p.y)),
+                  valid = choices.has(`${p.x},${p.y}`),
+                  selected = stack.some((u) => u.id === selectedId) || t?.id === selectedId;
                 const range =
                   acting &&
-                  intent.kind === 'attack' &&
+                  draft?.type === 'attack' &&
                   cells(acting).some((c) => distance(c, p) <= getStats(s, acting).range);
                 const inPreview =
                   preview &&
@@ -173,18 +175,16 @@ export function Board({
                   p.x < preview.x + previewSize &&
                   p.y >= preview.y &&
                   p.y < preview.y + previewSize;
-                const picked = intent.kind === 'reforge' && !!t && intent.targets.includes(t.id);
-                const area = row < 5 ? 'north' : row > 7 ? 'south' : 'contested';
-                const label = `${p.x}列${p.y}行${t ? `，${faction(t.owner)}${t.unit ? definition(t.unit.kind).name + '，' + t.unit.hp + '生命' : '基地，' + s.bases[t.owner] + '生命'}` : '，空格'}${valid ? '，可选择' : ''}`;
+                const label = `${p.x}列${p.y}行${t ? `，${t.unit && getStats(s, t.unit).frozen ? '冰冻中立' : faction(t.owner)}${t.unit ? definition(t.unit.kind).name + '，' + format(t.unit.hp) + '生命' : '基地，' + s.bases[t.owner] + '生命'}` : '，空格'}${stack.length > 1 ? `，叠放${stack.length}枚` : ''}${valid ? '，可选择' : ''}`;
                 return (
                   <button
-                    key={col}
                     role="gridcell"
+                    key={col}
                     data-cell={`${p.x},${p.y}`}
                     aria-label={label}
-                    aria-selected={selected || picked}
+                    aria-selected={selected}
                     tabIndex={focus.x === p.x && focus.y === p.y ? 0 : -1}
-                    className={`cell ${area} ${range ? 'in-range' : ''} ${valid ? `legal ${tone} ${t ? 'occupied-target' : ''}` : ''} ${selected ? 'selected-cell' : ''} ${inPreview ? 'area-preview' : ''} ${picked ? 'picked-cell' : ''}`}
+                    className={`cell ${row < 5 ? 'north' : row > 7 ? 'south' : 'contested'} ${range ? 'in-range' : ''} ${valid ? `legal ${tone} ${t ? 'occupied-target' : ''}` : ''} ${selected ? 'selected-cell' : ''} ${inPreview ? 'area-preview' : ''}`}
                     onClick={() => onCell(p)}
                     onFocus={() => {
                       setFocus(p);
@@ -204,89 +204,154 @@ export function Board({
             <span>交 锋 区</span>
           </div>
           <div className="frontier frontier-two" aria-hidden="true" />
+          {s.hazards.map((h) => (
+            <div
+              key={h.id}
+              className={`hazard hazard-${h.axis}`}
+              aria-hidden="true"
+              style={
+                h.axis === 'row'
+                  ? { top: `${((h.line - 1) / 13) * 100}%`, height: `${100 / 13}%` }
+                  : { left: `${((h.line - 1) / 9) * 100}%`, width: `${100 / 9}%` }
+              }
+            />
+          ))}
+          {s.iceMarks.map((m) => (
+            <div
+              className="ice-ground"
+              key={m.id}
+              aria-hidden="true"
+              style={{ left: `${((m.x - 1) / 9) * 100}%`, top: `${((m.y - 1) / 13) * 100}%` }}
+            >
+              ❄
+            </div>
+          ))}
+          <svg className="siphon-layer" viewBox="0 0 900 1300" aria-hidden="true">
+            {s.siphons.map((l) => {
+              const a = l.fromId.startsWith('base-')
+                  ? basePoint(Number(l.fromId.at(-1)) as Player)
+                  : s.units.find((u) => u.id === l.fromId),
+                b = l.toId.startsWith('base-')
+                  ? basePoint(Number(l.toId.at(-1)) as Player)
+                  : s.units.find((u) => u.id === l.toId);
+              return a && b ? (
+                <g key={l.id}>
+                  <path
+                    d={`M${(a.x - 0.5) * 100} ${(a.y - 0.5) * 100} L${(b.x - 0.5) * 100} ${(b.y - 0.5) * 100}`}
+                    className="siphon-thread"
+                  />
+                  <circle cx={(b.x - 0.5) * 100} cy={(b.y - 0.5) * 100} r="10" fill="#9272ae" />
+                </g>
+              ) : null;
+            })}
+          </svg>
           {([1, 2] as Player[]).map((p) => {
             const at = basePoint(p);
             return (
               <div
-                key={p}
                 className={`base-token p${p}`}
-                style={{ left: `${((at.x - 1) / 9) * 100}%`, top: `${((at.y - 1) / 13) * 100}%` }}
+                key={p}
                 aria-hidden="true"
+                style={{ left: `${((at.x - 1) / 9) * 100}%`, top: `${((at.y - 1) / 13) * 100}%` }}
               >
                 <Icon name="crown" size={25} />
                 <b>{s.bases[p]}</b>
+                {s.baseEffects[p].some((e) => e.type === 'mark') && (
+                  <span className="base-mark">◆</span>
+                )}
               </div>
             );
           })}
-          {s.units.map((u) => {
-            const d = definition(u.kind),
-              size = d.size ?? 1,
-              stats = getStats(s, u),
-              selected = u.id === selectedId;
-            const hurt = events.some((e) => e.type === 'damage' && e.unitId === u.id),
-              spawned = events.some((e) => e.type === 'spawn' && e.unitId === u.id);
-            return (
-              <div
-                key={u.id}
-                className={`piece-wrap p${u.owner} ${size === 2 ? 'large-piece' : ''} ${selected ? 'piece-selected' : ''} ${hurt ? 'hurt' : ''} ${spawned ? 'arriving' : ''}`}
-                style={{
-                  left: `${((u.x - 1) / 9) * 100}%`,
-                  top: `${((u.y - 1) / 13) * 100}%`,
-                  width: `${(size / 9) * 100}%`,
-                  height: `${(size / 13) * 100}%`,
-                }}
-                aria-hidden="true"
-              >
-                <div className={`piece ${stats.sleeping ? 'sleeping' : ''}`}>
-                  <span className="piece-heading" />
-                  <span className="piece-code">
-                    {u.kind === '3p' ? '3′' : typeof u.kind === 'number' ? u.kind : '◆'}
-                  </span>
-                  <strong>{d.glyph}</strong>
-                  <span className="piece-hp">{u.hp}</span>
-                  <div className="piece-health">
-                    <i style={{ width: `${(u.hp / u.maxHp) * 100}%` }} />
+          {s.units
+            .filter(
+              (u) =>
+                u.kind !== 'u25' ||
+                s.units.find((v) => v.kind === 'u25' && v.x === u.x && v.y === u.y)?.id === u.id,
+            )
+            .map((u) => {
+              const d = definition(u.kind),
+                stats = getStats(s, u),
+                stack = s.units.filter((v) => v.x === u.x && v.y === u.y),
+                selected = stack.some((v) => v.id === selectedId),
+                size = u.size;
+              return (
+                <div
+                  key={u.id}
+                  className={`piece-wrap p${u.owner} ${size === 2 ? 'large-piece' : ''} ${selected ? 'piece-selected' : ''} ${d.tier !== 'normal' && typeof u.kind !== 'number' && !['3p', 'grave', 'wall'].includes(String(u.kind)) ? 'ultimate-piece' : ''} ${stats.frozen ? 'neutral-piece' : ''} ${events.some((e) => e.type === 'damage' && e.unitId === u.id) ? 'hurt' : ''} ${events.some((e) => e.type === 'spawn' && e.unitId === u.id) ? 'arriving' : ''}`}
+                  aria-hidden="true"
+                  style={{
+                    left: `${((u.x - 1) / 9) * 100}%`,
+                    top: `${((u.y - 1) / 13) * 100}%`,
+                    width: `${(size / 9) * 100}%`,
+                    height: `${(size / 13) * 100}%`,
+                  }}
+                >
+                  <div className={`piece ${stats.sleeping ? 'sleeping' : ''}`}>
+                    <span className="piece-heading" />
+                    <span className="piece-code">
+                      {u.kind === '3p'
+                        ? '3′'
+                        : String(u.kind).startsWith('u')
+                          ? String(u.kind).toUpperCase()
+                          : typeof u.kind === 'number'
+                            ? u.kind
+                            : '◆'}
+                    </span>
+                    <strong>{d.glyph}</strong>
+                    <span className="piece-hp">{format(u.hp)}</span>
+                    <div className="piece-health">
+                      <i style={{ width: `${(u.hp / u.maxHp) * 100}%` }} />
+                    </div>
+                    {u.effects.some(
+                      (e) =>
+                        e.type === 'immune' &&
+                        e.from <= s.ply + u.offset &&
+                        e.until > s.ply + u.offset,
+                    ) && <span className="shield-halo" />}
+                    {u.effects.some((e) => e.type === 'mark') && (
+                      <span className="mark-dot">·</span>
+                    )}
+                    {u.equipment.length > 0 && (
+                      <span className="gear-dot">{definition(u.equipment[0]).glyph}</span>
+                    )}
+                    {u.silenced && <span className="silence-dot">禁</span>}
+                    {stats.frozen && <span className="frost-crystal">❄</span>}
                   </div>
-                  {u.effects.some(
-                    (e) => e.type === 'immune' && e.from <= s.ply && e.until > s.ply,
-                  ) && <span className="shield-halo" />}
-                  {u.effects.some((e) => e.type === 'mark') && <span className="mark-dot">·</span>}
+                  <div className="action-pips">
+                    {Array.from(
+                      { length: Math.min(6, stats.actions || stats.operationLimit) },
+                      (_, i) => (
+                        <i
+                          key={i}
+                          className={
+                            (stats.actions ? i < stats.remaining : i < stats.operationsLeft)
+                              ? 'available'
+                              : ''
+                          }
+                        />
+                      ),
+                    )}
+                  </div>
+                  {stats.sleeping && <span className="sleep-badge">休</span>}
+                  {stack.length > 1 && <span className="stack-badge">×{stack.length}</span>}
                 </div>
-                <div className="action-pips">
-                  {Array.from({ length: Math.min(6, stats.actions) }, (_, i) => (
-                    <i key={i} className={i < stats.remaining ? 'available' : ''} />
-                  ))}
-                </div>
-                {stats.sleeping && <span className="sleep-badge">休</span>}
-              </div>
-            );
-          })}
-          {intent.kind === 'dash-attack' && (
-            <div
-              className="dash-ghost"
-              style={{
-                left: `${((intent.to.x - 1) / 9) * 100}%`,
-                top: `${((intent.to.y - 1) / 13) * 100}%`,
-              }}
-              aria-hidden="true"
-            >
-              <Icon name="move" />
-            </div>
-          )}
+              );
+            })}
           <Effects events={events} reduced={reduced} />
         </div>
       </div>
       <div className="board-legend">
         <span>
           <i className="legend-dot move" />
-          可移动 / 部署
+          落点
         </span>
         <span>
           <i className="legend-dot attack" />
-          可攻击目标
+          目标
         </span>
+        <span>❄ 冰冻中立</span>
         <span className="hover-coordinate">
-          {hover ? `(${hover.x}, ${hover.y})` : '方向键也可选格'}
+          {hover ? `(${hover.x}, ${hover.y})` : '方向键选格'}
         </span>
       </div>
     </section>

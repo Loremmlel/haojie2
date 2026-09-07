@@ -1,137 +1,95 @@
 import {
+  actionError,
+  allegiance,
   asTarget,
   attackPath,
   definition,
   getStats,
   isLegal,
-  movementPath,
   targetAt,
-  targets,
+  movementPath,
+  canPlace,
 } from '../engine';
-import type { Command, GameState, Point } from '../engine';
+import type { ActionSpec, Command, GameState, Point } from '../engine';
 export type Intent =
   | { kind: 'none' }
-  | { kind: 'deploy'; cardId: string; charge: boolean }
-  | {
-      kind: 'move' | 'attack' | 'hook-target' | 'sacrifice-pick' | 'wall' | 'dash-move';
-      unitId: string;
-    }
-  | { kind: 'hook-drop' | 'sacrifice-column'; unitId: string; targetId: string }
-  | { kind: 'dash-attack'; unitId: string; to: Point }
-  | { kind: 'cast'; cardId: string }
-  | { kind: 'reforge'; cardId: string; targets: string[] };
-export function commandFor(s: GameState, i: Intent, p: Point): Command | null {
-  const target = targetAt(s, p);
-  if (s.pending.length) return target ? { type: 'react', targetId: target.id } : null;
-  switch (i.kind) {
-    case 'deploy':
-      return { type: 'deploy', cardId: i.cardId, ...p, charge: i.charge };
-    case 'move':
-      return { type: 'move', unitId: i.unitId, ...p };
-    case 'attack':
-      return target ? { type: 'attack', unitId: i.unitId, targetId: target.id } : null;
-    case 'hook-drop':
-      return { type: 'skill', unitId: i.unitId, targetId: i.targetId, ...p };
-    case 'sacrifice-column':
-      return { type: 'skill', unitId: i.unitId, targetId: i.targetId, column: p.x };
-    case 'wall':
-      return { type: 'skill', unitId: i.unitId, ...p };
-    case 'dash-attack':
-      return target
-        ? { type: 'skill', unitId: i.unitId, mode: 'dash', ...i.to, targetId: target.id }
-        : null;
-    case 'cast': {
-      const card = s.hands[s.active].find((c) => c.id === i.cardId);
-      if (card?.kind === 8) return { type: 'cast', cardId: i.cardId, ...p };
-      return target ? { type: 'cast', cardId: i.cardId, targetId: target.id } : null;
-    }
-    default:
-      return null;
+  | { kind: 'select'; action: ActionSpec; draft: Command; index: number };
+export const startIntent = (a: ActionSpec): Intent => ({
+  kind: 'select',
+  action: a,
+  draft: { ...a.command },
+  index: 0,
+});
+export function advanceIntent(i: Intent, p: Point, s: GameState): Intent {
+  if (i.kind === 'none') return i;
+  const step = i.action.steps[i.index],
+    draft = { ...i.draft };
+  if (step.kind === 'target') {
+    const t = targetAt(s, p);
+    if (!t) return i;
+    if (step.field === 'sacrificeIds') draft.sacrificeIds = [...(draft.sacrificeIds ?? []), t.id];
+    else draft[step.field ?? 'targetId'] = t.id;
   }
+  if (step.kind === 'point') {
+    draft.x = p.x;
+    draft.y = p.y;
+  }
+  if (step.kind === 'row') draft.row = p.y;
+  if (step.kind === 'column') draft.column = p.x;
+  return { ...i, draft, index: i.index + 1 };
+}
+export function commandFor(s: GameState, i: Intent, p: Point): Command | null {
+  if (i.kind === 'none') return null;
+  const next = advanceIntent(i, p, s);
+  if (next.kind === 'select' && next.index >= next.action.steps.length) return next.draft;
+  return null;
 }
 export function canChoose(s: GameState, i: Intent, p: Point): boolean {
-  if (s.winner) return false;
-  const command = commandFor(s, i, p);
-  if (command) return isLegal(s, command);
-  const t = targetAt(s, p),
-    u = 'unitId' in i ? s.units.find((u) => u.id === i.unitId) : undefined;
-  if (i.kind === 'reforge')
-    return !!t?.unit && t.owner === s.active && t.unit.hp * 2 >= t.unit.maxHp;
-  if (!u || u.owner !== s.active || getStats(s, u).remaining <= 0) return false;
-  if (i.kind === 'hook-target')
-    return !!t?.unit && t.owner !== u.owner && !!attackPath(s, u, t, getStats(s, u).range);
-  if (i.kind === 'sacrifice-pick')
-    return (
-      !!t?.unit &&
-      t.id !== u.id &&
-      t.owner === u.owner &&
-      Array.from({ length: 9 }, (_, n) => n + 1).some((column) =>
-        isLegal(s, { type: 'skill', unitId: u.id, targetId: t.id, column }),
-      )
-    );
-  if (i.kind === 'dash-move') {
-    if (u.charge < 2 || u.lastCharge >= s.turns[u.owner] || u.hp <= 10 || !movementPath(s, u, p, 6))
+  if (i.kind === 'none' || actionError(s, i.action)) return false;
+  const step = i.action.steps[i.index];
+  if (!step || step.kind === 'death') return false;
+  const complete = commandFor(s, i, p);
+  if (complete) return isLegal(s, complete);
+  const u = s.units.find((u) => u.id === i.draft.unitId),
+    t = targetAt(s, p);
+  if (step.kind === 'point') {
+    if (i.action.id === 'dash' && u) return !!movementPath(s, u, p, 6);
+    return true;
+  }
+  if (step.kind === 'target') {
+    if (!t || (step.unitOnly && !t.unit)) return false;
+    const owner = u?.owner ?? s.active,
+      side = t.unit ? allegiance(s, t.unit) : t.owner;
+    if (
+      (step.relation === 'friend' && side !== owner) ||
+      (step.relation === 'enemy' && side === owner)
+    )
       return false;
-    return targets(s).some(
-      (t) => t.owner !== u.owner && !!attackPath(s, { ...u, ...p }, t, getStats(s, u).range),
-    );
+    if (
+      step.field === 'sacrificeIds' &&
+      (t.unit?.kind === 'u25' ||
+        !t.unit ||
+        t.unit.hp * 2 < t.unit.maxHp ||
+        i.draft.sacrificeIds?.includes(t.id))
+    )
+      return false;
+    if (i.action.id === 'sacrifice' && (t.id === u?.id || t.unit?.kind === 'u25')) return false;
+    if (step.range && u && !attackPath(s, u, t, getStats(s, u).range)) return false;
+    return true;
   }
   return false;
 }
-export function nextIntent(s: GameState, i: Intent, p: Point): Intent {
-  const t = targetAt(s, p);
-  if (i.kind === 'hook-target' && t) return { kind: 'hook-drop', unitId: i.unitId, targetId: t.id };
-  if (i.kind === 'sacrifice-pick' && t)
-    return { kind: 'sacrifice-column', unitId: i.unitId, targetId: t.id };
-  if (i.kind === 'dash-move') return { kind: 'dash-attack', unitId: i.unitId, to: p };
-  if (i.kind === 'reforge' && t)
-    return {
-      ...i,
-      targets: i.targets.includes(t.id)
-        ? i.targets.filter((id) => id !== t.id)
-        : [...i.targets, t.id],
-    };
-  return i;
-}
 export function instruction(s: GameState, i: Intent): string {
-  const reaction = s.pending[0];
-  if (reaction)
-    return `${reaction.owner === 1 ? '苍穹方' : '赤焰方'}选择${reaction.kind === 'death-shot' ? '奶妈的临终攻击 / 治疗目标' : `伤害转化目标（${reaction.amount}伤害）`}`;
-  switch (i.kind) {
-    case 'deploy':
-      return '点击高亮空格部署；大体型以所选格为左上角。';
-    case 'move':
-      return '点击圆点落位；移动会消耗一次行动。';
-    case 'attack':
-      return '点击红色目标攻击；奶妈的友方目标会获得治疗。';
-    case 'hook-target':
-      return '牵引 1 / 2：选择射程内的敌方随从。';
-    case 'hook-drop':
-      return '牵引 2 / 2：选择它的新位置，仍须在钩子射程内。';
-    case 'sacrifice-pick':
-      return '献祭 1 / 2：选择另一枚友方随从。';
-    case 'sacrifice-column':
-      return '献祭 2 / 2：点击高亮列，射击进攻方向上的第一个敌方。';
-    case 'wall':
-      return '点击射程内的高亮空格制造临时路障。';
-    case 'dash-move':
-      return '突袭 1 / 2：选择最多6格内的落点。';
-    case 'dash-attack':
-      return '突袭 2 / 2：选择新位置射程内的敌方目标。';
-    case 'reforge':
-      return `重铸：选择两个至少半血的友方（已选${i.targets.length}/2），再次点击可取消。`;
-    case 'cast': {
-      const c = s.hands[s.active].find((c) => c.id === i.cardId);
-      return c?.kind === 8
-        ? '点击“田”字区域的左上格；爆弹会伤到双方。'
-        : '点击一个友方随从施放法术。';
-    }
-    default:
-      return '先部署手中随从，或选择己方棋子行动；法术可以留到后续回合。';
-  }
+  if (i.kind === 'select') return i.action.steps[i.index]?.label ?? '选择目标';
+  if (s.phase === 'summon') return '先决定普通或终极召唤，再查看结果；2人头可替换一次召唤。';
+  return '选择随从或手牌。每个随从每回合只能选择一种操作模式；选攻击后可连击。';
 }
 export function intentTone(i: Intent): string {
-  if (['attack', 'sacrifice-column', 'dash-attack'].includes(i.kind)) return 'attack';
-  if (i.kind === 'cast' || i.kind === 'reforge' || i.kind === 'sacrifice-pick') return 'magic';
-  return 'move';
+  if (i.kind === 'none') return 'move';
+  const t = i.draft.type;
+  return t === 'attack' || i.action.id === 'superhook'
+    ? 'attack'
+    : t === 'cast' || t === 'skill' || t === 'equip'
+      ? 'magic'
+      : 'move';
 }

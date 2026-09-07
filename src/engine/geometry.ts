@@ -1,69 +1,96 @@
 import { definition } from './catalog';
+import { allegiance, has, passive } from './state';
 import type { GameState, Player, Point, Target, Unit } from './types';
 export const WIDTH = 9,
   HEIGHT = 13;
-export const ALL_CELLS: Point[] = Array.from({ length: WIDTH * HEIGHT }, (_, i) => ({
-  x: (i % WIDTH) + 1,
-  y: Math.floor(i / WIDTH) + 1,
+export const ALL_CELLS: Point[] = Array.from({ length: 117 }, (_, i) => ({
+  x: (i % 9) + 1,
+  y: Math.floor(i / 9) + 1,
 }));
 export const other = (p: Player): Player => (p === 1 ? 2 : 1);
 export const basePoint = (p: Player): Point => ({ x: 5, y: p === 1 ? 1 : 13 });
 export const inside = (p: Point) =>
-  Number.isInteger(p.x) &&
-  Number.isInteger(p.y) &&
-  p.x >= 1 &&
-  p.x <= WIDTH &&
-  p.y >= 1 &&
-  p.y <= HEIGHT;
+  Number.isInteger(p.x) && Number.isInteger(p.y) && p.x >= 1 && p.x <= 9 && p.y >= 1 && p.y <= 13;
 export const equal = (a: Point, b: Point) => a.x === b.x && a.y === b.y;
 export const distance = (a: Point, b: Point) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 export const key = (p: Point) => `${p.x},${p.y}`;
-export function cells(u: Pick<Unit, 'kind' | 'x' | 'y'>): Point[] {
-  const size = definition(u.kind).size ?? 1;
+export function cells(u: { kind: Unit['kind']; x: number; y: number; size?: number }): Point[] {
+  const size = u.size ?? definition(u.kind).size ?? 1;
   return Array.from({ length: size * size }, (_, i) => ({
     x: u.x + (i % size),
     y: u.y + Math.floor(i / size),
   }));
 }
-export function occupant(s: GameState, p: Point): Unit | undefined {
-  return s.units.find((u) => cells(u).some((c) => equal(c, p)));
-}
+export const occupants = (s: GameState, p: Point) =>
+  s.units.filter((u) => cells(u).some((c) => equal(c, p)));
+export const occupant = (s: GameState, p: Point) => occupants(s, p)[0];
 export function targets(s: GameState): Target[] {
   return [
-    ...s.units.map((u) => ({ id: u.id, x: u.x, y: u.y, owner: u.owner, unit: u })),
+    ...s.units.map((u) => ({ id: u.id, owner: u.owner, x: u.x, y: u.y, unit: u })),
     ...([1, 2] as Player[]).map((p) => ({ id: `base-${p}`, owner: p, ...basePoint(p) })),
   ];
 }
 export function targetAt(s: GameState, p: Point): Target | undefined {
   return targets(s).find((t) => (t.unit ? cells(t.unit).some((c) => equal(c, p)) : equal(t, p)));
 }
-export function adjacent(a: Unit, b: Unit): boolean {
+export function topTarget(s: GameState, t: Target) {
+  if (!t.unit) return true;
+  return occupant(s, t)?.id === t.id;
+}
+export function adjacent(a: Unit, b: Unit) {
   return cells(a).some((c) => cells(b).some((d) => distance(c, d) === 1));
 }
-const near = (a: Unit, b: Unit) =>
-  cells(a).some((c) =>
-    cells(b).some((d) => Math.max(Math.abs(c.x - d.x), Math.abs(c.y - d.y)) <= 1),
+export function ring(a: Unit, b: Point | Unit) {
+  const bc = 'kind' in b ? cells(b) : [b];
+  return (
+    cells(a).some((c) =>
+      bc.some((d) => Math.max(Math.abs(c.x - d.x), Math.abs(c.y - d.y)) === 1),
+    ) && !cells(a).some((c) => bc.some((d) => equal(c, d)))
   );
-export function canPlace(s: GameState, u: Unit, at: Point, deployment = false): boolean {
+}
+export function canPlace(
+  s: GameState,
+  u: Unit,
+  at: Point,
+  deployment = false,
+  ignore: string[] = [],
+): boolean {
   const moved = { ...u, ...at },
     footprint = cells(moved);
   if (footprint.some((p) => !inside(p) || equal(p, basePoint(1)) || equal(p, basePoint(2))))
     return false;
-  if (deployment && footprint.some((p) => !s.deployRows[u.owner].includes(p.y))) return false;
+  if (deployment && u.kind !== 'u27' && footprint.some((p) => !s.deployRows[u.owner].includes(p.y)))
+    return false;
+  const others = s.units.filter((v) => v.id !== u.id && !ignore.includes(v.id));
   if (
-    s.units.some((v) => v.id !== u.id && cells(v).some((c) => footprint.some((p) => equal(c, p))))
+    others.some(
+      (v) =>
+        cells(v).some((c) => footprint.some((p) => equal(c, p))) &&
+        !(
+          u.kind === 'u25' &&
+          v.kind === 'u25' &&
+          u.owner === v.owner &&
+          u.size === 1 &&
+          v.size === 1 &&
+          !has(s, v, 'freeze')
+        ),
+    )
   )
     return false;
   if (
-    s.units.some(
+    others.some(
       (v) =>
-        v.id !== u.id && v.owner === u.owner && (v.kind === 23 || u.kind === 23) && near(moved, v),
+        allegiance(s, v) === u.owner &&
+        ((v.kind === 23 && passive(s, v)) || (u.kind === 23 && passive(s, u))) &&
+        cells(v).some((c) =>
+          footprint.some((p) => Math.max(Math.abs(c.x - p.x), Math.abs(c.y - p.y)) <= 1),
+        ),
     )
   )
     return false;
   return true;
 }
-const neighbors = (p: Point): Point[] =>
+export const neighbors = (p: Point): Point[] =>
   [
     { x: p.x, y: p.y + 1 },
     { x: p.x, y: p.y - 1 },
@@ -87,15 +114,15 @@ export function movementPath(
     return path.slice(1).every((p) => canPlace(s, u, p)) ? path : null;
   }
   const queue: Point[][] = [[{ x: u.x, y: u.y }]],
-    visited = new Set([key(u)]);
+    seen = new Set([key(u)]);
   for (let i = 0; i < queue.length; i++) {
     const path = queue[i];
     if (path.length - 1 >= limit) continue;
-    for (const p of neighbors(path[path.length - 1])) {
-      if (visited.has(key(p)) || !canPlace(s, u, p)) continue;
+    for (const p of neighbors(path.at(-1)!)) {
+      if (seen.has(key(p)) || !canPlace(s, u, p)) continue;
       const next = [...path, p];
       if (equal(p, to)) return next;
-      visited.add(key(p));
+      seen.add(key(p));
       queue.push(next);
     }
   }
@@ -107,17 +134,17 @@ export function attackPath(
   target: Target | Point,
   limit: number,
 ): Point[] | null {
-  const isTarget = (v: Target | Point): v is Target => 'id' in v;
-  const t = isTarget(target) ? target : undefined;
-  const ends = t?.unit ? cells(t.unit) : [target];
-  const blocked = new Set<string>();
-  for (const enemy of s.units)
-    if (enemy.owner !== u.owner && enemy.id !== t?.id)
-      for (const p of cells(enemy)) blocked.add(key(p));
-  if (`base-${other(u.owner)}` !== t?.id) blocked.add(key(basePoint(other(u.owner))));
-  const starts = cells(u),
-    queue = starts.map((p) => [p]),
-    visited = new Set(starts.map(key));
+  const t = 'id' in target ? target : undefined,
+    ends = t?.unit ? cells(t.unit) : [target],
+    blocked = new Set<string>();
+  for (const v of s.units)
+    if (v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
+      for (const p of cells(v)) blocked.add(key(p));
+  // When attacking a stack, other members on its target square are not intervening blockers.
+  for (const end of ends) blocked.delete(key(end));
+  if (t?.id !== `base-${other(u.owner)}`) blocked.add(key(basePoint(other(u.owner))));
+  const queue = cells(u).map((p) => [p]),
+    seen = new Set(cells(u).map(key));
   let fallback: Point[] | null = null;
   for (let i = 0; i < queue.length; i++) {
     const path = queue[i],
@@ -128,21 +155,33 @@ export function attackPath(
       if (blocked.has(key(p))) continue;
       const next = [...path, p];
       if (ends.some((e) => equal(e, p))) {
-        if (!fallback) fallback = next;
-        if (t?.unit?.kind !== 24 || frontal(next, t.owner)) return next;
+        fallback ??= next;
+        if (t?.unit?.kind !== 24 || t.unit.silenced || frontal(next, t.owner)) return next;
         continue;
       }
-      if (!visited.has(key(p))) {
-        visited.add(key(p));
+      if (!seen.has(key(p))) {
+        seen.add(key(p));
         queue.push(next);
       }
     }
   }
   return fallback;
 }
-export function frontal(path: Point[], owner: Player): boolean {
+export function frontal(path: Point[], owner: Player) {
   if (path.length < 2) return false;
-  const prev = path[path.length - 2],
-    last = path[path.length - 1];
-  return owner === 1 ? last.y < prev.y : last.y > prev.y;
+  const a = path.at(-2)!,
+    b = path.at(-1)!;
+  return owner === 1 ? b.y < a.y : b.y > a.y;
+}
+export function refreshDeployment(s: GameState, owner: Player) {
+  s.deployRows[owner] = [];
+  for (let y = 1; y <= 13; y++) {
+    const count = (p: Player) =>
+      s.units.filter((u) => allegiance(s, u) === p && cells(u).some((c) => c.y === y)).length;
+    if ((owner === 1 ? y <= 8 : y >= 6) || count(owner) - count(other(owner)) >= 2)
+      s.deployRows[owner].push(y);
+  }
+}
+export function inSquare(u: Unit, p: Point, radius = 5) {
+  return inside(p) && Math.abs(p.x - u.x) <= radius && Math.abs(p.y - u.y) <= radius;
 }

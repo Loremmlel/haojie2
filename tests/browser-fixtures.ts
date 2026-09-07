@@ -1,0 +1,87 @@
+/** Test-only saved matches. No scenario overrides or cheats are included in the shipped game. */
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { createGame, createSession } from '../src/engine';
+import { addEffect } from '../src/engine/state';
+import { fixture, add, card, seedFor } from './helpers';
+import type { GameState } from '../src/engine';
+mkdirSync('artifacts/fixtures', { recursive: true });
+function save(name: string, s: GameState) {
+  writeFileSync(`artifacts/fixtures/${name}.json`, JSON.stringify(createSession(s)));
+}
+let s = createGame(7);
+s.heads[1] = 4;
+save('summon', s);
+s = fixture();
+add(s, 9, 1, 3, 4);
+add(s, 'grave', 2, 3, 6);
+add(s, 'grave', 2, 5, 4);
+save('archer', s);
+s = fixture();
+add(s, 'u6', 1, 4, 4);
+add(s, 26, 2, 4, 6);
+card(s, 'u5');
+save('staff', s);
+s = fixture();
+for (let i = 0; i < 3; i++) {
+  const u = add(s, 'u25', 2, i < 2 ? 5 : 6, 7);
+  u.group = 'test-batch';
+}
+card(s, 'u9');
+save('storm-clones', s);
+s = fixture();
+add(s, 'u19', 1, 3, 4);
+s.deaths.push({ id: 'fallen-killer', kind: 26, owner: 1, ply: 4, revived: false });
+save('revive', s);
+s = fixture();
+add(s, 'u14', 1, 3, 5);
+add(s, 'grave', 2, 5, 5);
+add(s, 1, 1, 2, 5).hp = 10;
+save('siphon', s);
+s = fixture();
+const runner = add(s, 'u12', 1, 3, 4);
+runner.charge = runner.readyCharge = 1;
+add(s, 'grave', 2, 3, 5);
+save('runner', s);
+s = fixture();
+const newborn = add(s, 9, 1, 3, 4);
+newborn.born = s.turns[1];
+newborn.deployedAt = s.ply;
+addEffect(s, newborn, 'execute', 1, 2, 2);
+add(s, 5, 2, 3, 6);
+card(s, 'u17');
+save('horn', s);
+s = fixture();
+add(s, 'u3', 2, 7, 10);
+add(s, 1, 1, 3, 4);
+card(s, 17);
+s.rng = seedFor(0, 1 / 3);
+save('counter', s);
+s = fixture();
+const mage = add(s, 'u6', 1, 3, 4);
+mage.charge = mage.readyCharge = 1;
+mage.chargeType = 'skill';
+add(s, 'grave', 2, 5, 5);
+add(s, 'grave', 2, 5, 6);
+save('cross', s);
+s = fixture();
+for (let i = 0; i < 3; i++) card(s, 'u28');
+save('craft', s);
+s = fixture();
+add(s, 9, 1, 5, 10);
+s.bases[2] = 10;
+save('victory', s);
+s = fixture();
+s.phase = 'summon';
+s.summonSlots = 1;
+add(s, 'u13', 1, 3, 4);
+card(s, 1);
+save('reroll', s);
+s = fixture();
+for (let i = 0; i < 2; i++) {
+  const u = add(s, 'u25', 1, 3, 4);
+  u.group = 'own-batch';
+}
+save('clone-control', s);
+s = fixture();
+add(s, 3, 1, 3, 4);
+save('guardian', s);
