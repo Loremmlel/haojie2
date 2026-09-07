@@ -44,6 +44,11 @@ jobs:
           PY
       - run: npm ci --no-audit --no-fund
       - run: npm run format
+      - name: Normalize the browser test after its first formatting pass
+        run: |
+          cp tests/browser.mjs /tmp/browser-before-format.mjs
+          npx prettier --write tests/browser.mjs
+          diff -u /tmp/browser-before-format.mjs tests/browser.mjs || true
       - run: npm run format:check
       - run: npm run check
       - name: Run all rule and save behavior tests
@@ -63,6 +68,10 @@ jobs:
           git commit -m 'feat: implement Haojie 2.0 rules, ultimate summons and weapons'
           git push origin HEAD:feat/haojie-2-rules-and-ultimate
           git rev-parse HEAD | tee artifacts/verified-commit.txt
+      - name: Package source snapshot for verification evidence
+        if: always()
+        run: |
+          mkdir -p artifacts
           tar --exclude='./.git' --exclude='./node_modules' --exclude='./artifacts' --exclude='./dist' -czf artifacts/haojie2-source.tar.gz .
       - uses: actions/upload-artifact@v4
         with:
@@ -71,6 +80,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: haojie-v2-source
           path: artifacts/haojie2-source.tar.gz
