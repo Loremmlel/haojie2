@@ -15,7 +15,9 @@
     "deploy:check": "node scripts/pages.mjs --check",
     "test:pages": "node tests/browser/pages.mjs",
     "test:browser:ai": "node tests/browser/ai.mjs",
-    "bench:ai": "tsx scripts/ai/benchmark.ts"
+    "bench:ai": "tsx scripts/ai/benchmark.ts",
+    "play:cli": "tsx scripts/ai/play.ts",
+    "bench:ai:compare": "tsx scripts/ai/compare.ts"
   },
   "dependencies": {
     "react": "19.2.0",

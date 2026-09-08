@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AiClient } from '../../ai/client';
-import { DIFFICULTIES } from '../../ai/difficulty';
+import { allocateBudget } from '../../ai/budget';
 import { decisionOwner, fingerprint, observe } from '../../ai/observation';
 import type { Decision, PlanStep } from '../../ai/types';
 import type { Command, Player, Session } from '../../engine';
@@ -49,8 +49,7 @@ export function useComputer({ session, live, apply, modal, notice }: Port) {
     }
     const id = ++revision.current,
       source = session.present;
-    const player = decisionOwner(source),
-      cfg = DIFFICULTIES[match.difficulty];
+    const player = decisionOwner(source);
     if (budget.current.ply !== source.ply)
       budget.current = { ply: source.ply, nodes: 0, ms: 0, commands: 0 };
     setThinking(true);
@@ -72,25 +71,13 @@ export function useComputer({ session, live, apply, modal, notice }: Port) {
           } else {
             cache.current = [];
             client.current ??= new AiClient();
-            const remainingNodes = cfg.turnNodes - budget.current.nodes,
-              remainingMs = cfg.turnMs - budget.current.ms;
-            const activeUnits = source.units.filter(
-              (u) =>
-                u.owner === player &&
-                (u.operations === 0 || u.mode === 'attack' || u.mode === 'move'),
-            ).length;
-            const allowance = Math.max(
-              80,
-              Math.min(cfg.nodes, remainingNodes / Math.max(1, Math.min(4, activeUnits))),
-            );
-            const milliseconds = Math.max(35, Math.min(cfg.decisionMs, remainingMs));
             const started = performance.now();
             const result = await client.current.plan({
               id,
               observation: observe(source),
               side: player,
               difficulty: match.difficulty,
-              limits: { simulations: allowance, milliseconds },
+              limits: allocateBudget(source, match.difficulty, budget.current),
             });
             if (!alive || id !== revision.current || live.current.present !== source) return;
             budget.current.nodes += result.stats.simulations;
