@@ -1,3 +1,4 @@
+import { baseCoverValue } from './threats';
 import { definition, isStored } from '../engine/catalog';
 import { unitActions, cardActions, reactionAction, actionError } from '../engine/options';
 import type { ActionSpec, SelectionStep } from '../engine/options';
@@ -137,13 +138,17 @@ function pointRank(s: GameState, a: ActionSpec, c: Command, p: Point, u?: Unit):
         0,
         p,
       );
-    let value = placementValue(s, ghost, p);
+    let value = placementValue(s, ghost, p) + baseCoverValue(s, { ...ghost, ...p });
     if (isRunner(ghost))
       value += occupants(s, p)
         .filter((v) => v.id !== ghost.id && v.owner !== ghost.owner)
         .reduce((n, v) => n + Math.min(30, v.hp) + 10, 0);
     return value;
   }
+  if (a.id === 'wall')
+    return (
+      baseCoverValue(s, template('wall', decisionOwner(s), 0, p)) - (u ? distance(p, u) * 0.1 : 0)
+    );
   if (a.id === 'hook') {
     const victim = s.units.find((v) => v.id === c.targetId);
     if (victim) return -placementValue(s, victim, p);

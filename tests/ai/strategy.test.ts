@@ -311,3 +311,36 @@ test('damage to a threatened enemy never makes that enemy a more valuable asset;
   assert.equal(d.command?.type, 'attack');
   assert.equal(d.command?.targetId, foe.id);
 });
+
+test('a sacrificial deployment screen remains a candidate when it prevents a lethal base shot', () => {
+  for (const difficulty of levels) {
+    const s = fixture(),
+      gun = add(s, 4, 2, 5, 5);
+    gun.charge = gun.readyCharge = 2;
+    s.bases[1] = 40;
+    card(s, 2);
+    const d = decide(observe(s), 1, difficulty, { simulations: 600, milliseconds: 100000 });
+    let after = s;
+    for (const step of d.plan) after = applyCommand(after, step.command);
+    assert.ok(
+      after.units.some((u) => u.owner === 1 && u.x === 5 && u.y > 1 && u.y < 5),
+      JSON.stringify(d.plan),
+    );
+    const target = { id: 'base-1', owner: 1 as const, ...basePoint(1) };
+    assert.equal(attackPath(after, after.units.find((u) => u.id === gun.id)!, target, 4), null);
+  }
+});
+test('temporary barricades can block a lethal base attack rather than defaulting to the nearest square', () => {
+  const s = fixture(),
+    caster = add(s, 19, 1, 3, 2),
+    gun = add(s, 4, 2, 5, 5);
+  gun.charge = gun.readyCharge = 2;
+  s.bases[1] = 40;
+  const d = choose(s, 'medium');
+  let after = s;
+  for (const step of d.plan) after = applyCommand(after, step.command);
+  assert.ok(
+    after.units.some((u) => u.owner === 1 && u.kind === 'wall' && u.x === 5 && u.y > 1 && u.y < 5),
+    JSON.stringify(d.plan),
+  );
+});

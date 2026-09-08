@@ -229,3 +229,51 @@ export function payloadOpportunity(
 ): number {
   return analyzePayload(s, u, type, valueOf).value;
 }
+
+const coverCache = new WeakMap<
+  GameState,
+  Map<Player, { view: GameState; target: Target; pressure: number; route: Set<string> }>
+>();
+/** Keep sacrificial base screens in the candidate set. Survival is not the only reason
+ * to occupy a square: blocking a lethal shot can be worth losing the defender next turn.
+ * First intersect an actual attack path, then recompute legal reach with that footprint. */
+export function baseCoverValue(s: GameState, defender: Unit): number {
+  let sides = coverCache.get(s);
+  if (!sides) {
+    sides = new Map();
+    coverCache.set(s, sides);
+  }
+  let data = sides.get(defender.owner);
+  if (!data) {
+    const view = actionWindow(s, other(defender.owner));
+    const target: Target = {
+      id: `base-${defender.owner}`,
+      owner: defender.owner,
+      ...basePoint(defender.owner),
+    };
+    const route = new Set<string>();
+    let pressure = 0;
+    for (const attacker of view.units.filter((v) => v.owner !== defender.owner)) {
+      const amount = attackPressure(view, attacker, target);
+      if (!amount) continue;
+      pressure += amount;
+      // A heart penetrates new screens; it can contribute pressure but never a blocking opportunity.
+      if (attacker.equipment.includes('u28')) continue;
+      for (const p of attackPath(view, attacker, target, statsFor(view, attacker).range) ?? [])
+        route.add(`${p.x},${p.y}`);
+    }
+    data = { view, target, pressure, route };
+    sides.set(defender.owner, data);
+  }
+  if (!data.pressure || !cells(defender).some((p) => data!.route.has(`${p.x},${p.y}`))) return 0;
+  const view = {
+    ...data.view,
+    units: [...data.view.units.filter((v) => v.id !== defender.id), defender],
+  };
+  let after = 0;
+  for (const attacker of view.units)
+    if (attacker.owner !== defender.owner) after += attackPressure(view, attacker, data.target);
+  const hp = s.bases[defender.owner];
+  const reduction = Math.max(0, Math.min(hp, data.pressure) - Math.min(hp, after));
+  return reduction * 3.1 + (data.pressure >= hp && after < hp ? 180 : 0);
+}
