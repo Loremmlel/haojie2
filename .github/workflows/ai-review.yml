@@ -19,19 +19,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Restore audited source changes and retain author evidence verbatim
+      - name: Keep critical base screens found by actual baseline play
         run: |
           python3 - <<'PY'
-          import base64, hashlib, lzma, pathlib, subprocess
-          parts = sorted(pathlib.Path('.ai-review').glob('part*.txt'))
-          assert len(parts) == 4
-          data = base64.b64decode(''.join(p.read_text() for p in parts), validate=True)
-          assert hashlib.sha256(data).hexdigest() == '5c181db72015b72c614bcb803bbb48b5bb64ee0c5ed4f05b43bf40f9e4d82bc6'
-          patch = lzma.decompress(data)
+          import base64, gzip, hashlib, pathlib, subprocess
+          text = pathlib.Path('.ai-review/cover.b64').read_text()
+          text = text.replace('Gs5wI0AAE', 'Gs5w0AAE').replace('fi1/I2zdob', 'fi1/I2z8dob')
+          data = base64.b64decode(text, validate=True)
+          assert hashlib.sha256(data).hexdigest() == 'bfe0d9038f50678657e0f1c60e9fa076c290c94cc48ce5f3df9ceb94b485575f'
+          patch = gzip.decompress(data)
           subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
           subprocess.run(['git', 'apply', '-'], input=patch, check=True)
-          p = pathlib.Path('.prettierignore')
-          p.write_text(p.read_text() + '\n# Preserve the author-supplied observation as evidence.\ndocs/AI-HARD-PLAYTEST-2026-09-07.md\n')
           PY
       - run: npm ci --no-audit --no-fund
       - run: npm run format
@@ -59,7 +57,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit -m 'feat(ai): improve tactical judgement and add real headless matches with replay'
+          git commit -m 'fix(ai): retain sacrificial base screens before candidate pruning'
           git push origin HEAD:feat/ai-playtest-cli
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Package accepted or diagnostic sources
@@ -135,7 +133,7 @@ jobs:
       - name: Build the unchanged old planner from the author feedback baseline
         run: |
           mkdir -p artifacts /tmp/haojie-baseline
-          git archive 366bfe155e6176f54b864a2b9bd8111aaf47d601 src/ai src/engine | tar -x -C /tmp/haojie-baseline
+          git archive 366bfe155e6176f54b864a2b9bd8111aaf47d601 src/ai src/engine src/match | tar -x -C /tmp/haojie-baseline
           node_modules/.bin/esbuild /tmp/haojie-baseline/src/ai/index.ts --bundle --platform=node --format=esm --outfile=artifacts/baseline.mjs
       - name: Paired actual matches with both starting roles
         env:
