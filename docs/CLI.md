@@ -47,9 +47,9 @@ npm run play:cli -- --save artifacts/my-match.json --command 'go'
 
 ## 搜索与记录
 
-CLI没有人为的观战延时，但AI仍使用与页面相同的回合共享计算预算。所有思考只读取公开Observation，不读真实PRNG。`--nodes 1000 --ms 100000`可以显式覆盖每决策预算，用于可重复的固定节点实验；这不是默认网页速度。机器负载和墙钟预算会使具体方案有差别，不保证两次限时运行选择逐字相同。
+CLI没有人为的观战延时，但AI仍使用与页面相同的回合共享计算预算。所有思考只读取公开Observation，不读真实PRNG。默认`--mode work`按固定工作量运行，网页同样采用此模式；`--nodes 700 --mode work`用于覆盖节点额度。相同公开局面、算法版本、难度与有效预算可跨负载复现选招；运行时长不保证相同。显式`--ms 1000`会选择timed模式，也可写`--mode timed --ms 1000`；限时模式不保证逐字相同。`--mode work`可覆盖`--ms`的默认模式选择。重新打开CLI会重建内存中的回合预算/计划缓存，因此逐步`--command`与一个持续交互进程不保证获得完全相同的有效预算。
 
-存档旁会写入`.jsonl`回放。记录包含初始Session、每条实际命令、操作方、前后公开指纹、事件及可选评分trace；初始Session有真实随机状态是为了回放，与送给AI的Observation分开。trace列出候选顺序、分值分项、概率分支、策反/处决承载者和可达目标；“静态期望”不是已经发生的伤害，“存活折扣”是启发式，不是测得概率。随机结果出现后仍以真实局面重算。
+存档旁会写入`.jsonl`回放。记录包含初始Session、每条实际命令、操作方、前后公开指纹、事件及可选评分trace；初始Session有真实随机状态是为了回放，与送给AI的Observation分开。trace列出候选顺序、分值分项、概率分支、策反/处决承载者和可达目标；候选的`score/stage=reply`是完整成对回应的均分，`outcomes`仍描述己方计划末尾的概率分支，不能把两者当作同一阶段。`stats.replyCandidates/replySamples`表示实际采用的回应；`replies`仅表示算完的轨迹。“静态期望”不是已经发生的伤害，“存活折扣”是启发式，不是测得概率。随机结果出现后仍以真实局面重算。
 
 ```bash
 npm run play:cli -- --replay artifacts/my-match.jsonl
@@ -69,8 +69,35 @@ npm run play:cli -- --replay artifacts/my-match.jsonl
 npm run bench:ai:compare -- /absolute/path/to/artifacts/baseline.mjs
 ```
 
-比较默认种子7、42、20260907，并交换先后手。可用环境变量`AI_NODES`、`AI_PLIES`、`AI_SEEDS`、`AI_REPORT`调整计算节点、对局上限和报告路径；`AI_LEVELS=hard,hard`指定新旧难度，也可比较两边medium/easy。所有结果记录源码摘要、节点预算、真正胜者、未决状态和实际回放。达到上限一律记未决，不能按基地血量替代规则判胜。
+比较默认是`AI_BUDGET=fixed`、种子7、42、20260907，并交换先后手。可用环境变量`AI_NODES`、`AI_PLIES`、`AI_SEEDS`、`AI_REPORT`调整计算节点、对局上限和报告路径；`AI_LEVELS=hard,hard`指定新旧难度，也可比较两边medium/easy。所有结果记录源码摘要、节点预算、真正胜者、未决状态和实际回放。达到上限一律记未决，不能按基地血量替代规则判胜。
 
 同种子不意味着两种策略每回合永远抽相同牌：不同的暴击、死亡和改判会消耗不同次数的真实随机数。这是原游戏规则，不额外修改它来制造测试优势。
 
 少量固定种子不是Elo，也不能证明与规则作者五五开。比较工具的作用是发现退步、行为异常和明显策略差距，之后再扩大独立种子组与真实人类对局。
+
+## 生产预算审计
+
+```bash
+npm run bench:ai:audit -- artifacts/current-audit.json
+# 只测相同9个保存局面，不跑自对弈
+AI_AUDIT_POSITIONS_ONLY=1 npm run bench:ai:audit -- artifacts/positions.json
+```
+
+可提供一个**可信**冻结ESM作为第二个参数；它必须同时导出原版本的`decide`和`allocateBudget`，工具会拒绝只含planner的bundle，避免给旧代码套新预算而冒充生产对照。例如在已签出旧版本的目录里创建临时入口（不提交）：
+
+```ts
+export { decide } from './src/ai/search';
+export { allocateBudget } from './src/ai/budget';
+```
+
+用esbuild打包后执行`npm run bench:ai:audit -- artifacts/old-audit.json /absolute/path/old-audit.mjs`。先结束其他重负载任务再测墙钟；本工具包含trace的诊断开销，不能代替具体浏览器/设备的性能验收。`selectedDepth`在新旧两边都按实际计划长度记录；旧`depth`与新`depth`定义不同，禁止直接把两列当作相同深度指标。
+
+本轮人工对局见`docs/playtests/cli-manual-budget-20260908.jsonl.gz`，命令与事件可按上述`--replay`验证；它是开发过程中的人工选招记录，不算冻结版本胜率样本。
+
+生产模式新旧对战必须为旧bundle同时导出原版`allocateBudget`（临时入口同上），否则工具会明确拒绝：
+
+```bash
+AI_BUDGET=production AI_SEEDS=7,42 AI_PLIES=24 AI_REPORT=artifacts/production-pairs npm run bench:ai:compare -- /absolute/path/old-audit.mjs
+```
+
+production模式忽略`AI_NODES`，每边各用原版/新版自己的分配器。fixed模式用同节点数与很大安全超时，只适合另列的固定工作量实验。当前比较摘要仍保留nodes字段作为fixed参数，阅读时必须结合budgetMode。本次冻结生产结果及逐局面证据见`docs/AI-BUDGET-AUDIT-2026-09-08.md`。

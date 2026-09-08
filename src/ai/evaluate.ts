@@ -14,6 +14,7 @@ import type { Card, GameState, Player, Point, Unit } from '../engine/types';
 import { actionWindow, hitDistance, occupantsAt, statsFor } from './spatial';
 import { baseThreat, incoming, markFollowUp, payloadOpportunity, readyAttack } from './threats';
 export { baseThreat } from './threats';
+/** Tunable strategic utilities, NOT rule stats or probabilities. Kept in the AI on purpose. */
 const passives: Partial<Record<Unit['kind'], number>> = {
   2: 16,
   3: 40,
@@ -146,7 +147,7 @@ export function headValue(heads: number): number {
 }
 /** Earliest useful contact, cover and response-window exposure. A zero-charge cannon is NOT 100 danger. */
 export function placementValue(s: GameState, u: Unit, p: Point, nextFullTurn = false): number {
-  const moved = { ...u, x: p.x, y: p.y },
+  const moved = u.x === p.x && u.y === p.y ? u : { ...u, x: p.x, y: p.y },
     st = statsFor(s, moved),
     enemyBase = basePoint(other(u.owner));
   const enemies = s.units.filter((v) => v.id !== u.id && allegiance(s, v) !== u.owner);
@@ -184,7 +185,7 @@ export function placementValue(s: GameState, u: Unit, p: Point, nextFullTurn = f
   score -= Math.min(moved.hp, danger) * exposureSlope;
   if (danger >= moved.hp)
     score -= nextFullTurn
-      ? Math.min(materialValue(s, moved) * 0.25, 30)
+      ? Math.min(materialValue(s, moved) * 0.45, 55)
       : Math.min(45, 14 + st.attack * 0.35);
   const stacked = occupantsAt(s, p).filter((v) => v.id !== u.id && v.owner === u.owner).length;
   if (!nextFullTurn && u.kind === 'u25' && stacked) score -= Math.pow(stacked, 1.35) * 2;
@@ -197,9 +198,9 @@ function formation(s: GameState, side: Player): number {
   const lanes = new Set<number>(),
     stacks = new Map<string, number>();
   let value = 0;
+  const enemy = targets(view).filter((t) => t.owner !== side);
   for (const u of view.units.filter((v) => v.owner === side)) {
-    const st = statsFor(view, u),
-      enemy = targets(view).filter((t) => t.owner !== side);
+    const st = statsFor(view, u);
     const contacts = readyAttack(view, u)
       ? enemy.filter((t) => Number.isFinite(hitDistance(view, u, t)))
       : [];
@@ -281,10 +282,24 @@ export function explainEvaluation(s: GameState, side: Player): EvaluationBreakdo
           0.9 *
           markFollowUp(s, { id: `base-${p}`, owner: p, ...basePoint(p) }, e.owner, e.until);
   }
+  const assets: Record<Player, number> = { 1: 0, 2: 0 };
+  for (const u of s.units) assets[u.owner] += materialValue(s, u);
   for (const u of s.units) {
     const sign = u.owner === side ? 1 : -1;
     result.force += sign * unitValue(s, u);
     result.position += sign * placementValue(s, u, u, true);
+    // Convert a clear board advantage into base contact rather than endless nearby trading.
+    // This is bounded, symmetric strategic utility, not a promise that every advance is safe.
+    const st = statsFor(s, u);
+    const advantage = Math.max(
+      0,
+      (assets[u.owner] - assets[other(u.owner)]) /
+        Math.max(100, assets[u.owner] + assets[other(u.owner)]),
+    );
+    if (st.move > 0 && st.attack > 0 && !st.frozen && s.bases[u.owner] > baseThreat(s, u.owner))
+      result.position +=
+        (sign * advantage * 24) /
+        (1 + Math.max(0, distance(u, basePoint(other(u.owner))) - st.range) * 0.25);
     for (const h of s.hazards)
       if (cells(u).some((p) => (h.axis === 'row' ? p.y === h.line : p.x === h.line)))
         result.effects -= sign * Math.min(u.hp, 20) * 0.5;

@@ -1,0 +1,6637 @@
+{
+  "baselineCommit": "0dd175f236ba752efc3c536073eaac2478fadfca",
+  "sourceDigest": "d23d28c59ceb4ef02e94b72bbe5c027b0e893ed2586b5009736178f442081ae9",
+  "node": "v22.16.0",
+  "platform": "linux",
+  "notes": [
+    "Machine-specific diagnostic; trace overhead included in snapshot audit.",
+    "Old planner uses its ORIGINAL production allocator and time cutoff; repeated old runs can differ.",
+    "New production mode has fixed work, not a hard 1000ms latency guarantee.",
+    "depth changed definition; selectedDepth is actual selected plan length in both versions.",
+    "Four paired games are diagnostic only; unfinished is not a loss or draw."
+  ],
+  "positions": {
+    "original": [
+      {
+        "ply": 2,
+        "units": 2,
+        "difficulty": "medium",
+        "limits": {
+          "simulations": 1800,
+          "milliseconds": 450
+        },
+        "ms": 46,
+        "command": {
+          "type": "deploy",
+          "cardId": "c12",
+          "charge": false,
+          "x": 4,
+          "y": 7
+        },
+        "selectedDepth": 2,
+        "simulations": 51,
+        "candidates": 42,
+        "depth": 3,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "adopted": 0
+      },
+      {
+        "ply": 2,
+        "units": 2,
+        "difficulty": "hard",
+        "limits": {
+          "simulations": 5500,
+          "milliseconds": 1000
+        },
+        "ms": 207,
+        "command": {
+          "type": "deploy",
+          "cardId": "c12",
+          "charge": false,
+          "x": 4,
+          "y": 7
+        },
+        "selectedDepth": 2,
+        "simulations": 432,
+        "candidates": 182,
+        "depth": 3,
+        "replies": 4,
+        "sampled": 0,
+        "exhausted": false,
+        "adopted": 4
+      },
+      {
+        "ply": 4,
+        "units": 6,
+        "difficulty": "medium",
+        "limits": {
+          "simulations": 1800,
+          "milliseconds": 450
+        },
+        "ms": 440,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u30"
+        },
+        "selectedDepth": 4,
+        "simulations": 479,
+        "candidates": 404,
+        "depth": 5,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "adopted": 0
+      },
+      {
+        "ply": 4,
+        "units": 6,
+        "difficulty": "hard",
+        "limits": {
+          "simulations": 5500,
+          "milliseconds": 1000
+        },
+        "ms": 660,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u30"
+        },
+        "selectedDepth": 3,
+        "simulations": 927,
+        "candidates": 610,
+        "depth": 3,
+        "replies": 4,
+        "sampled": 4,
+        "exhausted": false,
+        "adopted": 4
+      },
+      {
+        "ply": 6,
+        "units": 6,
+        "difficulty": "medium",
+        "limits": {
+          "simulations": 1800,
+          "milliseconds": 450
+        },
+        "ms": 419,
+        "command": {
+          "type": "deploy",
+          "cardId": "c74",
+          "charge": false,
+          "x": 3,
+          "y": 7
+        },
+        "selectedDepth": 4,
+        "simulations": 448,
+        "candidates": 292,
+        "depth": 5,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "adopted": 0
+      },
+      {
+        "ply": 6,
+        "units": 6,
+        "difficulty": "hard",
+        "limits": {
+          "simulations": 5500,
+          "milliseconds": 1000
+        },
+        "ms": 958,
+        "command": {
+          "type": "deploy",
+          "cardId": "c76",
+          "charge": false,
+          "x": 4,
+          "y": 9
+        },
+        "selectedDepth": 3,
+        "simulations": 1306,
+        "candidates": 599,
+        "depth": 3,
+        "replies": 7,
+        "sampled": 8,
+        "exhausted": false,
+        "adopted": 3
+      },
+      {
+        "ply": 8,
+        "units": 9,
+        "difficulty": "medium",
+        "limits": {
+          "simulations": 1800,
+          "milliseconds": 450
+        },
+        "ms": 457,
+        "command": {
+          "type": "deploy",
+          "cardId": "c112",
+          "charge": false,
+          "x": 2,
+          "y": 8
+        },
+        "selectedDepth": 3,
+        "simulations": 543,
+        "candidates": 388,
+        "depth": 3,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": true,
+        "adopted": 0
+      },
+      {
+        "ply": 8,
+        "units": 9,
+        "difficulty": "hard",
+        "limits": {
+          "simulations": 5500,
+          "milliseconds": 1000
+        },
+        "ms": 862,
+        "command": {
+          "type": "cast",
+          "cardId": "c110",
+          "targetId": "u17"
+        },
+        "selectedDepth": 2,
+        "simulations": 1329,
+        "candidates": 631,
+        "depth": 2,
+        "replies": 4,
+        "sampled": 4,
+        "exhausted": false,
+        "adopted": 3
+      },
+      {
+        "ply": 10,
+        "units": 11,
+        "difficulty": "medium",
+        "limits": {
+          "simulations": 1800,
+          "milliseconds": 450
+        },
+        "ms": 458,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u107"
+        },
+        "selectedDepth": 3,
+        "simulations": 405,
+        "candidates": 322,
+        "depth": 3,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": true,
+        "adopted": 0
+      },
+      {
+        "ply": 10,
+        "units": 11,
+        "difficulty": "hard",
+        "limits": {
+          "simulations": 5500,
+          "milliseconds": 1000
+        },
+        "ms": 999,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u107"
+        },
+        "selectedDepth": 2,
+        "simulations": 892,
+        "candidates": 534,
+        "depth": 2,
+        "replies": 1,
+        "sampled": 0,
+        "exhausted": false,
+        "adopted": 0
+      },
+      {
+        "ply": 12,
+        "units": 12,
+        "difficulty": "medium",
+        "limits": {
+          "simulations": 1800,
+          "milliseconds": 450
+        },
+        "ms": 460,
+        "command": {
+          "type": "deploy",
+          "cardId": "c191",
+          "charge": false,
+          "x": 5,
+          "y": 7
+        },
+        "selectedDepth": 2,
+        "simulations": 283,
+        "candidates": 251,
+        "depth": 2,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": true,
+        "adopted": 0
+      },
+      {
+        "ply": 12,
+        "units": 12,
+        "difficulty": "hard",
+        "limits": {
+          "simulations": 5500,
+          "milliseconds": 1000
+        },
+        "ms": 1010,
+        "command": {
+          "type": "deploy",
+          "cardId": "c191",
+          "charge": false,
+          "x": 5,
+          "y": 7
+        },
+        "selectedDepth": 2,
+        "simulations": 583,
+        "candidates": 465,
+        "depth": 2,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": true,
+        "adopted": 0
+      },
+      {
+        "ply": 14,
+        "units": 13,
+        "difficulty": "medium",
+        "limits": {
+          "simulations": 1800,
+          "milliseconds": 450
+        },
+        "ms": 460,
+        "command": {
+          "type": "deploy",
+          "cardId": "c231",
+          "charge": false,
+          "x": 5,
+          "y": 7
+        },
+        "selectedDepth": 2,
+        "simulations": 265,
+        "candidates": 245,
+        "depth": 2,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": true,
+        "adopted": 0
+      },
+      {
+        "ply": 14,
+        "units": 13,
+        "difficulty": "hard",
+        "limits": {
+          "simulations": 5500,
+          "milliseconds": 1000
+        },
+        "ms": 1013,
+        "command": {
+          "type": "deploy",
+          "cardId": "c231",
+          "charge": false,
+          "x": 5,
+          "y": 7
+        },
+        "selectedDepth": 2,
+        "simulations": 545,
+        "candidates": 498,
+        "depth": 2,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": true,
+        "adopted": 0
+      },
+      {
+        "ply": 16,
+        "units": 16,
+        "difficulty": "medium",
+        "limits": {
+          "simulations": 1800,
+          "milliseconds": 450
+        },
+        "ms": 474,
+        "command": {
+          "type": "attack",
+          "unitId": "u196",
+          "targetId": "u188"
+        },
+        "selectedDepth": 2,
+        "simulations": 211,
+        "candidates": 157,
+        "depth": 2,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": true,
+        "adopted": 0
+      },
+      {
+        "ply": 16,
+        "units": 16,
+        "difficulty": "hard",
+        "limits": {
+          "simulations": 5500,
+          "milliseconds": 1000
+        },
+        "ms": 1015,
+        "command": {
+          "type": "attack",
+          "unitId": "u196",
+          "targetId": "u188"
+        },
+        "selectedDepth": 2,
+        "simulations": 458,
+        "candidates": 350,
+        "depth": 2,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": true,
+        "adopted": 0
+      },
+      {
+        "ply": 18,
+        "units": 18,
+        "difficulty": "medium",
+        "limits": {
+          "simulations": 1800,
+          "milliseconds": 375
+        },
+        "ms": 407,
+        "command": {
+          "type": "deploy",
+          "cardId": "c309",
+          "charge": false,
+          "x": 5,
+          "y": 7
+        },
+        "selectedDepth": 2,
+        "simulations": 179,
+        "candidates": 124,
+        "depth": 2,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": true,
+        "adopted": 0
+      },
+      {
+        "ply": 18,
+        "units": 18,
+        "difficulty": "hard",
+        "limits": {
+          "simulations": 5500,
+          "milliseconds": 875
+        },
+        "ms": 893,
+        "command": {
+          "type": "deploy",
+          "cardId": "c309",
+          "charge": false,
+          "x": 5,
+          "y": 7
+        },
+        "selectedDepth": 2,
+        "simulations": 342,
+        "candidates": 251,
+        "depth": 2,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": true,
+        "adopted": 0
+      }
+    ],
+    "revised": [
+      {
+        "ply": 2,
+        "units": 2,
+        "difficulty": "medium",
+        "limits": {
+          "mode": "work",
+          "simulations": 320,
+          "milliseconds": 450
+        },
+        "ms": 23,
+        "command": {
+          "type": "deploy",
+          "cardId": "c14",
+          "charge": false,
+          "x": 5,
+          "y": 7
+        },
+        "selectedDepth": 2,
+        "simulations": 17,
+        "candidates": 14,
+        "depth": 3,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 0,
+        "replySamples": 0,
+        "adopted": 0
+      },
+      {
+        "ply": 2,
+        "units": 2,
+        "difficulty": "hard",
+        "limits": {
+          "mode": "work",
+          "simulations": 800,
+          "milliseconds": 1000
+        },
+        "ms": 87,
+        "command": {
+          "type": "deploy",
+          "cardId": "c14",
+          "charge": false,
+          "x": 5,
+          "y": 7
+        },
+        "selectedDepth": 2,
+        "simulations": 91,
+        "candidates": 80,
+        "depth": 3,
+        "replies": 4,
+        "sampled": 8,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 2,
+        "replySamples": 2,
+        "adopted": 2
+      },
+      {
+        "ply": 4,
+        "units": 6,
+        "difficulty": "medium",
+        "limits": {
+          "mode": "work",
+          "simulations": 320,
+          "milliseconds": 450
+        },
+        "ms": 71,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u32"
+        },
+        "selectedDepth": 4,
+        "simulations": 51,
+        "candidates": 47,
+        "depth": 5,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 0,
+        "replySamples": 0,
+        "adopted": 0
+      },
+      {
+        "ply": 4,
+        "units": 6,
+        "difficulty": "hard",
+        "limits": {
+          "mode": "work",
+          "simulations": 800,
+          "milliseconds": 1000
+        },
+        "ms": 168,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u9"
+        },
+        "selectedDepth": 3,
+        "simulations": 143,
+        "candidates": 130,
+        "depth": 5,
+        "replies": 4,
+        "sampled": 8,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 2,
+        "replySamples": 2,
+        "adopted": 2
+      },
+      {
+        "ply": 6,
+        "units": 6,
+        "difficulty": "medium",
+        "limits": {
+          "mode": "work",
+          "simulations": 320,
+          "milliseconds": 450
+        },
+        "ms": 69,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u67"
+        },
+        "selectedDepth": 4,
+        "simulations": 56,
+        "candidates": 39,
+        "depth": 5,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 0,
+        "replySamples": 0,
+        "adopted": 0
+      },
+      {
+        "ply": 6,
+        "units": 6,
+        "difficulty": "hard",
+        "limits": {
+          "mode": "work",
+          "simulations": 800,
+          "milliseconds": 1000
+        },
+        "ms": 234,
+        "command": {
+          "type": "attack",
+          "unitId": "u45",
+          "targetId": "u67"
+        },
+        "selectedDepth": 1,
+        "simulations": 177,
+        "candidates": 138,
+        "depth": 5,
+        "replies": 4,
+        "sampled": 23,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 2,
+        "replySamples": 2,
+        "adopted": 2
+      },
+      {
+        "ply": 8,
+        "units": 9,
+        "difficulty": "medium",
+        "limits": {
+          "mode": "work",
+          "simulations": 320,
+          "milliseconds": 450
+        },
+        "ms": 107,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u7"
+        },
+        "selectedDepth": 5,
+        "simulations": 113,
+        "candidates": 80,
+        "depth": 6,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 0,
+        "replySamples": 0,
+        "adopted": 0
+      },
+      {
+        "ply": 8,
+        "units": 9,
+        "difficulty": "hard",
+        "limits": {
+          "mode": "work",
+          "simulations": 800,
+          "milliseconds": 1000
+        },
+        "ms": 265,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u7"
+        },
+        "selectedDepth": 5,
+        "simulations": 512,
+        "candidates": 159,
+        "depth": 7,
+        "replies": 4,
+        "sampled": 12,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 2,
+        "replySamples": 2,
+        "adopted": 2
+      },
+      {
+        "ply": 10,
+        "units": 11,
+        "difficulty": "medium",
+        "limits": {
+          "mode": "work",
+          "simulations": 320,
+          "milliseconds": 450
+        },
+        "ms": 145,
+        "command": {
+          "type": "attack",
+          "unitId": "u81",
+          "targetId": "u9"
+        },
+        "selectedDepth": 6,
+        "simulations": 122,
+        "candidates": 92,
+        "depth": 6,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 0,
+        "replySamples": 0,
+        "adopted": 0
+      },
+      {
+        "ply": 10,
+        "units": 11,
+        "difficulty": "hard",
+        "limits": {
+          "mode": "work",
+          "simulations": 800,
+          "milliseconds": 1000
+        },
+        "ms": 355,
+        "command": {
+          "type": "attack",
+          "unitId": "u81",
+          "targetId": "u9"
+        },
+        "selectedDepth": 7,
+        "simulations": 278,
+        "candidates": 210,
+        "depth": 8,
+        "replies": 4,
+        "sampled": 8,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 2,
+        "replySamples": 2,
+        "adopted": 2
+      },
+      {
+        "ply": 12,
+        "units": 12,
+        "difficulty": "medium",
+        "limits": {
+          "mode": "work",
+          "simulations": 320,
+          "milliseconds": 450
+        },
+        "ms": 187,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u138"
+        },
+        "selectedDepth": 6,
+        "simulations": 142,
+        "candidates": 104,
+        "depth": 8,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 0,
+        "replySamples": 0,
+        "adopted": 0
+      },
+      {
+        "ply": 12,
+        "units": 12,
+        "difficulty": "hard",
+        "limits": {
+          "mode": "work",
+          "simulations": 800,
+          "milliseconds": 1000
+        },
+        "ms": 388,
+        "command": {
+          "type": "attack",
+          "unitId": "u185",
+          "targetId": "u138"
+        },
+        "selectedDepth": 8,
+        "simulations": 290,
+        "candidates": 226,
+        "depth": 8,
+        "replies": 4,
+        "sampled": 11,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 2,
+        "replySamples": 2,
+        "adopted": 2
+      },
+      {
+        "ply": 14,
+        "units": 13,
+        "difficulty": "medium",
+        "limits": {
+          "mode": "work",
+          "simulations": 320,
+          "milliseconds": 450
+        },
+        "ms": 342,
+        "command": {
+          "type": "attack",
+          "unitId": "u196",
+          "targetId": "u188"
+        },
+        "selectedDepth": 5,
+        "simulations": 201,
+        "candidates": 175,
+        "depth": 6,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 0,
+        "replySamples": 0,
+        "adopted": 0
+      },
+      {
+        "ply": 14,
+        "units": 13,
+        "difficulty": "hard",
+        "limits": {
+          "mode": "work",
+          "simulations": 800,
+          "milliseconds": 1000
+        },
+        "ms": 740,
+        "command": {
+          "type": "deploy",
+          "cardId": "c231",
+          "charge": false,
+          "x": 7,
+          "y": 7
+        },
+        "selectedDepth": 2,
+        "simulations": 474,
+        "candidates": 407,
+        "depth": 7,
+        "replies": 4,
+        "sampled": 18,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 2,
+        "replySamples": 2,
+        "adopted": 2
+      },
+      {
+        "ply": 16,
+        "units": 16,
+        "difficulty": "medium",
+        "limits": {
+          "mode": "work",
+          "simulations": 320,
+          "milliseconds": 450
+        },
+        "ms": 371,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u228"
+        },
+        "selectedDepth": 6,
+        "simulations": 185,
+        "candidates": 155,
+        "depth": 6,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 0,
+        "replySamples": 0,
+        "adopted": 0
+      },
+      {
+        "ply": 16,
+        "units": 16,
+        "difficulty": "hard",
+        "limits": {
+          "mode": "work",
+          "simulations": 800,
+          "milliseconds": 1000
+        },
+        "ms": 788,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u261"
+        },
+        "selectedDepth": 8,
+        "simulations": 437,
+        "candidates": 356,
+        "depth": 8,
+        "replies": 4,
+        "sampled": 12,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 2,
+        "replySamples": 2,
+        "adopted": 2
+      },
+      {
+        "ply": 18,
+        "units": 18,
+        "difficulty": "medium",
+        "limits": {
+          "mode": "work",
+          "simulations": 320,
+          "milliseconds": 375
+        },
+        "ms": 611,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u261"
+        },
+        "selectedDepth": 6,
+        "simulations": 279,
+        "candidates": 243,
+        "depth": 6,
+        "replies": 0,
+        "sampled": 0,
+        "exhausted": false,
+        "mode": "work",
+        "stopReason": "complete",
+        "replyCandidates": 0,
+        "replySamples": 0,
+        "adopted": 0
+      },
+      {
+        "ply": 18,
+        "units": 18,
+        "difficulty": "hard",
+        "limits": {
+          "mode": "work",
+          "simulations": 800,
+          "milliseconds": 875
+        },
+        "ms": 1315,
+        "command": {
+          "type": "attack",
+          "unitId": "u17",
+          "targetId": "u261"
+        },
+        "selectedDepth": 5,
+        "simulations": 800,
+        "candidates": 508,
+        "depth": 6,
+        "replies": 3,
+        "sampled": 10,
+        "exhausted": true,
+        "mode": "work",
+        "stopReason": "nodes",
+        "replyCandidates": 2,
+        "replySamples": 1,
+        "adopted": 2
+      }
+    ]
+  },
+  "selfPlay": {
+    "original": {
+      "seed": 7,
+      "maxPlies": 12,
+      "commands": 107,
+      "cached": 54,
+      "freshPlay": 16,
+      "adoptedReplies": 6,
+      "exhaustedFreshPlay": 4,
+      "decisions": [
+        {
+          "ply": 1,
+          "phase": "summon",
+          "units": 0,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "summon",
+          "units": 0,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 1,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "summon",
+          "units": 0,
+          "cached": false,
+          "selectedDepth": 5,
+          "ms": 13,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 60,
+          "candidates": 53,
+          "depth": 5,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "play",
+          "units": 0,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c2",
+            "charge": true,
+            "x": 5,
+            "y": 8
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "play",
+          "units": 1,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c4",
+            "charge": false,
+            "x": 4,
+            "y": 8
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "play",
+          "units": 2,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u7",
+            "x": 5,
+            "y": 9
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "play",
+          "units": 2,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 2,
+          "phase": "summon",
+          "units": 2,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 4,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 2,
+          "phase": "summon",
+          "units": 2,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 5,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 2,
+          "phase": "summon",
+          "units": 2,
+          "cached": false,
+          "selectedDepth": 2,
+          "ms": 6,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 14,
+          "candidates": 13,
+          "depth": 4,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 2,
+          "phase": "play",
+          "units": 2,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c13",
+            "charge": false,
+            "x": 5,
+            "y": 11
+          }
+        },
+        {
+          "ply": 2,
+          "phase": "play",
+          "units": 3,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 62,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 186,
+          "candidates": 44,
+          "depth": 2,
+          "replies": 2,
+          "sampled": 6,
+          "exhausted": false,
+          "adopted": 2,
+          "command": {
+            "type": "cast",
+            "cardId": "c15",
+            "targetId": "u18"
+          }
+        },
+        {
+          "ply": 2,
+          "phase": "play",
+          "units": 3,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 1,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "summon",
+          "units": 3,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 8,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "summon",
+          "units": 3,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 9,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "summon",
+          "units": 3,
+          "cached": false,
+          "selectedDepth": 6,
+          "ms": 109,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 292,
+          "candidates": 208,
+          "depth": 6,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "play",
+          "units": 3,
+          "cached": true,
+          "selectedDepth": 5,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c23",
+            "charge": false,
+            "x": 5,
+            "y": 8
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "play",
+          "units": 4,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c25",
+            "charge": false,
+            "x": 4,
+            "y": 7
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "play",
+          "units": 5,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u9",
+            "targetId": "u18"
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "play",
+          "units": 5,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u7",
+            "targetId": "u18"
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "play",
+          "units": 4,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "summon",
+          "units": 4,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 8,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "summon",
+          "units": 4,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 10,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "summon",
+          "units": 4,
+          "cached": false,
+          "selectedDepth": 3,
+          "ms": 26,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 40,
+          "candidates": 33,
+          "depth": 4,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "play",
+          "units": 4,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c40",
+            "charge": false,
+            "x": 5,
+            "y": 12
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "play",
+          "units": 5,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c42",
+            "charge": false,
+            "x": 1,
+            "y": 6
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "play",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "summon",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 19,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "summon",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 19,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "summon",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 6,
+          "ms": 305,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 539,
+          "candidates": 414,
+          "depth": 8,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 6,
+          "cached": true,
+          "selectedDepth": 5,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u28",
+            "targetId": "u45"
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 5,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c52",
+            "charge": false,
+            "x": 3,
+            "y": 8
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 6,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c50",
+            "charge": false,
+            "x": 3,
+            "y": 6
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 7,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u9",
+            "targetId": "u47"
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 7,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u7",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 7,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 147,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 283,
+          "candidates": 53,
+          "depth": 2,
+          "replies": 4,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 4,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "summon",
+          "units": 7,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 16,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "summon",
+          "units": 7,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 16,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "summon",
+          "units": 7,
+          "cached": false,
+          "selectedDepth": 3,
+          "ms": 71,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 81,
+          "candidates": 76,
+          "depth": 5,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "play",
+          "units": 7,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c69",
+            "charge": false,
+            "x": 5,
+            "y": 12
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "play",
+          "units": 8,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u47",
+            "x": 2,
+            "y": 6
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "play",
+          "units": 8,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 263,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 376,
+          "candidates": 170,
+          "depth": 2,
+          "replies": 3,
+          "sampled": 6,
+          "exhausted": false,
+          "adopted": 3,
+          "command": {
+            "type": "cast",
+            "cardId": "c71",
+            "targetId": "u74"
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "play",
+          "units": 8,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "summon",
+          "units": 8,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 72,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 60,
+          "candidates": 2,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": true
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "summon",
+          "units": 8,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 42,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "summon",
+          "units": 8,
+          "cached": false,
+          "selectedDepth": 6,
+          "ms": 523,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 703,
+          "candidates": 602,
+          "depth": 6,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 8,
+          "cached": true,
+          "selectedDepth": 5,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u28",
+            "targetId": "u74"
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 7,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c82",
+            "charge": false,
+            "x": 5,
+            "y": 6
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 8,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c80",
+            "charge": false,
+            "x": 5,
+            "y": 7
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u9",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u7",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": false,
+          "selectedDepth": 4,
+          "ms": 423,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 559,
+          "candidates": 327,
+          "depth": 5,
+          "replies": 4,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 4,
+          "command": {
+            "type": "move",
+            "unitId": "u60",
+            "x": 3,
+            "y": 10
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "charge",
+            "unitId": "u62",
+            "mode": "attack"
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u30",
+            "x": 4,
+            "y": 6
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "summon",
+          "units": 9,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 22,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "summon",
+          "units": 9,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 24,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "summon",
+          "units": 9,
+          "cached": false,
+          "selectedDepth": 4,
+          "ms": 128,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 118,
+          "candidates": 109,
+          "depth": 5,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c102",
+            "charge": false,
+            "x": 5,
+            "y": 12
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "play",
+          "units": 10,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c104",
+            "charge": false,
+            "x": 1,
+            "y": 6
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u47",
+            "x": 2,
+            "y": 5
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "play",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 35,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 44,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 4,
+          "ms": 527,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 538,
+          "candidates": 485,
+          "depth": 4,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 964.5686763333342
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u90",
+            "targetId": "u47"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 10,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 964.5684160000013
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u28",
+            "targetId": "u107"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u7",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 9,
+          "cached": false,
+          "selectedDepth": 3,
+          "ms": 857,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 1134,
+          "candidates": 759,
+          "depth": 3,
+          "replies": 4,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 4,
+          "command": {
+            "type": "deploy",
+            "cardId": "c115",
+            "charge": false,
+            "x": 3,
+            "y": 7
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 10,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c113",
+            "charge": false,
+            "x": 2,
+            "y": 6
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "charge",
+            "unitId": "u62",
+            "mode": "attack"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 5,
+          "ms": 926,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 1087,
+          "candidates": 725,
+          "depth": 4,
+          "replies": 4,
+          "sampled": 7,
+          "exhausted": false,
+          "adopted": 4,
+          "command": {
+            "type": "move",
+            "unitId": "u30",
+            "x": 4,
+            "y": 7
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u9",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u60",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u60",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 32,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 30,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 42,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 5,
+          "ms": 324,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 190,
+          "candidates": 173,
+          "depth": 6,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c145",
+            "charge": false,
+            "x": 5,
+            "y": 12
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 12,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c147",
+            "charge": false,
+            "x": 4,
+            "y": 11
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 13,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c143",
+            "charge": false,
+            "x": 3,
+            "y": 12
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 14,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u109",
+            "x": 1,
+            "y": 5
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 14,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 3,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "summon",
+          "units": 14,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 127,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 875
+          },
+          "simulations": 60,
+          "candidates": 2,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": true
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "summon",
+          "units": 14,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 59,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 843.2686954999999
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "summon",
+          "units": 14,
+          "cached": false,
+          "selectedDepth": 3,
+          "ms": 442,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 828.5468737499996
+          },
+          "simulations": 269,
+          "candidates": 237,
+          "depth": 3,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 14,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 717.9325107499999
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u28",
+            "targetId": "u150"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 13,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 957.2428466666667
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u7",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 13,
+          "cached": false,
+          "selectedDepth": 2,
+          "ms": 967,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 957.2426996666678
+          },
+          "simulations": 625,
+          "candidates": 617,
+          "depth": 2,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": true,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c158",
+            "charge": false,
+            "x": 1,
+            "y": 4
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 14,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 634.8718170000017
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c160",
+            "charge": false,
+            "x": 2,
+            "y": 5
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 2,
+          "ms": 646,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 634.8713530000023
+          },
+          "simulations": 405,
+          "candidates": 349,
+          "depth": 2,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": true,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u9",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 419.5534300000024
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u92",
+            "x": 6,
+            "y": 7
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 2,
+          "ms": 646,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 629.3294090000036
+          },
+          "simulations": 506,
+          "candidates": 282,
+          "depth": 2,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": true,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u60",
+            "x": 2,
+            "y": 9
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 306.2366955000052
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "skill",
+            "unitId": "u132",
+            "mode": "attack"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 2,
+          "ms": 326,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 306.2356540000055
+          },
+          "simulations": 245,
+          "candidates": 133,
+          "depth": 2,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": true,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u90",
+            "x": 4,
+            "y": 6
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 286.36107300001095
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "summon",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 54,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "summon",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 54,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "summon",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 6,
+          "ms": 484,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 278,
+          "candidates": 272,
+          "depth": 7,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 15,
+          "cached": true,
+          "selectedDepth": 5,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u152",
+            "x": 5,
+            "y": 11
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 15,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c183",
+            "charge": false,
+            "x": 1,
+            "y": 11
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "cast",
+            "cardId": "c181",
+            "targetId": "u109"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u154",
+            "x": 2,
+            "y": 12
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "charge",
+            "unitId": "u109",
+            "mode": "attack"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 4,
+          "limits": {
+            "simulations": 5500,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        }
+      ]
+    },
+    "revised": {
+      "seed": 7,
+      "maxPlies": 12,
+      "commands": 110,
+      "cached": 46,
+      "freshPlay": 27,
+      "adoptedReplies": 20,
+      "exhaustedFreshPlay": 0,
+      "decisions": [
+        {
+          "ply": 1,
+          "phase": "summon",
+          "units": 0,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "summon",
+          "units": 0,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "summon",
+          "units": 0,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "play",
+          "units": 0,
+          "cached": false,
+          "selectedDepth": 4,
+          "ms": 24,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 64,
+          "candidates": 47,
+          "depth": 4,
+          "replies": 4,
+          "sampled": 8,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "deploy",
+            "cardId": "c2",
+            "charge": true,
+            "x": 5,
+            "y": 8
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "play",
+          "units": 1,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c4",
+            "charge": false,
+            "x": 5,
+            "y": 7
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "play",
+          "units": 2,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u7",
+            "x": 5,
+            "y": 9
+          }
+        },
+        {
+          "ply": 1,
+          "phase": "play",
+          "units": 2,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 2,
+          "phase": "summon",
+          "units": 2,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 4,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 2,
+          "phase": "summon",
+          "units": 2,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 5,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 2,
+          "phase": "summon",
+          "units": 2,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 2,
+          "phase": "play",
+          "units": 2,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 40,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 97,
+          "candidates": 78,
+          "depth": 3,
+          "replies": 4,
+          "sampled": 18,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "deploy",
+            "cardId": "c13",
+            "charge": false,
+            "x": 5,
+            "y": 12
+          }
+        },
+        {
+          "ply": 2,
+          "phase": "play",
+          "units": 3,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 36,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 79,
+          "candidates": 59,
+          "depth": 2,
+          "replies": 4,
+          "sampled": 20,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "summon",
+          "units": 3,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 6,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "summon",
+          "units": 3,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 9,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "summon",
+          "units": 3,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 1,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "play",
+          "units": 3,
+          "cached": false,
+          "selectedDepth": 4,
+          "ms": 78,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 134,
+          "candidates": 105,
+          "depth": 5,
+          "replies": 4,
+          "sampled": 12,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "deploy",
+            "cardId": "c21",
+            "charge": false,
+            "x": 5,
+            "y": 8
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "play",
+          "units": 4,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c23",
+            "charge": false,
+            "x": 4,
+            "y": 8
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "play",
+          "units": 5,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u9",
+            "x": 4,
+            "y": 7
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "play",
+          "units": 5,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u7",
+            "targetId": "u18"
+          }
+        },
+        {
+          "ply": 3,
+          "phase": "play",
+          "units": 4,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 1,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "summon",
+          "units": 4,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 7,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "summon",
+          "units": 4,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 7,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "summon",
+          "units": 4,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 1,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "play",
+          "units": 4,
+          "cached": false,
+          "selectedDepth": 3,
+          "ms": 84,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 116,
+          "candidates": 93,
+          "depth": 4,
+          "replies": 4,
+          "sampled": 18,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "deploy",
+            "cardId": "c37",
+            "charge": false,
+            "x": 1,
+            "y": 6
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "play",
+          "units": 5,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c39",
+            "charge": false,
+            "x": 5,
+            "y": 10
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "play",
+          "units": 6,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "cast",
+            "cardId": "c15",
+            "targetId": "u42"
+          }
+        },
+        {
+          "ply": 4,
+          "phase": "play",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 1,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "summon",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 20,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "summon",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 19,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "summon",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 6,
+          "ms": 121,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 174,
+          "candidates": 117,
+          "depth": 7,
+          "replies": 4,
+          "sampled": 12,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "deploy",
+            "cardId": "c49",
+            "charge": false,
+            "x": 3,
+            "y": 8
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 7,
+          "cached": true,
+          "selectedDepth": 5,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u9",
+            "targetId": "u42"
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 6,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c51",
+            "charge": false,
+            "x": 5,
+            "y": 7
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 7,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u26",
+            "targetId": "u44"
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 6,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u28",
+            "x": 4,
+            "y": 9
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 6,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u7",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 5,
+          "phase": "play",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 1,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "summon",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 12,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "summon",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 10,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "summon",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "play",
+          "units": 6,
+          "cached": false,
+          "selectedDepth": 2,
+          "ms": 138,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 139,
+          "candidates": 123,
+          "depth": 3,
+          "replies": 4,
+          "sampled": 15,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "deploy",
+            "cardId": "c72",
+            "charge": false,
+            "x": 1,
+            "y": 10
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "play",
+          "units": 7,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "cast",
+            "cardId": "c74",
+            "targetId": "u77"
+          }
+        },
+        {
+          "ply": 6,
+          "phase": "play",
+          "units": 7,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "summon",
+          "units": 7,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 49,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 60,
+          "candidates": 2,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": true
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "summon",
+          "units": 7,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 27,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "summon",
+          "units": 7,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 7,
+          "cached": false,
+          "selectedDepth": 7,
+          "ms": 255,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 257,
+          "candidates": 204,
+          "depth": 7,
+          "replies": 4,
+          "sampled": 12,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "deploy",
+            "cardId": "c82",
+            "charge": false,
+            "x": 2,
+            "y": 8
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 8,
+          "cached": true,
+          "selectedDepth": 6,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c84",
+            "charge": false,
+            "x": 2,
+            "y": 9
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 5,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u9",
+            "x": 4,
+            "y": 8
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u61",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u61",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u54",
+            "x": 3,
+            "y": 9
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u7",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 7,
+          "phase": "play",
+          "units": 9,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 122,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 80,
+          "candidates": 72,
+          "depth": 3,
+          "replies": 4,
+          "sampled": 8,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "summon",
+          "units": 9,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 28,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "summon",
+          "units": 9,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 28,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "summon",
+          "units": 9,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 1,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "play",
+          "units": 9,
+          "cached": false,
+          "selectedDepth": 4,
+          "ms": 222,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 193,
+          "candidates": 177,
+          "depth": 5,
+          "replies": 4,
+          "sampled": 11,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "attack",
+            "unitId": "u77",
+            "targetId": "u87"
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u77",
+            "targetId": "u61"
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "play",
+          "units": 9,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c100",
+            "charge": false,
+            "x": 5,
+            "y": 10
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "play",
+          "units": 10,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c102",
+            "charge": false,
+            "x": 2,
+            "y": 6
+          }
+        },
+        {
+          "ply": 8,
+          "phase": "play",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 3,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 30,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 33,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 8,
+          "ms": 273,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 263,
+          "candidates": 225,
+          "depth": 8,
+          "replies": 4,
+          "sampled": 12,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "attack",
+            "unitId": "u26",
+            "targetId": "u87"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 7,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u7",
+            "targetId": "u87"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 10,
+          "cached": true,
+          "selectedDepth": 6,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c122",
+            "charge": false,
+            "x": 4,
+            "y": 6
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 5,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c120",
+            "charge": false,
+            "x": 1,
+            "y": 9
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 12,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u28",
+            "targetId": "u115"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u89",
+            "targetId": "u117"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u9",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 9,
+          "phase": "play",
+          "units": 11,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 33,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 27,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 27,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "summon",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 2,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 11,
+          "cached": false,
+          "selectedDepth": 5,
+          "ms": 423,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 298,
+          "candidates": 277,
+          "depth": 7,
+          "replies": 4,
+          "sampled": 16,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "deploy",
+            "cardId": "c148",
+            "charge": false,
+            "x": 9,
+            "y": 6
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 12,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c146",
+            "charge": false,
+            "x": 5,
+            "y": 10
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 13,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c150",
+            "charge": false,
+            "x": 2,
+            "y": 11
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 14,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "charge",
+            "unitId": "u117",
+            "mode": "attack"
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 14,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u77",
+            "targetId": "u54"
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 14,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 308,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 163,
+          "candidates": 151,
+          "depth": 2,
+          "replies": 4,
+          "sampled": 12,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "attack",
+            "unitId": "u77",
+            "targetId": "u28"
+          }
+        },
+        {
+          "ply": 10,
+          "phase": "play",
+          "units": 14,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 3,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "summon",
+          "units": 14,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 88,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 60,
+          "candidates": 2,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": true
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "summon",
+          "units": 14,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 43,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "summon",
+          "units": 14,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 3,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 14,
+          "cached": false,
+          "selectedDepth": 7,
+          "ms": 691,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 438,
+          "candidates": 377,
+          "depth": 8,
+          "replies": 4,
+          "sampled": 12,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "attack",
+            "unitId": "u26",
+            "targetId": "u155"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 13,
+          "cached": true,
+          "selectedDepth": 6,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c165",
+            "charge": false,
+            "x": 3,
+            "y": 7
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 14,
+          "cached": true,
+          "selectedDepth": 5,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "deploy",
+            "cardId": "c167",
+            "charge": false,
+            "x": 4,
+            "y": 7
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "move",
+            "unitId": "u54",
+            "x": 3,
+            "y": 10
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "skill",
+            "unitId": "u134",
+            "mode": "attack"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u9",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u7",
+            "targetId": "base-2"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 2,
+          "ms": 295,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 153,
+          "candidates": 145,
+          "depth": 4,
+          "replies": 4,
+          "sampled": 8,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "attack",
+            "unitId": "u89",
+            "targetId": "u157"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u132",
+            "targetId": "u117"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 2,
+          "ms": 282,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 127,
+          "candidates": 119,
+          "depth": 2,
+          "replies": 4,
+          "sampled": 8,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "attack",
+            "unitId": "u28",
+            "targetId": "u28"
+          }
+        },
+        {
+          "ply": 11,
+          "phase": "play",
+          "units": 15,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "summon",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 49,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "summon",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 51,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 29,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "summon",
+            "ultimate": false
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "summon",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 4,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "begin"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 15,
+          "cached": false,
+          "selectedDepth": 5,
+          "ms": 965,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 452,
+          "candidates": 421,
+          "depth": 7,
+          "replies": 4,
+          "sampled": 29,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "deploy",
+            "cardId": "c194",
+            "charge": false,
+            "x": 5,
+            "y": 11
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": true,
+          "selectedDepth": 4,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "charge",
+            "unitId": "u117",
+            "mode": "attack"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": true,
+          "selectedDepth": 3,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "cast",
+            "cardId": "c192",
+            "targetId": "u117"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": true,
+          "selectedDepth": 2,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u77",
+            "targetId": "u89"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": true,
+          "selectedDepth": 1,
+          "ms": 0,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 0,
+          "candidates": 0,
+          "depth": 0,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "adopted": 0,
+          "command": {
+            "type": "attack",
+            "unitId": "u153",
+            "targetId": "u54"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 593,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 251,
+          "candidates": 239,
+          "depth": 4,
+          "replies": 4,
+          "sampled": 12,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "attack",
+            "unitId": "u77",
+            "targetId": "u89"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 517,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 222,
+          "candidates": 198,
+          "depth": 3,
+          "replies": 4,
+          "sampled": 24,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "attack",
+            "unitId": "u153",
+            "targetId": "u26"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 500,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 193,
+          "candidates": 175,
+          "depth": 2,
+          "replies": 4,
+          "sampled": 18,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 2,
+          "replySamples": 2,
+          "adopted": 2,
+          "command": {
+            "type": "attack",
+            "unitId": "u157",
+            "targetId": "u54"
+          }
+        },
+        {
+          "ply": 12,
+          "phase": "play",
+          "units": 16,
+          "cached": false,
+          "selectedDepth": 1,
+          "ms": 4,
+          "limits": {
+            "mode": "work",
+            "simulations": 800,
+            "milliseconds": 1000
+          },
+          "simulations": 1,
+          "candidates": 1,
+          "depth": 1,
+          "replies": 0,
+          "sampled": 0,
+          "exhausted": false,
+          "mode": "work",
+          "stopReason": "complete",
+          "replyCandidates": 0,
+          "replySamples": 0,
+          "adopted": 0,
+          "command": {
+            "type": "end"
+          }
+        }
+      ]
+    }
+  },
+  "pairedGames": [
+    {
+      "sourceDigest": "d23d28c59ceb4ef02e94b72bbe5c027b0e893ed2586b5009736178f442081ae9",
+      "seed": 7,
+      "newSide": 1,
+      "levels": ["hard", "hard"],
+      "nodes": 700,
+      "maxPlies": 24,
+      "budgetMode": "production",
+      "winner": 1,
+      "newWon": true,
+      "ply": 21,
+      "commands": 214,
+      "bases": {
+        "1": 300,
+        "2": 0
+      },
+      "heads": {
+        "1": 2,
+        "2": 2
+      },
+      "units": 17,
+      "milliseconds": 22640,
+      "maxDecisionMs": 1558
+    },
+    {
+      "sourceDigest": "d23d28c59ceb4ef02e94b72bbe5c027b0e893ed2586b5009736178f442081ae9",
+      "seed": 7,
+      "newSide": 2,
+      "levels": ["hard", "hard"],
+      "nodes": 700,
+      "maxPlies": 24,
+      "budgetMode": "production",
+      "winner": "unresolved",
+      "newWon": false,
+      "ply": 25,
+      "commands": 305,
+      "bases": {
+        "1": 295,
+        "2": 260
+      },
+      "heads": {
+        "1": 0,
+        "2": 3
+      },
+      "units": 29,
+      "milliseconds": 60283,
+      "maxDecisionMs": 4008
+    },
+    {
+      "sourceDigest": "d23d28c59ceb4ef02e94b72bbe5c027b0e893ed2586b5009736178f442081ae9",
+      "seed": 42,
+      "newSide": 1,
+      "levels": ["hard", "hard"],
+      "nodes": 700,
+      "maxPlies": 24,
+      "budgetMode": "production",
+      "winner": "unresolved",
+      "newWon": false,
+      "ply": 25,
+      "commands": 278,
+      "bases": {
+        "1": 295,
+        "2": 300
+      },
+      "heads": {
+        "1": 2,
+        "2": 1
+      },
+      "units": 22,
+      "milliseconds": 44427,
+      "maxDecisionMs": 1289
+    },
+    {
+      "sourceDigest": "d23d28c59ceb4ef02e94b72bbe5c027b0e893ed2586b5009736178f442081ae9",
+      "seed": 42,
+      "newSide": 2,
+      "levels": ["hard", "hard"],
+      "nodes": 700,
+      "maxPlies": 24,
+      "budgetMode": "production",
+      "winner": "unresolved",
+      "newWon": false,
+      "ply": 25,
+      "commands": 286,
+      "bases": {
+        "1": 300,
+        "2": 210
+      },
+      "heads": {
+        "1": 2,
+        "2": 1
+      },
+      "units": 31,
+      "milliseconds": 74951,
+      "maxDecisionMs": 5283
+    }
+  ],
+  "latency": {
+    "new": {
+      "totalCommands": 501,
+      "nonCachedDecisions": 258,
+      "meanNonCachedMs": 409.9,
+      "p95NonCachedMs": 2080,
+      "maxMs": 5283
+    },
+    "baseline": {
+      "totalCommands": 582,
+      "nonCachedDecisions": 380,
+      "meanNonCachedMs": 252.6,
+      "p95NonCachedMs": 975,
+      "maxMs": 1132
+    }
+  }
+}

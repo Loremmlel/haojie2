@@ -6,6 +6,8 @@ export type Observation = Omit<GameState, 'seed' | 'rng' | 'events' | 'log'>;
 export interface SearchLimits {
   simulations: number;
   milliseconds: number;
+  /** Work mode is reproducible; timed mode explicitly trades reproducibility for a deadline. */
+  mode?: 'work' | 'timed';
   trace?: boolean;
 }
 export interface PlanStep {
@@ -40,6 +42,12 @@ export interface Decision {
     replies: number;
     sampled: number;
     exhausted: boolean;
+    mode?: 'work' | 'timed';
+    stopReason?: 'nodes' | 'time' | 'complete';
+    replyCandidates?: number;
+    replySamples?: number;
+    selectedDepth?: number;
+    cached?: boolean;
   };
 }
 export interface SearchRequest {
@@ -51,6 +59,7 @@ export interface SearchRequest {
 }
 export interface SearchResponse {
   id: number;
+  progress?: boolean;
   decision?: Decision;
   error?: string;
 }

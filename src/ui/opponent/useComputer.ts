@@ -68,6 +68,15 @@ export function useComputer({ session, live, apply, modal, notice }: Port) {
           if (predicted?.before === fingerprint(source)) {
             command = predicted.command;
             cache.current.shift();
+            setStats({
+              simulations: 0,
+              candidates: 0,
+              depth: 0,
+              replies: 0,
+              sampled: 0,
+              exhausted: false,
+              cached: true,
+            });
           } else {
             cache.current = [];
             client.current ??= new AiClient();

@@ -24,6 +24,7 @@ export function distribution(
   limit = 12,
   samples = 3,
   salt = 0,
+  sampleKey?: string,
 ): Distribution {
   let attempts = 0;
   const run = (tape: readonly number[], fallback?: (cuts: readonly number[]) => number) => {
@@ -69,7 +70,9 @@ export function distribution(
     }
     if (sampled) {
       outcomes.length = 0;
-      const seed = hash(positionKey(s) + JSON.stringify(c) + salt);
+      const seed = hash(
+        sampleKey === undefined ? positionKey(s) + JSON.stringify(c) + salt : sampleKey,
+      );
       for (let lane = 0; lane < samples; lane++) {
         let index = 0;
         outcomes.push({

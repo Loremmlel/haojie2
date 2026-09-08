@@ -69,6 +69,7 @@ export class Arena {
           replies: 0,
           sampled: 0,
           exhausted: false,
+          cached: true,
         },
       };
     } else

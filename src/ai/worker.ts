@@ -1,4 +1,4 @@
-import { decide } from './search';
+import { search } from './search';
 import type { SearchRequest, SearchResponse } from './types';
 const port = self as unknown as {
   onmessage: ((e: MessageEvent<SearchRequest>) => void) | null;
@@ -6,10 +6,18 @@ const port = self as unknown as {
 };
 port.onmessage = ({ data }) => {
   try {
-    port.postMessage({
-      id: data.id,
-      decision: decide(data.observation, data.side, data.difficulty, data.limits),
-    });
+    const iterator = search(data.observation, data.side, data.difficulty, data.limits);
+    let last = performance.now();
+    port.postMessage({ id: data.id, progress: true });
+    let step = iterator.next();
+    while (!step.done) {
+      if (performance.now() - last >= 250) {
+        port.postMessage({ id: data.id, progress: true });
+        last = performance.now();
+      }
+      step = iterator.next();
+    }
+    port.postMessage({ id: data.id, decision: step.value });
   } catch (error) {
     port.postMessage({ id: data.id, error: error instanceof Error ? error.message : 'AI计算失败' });
   }

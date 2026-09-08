@@ -1,4 +1,14 @@
 import type { Definition, Kind } from './types';
+/** Numeric combat parameters shared by resolution and read-only AI estimates. */
+export const COMBAT_RULES = {
+  charger: { heavyChance: 1 / 12, criticalChance: 1 / 3, heavyBonus: 60, bonus: 20 },
+  superCritical: { lethalChance: 1 / 5, doubleChance: 1 / 3, lethalDamage: 100 },
+  vampire: { base: 0.2, perKill: 0.2 },
+  minerBaseDamage: 10,
+  frontDamageCap: 10,
+  kingAttackImmunity: 10,
+  catapultMarkDamage: 5,
+} as const;
 /** Single source for both rule stats and the UI codex. Fractional attributes retain their exact numeric value. */
 export const CATALOG: Definition[] = [
   {

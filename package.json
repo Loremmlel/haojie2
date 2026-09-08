@@ -17,7 +17,8 @@
     "test:browser:ai": "node tests/browser/ai.mjs",
     "bench:ai": "tsx scripts/ai/benchmark.ts",
     "play:cli": "tsx scripts/ai/play.ts",
-    "bench:ai:compare": "tsx scripts/ai/compare.ts"
+    "bench:ai:compare": "tsx scripts/ai/compare.ts",
+    "bench:ai:audit": "tsx scripts/ai/audit.ts"
   },
   "dependencies": {
     "react": "19.2.0",

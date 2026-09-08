@@ -66,6 +66,11 @@ export class AiClient {
         this.mode = 'worker';
         worker.onmessage = ({ data }: MessageEvent<SearchResponse>) => {
           if (data.id !== request.id) return;
+          if (data.progress) {
+            clearTimeout(timer);
+            timer = setTimeout(fallback, 4000);
+            return;
+          }
           if (data.error) {
             fallback();
             return;
