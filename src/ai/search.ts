@@ -1,5 +1,10 @@
 import type { GameState, Player } from '../engine/types';
-import { iterateCandidateGroups, attackCandidates, type CandidateGroup } from './candidates';
+import {
+  iterateCandidateGroups,
+  attackCandidates,
+  commandPriority,
+  type CandidateGroup,
+} from './candidates';
 import { DIFFICULTIES } from './difficulty';
 import { analyzePayload } from './threats';
 import { evaluate, explainEvaluation, materialValue } from './evaluate';
@@ -24,10 +29,32 @@ interface Context {
   max: number;
   stopAt: number;
   deadline: number;
-  stopped: boolean;
   side: Player;
   difficulty: Difficulty;
   cache: Map<string, number>;
+  scenarioSeed: number;
+}
+// Common random scenarios reduce draw noise BETWEEN alternatives; never use the real PRNG.
+function scenarioKey(
+  ctx: Context,
+  s: GameState,
+  command: import('../engine/types').Command,
+  sample: number,
+): string {
+  const u = s.units.find((v) => v.id === command.unitId);
+  return JSON.stringify([
+    ctx.scenarioSeed,
+    sample,
+    s.ply,
+    s.summonSlots,
+    command.type,
+    command.unitId,
+    command.cardId,
+    u?.shots,
+    u?.moves,
+    u?.operations,
+    u?.freeUsed,
+  ]);
 }
 const time = () => (typeof performance === 'undefined' ? Date.now() : performance.now());
 function stopped(ctx: Context): boolean {
@@ -58,6 +85,7 @@ function* expand(
   path: PlanStep[],
   level: Difficulty = ctx.difficulty,
   lean = false,
+  salt = 0,
 ): Generator<void, Node[]> {
   const settings = DIFFICULTIES[level],
     result: Node[] = [],
@@ -66,21 +94,32 @@ function* expand(
   for (const group of iterateCandidateGroups(s, level)) {
     work.push({
       ...group,
-      keep: lean ? 1 : path.length ? Math.min(3, group.keep) : group.keep,
+      keep: lean || path.length ? 1 : group.keep,
       index: 0,
       accepted: 0,
     });
     yield;
   }
-  let live = work.length,
-    pass = 0;
+  // A rollout is a narrow policy, not another exhaustive root search at each atomic command.
+  if (lean) {
+    work.sort(
+      (a, b) =>
+        (b.priority ?? commandPriority(s, b.commands[0])) -
+        (a.priority ?? commandPriority(s, a.commands[0])),
+    );
+    work.splice(3);
+  }
+  const localStart = ctx.count;
+  const localLimit = lean ? Infinity : path.length ? 24 : Math.max(40, Math.floor(ctx.max * 0.16));
+  let live = work.length;
   while (live > 0) {
+    const passStart = result.length;
     live = 0;
     for (const group of work) {
       if (group.index >= group.commands.length || group.accepted >= group.keep) continue;
       live++;
       if (
-        stopped(ctx) &&
+        (stopped(ctx) || ctx.count - localStart >= localLimit) &&
         result.length &&
         !(s.phase === 'summon' && group.family === 'summon' && group.accepted < group.keep)
       )
@@ -92,14 +131,17 @@ function* expand(
       const d = distribution(
         s,
         command,
-        command.type === 'summon' ? 64 : settings.chanceLimit,
-        settings.chanceSamples,
+        lean ? 2 : command.type === 'summon' ? 64 : settings.chanceLimit,
+        lean ? 1 : settings.chanceSamples,
+        salt,
+        lean ? scenarioKey(ctx, s, command, salt) : undefined,
       );
       ctx.count += d.attempts;
       if (d.sampled) ctx.sampled++;
       if (d.outcomes.length) {
         ctx.candidates++;
         group.accepted++;
+        if (!lean) ctx.depth = Math.max(ctx.depth, path.length + 1);
         const nextPath = [...path, { before: fingerprint(s), command }];
         const only = d.outcomes.length === 1 ? d.outcomes[0].state : null;
         result.push({
@@ -113,13 +155,14 @@ function* expand(
             !!only &&
             !only.winner &&
             only.active === s.active &&
+            only.phase === s.phase &&
             decisionOwner(only) === decisionOwner(s),
         });
       }
       yield;
     }
-    if (pass++ === 0 && !lean && !stopped(ctx))
-      result.push(...(yield* attackContinuations(ctx, result, level)));
+    if (!lean && !path.length && !stopped(ctx))
+      result.push(...(yield* attackContinuations(ctx, result.slice(passStart), level)));
   }
   return result;
 }
@@ -141,10 +184,17 @@ function* attackContinuations(
       const state = current.outcomes[0].state;
       if (state.pending.length || state.winner) break;
       let best: Node | undefined, focused: Node | undefined;
-      for (const command of attackCandidates(state, first.unitId).slice(
-        0,
-        level === 'hard' ? 6 : 3,
-      )) {
+      const followups = attackCandidates(state, first.unitId);
+      // A mark or a depleted shooter can hand off the same target to an ally. Keep
+      // this as a legal, deterministic sequence; dice/reactions still break the line.
+      if (state.units.some((u) => u.id === first.targetId) || first.targetId?.startsWith('base-'))
+        for (const ally of state.units)
+          if (ally.owner === state.active && ally.id !== first.unitId)
+            followups.push(
+              ...attackCandidates(state, ally.id).filter((c) => c.targetId === first.targetId),
+            );
+      followups.sort((a, b) => commandPriority(state, b) - commandPriority(state, a));
+      for (const command of followups.slice(0, level === 'hard' ? 6 : 3)) {
         if (stopped(ctx)) break;
         const d = distribution(
           state,
@@ -168,7 +218,9 @@ function* attackContinuations(
               single.active === state.active &&
               decisionOwner(single) === decisionOwner(state),
           };
-          if (command.targetId === first.targetId) focused = node;
+          ctx.depth = Math.max(ctx.depth, node.path.length);
+          if (command.targetId === first.targetId && (!focused || node.score > focused.score))
+            focused = node;
           if (!best || node.score > best.score) best = node;
         }
         yield;
@@ -206,18 +258,19 @@ function* rollout(
   ctx: Context,
   initial: GameState,
   owner: Player,
-  steps = 60,
+  scenario = 0,
+  steps = 100,
 ): Generator<void, GameState> {
   let state = initial;
   for (let i = 0; i < steps && !state.winner; i++) {
     if (stopped(ctx)) break;
     if (state.active !== owner && !state.pending.length) break;
     const mover = decisionOwner(state),
-      nodes = yield* expand(ctx, state, [], 'easy', true);
+      nodes = yield* expand(ctx, state, [], 'easy', true, scenario);
     const choice = selectForOwner(nodes, ctx, mover);
     if (!choice) break;
     // Rollout sample is not selected by its score. Outcome choice is fixed independently.
-    let draw = (hash(fingerprint(state) + i + owner) + 0.5) / 4294967296;
+    let draw = (hash(scenarioKey(ctx, state, choice.path[0].command, scenario)) + 0.5) / 4294967296;
     let selected = choice.outcomes.at(-1)!;
     for (const out of choice.outcomes) {
       draw -= out.weight;
@@ -247,11 +300,14 @@ export function* search(
     depth: 1,
     max,
     stopAt: max,
-    deadline: time() + Math.max(10, limits.milliseconds ?? cfg.decisionMs),
-    stopped: false,
+    deadline:
+      limits.mode === 'timed'
+        ? time() + Math.max(10, limits.milliseconds ?? cfg.decisionMs)
+        : Infinity,
     side,
     difficulty,
     cache: new Map(),
+    scenarioSeed: hash(positionKey(s)),
   };
   if (s.winner || decisionOwner(s) !== side)
     return {
@@ -260,14 +316,18 @@ export function* search(
       stats: { simulations: 0, candidates: 0, depth: 0, replies: 0, sampled: 0, exhausted: false },
     };
   const fullDeadline = ctx.deadline;
-  if (difficulty === 'hard') ctx.deadline = time() + Math.max(10, (fullDeadline - time()) * 0.52);
+  if (difficulty === 'hard') {
+    if (Number.isFinite(fullDeadline))
+      ctx.deadline = time() + Math.max(10, (fullDeadline - time()) * 0.4);
+    ctx.stopAt = Math.max(40, Math.floor(max * 0.4));
+  }
   const roots = yield* expand(ctx, s, []);
   const bestByRoot = new Map<string, Node>();
   for (const n of roots)
     if (!bestByRoot.has(n.root) || n.score > bestByRoot.get(n.root)!.score)
       bestByRoot.set(n.root, n);
   // Keep some budget for genuine adversarial replies instead of spending all of it on our moves.
-  ctx.stopAt = difficulty === 'hard' ? Math.max(ctx.count, Math.floor(max * 0.55)) : max;
+  ctx.stopAt = difficulty === 'hard' ? Math.max(ctx.count, Math.floor(max * 0.4)) : max;
   const seen = new Set<string>();
   let beam = bestDiverse(roots, cfg.width, seen);
   for (let depth = 2; depth <= cfg.depth && beam.length && !stopped(ctx); depth++) {
@@ -281,55 +341,61 @@ export function* search(
       }
       children.push(...next);
     }
-    ctx.depth = depth;
+
     beam = bestDiverse(children, cfg.width, seen);
   }
   let choices = [...bestByRoot.values()].sort((a, b) => b.score - a.score);
   ctx.stopAt = max;
   ctx.deadline = fullDeadline;
+  let replyCandidates = 0,
+    replySamples = 0;
   if (difficulty === 'hard' && s.phase !== 'summon' && choices.length > 1 && !stopped(ctx)) {
-    const shortlist = choices.slice(0, cfg.replyRoots),
-      tested: Node[] = [];
-    const remaining = ctx.deadline - time();
-    for (let index = 0; index < shortlist.length; index++) {
-      if (stopped(ctx)) break;
-      const node = shortlist[index],
-        globalDeadline = ctx.deadline,
-        globalStop = ctx.stopAt;
-      ctx.deadline = Math.min(globalDeadline, time() + remaining / shortlist.length);
-      ctx.stopAt = Math.min(
-        globalStop,
-        ctx.count + Math.max(100, Math.floor((max - ctx.count) / (shortlist.length - index))),
-      );
-      let score = 0,
-        weight = 0;
-      for (const outcome of node.outcomes) {
+    const shortlist = choices.slice(0, cfg.replyRoots);
+    const sums = shortlist.map(() => 0);
+    // Publish only COMPLETE PAIRED scenarios. A completed first round remains useful even
+    // if a later scenario runs out of budget. No half-turn scores or unequal sample counts.
+    for (let sample = 0; sample < 2 && !stopped(ctx); sample++) {
+      const roundScores: number[] = [];
+      const roundDeadline = ctx.deadline;
+      for (let index = 0; index < shortlist.length; index++) {
         if (stopped(ctx)) break;
-        let state = outcome.state;
-        if (!state.winner && state.active === side) state = yield* rollout(ctx, state, side);
-        if (!state.winner && state.active !== side) {
-          state = yield* rollout(ctx, state, state.active);
-          if (
-            state.winner ||
-            (state.active === side && state.ply >= s.ply + 2 && !state.pending.length)
-          )
-            ctx.replies++;
+        const node = shortlist[index];
+        let draw = (hash(fingerprint(s) + ':reply:' + sample) + 0.5) / 4294967296;
+        let state = node.outcomes.at(-1)!.state;
+        for (const out of node.outcomes) {
+          draw -= out.weight;
+          if (draw <= 0) {
+            state = out.state;
+            break;
+          }
         }
-        // Never rank a half-finished own turn against a fully completed opponent reply.
+        if (node.outcomes.length > 1) ctx.sampled++;
+        // Equal time slices in opt-in timed mode; normal production has a fixed work budget.
+        ctx.deadline = Math.min(
+          roundDeadline,
+          time() + (roundDeadline - time()) / (shortlist.length - index),
+        );
+        if (!state.winner && state.active === side)
+          state = yield* rollout(ctx, state, side, sample);
+        if (!state.winner && state.active !== side)
+          state = yield* rollout(ctx, state, state.active, sample);
+        ctx.deadline = roundDeadline;
         if (
           state.winner ||
           (state.active === side && state.ply >= s.ply + 2 && !state.pending.length)
         ) {
-          score += outcome.weight * value(ctx, state);
-          weight += outcome.weight;
-        }
+          ctx.replies++;
+          roundScores.push(value(ctx, state));
+        } else break;
       }
-      ctx.deadline = globalDeadline;
-      ctx.stopAt = globalStop;
-      if (weight > 0.999999) tested.push({ ...node, score: score / weight, replyTested: true });
+      if (roundScores.length !== shortlist.length) break;
+      replySamples++;
+      roundScores.forEach((score, index) => (sums[index] += score));
+      choices = shortlist
+        .map((node, index) => ({ ...node, score: sums[index] / replySamples, replyTested: true }))
+        .sort((a, b) => b.score - a.score);
+      replyCandidates = shortlist.length;
     }
-    // Compare candidates at the same reply-tested stage. Unsearched roots are not assumed safe.
-    if (tested.length >= 2) choices = tested.sort((a, b) => b.score - a.score);
   }
   let selected = choices[0];
   if (
@@ -379,6 +445,11 @@ export function* search(
       replies: ctx.replies,
       sampled: ctx.sampled,
       exhausted: stopped(ctx),
+      mode: limits.mode ?? 'work',
+      stopReason: ctx.count >= max ? 'nodes' : time() >= ctx.deadline ? 'time' : 'complete',
+      replyCandidates,
+      replySamples,
+      selectedDepth: plan.length,
     },
   };
 }

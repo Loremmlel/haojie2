@@ -1,4 +1,4 @@
-import { baseCoverValue } from './threats';
+import { baseCoverValue, payloadCoverValue } from './threats';
 import { definition, isStored } from '../engine/catalog';
 import { unitActions, cardActions, reactionAction, actionError } from '../engine/options';
 import type { ActionSpec, SelectionStep } from '../engine/options';
@@ -35,6 +35,7 @@ export interface CandidateGroup {
   family: string;
   commands: Command[];
   keep: number;
+  priority?: number;
 }
 const releaseCache = new WeakMap<GameState, Map<string, number>>();
 /** Removing a cheap screen may unlock a loaded ally's otherwise blocked base shot. */
@@ -117,6 +118,34 @@ function targetRank(s: GameState, a: ActionSpec, c: Command, t: Target): number 
     return -value + (a.id === 'sacrifice' ? getStats(s, u).attack : 0);
   return friend ? value : value + 30;
 }
+/** Cheap ordering for narrow rollout policies, never a substitute for engine validation. */
+export function commandPriority(s: GameState, c: Command): number {
+  const u = s.units.find((v) => v.id === c.unitId);
+  const t = targets(s).find((v) => v.id === c.targetId);
+  const owner = decisionOwner(s);
+  if (c.type === 'end' || c.type === 'finish-mode') return -0.1;
+  if (c.type === 'summon' || c.type === 'begin' || c.type === 'react') return 1000;
+  if (c.type === 'deploy') return 80;
+  if (c.type === 'attack' && u && t) {
+    if (t.owner === owner && t.unit)
+      return Math.min(t.unit.maxHp - t.unit.hp, getStats(s, u).attack) * 0.8;
+    const hp = t.unit?.hp ?? s.bases[t.owner];
+    const packets = hitPackets(s, u, t);
+    const damage = packets.reduce((v, p) => v + p.probability * Math.min(hp, p.damage), 0);
+    const kill = packets.reduce((v, p) => v + (p.damage >= hp ? p.probability : 0), 0);
+    return (
+      damage * (t.unit ? 0.65 : 3.1) +
+      kill * (t.unit ? materialValue(s, t.unit) : 100000) +
+      (has(s, u, 'execute') || has(s, u, 'convert') ? 100 : 0) +
+      (u.kind === 10 ? markFollowUp(s, t, owner, s.ply + 2) * 5 : 0)
+    );
+  }
+  if (c.type === 'move' && u && c.x !== undefined && c.y !== undefined)
+    return placementValue(s, u, { x: c.x, y: c.y }) - placementValue(s, u, u) + 0.5;
+  if (c.type === 'charge') return 8;
+  if (c.type === 'cast' || c.type === 'equip') return 12;
+  return 6;
+}
 function pointRank(s: GameState, a: ActionSpec, c: Command, p: Point, u?: Unit): number {
   if (
     c.type === 'move' ||
@@ -138,7 +167,10 @@ function pointRank(s: GameState, a: ActionSpec, c: Command, p: Point, u?: Unit):
         0,
         p,
       );
-    let value = placementValue(s, ghost, p) + baseCoverValue(s, { ...ghost, ...p });
+    let value =
+      placementValue(s, ghost, p) +
+      baseCoverValue(s, { ...ghost, ...p }) +
+      payloadCoverValue(s, { ...ghost, ...p }, (v) => materialValue(s, v));
     if (isRunner(ghost))
       value += occupants(s, p)
         .filter((v) => v.id !== ghost.id && v.owner !== ghost.owner)
@@ -147,7 +179,9 @@ function pointRank(s: GameState, a: ActionSpec, c: Command, p: Point, u?: Unit):
   }
   if (a.id === 'wall')
     return (
-      baseCoverValue(s, template('wall', decisionOwner(s), 0, p)) - (u ? distance(p, u) * 0.1 : 0)
+      baseCoverValue(s, template('wall', decisionOwner(s), 0, p)) +
+      payloadCoverValue(s, template('wall', decisionOwner(s), 0, p), (v) => materialValue(s, v)) -
+      (u ? distance(p, u) * 0.1 : 0)
     );
   if (a.id === 'hook') {
     const victim = s.units.find((v) => v.id === c.targetId);
@@ -301,8 +335,9 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
           return false;
         return true;
       })
-      .sort((x, y) => targetRank(s, a, c, y) - targetRank(s, a, c, x))
-      .map((t) =>
+      .map((t) => ({ t, score: targetRank(s, a, c, t) }))
+      .sort((x, y) => y.score - x.score)
+      .map(({ t }) =>
         step.field === 'sacrificeIds'
           ? { ...c, sacrificeIds: [...(c.sacrificeIds ?? []), t.id] }
           : { ...c, [step.field ?? 'targetId']: t.id },
@@ -363,6 +398,7 @@ export function* iterateCandidateGroups(
       ? {
           family: `${a.command.unitId ?? a.command.cardId ?? 'system'}:${a.id}`,
           commands,
+          priority: commandPriority(s, commands[0]),
           keep: a.command.type === 'attack' ? Math.max(8, settings.perAction) : settings.perAction,
         }
       : null;

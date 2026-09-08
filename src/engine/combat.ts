@@ -1,4 +1,5 @@
-import { definition } from './catalog';
+import { definition, COMBAT_RULES } from './catalog';
+import { attackProfile, vampireRate } from './attack-profile';
 import {
   attackPath,
   basePoint,
@@ -263,12 +264,17 @@ export function damage(
     return 0;
   }
   if (protectedEffect(s, t, source, ctx)) return 0;
-  if (!u.silenced && u.kind === 'u18' && source.kind === 'attack' && amount <= 10) {
+  if (
+    !u.silenced &&
+    u.kind === 'u18' &&
+    source.kind === 'attack' &&
+    amount <= COMBAT_RULES.kingAttackImmunity
+  ) {
     emit(s, { type: 'shield', to: u, owner: u.owner, text: '王之蔑视' });
     return 0;
   }
   if (!u.silenced && u.kind === 24 && source.path && frontal(source.path, u.owner))
-    amount = Math.min(amount, 10);
+    amount = Math.min(amount, COMBAT_RULES.frontDamageCap);
   const before = u.hp;
   const guardian =
     !u.guardUsed &&
@@ -521,24 +527,20 @@ export function performAttack(
       (e) => e.type === 'mark' && e.owner === u.owner && activeEffect(s, e, t.unit),
     );
   if (mark) removeEffect(s, t, mark);
-  let amount = options.amount ?? stats.attack;
-  if (!u.silenced) {
-    if (u.kind === 1) {
-      const r = random(s, [0, 1 / 12, 1 / 3, 1]);
-      amount += r < 1 / 12 ? 60 : r < 1 / 3 ? 20 : 0;
-    }
-    if (u.kind === 'u1') {
-      const r = random(s, [0, 1 / 5, 1 / 5 + 1 / 3, 1]);
-      amount = r < 1 / 5 ? 100 : r < 1 / 5 + 1 / 3 ? amount * 2 : amount;
-    }
-    if (
-      u.kind === 'u8' &&
-      random(s, [0, Math.min(1, 0.2 + 0.2 * u.kills), 1]) < Math.min(1, 0.2 + 0.2 * u.kills)
-    )
-      amount *= 2;
-    if (u.kind === 'u27' && !t.unit) amount = 10;
+  const profile = attackProfile(
+    u.kind,
+    options.amount ?? stats.attack,
+    u.kills,
+    u.silenced,
+    !t.unit,
+  );
+  let amount = profile.packets[0].damage;
+  if (profile.cuts) {
+    const roll = random(s, profile.cuts);
+    const index = profile.cuts.slice(1).findIndex((cut) => roll < cut);
+    amount = profile.packets[index < 0 ? profile.packets.length - 1 : index].damage;
   }
-  const lifesteal = !u.silenced && u.kind === 'u8' ? 0.2 + 0.2 * u.kills : 0;
+  const lifesteal = !u.silenced && u.kind === 'u8' ? vampireRate(u.kills) : 0;
   let loss = 0;
   if (u.kind === 10 && !u.silenced && !ally) {
     loss = damage(s, t, amount, { owner: u.owner, unit: u, kind: 'attack', path }, ctx);
@@ -555,10 +557,23 @@ export function performAttack(
     targetEffects(s, t).push(e);
     if (t.unit ? t.unit.hp >= t.unit.maxHp : s.bases[t.owner] >= 300) {
       removeEffect(s, t, e);
-      loss = damage(s, t, 5, { owner: u.owner, unit: u, kind: 'attack', path }, ctx);
+      loss = damage(
+        s,
+        t,
+        COMBAT_RULES.catapultMarkDamage,
+        { owner: u.owner, unit: u, kind: 'attack', path },
+        ctx,
+      );
     } else emit(s, { type: 'skill', to: t, owner: u.owner, text: '标记' });
   } else loss = damage(s, t, amount, { owner: u.owner, unit: u, kind: 'attack', path }, ctx);
-  if (mark) loss += damage(s, t, 5, { owner: u.owner, unit: u, kind: 'status' }, ctx);
+  if (mark)
+    loss += damage(
+      s,
+      t,
+      COMBAT_RULES.catapultMarkDamage,
+      { owner: u.owner, unit: u, kind: 'status' },
+      ctx,
+    );
   let drain = lifesteal;
   if (hasWeapon(u, 'u11') && (options.weaponFirst ?? !u.weaponFirstUsed)) drain += 1;
   if (loss > 0 && drain > 0) heal(s, u, loss * drain, ctx);

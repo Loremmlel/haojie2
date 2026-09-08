@@ -1,3 +1,5 @@
+import { attackProfile } from '../engine/attack-profile';
+import { COMBAT_RULES } from '../engine/catalog';
 import {
   attackPath,
   basePoint,
@@ -30,28 +32,8 @@ export function hitPackets(
 ): { damage: number; probability: number }[] {
   const st = statsFor(s, u);
   if (t.unit && has(s, t.unit, 'immune')) return [{ damage: 0, probability: 1 }];
-  let packets = [{ damage: st.attack, probability: 1 }];
+  let packets = attackProfile(u.kind, st.attack, u.kills, !passive(s, u), !t.unit).packets;
   if (passive(s, u)) {
-    if (u.kind === 1)
-      packets = [
-        { damage: st.attack, probability: 2 / 3 },
-        { damage: st.attack + 20, probability: 1 / 4 },
-        { damage: st.attack + 60, probability: 1 / 12 },
-      ];
-    if (u.kind === 'u1')
-      packets = [
-        { damage: st.attack, probability: 7 / 15 },
-        { damage: st.attack * 2, probability: 1 / 3 },
-        { damage: 100, probability: 1 / 5 },
-      ];
-    if (u.kind === 'u8') {
-      const p = Math.min(1, 0.2 + 0.2 * u.kills);
-      packets = [
-        { damage: st.attack, probability: 1 - p },
-        { damage: st.attack * 2, probability: p },
-      ];
-    }
-    if (u.kind === 'u27' && !t.unit) packets = [{ damage: 10, probability: 1 }];
     if (u.kind === 10)
       packets = [
         {
@@ -59,17 +41,31 @@ export function hitPackets(
             st.attack > 0
               ? st.attack
               : (t.unit ? t.unit.hp === t.unit.maxHp : s.bases[t.owner] === 300)
-                ? 5
+                ? COMBAT_RULES.catapultMarkDamage
                 : 0,
           probability: 1,
         },
       ];
   }
   if (t.unit && passive(s, t.unit)) {
-    if (t.unit.kind === 24 && isFrontHit(s, u, t, t.id))
-      packets = packets.map((p) => ({ ...p, damage: Math.min(10, p.damage) }));
+    if (
+      t.unit.kind === 24 &&
+      isFrontHit(
+        s,
+        u,
+        t,
+        s.units.some((v) => v.id === t.id && (v.x !== t.x || v.y !== t.y)) ? t.id : '',
+      )
+    )
+      packets = packets.map((p) => ({
+        ...p,
+        damage: Math.min(COMBAT_RULES.frontDamageCap, p.damage),
+      }));
     if (t.unit.kind === 'u18')
-      packets = packets.map((p) => ({ ...p, damage: p.damage <= 10 ? 0 : p.damage }));
+      packets = packets.map((p) => ({
+        ...p,
+        damage: p.damage <= COMBAT_RULES.kingAttackImmunity ? 0 : p.damage,
+      }));
   }
   return packets;
 }
@@ -91,11 +87,12 @@ export function attackPressure(s: GameState, u: Unit, t: Target, ignoreId = ''):
 }
 export function incoming(s: GameState, target: Unit, nextFullTurn = false): number {
   const view = actionWindow(s, other(target.owner), nextFullTurn),
-    t = asTarget({ ...target });
+    t = asTarget(target);
+  const original = s.units.find((u) => u.id === target.id);
+  const ignore = original && (original.x !== target.x || original.y !== target.y) ? target.id : '';
   let total = 0;
   for (const v of view.units)
-    if (v.owner !== target.owner && v.id !== target.id)
-      total += attackPressure(view, v, t, target.id);
+    if (v.owner !== target.owner && v.id !== target.id) total += attackPressure(view, v, t, ignore);
   return total;
 }
 export function baseThreat(s: GameState, defender: Player): number {
@@ -276,4 +273,55 @@ export function baseCoverValue(s: GameState, defender: Unit): number {
   const hp = s.bases[defender.owner];
   const reduction = Math.max(0, Math.min(hp, data.pressure) - Math.min(hp, after));
   return reduction * 3.1 + (data.pressure >= hp && after < hp ? 180 : 0);
+}
+
+const payloadCoverCache = new WeakMap<
+  GameState,
+  Map<
+    Player,
+    { route: Set<string>; carriers: { id: string; type: 'execute' | 'convert'; value: number }[] }
+  >
+>();
+/** Preserve interception candidates protecting valuable units, not only the base. */
+export function payloadCoverValue(
+  s: GameState,
+  defender: Unit,
+  valueOf: (u: Unit) => number,
+): number {
+  let sides = payloadCoverCache.get(s);
+  if (!sides) {
+    sides = new Map();
+    payloadCoverCache.set(s, sides);
+  }
+  let data = sides.get(defender.owner);
+  if (!data) {
+    data = { route: new Set(), carriers: [] };
+    for (const u of s.units) {
+      if (u.owner === defender.owner || u.equipment.includes('u28')) continue;
+      for (const type of ['execute', 'convert'] as const) {
+        if (!u.effects.some((e) => e.type === type)) continue;
+        const analysis = analyzePayload(s, u, type, valueOf);
+        const victim = s.units.find((v) => v.id === analysis.targets[0]?.id);
+        if (!analysis.value || !victim) continue;
+        const view = actionWindow(s, u.owner),
+          carrier = view.units.find((v) => v.id === u.id);
+        if (!carrier) continue;
+        for (const p of attackPath(
+          view,
+          carrier,
+          asTarget(victim),
+          statsFor(view, carrier).range,
+        ) ?? [])
+          data.route.add(`${p.x},${p.y}`);
+        data.carriers.push({ id: u.id, type, value: analysis.value });
+      }
+    }
+    sides.set(defender.owner, data);
+  }
+  if (!cells(defender).some((p) => data!.route.has(`${p.x},${p.y}`))) return 0;
+  const view = { ...s, units: [...s.units.filter((v) => v.id !== defender.id), defender] };
+  return data.carriers.reduce((n, c) => {
+    const carrier = view.units.find((u) => u.id === c.id)!;
+    return n + Math.max(0, c.value - analyzePayload(view, carrier, c.type, valueOf).value);
+  }, 0);
 }

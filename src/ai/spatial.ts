@@ -8,6 +8,7 @@ interface Spatial {
   stats: Map<string, Stats>;
   reaches: Map<string, Int16Array>;
   windows: Map<string, GameState>;
+  members: Set<Unit>;
 }
 const cache = new WeakMap<GameState, Spatial>();
 function spatial(s: GameState): Spatial {
@@ -15,7 +16,13 @@ function spatial(s: GameState): Spatial {
   if (!result) {
     const occupants = Array.from({ length: 117 }, () => [] as Unit[]);
     for (const u of s.units) for (const p of cells(u)) if (inside(p)) occupants[index(p)].push(u);
-    result = { occupants, stats: new Map(), reaches: new Map(), windows: new Map() };
+    result = {
+      occupants,
+      stats: new Map(),
+      reaches: new Map(),
+      windows: new Map(),
+      members: new Set(s.units),
+    };
     cache.set(s, result);
   }
   return result;
@@ -25,7 +32,7 @@ export const occupantsAt = (s: GameState, p: Point) =>
 export function statsFor(s: GameState, u: Unit): Stats {
   const data = spatial(s);
   // Preview units may share an id but differ in coordinates/charge. Cache only state members.
-  if (!s.units.includes(u)) return getStats(s, u);
+  if (!data.members.has(u)) return getStats(s, u);
   let result = data.stats.get(u.id);
   if (!result) {
     result = getStats(s, u);

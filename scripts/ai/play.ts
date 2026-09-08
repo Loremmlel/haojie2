@@ -50,8 +50,11 @@ const source = flag(
 let arena = source
   ? new Arena(parseSession(readFileSync(source, 'utf8')))
   : Arena.create(integer('seed', 20260907, 1, 4294967295), match);
-const limits = {
-  ...(flag('nodes') ? { simulations: integer('nodes', 5500, 40, 100000) } : {}),
+const mode = flag('mode', flag('ms') ? 'timed' : 'work');
+if (mode !== 'work' && mode !== 'timed') throw new Error('--mode 必须为 work / timed');
+const limits: Partial<import('../../src/ai/types').SearchLimits> = {
+  mode,
+  ...(flag('nodes') ? { simulations: integer('nodes', 800, 40, 100000) } : {}),
   ...(flag('ms') ? { milliseconds: integer('ms', 1000, 10, 100000) } : {}),
   trace: true,
 };
@@ -71,6 +74,7 @@ summon [ultimate] | begin | deploy CARD X Y [charge] | move UNIT X Y | attack UN
 charge UNIT attack/move/skill | cast CARD TARGET | equip CARD TARGET | finish UNIT | react TARGET | end
 复杂技能直接输入JSON，例如 {"type":"skill","unitId":"u8","targetId":"u9","x":5,"y":6}
 --new --seed N --human 1|2 --difficulty hard --save FILE；--command '指令' 可逐条无交互操作。
+--mode work|timed；默认work按固定模拟预算。--ms显式启用timed，可用--mode work覆盖。
 --replay FILE.jsonl 重放并逐步核对指纹。legal只是候选，不限制原始JSON的合法操作。`;
 function parse(line: string): Command {
   if (line.startsWith('{')) return JSON.parse(line);
@@ -140,7 +144,7 @@ function run(line: string): boolean {
       log(entry);
       persist();
       console.log(
-        `AI P${entry.owner} ${describe(before, entry.command)} (${Math.round(performance.now() - t)}ms; 深${entry.decision?.stats.depth}; ${entry.decision?.stats.simulations}模拟)`,
+        `AI P${entry.owner} ${describe(before, entry.command)} (${Math.round(performance.now() - t)}ms; 深${entry.decision?.stats.depth}; ${entry.decision?.stats.simulations}模拟; 回应候选${entry.decision?.stats.replyCandidates ?? 0}; ${entry.decision?.stats.cached ? '缓存' : mode})`,
       );
     }
     if (count >= 200) console.log('达到200条安全上限，局面已保存，未静默跳过。');

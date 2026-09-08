@@ -34,13 +34,16 @@ export function allocateBudget(
   // Several actors can share a cached plan; don't exhaust the entire turn on its first three actors.
   const planningBatches = Math.max(1, Math.ceil(activeUnits / 3));
   return {
-    simulations: Math.max(
-      100,
-      Math.min(cfg.nodes, (cfg.turnNodes - used.nodes) / Math.max(1, Math.min(4, activeUnits))),
+    mode: 'work',
+    simulations: Math.floor(
+      Math.max(
+        difficulty === 'hard' ? 240 : difficulty === 'medium' ? 120 : 60,
+        Math.min(cfg.nodes, (cfg.turnNodes - used.nodes) / planningBatches),
+      ),
     ),
     milliseconds: Math.max(
       difficulty === 'hard' ? 90 : 45,
-      Math.min(cfg.decisionMs, (cfg.turnMs - used.ms) / planningBatches),
+      Math.min(cfg.decisionMs, cfg.turnMs / planningBatches),
     ),
   };
 }

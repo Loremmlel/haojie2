@@ -33,6 +33,7 @@ for (const seed of process.env.AI_BENCH_QUICK ? [7] : [7, 42])
         const result = decide(observe(s), side, d, {
           simulations: d === 'hard' ? 1400 : d === 'medium' ? 600 : 200,
           milliseconds: 100000,
+          mode: 'work',
         });
         maxMs = Math.max(maxMs, performance.now() - t);
         simulations += result.stats.simulations;

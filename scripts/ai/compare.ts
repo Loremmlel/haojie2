@@ -5,11 +5,20 @@ import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createGame, createSession, applyCommand, commandError } from '../../src/engine';
 import { decide } from '../../src/ai/search';
+import { allocateBudget, emptyBudget } from '../../src/ai/budget';
 import { observe, fingerprint, decisionOwner } from '../../src/ai/observation';
 import type { Decision, Difficulty, PlanStep } from '../../src/ai/types';
 const path = process.argv[2];
 if (!path) throw new Error('Usage: tsx scripts/ai/compare.ts /absolute/path/to/baseline.mjs');
-const baseline = (await import(pathToFileURL(path).href)) as { decide: typeof decide };
+const baseline = (await import(pathToFileURL(path).href)) as {
+  decide: typeof decide;
+  allocateBudget?: typeof allocateBudget;
+};
+const production = process.env.AI_BUDGET === 'production';
+if (process.env.AI_BUDGET && !['production', 'fixed'].includes(process.env.AI_BUDGET))
+  throw new Error('AI_BUDGET must be production or fixed');
+if (production && !baseline.allocateBudget)
+  throw new Error('Production baseline must export its own allocateBudget');
 const seeds = (process.env.AI_SEEDS ?? '7,42,20260907').split(',').map(Number);
 const nodes = Number(process.env.AI_NODES ?? 700),
   maxPlies = Number(process.env.AI_PLIES ?? 60);
@@ -41,6 +50,7 @@ for (const seed of seeds)
       turn = -1,
       used = 0,
       maxDecisionMs = 0;
+    const budgets = { 1: emptyBudget(), 2: emptyBudget() };
     const transcript: unknown[] = [{ format: 'haojie-cli-v1', initial: createSession(s) }];
     const started = performance.now();
     let failure: string | undefined;
@@ -64,6 +74,7 @@ for (const seed of seeds)
       const owner = decisionOwner(s),
         before = fingerprint(s),
         isNew = owner === newSide;
+      if (budgets[owner].ply !== s.ply) budgets[owner] = { ...emptyBudget(), ply: s.ply };
       const timed = performance.now(),
         predicted = cache[owner][0];
       let result: Decision;
@@ -82,10 +93,26 @@ for (const seed of seeds)
             },
           };
         else
-          result = (isNew ? decide : baseline.decide)(observe(s), owner, levels[isNew ? 0 : 1], {
-            simulations: Math.max(100, Math.min(nodes, nodes * 6 - used)),
-            milliseconds: 100000,
-          });
+          result = (isNew ? decide : baseline.decide)(
+            observe(s),
+            owner,
+            levels[isNew ? 0 : 1],
+            production
+              ? (isNew ? allocateBudget : baseline.allocateBudget!)(
+                  s,
+                  levels[isNew ? 0 : 1],
+                  budgets[owner],
+                )
+              : {
+                  simulations: Math.max(100, Math.min(nodes, nodes * 6 - used)),
+                  milliseconds: 100000,
+                  mode: 'work',
+                },
+          );
+        const elapsed = performance.now() - timed;
+        budgets[owner].nodes += result.stats.simulations;
+        budgets[owner].ms += elapsed;
+        budgets[owner].commands++;
         maxDecisionMs = Math.max(maxDecisionMs, performance.now() - timed);
         used += result.stats.simulations;
         if (!result.command) throw new Error(`No command at ${s.ply}`);
@@ -102,6 +129,7 @@ for (const seed of seeds)
           after: fingerprint(next),
           events: next.events,
           stats: result.stats,
+          milliseconds: Math.round(elapsed),
         });
         s = next;
         count++;
@@ -117,6 +145,7 @@ for (const seed of seeds)
       levels,
       nodes,
       maxPlies,
+      budgetMode: production ? 'production' : 'fixed',
       winner: s.winner ?? 'unresolved',
       newWon: s.winner === newSide,
       ply: s.ply,
@@ -138,7 +167,7 @@ for (const seed of seeds)
       `${prefix}-report.json`,
       JSON.stringify(
         {
-          note: 'Paired fixed-node diagnostic, not calibrated Elo or human-author parity. Unfinished games are unresolved.',
+          note: 'Paired diagnostic with explicit budget mode, not calibrated Elo or human-author parity. Unfinished games are unresolved.',
           results,
         },
         null,
