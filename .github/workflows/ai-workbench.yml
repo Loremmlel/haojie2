@@ -1,0 +1,26 @@
+name: Temporary AI audit workbench
+on:
+  push:
+    branches: [fix/ai-budget-audit]
+    paths: ['.github/workflows/ai-workbench.yml']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - name: Package dependencies for isolated local audit
+        run: tar -czf /tmp/ai-workbench.tar.gz node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-workbench
+          path: /tmp/ai-workbench.tar.gz
+          retention-days: 1
