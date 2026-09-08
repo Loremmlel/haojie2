@@ -1,0 +1,163 @@
+name: Qualify AI playtest improvements and CLI
+on:
+  push:
+    branches: [feat/ai-playtest-cli]
+    paths: ['.github/workflows/ai-review.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      accepted: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Restore audited source changes and retain author evidence verbatim
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib, subprocess
+          parts = sorted(pathlib.Path('.ai-review').glob('part*.txt'))
+          assert len(parts) == 4
+          data = base64.b64decode(''.join(p.read_text() for p in parts), validate=True)
+          assert hashlib.sha256(data).hexdigest() == '5c181db72015b72c614bcb803bbb48b5bb64ee0c5ed4f05b43bf40f9e4d82bc6'
+          patch = lzma.decompress(data)
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+          p = pathlib.Path('.prettierignore')
+          p.write_text(p.read_text() + '\n# Preserve the author-supplied observation as evidence.\ndocs/AI-HARD-PLAYTEST-2026-09-07.md\n')
+          PY
+      - run: npm ci --no-audit --no-fund
+      - run: npm run format
+      - run: npm run format
+      - run: npm run format:check
+      - run: npm run check
+      - name: Rules, strategic behavior and CLI replay
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          npm test | tee artifacts/engine-report.txt
+          npm run play:cli -- --replay docs/playtests/cli-human-20260907.jsonl.gz | tee artifacts/manual-replay-report.txt
+      - run: npm run deploy
+      - run: npm run deploy:check
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - run: npm run test:pages
+      - run: npm run test:browser:ai
+      - name: Commit accepted source and offline Pages entry
+        id: commit
+        run: |
+          git diff --exit-code 366bfe155e6176f54b864a2b9bd8111aaf47d601 -- docs/AI-HARD-PLAYTEST-2026-09-07.md
+          rm -rf .ai-review
+          git restore .github
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(ai): improve tactical judgement and add real headless matches with replay'
+          git push origin HEAD:feat/ai-playtest-cli
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Package accepted or diagnostic sources
+        if: always()
+        run: |
+          mkdir -p artifacts
+          tar --exclude='./.git' --exclude='./node_modules' --exclude='./.ai-review' --exclude='./artifacts' --exclude='./dist' -czf artifacts/haojie-source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-review-source
+          path: artifacts/haojie-source.tar.gz
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-review-html
+          path: dist/index.html
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-review-acceptance
+          path: |
+            artifacts/*.png
+            artifacts/*report.json
+            artifacts/*report.txt
+          retention-days: 7
+  qualification:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: hard-7
+            seed: 7
+            level: hard
+            nodes: 600
+            plies: 60
+          - label: hard-42
+            seed: 42
+            level: hard
+            nodes: 600
+            plies: 60
+          - label: hard-20260907
+            seed: 20260907
+            level: hard
+            nodes: 600
+            plies: 60
+          - label: medium-42
+            seed: 42
+            level: medium
+            nodes: 300
+            plies: 40
+          - label: easy-42
+            seed: 42
+            level: easy
+            nodes: 120
+            plies: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.accepted }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - name: Build the unchanged old planner from the author feedback baseline
+        run: |
+          mkdir -p artifacts /tmp/haojie-baseline
+          git archive 366bfe155e6176f54b864a2b9bd8111aaf47d601 src/ai src/engine | tar -x -C /tmp/haojie-baseline
+          node_modules/.bin/esbuild /tmp/haojie-baseline/src/ai/index.ts --bundle --platform=node --format=esm --outfile=artifacts/baseline.mjs
+      - name: Paired actual matches with both starting roles
+        env:
+          AI_SEEDS: ${{ matrix.seed }}
+          AI_LEVELS: '${{ matrix.level }},${{ matrix.level }}'
+          AI_NODES: ${{ matrix.nodes }}
+          AI_PLIES: ${{ matrix.plies }}
+          AI_REPORT: artifacts/qualification
+        run: |
+          set -o pipefail
+          npm run bench:ai:compare -- "$(pwd)/artifacts/baseline.mjs" | tee artifacts/qualification-log.txt
+      - name: Verify every actual-command replay
+        run: |
+          for f in artifacts/qualification-*.jsonl; do
+            npm run play:cli -- --replay "$f"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qualification-${{ matrix.label }}
+          path: |
+            artifacts/qualification*.json
+            artifacts/qualification*.jsonl
+            artifacts/qualification*.txt
+          retention-days: 7
