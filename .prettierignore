@@ -3,3 +3,6 @@ dist/
 artifacts/
 package-lock.json
 index.html
+
+# Preserve the author-supplied observation as evidence.
+docs/AI-HARD-PLAYTEST-2026-09-07.md

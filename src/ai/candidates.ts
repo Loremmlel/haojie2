@@ -1,8 +1,10 @@
+import { baseCoverValue } from './threats';
 import { definition, isStored } from '../engine/catalog';
 import { unitActions, cardActions, reactionAction, actionError } from '../engine/options';
 import type { ActionSpec, SelectionStep } from '../engine/options';
 import {
   ALL_CELLS,
+  basePoint,
   attackPath,
   canPlace,
   cells,
@@ -18,21 +20,91 @@ import { allegiance, asTarget, getStats, isRunner, template } from '../engine/st
 import type { Command, GameState, Point, Target, Unit } from '../engine/types';
 import { DIFFICULTIES } from './difficulty';
 import type { Difficulty } from './types';
-import { placementValue, unitValue } from './evaluate';
+import { placementValue, unitValue, materialValue } from './evaluate';
+import {
+  markFollowUp,
+  payloadOpportunity,
+  hitPackets,
+  readyAttack,
+  attackPressure,
+} from './threats';
+import { has, now, passive } from '../engine/state';
 import { decisionOwner } from './observation';
+import { hitDistance } from './spatial';
 export interface CandidateGroup {
   family: string;
   commands: Command[];
   keep: number;
 }
+const releaseCache = new WeakMap<GameState, Map<string, number>>();
+/** Removing a cheap screen may unlock a loaded ally's otherwise blocked base shot. */
+function laneRelease(s: GameState, blocker: Unit): number {
+  let cache = releaseCache.get(s);
+  if (!cache) {
+    cache = new Map();
+    releaseCache.set(s, cache);
+  }
+  const old = cache.get(blocker.id);
+  if (old !== undefined) return old;
+  const owner = decisionOwner(s),
+    defender = owner === 1 ? 2 : 1;
+  const target = { id: `base-${defender}`, owner: defender as 1 | 2, ...basePoint(defender) };
+  let value = 0;
+  for (const ally of s.units)
+    if (
+      ally.owner === owner &&
+      readyAttack(s, ally) &&
+      !Number.isFinite(hitDistance(s, ally, target)) &&
+      Number.isFinite(hitDistance(s, ally, target, blocker.id))
+    ) {
+      const damage = attackPressure(s, ally, target, blocker.id);
+      value = Math.max(value, damage >= s.bases[defender] ? 200 : Math.min(80, damage * 0.8));
+    }
+  cache.set(blocker.id, value);
+  return value;
+}
 function targetRank(s: GameState, a: ActionSpec, c: Command, t: Target): number {
   const owner = decisionOwner(s),
     friend = (t.unit ? allegiance(s, t.unit) : t.owner) === owner;
-  if (!t.unit) return friend ? (300 - s.bases[t.owner]) * 0.6 : 180 + (300 - s.bases[t.owner]);
+  const caster =
+    s.units.find((u) => u.id === c.unitId) ??
+    (c.type === 'react' ? s.pending[0]?.source : undefined);
+  const cardKind = s.hands[s.active].find((v) => v.id === c.cardId)?.kind;
+  if (caster?.kind === 10 && !caster.silenced && !friend) {
+    const follow = markFollowUp(s, t, owner, s.ply + 2);
+    const immediate = t.unit ? t.unit.hp === t.unit.maxHp : s.bases[t.owner] === 300;
+    return (
+      (immediate ? 5 : 0) +
+      follow * (t.unit ? 12 + materialValue(s, t.unit) * 0.25 : 15) +
+      (t.unit && immediate ? materialValue(s, t.unit) * 0.08 : 0)
+    );
+  }
+  if (c.type === 'cast' && (cardKind === 18 || cardKind === 22) && t.unit) {
+    const type = cardKind === 18 ? 'execute' : 'convert';
+    const carrier = {
+      ...t.unit,
+      effects: [
+        ...t.unit.effects,
+        { type, owner, from: now(s, t.unit) + 2, until: now(s, t.unit) + 4 },
+      ],
+    } as Unit;
+    const view = { ...s, units: s.units.map((v) => (v.id === carrier.id ? carrier : v)) };
+    return payloadOpportunity(view, carrier, type, (v) => materialValue(view, v));
+  }
+  if (!t.unit) return friend ? (300 - s.bases[t.owner]) * 0.6 : 80 + (300 - s.bases[t.owner]);
   const u = t.unit,
     value = unitValue(s, u);
-  if (c.type === 'attack' || c.type === 'react')
-    return friend ? (u.maxHp - u.hp) * 2 : value + (u.hp < 30 ? 30 : 0);
+  if (c.type === 'attack' || c.type === 'react') {
+    if (friend) return (u.maxHp - u.hp) * 2;
+    const shots = caster ? getStats(s, caster).remaining : 1;
+    const packets = caster ? hitPackets(s, caster, t) : [];
+    const burst = packets.length === 1 && caster?.kind !== 9 && caster?.kind !== 10 ? shots : 1;
+    const killChance = packets.reduce(
+      (p, hit) => p + (hit.damage * burst >= u.hp ? hit.probability : 0),
+      0,
+    );
+    return value + killChance * (value * 0.7 + 20) + laneRelease(s, u);
+  }
   if (a.id === 'siphon')
     return c.targetId
       ? friend
@@ -66,13 +138,17 @@ function pointRank(s: GameState, a: ActionSpec, c: Command, p: Point, u?: Unit):
         0,
         p,
       );
-    let value = placementValue(s, ghost, p);
+    let value = placementValue(s, ghost, p) + baseCoverValue(s, { ...ghost, ...p });
     if (isRunner(ghost))
       value += occupants(s, p)
         .filter((v) => v.id !== ghost.id && v.owner !== ghost.owner)
         .reduce((n, v) => n + Math.min(30, v.hp) + 10, 0);
     return value;
   }
+  if (a.id === 'wall')
+    return (
+      baseCoverValue(s, template('wall', decisionOwner(s), 0, p)) - (u ? distance(p, u) * 0.1 : 0)
+    );
   if (a.id === 'hook') {
     const victim = s.units.find((v) => v.id === c.targetId);
     if (victim) return -placementValue(s, victim, p);
@@ -164,6 +240,52 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
         if (c.type === 'attack' || c.type === 'react') {
           if (!topTarget(s, t)) return false;
           if (
+            view &&
+            side === owner &&
+            t.unit &&
+            !view.silenced &&
+            (view.kind === 2 || view.kind === 'u21') &&
+            t.unit.hp === t.unit.maxHp
+          )
+            return false;
+          if (
+            view?.kind === 10 &&
+            passive(s, view) &&
+            t.unit?.kind === 'u18' &&
+            passive(s, t.unit) &&
+            t.unit.hp === t.unit.maxHp &&
+            getStats(s, view).attack <= 10 &&
+            !has(s, view, 'execute') &&
+            !has(s, view, 'convert') &&
+            !view.equipment.includes('u28')
+          )
+            return false;
+          // Don't spend visible actions and beam slots on zero-damage, zero-effect hits.
+          // Real on-hit mechanics (marks, execution, burning, equipment) remain candidates.
+          if (
+            view &&
+            side !== owner &&
+            getStats(s, view).attack === 0 &&
+            !(passive(s, view) && (view.kind === 10 || view.kind === 'u6')) &&
+            !has(s, view, 'execute') &&
+            !has(s, view, 'convert') &&
+            !view.equipment.includes('u5') &&
+            !view.equipment.includes('u28') &&
+            !t.unit?.effects.some((e) => e.type === 'mark' && e.owner === owner && e.until > s.ply)
+          )
+            return false;
+          if (
+            view?.kind === 10 &&
+            !view.silenced &&
+            side !== owner &&
+            getStats(s, view).attack === 0 &&
+            !has(s, view, 'execute') &&
+            !has(s, view, 'convert') &&
+            !(t.unit ? t.unit.hp === t.unit.maxHp : s.bases[t.owner] === 300) &&
+            !markFollowUp(s, t, owner, s.ply + 2)
+          )
+            return false;
+          if (
             side === owner &&
             !(view && !view.silenced && (view.kind === 2 || view.kind === 'u21') && t.unit) &&
             !(t.unit?.kind === 16 && !t.unit.silenced && t.id !== view?.id)
@@ -192,10 +314,23 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
       .filter((d) => d.owner === s.active && !d.revived && s.ply - d.ply <= 4 && s.ply > d.ply)
       .sort((a, b) => definition(b.kind).attack - definition(a.kind).attack)
       .map((d) => ({ ...c, deathId: d.id }));
-  return Array.from({ length: step.kind === 'row' ? 13 : 9 }, (_, i) => ({
+  const lines = Array.from({ length: step.kind === 'row' ? 13 : 9 }, (_, i) => ({
     ...c,
     [step.kind]: i + 1,
   }));
+  const lineValue = (command: Command) =>
+    targets(s).reduce((score, t) => {
+      const hit = (t.unit ? cells(t.unit) : [t]).some((p) =>
+        step.kind === 'row' ? p.y === command.row : p.x === command.column,
+      );
+      if (!hit) return score;
+      return (
+        score +
+        (t.owner === decisionOwner(s) ? -1 : 1) *
+          (t.unit ? Math.min(20, t.unit.hp) + (t.unit.hp <= 20 ? materialValue(s, t.unit) : 0) : 25)
+      );
+    }, 0);
+  return lines.sort((a, b) => lineValue(b) - lineValue(a));
 }
 function expand(s: GameState, a: ActionSpec, partial: number): Command[] {
   let drafts = [a.command];
@@ -278,4 +413,12 @@ export function* iterateCandidateGroups(
 }
 export function candidateGroups(s: GameState, difficulty: Difficulty): CandidateGroup[] {
   return [...iterateCandidateGroups(s, difficulty)];
+}
+
+/** Cheap tactical follow-ups: reuse the same target rules without enumerating all movements. */
+export function attackCandidates(s: GameState, id: string): Command[] {
+  const unit = s.units.find((u) => u.id === id);
+  if (!unit || s.pending.length) return [];
+  const action = unitActions(s, unit).find((a) => a.command.type === 'attack');
+  return action && !actionError(s, action) ? expand(s, action, 1) : [];
 }

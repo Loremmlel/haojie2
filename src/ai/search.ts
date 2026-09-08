@@ -1,7 +1,8 @@
 import type { GameState, Player } from '../engine/types';
-import { iterateCandidateGroups, type CandidateGroup } from './candidates';
+import { iterateCandidateGroups, attackCandidates, type CandidateGroup } from './candidates';
 import { DIFFICULTIES } from './difficulty';
-import { evaluate } from './evaluate';
+import { analyzePayload } from './threats';
+import { evaluate, explainEvaluation, materialValue } from './evaluate';
 import { decisionOwner, fingerprint, hash, imagined, positionKey } from './observation';
 import { distribution } from './simulate';
 import type { Outcome } from './simulate';
@@ -12,6 +13,7 @@ interface Node {
   path: PlanStep[];
   root: string;
   expandable: boolean;
+  replyTested?: boolean;
 }
 interface Context {
   count: number;
@@ -70,18 +72,29 @@ function* expand(
     });
     yield;
   }
-  let live = work.length;
+  let live = work.length,
+    pass = 0;
   while (live > 0) {
     live = 0;
     for (const group of work) {
       if (group.index >= group.commands.length || group.accepted >= group.keep) continue;
       live++;
-      if (stopped(ctx) && result.length) return result;
+      if (
+        stopped(ctx) &&
+        result.length &&
+        !(s.phase === 'summon' && group.family === 'summon' && group.accepted < group.keep)
+      )
+        return result;
       const command = group.commands[group.index++],
         key = JSON.stringify(command);
       if (seen.has(key)) continue;
       seen.add(key);
-      const d = distribution(s, command, settings.chanceLimit, settings.chanceSamples);
+      const d = distribution(
+        s,
+        command,
+        command.type === 'summon' ? 64 : settings.chanceLimit,
+        settings.chanceSamples,
+      );
       ctx.count += d.attempts;
       if (d.sampled) ctx.sampled++;
       if (d.outcomes.length) {
@@ -91,7 +104,9 @@ function* expand(
         const only = d.outcomes.length === 1 ? d.outcomes[0].state : null;
         result.push({
           outcomes: d.outcomes,
-          score: expectation(ctx, d.outcomes),
+          score:
+            expectation(ctx, d.outcomes) -
+            nextPath.filter((p) => p.command.type === 'move').length * 0.2,
           path: nextPath,
           root: path.length ? JSON.stringify(path[0].command) : key,
           expandable:
@@ -103,8 +118,69 @@ function* expand(
       }
       yield;
     }
+    if (pass++ === 0 && !lean && !stopped(ctx))
+      result.push(...(yield* attackContinuations(ctx, result, level)));
   }
   return result;
+}
+/** Also evaluate a short complete firing operation. Six small shots must not lose to
+ * a cosmetic move just because the beam cannot reach shot six. Keep the one-shot node too,
+ * so interleaving marks/heals is still possible. Never continue through unknown dice or reactions. */
+function* attackContinuations(
+  ctx: Context,
+  roots: Node[],
+  level: Difficulty,
+): Generator<void, Node[]> {
+  const added: Node[] = [];
+  for (const root of roots) {
+    const first = root.path.at(-1)!.command;
+    if (first.type !== 'attack' || !first.unitId || !root.expandable) continue;
+    let current = root;
+    for (let step = 0; step < 5 && !stopped(ctx); step++) {
+      if (current.outcomes.length !== 1) break;
+      const state = current.outcomes[0].state;
+      if (state.pending.length || state.winner) break;
+      let best: Node | undefined, focused: Node | undefined;
+      for (const command of attackCandidates(state, first.unitId).slice(
+        0,
+        level === 'hard' ? 6 : 3,
+      )) {
+        if (stopped(ctx)) break;
+        const d = distribution(
+          state,
+          command,
+          DIFFICULTIES[level].chanceLimit,
+          DIFFICULTIES[level].chanceSamples,
+        );
+        ctx.count += d.attempts;
+        if (d.sampled) ctx.sampled++;
+        if (d.outcomes.length) {
+          ctx.candidates++;
+          const single = d.outcomes.length === 1 ? d.outcomes[0].state : null;
+          const node: Node = {
+            outcomes: d.outcomes,
+            score: expectation(ctx, d.outcomes),
+            root: root.root,
+            path: [...current.path, { before: fingerprint(state), command }],
+            expandable:
+              !!single &&
+              !single.winner &&
+              single.active === state.active &&
+              decisionOwner(single) === decisionOwner(state),
+          };
+          if (command.targetId === first.targetId) focused = node;
+          if (!best || node.score > best.score) best = node;
+        }
+        yield;
+      }
+      best = focused ?? best;
+      if (!best) break;
+      current = best;
+      if (best.score > root.score + 0.01) added.push(best);
+      if (!best.expandable) break;
+    }
+  }
+  return added;
 }
 function bestDiverse(nodes: Node[], width: number, seen: Set<string>): Node[] {
   const chosen: Node[] = [],
@@ -186,7 +262,10 @@ export function* search(
   const fullDeadline = ctx.deadline;
   if (difficulty === 'hard') ctx.deadline = time() + Math.max(10, (fullDeadline - time()) * 0.52);
   const roots = yield* expand(ctx, s, []);
-  const bestByRoot = new Map<string, Node>(roots.map((n) => [n.root, n]));
+  const bestByRoot = new Map<string, Node>();
+  for (const n of roots)
+    if (!bestByRoot.has(n.root) || n.score > bestByRoot.get(n.root)!.score)
+      bestByRoot.set(n.root, n);
   // Keep some budget for genuine adversarial replies instead of spending all of it on our moves.
   ctx.stopAt = difficulty === 'hard' ? Math.max(ctx.count, Math.floor(max * 0.55)) : max;
   const seen = new Set<string>();
@@ -208,7 +287,7 @@ export function* search(
   let choices = [...bestByRoot.values()].sort((a, b) => b.score - a.score);
   ctx.stopAt = max;
   ctx.deadline = fullDeadline;
-  if (difficulty === 'hard' && choices.length > 1 && !stopped(ctx)) {
+  if (difficulty === 'hard' && s.phase !== 'summon' && choices.length > 1 && !stopped(ctx)) {
     const shortlist = choices.slice(0, cfg.replyRoots),
       tested: Node[] = [];
     const remaining = ctx.deadline - time();
@@ -247,13 +326,18 @@ export function* search(
       }
       ctx.deadline = globalDeadline;
       ctx.stopAt = globalStop;
-      if (weight > 0.999999) tested.push({ ...node, score: score / weight });
+      if (weight > 0.999999) tested.push({ ...node, score: score / weight, replyTested: true });
     }
     // Compare candidates at the same reply-tested stage. Unsearched roots are not assumed safe.
     if (tested.length >= 2) choices = tested.sort((a, b) => b.score - a.score);
   }
   let selected = choices[0];
-  if (difficulty === 'easy' && selected && Math.abs(selected.score) < 90000) {
+  if (
+    difficulty === 'easy' &&
+    s.phase !== 'summon' &&
+    selected &&
+    Math.abs(selected.score) < 90000
+  ) {
     const near = choices.filter((n) => selected!.score - n.score <= cfg.noise).slice(0, 3);
     selected = near[hash(fingerprint(s)) % near.length];
   }
@@ -261,6 +345,33 @@ export function* search(
   return {
     command: plan[0]?.command ?? null,
     plan,
+    ...(limits.trace
+      ? {
+          trace: {
+            initial: { ...explainEvaluation(s, side) },
+            chosen: plan[0]?.command ?? null,
+            alternatives: choices.slice(0, 12).map((node) => ({
+              command: node.path[0].command,
+              score: node.score,
+              stage: node.replyTested ? ('reply' as const) : ('static' as const),
+              line: node.path.map((step) => step.command),
+              outcomes: node.outcomes.map((out) => ({
+                probability: out.weight,
+                score: value(ctx, out.state),
+                bases: out.state.bases,
+                terms: { ...explainEvaluation(out.state, side) },
+                payloads: out.state.units.flatMap((u) =>
+                  (['execute', 'convert'] as const)
+                    .filter((type) => u.effects.some((e) => e.type === type))
+                    .map((type) =>
+                      analyzePayload(out.state, u, type, (v) => materialValue(out.state, v)),
+                    ),
+                ),
+              })),
+            })),
+          },
+        }
+      : {}),
     stats: {
       simulations: ctx.count,
       candidates: ctx.candidates,

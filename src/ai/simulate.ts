@@ -51,7 +51,8 @@ export function distribution(
       } catch (e) {
         if (!(e instanceof Chance)) throw e;
         if (
-          e.cuts.length > 5 ||
+          (e.cuts.length > 5 &&
+            !(c.type === 'summon' && limit >= 40 && branch.tape.length === 0)) ||
           queue.length + outcomes.length + e.cuts.length > limit ||
           branch.tape.length >= 6
         ) {
