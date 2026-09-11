@@ -1,0 +1,48 @@
+name: Temporary validated VFX source import
+on:
+  push:
+    branches: [feat/vfx-identity]
+    paths: ['.github/workflows/vfx-import.yml', '.github/vfx-source.part*']
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/vfx-identity
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and apply the locally tested source patch
+        run: |
+          cat .github/vfx-source.part{0,1,2,3,4} > /tmp/vfx-patch.tar.xz
+          echo '94f9c0e0d1ca33aab2a546d8dc0213b513afac9b9bc22dab087e6db704ec898f  /tmp/vfx-patch.tar.xz' | sha256sum -c -
+          mkdir -p /tmp/haojie-vfx
+          tar -xJf /tmp/vfx-patch.tar.xz -C /tmp/haojie-vfx
+          git apply --check /tmp/haojie-vfx/vfx.patch
+          git apply /tmp/haojie-vfx/vfx.patch
+          cp /tmp/haojie-vfx/docs/VFX.md docs/VFX.md
+          rm .github/vfx-source.part{0,1,2,3,4} .github/workflows/vfx-import.yml
+          git diff --check
+      - run: npm ci --no-audit --no-fund
+      - run: npm run format:check
+      - run: npm run check
+      - run: npm test
+      - run: npm run deploy && npm run deploy:check
+      - name: Confirm the exact locally validated standalone output
+        run: echo 'b42142a4e80b88fb83584297ddf383b7be46aee5506607be3228ed90c2d783f5  index.html' | sha256sum -c -
+      - name: Replay original CLI transcripts
+        run: |
+          npm run play:cli -- --replay docs/playtests/cli-human-20260907.jsonl.gz
+          npm run play:cli -- --replay docs/playtests/cli-manual-budget-20260908.jsonl.gz
+      - name: Commit source and standalone HTML together
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --stat
+          git commit -m 'feat(vfx): add distinct paper-and-ink effects with causal playback' -m 'Preserve rules, serial, RNG and AI while enriching existing events with immutable action facts. Add typed effect families, shared impact timing, bounded overlapping batches, actual-path unit motion, shields and pending/triggered seals. Respect cancellation and reduced motion. Include a development-only 22-scenario preview, six additional behavioral contracts (155 total), real-flight and lifecycle browser acceptance, historical replay CI, documentation and matching offline HTML. Remove all temporary source-transport files.'
+          git push origin HEAD:feat/vfx-identity
