@@ -1,3 +1,4 @@
+import type { EventFacts } from './event-facts';
 /** All game state is data. No renderer, network or wall clock is required. */
 export type Player = 1 | 2;
 export type Kind = number | '3p' | 'grave' | 'wall' | `u${number}` | 'u12p' | 'firelord';
@@ -95,7 +96,7 @@ export interface Reaction {
   source: Unit;
   amount: number;
 }
-export interface GameEvent {
+export interface GameEvent extends EventFacts {
   id: string;
   type:
     | 'spawn'

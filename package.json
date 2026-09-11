@@ -18,7 +18,9 @@
     "bench:ai": "tsx scripts/ai/benchmark.ts",
     "play:cli": "tsx scripts/ai/play.ts",
     "bench:ai:compare": "tsx scripts/ai/compare.ts",
-    "bench:ai:audit": "tsx scripts/ai/audit.ts"
+    "bench:ai:audit": "tsx scripts/ai/audit.ts",
+    "preview:vfx": "node scripts/vfx/build-preview.mjs",
+    "test:browser:vfx": "node tests/browser/vfx.mjs"
   },
   "dependencies": {
     "react": "19.2.0",

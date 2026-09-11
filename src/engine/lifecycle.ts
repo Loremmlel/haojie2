@@ -1,3 +1,4 @@
+import { eventActor, withEventFacts } from './event-facts';
 import { definition, isStored } from './catalog';
 import { alive, damage, findTarget, freeze, heal, kill, pruneSiphons, resolution } from './combat';
 import type { Resolution } from './combat';
@@ -86,8 +87,19 @@ export function beginTurn(s: GameState, ctx: Resolution) {
           h.axis === 'row' ? p.y === h.line : p.x === h.line,
         ),
       );
-      emit(s, { type: 'skill', owner: h.owner, text: '烈焰风暴 · 再临' });
-      for (const t of victims) damage(s, t, 20, packet, ctx);
+      withEventFacts(
+        s,
+        {
+          action: 'storm',
+          stage: 'trigger',
+          ability: 'u9',
+          area: ALL_CELLS.filter((p) => (h.axis === 'row' ? p.y === h.line : p.x === h.line)),
+        },
+        () => {
+          emit(s, { type: 'skill', owner: h.owner, text: '烈焰风暴 · 再临' });
+          for (const t of victims) damage(s, t, 20, packet, ctx);
+        },
+      );
     }
   processIceMarks(s, ctx);
   refreshDeployment(s, owner);
@@ -144,8 +156,14 @@ export function endTurn(s: GameState, ctx: Resolution) {
       to = targets(s).find((t) => t.id === link.toId);
     if (!source || !from || !to) continue;
     ctx.token++;
-    damage(s, from, 20, { owner: link.owner, unit: source, kind: 'skill' }, ctx);
-    heal(s, to, 20, ctx);
+    withEventFacts(
+      s,
+      { action: 'siphon', stage: 'trigger', actor: eventActor(from), subject: eventActor(to) },
+      () => {
+        damage(s, from, 20, { owner: link.owner, unit: source, kind: 'skill' }, ctx);
+        heal(s, to, 20, ctx);
+      },
+    );
   }
   for (const lord of [...s.units])
     if (lord.kind === 'firelord' && passive(s, lord)) {
@@ -162,28 +180,30 @@ export function endTurn(s: GameState, ctx: Resolution) {
       const target = victims[0];
       if (!target) continue;
       ctx.token++;
-      emit(s, {
-        type: 'attack',
-        from: lord,
-        to: target,
-        owner: lord.owner,
-        text: '末日审判',
-        ultimate: true,
-      });
-      const primary = target.unit ? occupants(s, target).map(asTarget) : [target];
-      const splash = targets(s).filter(
-        (t) =>
-          !primary.some((p) => p.id === t.id) &&
-          (t.unit ? cells(t.unit) : [t]).some((c) =>
-            (target.unit ? cells(target.unit) : [target]).some(
-              (p) => Math.max(Math.abs(p.x - c.x), Math.abs(p.y - c.y)) === 1,
+      withEventFacts(s, { action: 'judgement', actor: eventActor(lord) }, () => {
+        emit(s, {
+          type: 'attack',
+          from: lord,
+          to: target,
+          owner: lord.owner,
+          text: '末日审判',
+          ultimate: true,
+        });
+        const primary = target.unit ? occupants(s, target).map(asTarget) : [target];
+        const splash = targets(s).filter(
+          (t) =>
+            !primary.some((p) => p.id === t.id) &&
+            (t.unit ? cells(t.unit) : [t]).some((c) =>
+              (target.unit ? cells(target.unit) : [target]).some(
+                (p) => Math.max(Math.abs(p.x - c.x), Math.abs(p.y - c.y)) === 1,
+              ),
             ),
-          ),
-      );
-      for (const t of primary)
-        damage(s, t, 80, { owner: lord.owner, unit: lord, kind: 'skill' }, ctx);
-      for (const t of splash)
-        damage(s, t, 10, { owner: lord.owner, unit: lord, kind: 'skill' }, ctx);
+        );
+        for (const t of primary)
+          damage(s, t, 80, { owner: lord.owner, unit: lord, kind: 'skill' }, ctx);
+        for (const t of splash)
+          damage(s, t, 10, { owner: lord.owner, unit: lord, kind: 'skill' }, ctx);
+      });
     }
   // End effects can require choices. The actual player switch is deferred until that queue drains.
   if (s.pending.length) {
