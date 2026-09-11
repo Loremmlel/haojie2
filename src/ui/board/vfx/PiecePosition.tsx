@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 import type { Unit } from '../../../engine';
-import { center, type EffectBatch } from './plan';
+import { center, MOVE_MS, type EffectBatch } from './plan';
 
 /** The real piece is already at its new square; only a temporary transform follows the route. */
 export function PiecePosition({
@@ -31,7 +31,7 @@ export function PiecePosition({
   useLayoutEffect(() => {
     if (reduced || !latest || !ref.current?.animate) return;
     const { batch, cue } = latest;
-    const duration = cue.family === 'rush' ? 250 : 360;
+    const duration = cue.family === 'rush' ? 250 : MOVE_MS;
     const delay = cue.family === 'hook' ? cue.impact : cue.start;
     const elapsed = performance.now() - batch.born - delay;
     if (elapsed >= duration) return;

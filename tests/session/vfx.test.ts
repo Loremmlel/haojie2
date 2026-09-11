@@ -45,6 +45,11 @@ test('effect facts are bounded identity snapshots and survive source death, move
   assert.equal(move.actor!.kind, 7);
   assert.deepEqual(move.from, { x: 5, y: 5 });
   assert.deepEqual(move.to, { x: 4, y: 6 });
+  const pull = effects('钩子牵引').find((c) => c.movement)!;
+  assert.deepEqual(pull.impactTo, center(move.from!, move.subject!.size));
+  assert.deepEqual(pull.to, center(move.to!, move.subject!.size));
+  assert.deepEqual(pull.route.at(-1), pull.impactTo);
+  assert.deepEqual(pull.movement!.at(-1), pull.to);
   assert.equal(move.subject!.x, 5);
   assert.equal('hp' in move.subject!, false);
   hook.after.units[1].x = 8;
@@ -171,4 +176,15 @@ test('effect batches coexist, expire independently and bound both batches and cu
     amount: 1,
   }));
   assert.ok(planEffects(storm).length <= MAX_CUES);
+  // The playback boundary stays bounded even when called without planEffects.
+  const oversized = make(99, 0, 1000);
+  const [decoration, damage] = effects('近身斩击');
+  oversized.cues = [
+    ...Array.from({ length: MAX_CUES + 30 }, (_, i) => ({ ...decoration, id: String(i) })),
+    damage,
+  ];
+  const limited = appendBatch([], oversized, 0);
+  assert.equal(limited[0].cues.length, MAX_CUES);
+  assert.ok(limited[0].cues.some((c) => c.family === 'damage'));
+  assert.equal(oversized.cues.length, MAX_CUES + 31);
 });

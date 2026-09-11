@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { definition } from '../../../engine';
-import { type Cue } from './plan';
+import { MOVE_MS, type Cue } from './plan';
 
 export const routePath = (route: Cue['route']) =>
   route.map((p, i) => `${i ? 'L' : 'M'}${p.x} ${p.y}`).join(' ');
@@ -51,7 +51,7 @@ function Shards({ heavy = false }: { heavy?: boolean }) {
 function Impact({ cue }: { cue: Cue }) {
   const heavy = cue.family === 'cannon' || cue.family === 'bomb';
   return (
-    <g transform={at(cue.to)}>
+    <g className="vfx-contact" transform={at(cue.impactTo ?? cue.to)}>
       <g className="vfx-hit">
         {heavy ? (
           <>
@@ -131,11 +131,13 @@ function Projectile({ cue, reduced }: { cue: Cue; reduced: boolean }) {
           </>
         )}
       </Flight>
-      <g style={{ '--hit': `${cue.impact + (cue.movement ? 360 : 0)}ms` } as CSSProperties}>
-        <Impact cue={cue} />
-      </g>
+      <Impact cue={cue} />
       {k === 'hook' && cue.stage === 'trigger' && (
-        <g transform={at(cue.to)}>
+        <g
+          className="vfx-arrival"
+          transform={at(cue.to)}
+          style={{ '--hit': `${cue.impact + (cue.movement ? MOVE_MS : 0)}ms` } as CSSProperties}
+        >
           <g className="vfx-hit">
             <path d="M-26 -26 H-36 V-6 M26 26 H36 V6" />
           </g>

@@ -85,6 +85,18 @@ try {
     assert.ok(
       await page.locator(`[data-fx=${kind}]${stage ? `[data-stage=${stage}]` : ''}`).count(),
     );
+    if (name === '钩子牵引') {
+      assert.equal(
+        await page.locator('[data-fx=hook] .vfx-contact').getAttribute('transform'),
+        'translate(450 450)',
+        'hook contact stays at the old victim square',
+      );
+      assert.equal(
+        await page.locator('[data-fx=hook] .vfx-arrival').getAttribute('transform'),
+        'translate(350 550)',
+        'arrival is a distinct marker at the completed relocation square',
+      );
+    }
     if (name === '法术反制')
       assert.equal(await page.locator('[data-fx=bomb], [data-fx=damage]').count(), 0);
     if (name === '金身挡下') assert.equal(await page.locator('[data-fx=damage]').count(), 0);

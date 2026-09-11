@@ -40,6 +40,8 @@ export interface Cue {
   owner: Player;
   from: Point;
   to: Point;
+  /** Projectile contact may precede a relocation to the final `to` square. */
+  impactTo?: Point;
   route: Point[];
   movement?: Point[];
   area: Point[];
@@ -62,6 +64,7 @@ export interface EffectBatch {
 }
 export const MAX_BATCHES = 4;
 export const MAX_CUES = 96;
+export const MOVE_MS = 360;
 export const center = (p: Point, size = 1): Point => ({
   x: (p.x - 0.5 + (size - 1) / 2) * 100,
   y: (p.y - 0.5 + (size - 1) / 2) * 100,
@@ -147,6 +150,7 @@ function make(e: GameEvent, kind: Family, start: number, id: string): Cue | unde
     from,
     to,
     route,
+    ...(kind === 'hook' && movement ? { impactTo: route.at(-1)! } : {}),
     movement,
     area: e.stage === 'blocked' ? [] : (e.area ?? []).map((p) => center(p)),
     actor: e.actor,
@@ -157,7 +161,7 @@ function make(e: GameEvent, kind: Family, start: number, id: string): Cue | unde
     label: e.text,
     start,
     impact,
-    end: impact + 650,
+    end: impact + (kind === 'hook' && movement ? MOVE_MS : 0) + 650,
   };
 }
 
@@ -243,6 +247,12 @@ export function planEffects(events: readonly GameEvent[]): Cue[] {
     }
     cues.push(...numbers.values());
   }
+  return limitCues(cues);
+}
+
+/** Enforce the same priority cap at both the planner and the playback boundary. */
+function limitCues(cues: readonly Cue[]): Cue[] {
+  if (cues.length <= MAX_CUES) return [...cues];
   // Evict decoration before numeric/death feedback in unusually large packets.
   const kept = new Set(
     cues
@@ -270,7 +280,7 @@ export function appendBatch(
     }
   const positioned = {
     ...next,
-    cues: next.cues.map((cue) => {
+    cues: limitCues(next.cues).map((cue) => {
       if (!['damage', 'heal'].includes(cue.family)) return cue;
       const slots = used.get(key(cue)) ?? new Set<number>();
       let slot = 0;
@@ -281,10 +291,7 @@ export function appendBatch(
     }),
   };
   const rows = [...living, positioned].filter((b) => b.cues.length);
-  while (
-    rows.length > MAX_BATCHES ||
-    (rows.length > 1 && rows.reduce((n, b) => n + b.cues.length, 0) > MAX_CUES)
-  )
+  while (rows.length > MAX_BATCHES || rows.reduce((n, b) => n + b.cues.length, 0) > MAX_CUES)
     rows.shift();
   return rows;
 }
