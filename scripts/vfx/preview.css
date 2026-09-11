@@ -1,0 +1,67 @@
+.hj-game.vfx-preview {
+  min-height: 100vh;
+  padding: 20px;
+}
+.hj-game.vfx-preview header {
+  max-width: 1050px;
+  margin: 0 auto 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.hj-game.vfx-preview header b {
+  font-size: 22px;
+}
+.hj-game.vfx-preview header span {
+  color: var(--muted);
+}
+.hj-game.vfx-preview main {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 560px);
+  justify-content: center;
+  gap: 28px;
+}
+.hj-game.vfx-preview aside {
+  padding: 22px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  align-self: start;
+}
+.hj-game .vfx-preview-menu {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 18px;
+}
+.hj-game .vfx-preview-menu button {
+  padding: 7px 10px;
+}
+.hj-game .vfx-preview-menu button[aria-pressed='true'] {
+  background: var(--teal-soft);
+  border-color: var(--teal);
+  color: var(--teal);
+}
+.hj-game.vfx-preview aside p {
+  margin-top: 18px;
+  color: var(--muted);
+}
+.hj-game .vfx-preview-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+.hj-game .vfx-preview-board {
+  min-width: 0;
+}
+@media (max-width: 700px) {
+  .hj-game.vfx-preview {
+    padding: 10px;
+  }
+  .hj-game.vfx-preview main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hj-game.vfx-preview header span {
+    display: none;
+  }
+}

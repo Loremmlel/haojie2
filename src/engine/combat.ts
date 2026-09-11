@@ -1,3 +1,4 @@
+import { eventActor, withEventFacts } from './event-facts';
 import { definition, COMBAT_RULES } from './catalog';
 import { attackProfile, vampireRate } from './attack-profile';
 import {
@@ -61,7 +62,14 @@ function removeEffect(s: GameState, t: Target, e: Effect) {
 export function protectedEffect(s: GameState, t: Target, source: Source, ctx: Resolution): boolean {
   if (!t.unit || source.owner === undefined || source.owner === t.owner) return false;
   if (has(s, t.unit, 'immune')) {
-    emit(s, { type: 'shield', to: t, owner: t.owner, text: '金身免疫' });
+    emit(s, {
+      type: 'shield',
+      to: t,
+      owner: t.owner,
+      action: 'ward',
+      stage: 'blocked',
+      text: '金身免疫',
+    });
     return true;
   }
   if (!['spell', 'skill'].includes(source.kind)) return false;
@@ -76,7 +84,15 @@ export function protectedEffect(s: GameState, t: Target, source: Source, ctx: Re
   );
   ctx.protection.set(key, !!tower);
   if (tower) {
-    emit(s, { type: 'shield', to: t, from: tower, owner: t.owner, text: '免疫塔' });
+    emit(s, {
+      type: 'shield',
+      to: t,
+      from: tower,
+      owner: t.owner,
+      action: 'ward',
+      stage: 'blocked',
+      text: '免疫塔',
+    });
     lowerMax(s, tower, 15, ctx);
     return true;
   }
@@ -260,7 +276,14 @@ export function damage(
   const u = t.unit;
   if (!alive(s, u)) return 0;
   if (has(s, u, 'immune')) {
-    emit(s, { type: 'shield', to: u, owner: u.owner, text: '金身' });
+    emit(s, {
+      type: 'shield',
+      to: u,
+      owner: u.owner,
+      action: 'ward',
+      stage: 'blocked',
+      text: '金身',
+    });
     return 0;
   }
   if (protectedEffect(s, t, source, ctx)) return 0;
@@ -270,7 +293,14 @@ export function damage(
     source.kind === 'attack' &&
     amount <= COMBAT_RULES.kingAttackImmunity
   ) {
-    emit(s, { type: 'shield', to: u, owner: u.owner, text: '王之蔑视' });
+    emit(s, {
+      type: 'shield',
+      to: u,
+      owner: u.owner,
+      action: 'ward',
+      stage: 'blocked',
+      text: '王之蔑视',
+    });
     return 0;
   }
   if (!u.silenced && u.kind === 24 && source.path && frontal(source.path, u.owner))
@@ -289,7 +319,14 @@ export function damage(
   if (guardian) {
     u.hp = 1;
     u.guardUsed = true;
-    emit(s, { type: 'shield', to: u, owner: u.owner, text: '名刀' });
+    emit(s, {
+      type: 'shield',
+      to: u,
+      owner: u.owner,
+      action: 'ward',
+      stage: 'blocked',
+      text: '名刀',
+    });
   } else u.hp = Math.max(0, Math.round((u.hp - amount) * 1e6) / 1e6);
   const loss = before - u.hp;
   if (loss)
@@ -343,13 +380,27 @@ export function freeze(s: GameState, t: Target, source: Source, ctx: Resolution,
     return;
   t.unit.effects = t.unit.effects.filter((e) => e.type !== 'freeze');
   addEffect(s, t.unit, 'freeze', source.owner!, 0, 4, 5 + extra, source.unit?.id);
-  emit(s, { type: 'shield', to: t, owner: source.owner, text: '冰冻 · 中立' });
+  emit(s, {
+    type: 'shield',
+    to: t,
+    owner: source.owner,
+    action: 'freeze',
+    stage: 'trigger',
+    text: '冰冻 · 中立',
+  });
 }
 export function burn(s: GameState, t: Target, source: Source, ctx: Resolution) {
   if (!t.unit || !alive(s, t.unit) || protectedEffect(s, t, source, ctx)) return;
   t.unit.effects = t.unit.effects.filter((e) => e.type !== 'burn');
   addEffect(s, t.unit, 'burn', source.owner!, 0, 12, 5, source.unit?.id);
-  emit(s, { type: 'skill', to: t, owner: source.owner, text: '灼烧' });
+  emit(s, {
+    type: 'skill',
+    to: t,
+    owner: source.owner,
+    action: 'burn',
+    stage: 'trigger',
+    text: '灼烧',
+  });
 }
 function knockback(s: GameState, u: Unit, t: Target, path: Point[], ctx: Resolution) {
   if (!t.unit || !alive(s, t.unit) || path.length < 2) return;
@@ -429,6 +480,23 @@ export function performAttack(
   ctx = resolution(),
   options: AttackOptions = {},
 ) {
+  const healing =
+    !options.forceHostile &&
+    !u.silenced &&
+    (u.kind === 2 || u.kind === 'u21') &&
+    t.unit &&
+    allegiance(s, t.unit) === u.owner;
+  return withEventFacts(
+    s,
+    {
+      action: healing ? 'mend' : 'attack',
+      actor: eventActor(u),
+      subject: eventActor(t),
+    },
+    () => resolveAttack(s, u, t, ctx, options),
+  );
+}
+function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, options: AttackOptions) {
   const ally = t.unit ? allegiance(s, t.unit) === u.owner : t.owner === u.owner;
   ensure(
     !ally ||
@@ -517,7 +585,15 @@ export function performAttack(
     !ally && t.unit && u.effects.find((e) => e.type === 'execute' && activeEffect(s, e, u));
   if (execute && t.unit) {
     u.effects = u.effects.filter((e) => e !== execute);
-    if (!protectedEffect(s, t, skillSource, ctx)) kill(s, t.unit, skillSource, ctx);
+    if (!protectedEffect(s, t, skillSource, ctx)) {
+      const start = s.events.length;
+      kill(s, t.unit, skillSource, ctx);
+      const death = s.events.slice(start).find((e) => e.type === 'death' && e.unitId === t.id);
+      if (death) {
+        death.action = 'execution';
+        death.stage = 'trigger';
+      }
+    }
     return;
   }
   const mark =
@@ -564,9 +640,18 @@ export function performAttack(
         { owner: u.owner, unit: u, kind: 'attack', path },
         ctx,
       );
-    } else emit(s, { type: 'skill', to: t, owner: u.owner, text: '标记' });
+    } else
+      emit(s, {
+        type: 'skill',
+        to: t,
+        owner: u.owner,
+        action: 'mark',
+        stage: 'apply',
+        text: '标记',
+      });
   } else loss = damage(s, t, amount, { owner: u.owner, unit: u, kind: 'attack', path }, ctx);
-  if (mark)
+  if (mark) {
+    const start = s.events.length;
     loss += damage(
       s,
       t,
@@ -574,9 +659,24 @@ export function performAttack(
       { owner: u.owner, unit: u, kind: 'status' },
       ctx,
     );
+    const hit = s.events.slice(start).find((e) => e.type === 'damage' && e.unitId === t.id);
+    if (hit) {
+      hit.action = 'mark';
+      hit.stage = 'trigger';
+    }
+  }
   let drain = lifesteal;
   if (hasWeapon(u, 'u11') && (options.weaponFirst ?? !u.weaponFirstUsed)) drain += 1;
-  if (loss > 0 && drain > 0) heal(s, u, loss * drain, ctx);
+  if (loss > 0 && drain > 0) {
+    const start = s.events.length;
+    heal(s, u, loss * drain, ctx);
+    for (const event of s.events.slice(start))
+      if (event.type === 'heal') {
+        event.action = 'siphon';
+        event.actor = eventActor(t);
+        event.from = { x: t.x, y: t.y };
+      }
+  }
   // The first-attack weapon applies to this complete attack, not to every turn hit.
   if (hasWeapon(u, 'u11') && options.weaponFirst === undefined) u.weaponFirstUsed = true;
   if (!u.silenced && u.kind === 'u2') u.charge = u.readyCharge = 0;
@@ -595,7 +695,14 @@ export function performAttack(
         victim.operations = 1;
         emit(
           s,
-          { type: 'skill', to: victim, owner: u.owner, text: '策反' },
+          {
+            type: 'skill',
+            to: victim,
+            owner: u.owner,
+            action: 'conversion',
+            stage: 'trigger',
+            text: '策反',
+          },
           `${definition(victim.kind).name}加入${faction(u.owner)}`,
         );
         return;
@@ -604,7 +711,14 @@ export function performAttack(
     if (!u.silenced && u.kind === 'u4' && !protectedEffect(s, t, skillSource, ctx)) {
       victim.silenced = true;
       addEffect(s, victim, 'stun', u.owner, 0, 2, undefined, u.id);
-      emit(s, { type: 'skill', to: victim, owner: u.owner, text: '沉默 · 眩晕' });
+      emit(s, {
+        type: 'skill',
+        to: victim,
+        owner: u.owner,
+        action: 'silence',
+        stage: 'trigger',
+        text: '沉默 · 眩晕',
+      });
     }
     if (hasWeapon(u, 'u5')) freeze(s, t, skillSource, ctx);
     if (hasWeapon(u, 'u28') || (!u.silenced && u.kind === 'u6' && !hasWeapon(u, 'u5')))

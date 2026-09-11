@@ -30,10 +30,7 @@
   align-items: center;
   pointer-events: none;
   z-index: 10;
-  transition:
-    left 0.48s cubic-bezier(0.2, 0.85, 0.3, 1),
-    top 0.48s cubic-bezier(0.2, 0.85, 0.3, 1);
-  will-change: left, top;
+  /* Movement is a cancelable transform along the recorded path, never a layout tween. */
 }
 .hj-game .piece {
   width: 76%;
@@ -215,12 +212,6 @@
   line-height: 5px;
   text-align: center;
   font-size: 20px;
-}
-.hj-game .piece-wrap.hurt {
-  animation: hj-hurt 0.35s ease 0.23s;
-}
-.hj-game .piece-wrap.arriving .piece {
-  animation: hj-arrive 0.55s cubic-bezier(0.2, 0.8, 0.3, 1);
 }
 @container haojie (max-width: 820px) {
   .hj-game .piece strong {

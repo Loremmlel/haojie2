@@ -62,7 +62,7 @@ export function HaojieGame(props: HaojieGameProps) {
               activeIntent={game.activeIntent}
               selectedId={game.selectedId}
               onCell={game.onCell}
-              events={game.events}
+              effects={game.effects}
               canUndo={!!session.past.length}
               canRedo={!!session.future.length}
               rewind={game.rewind}

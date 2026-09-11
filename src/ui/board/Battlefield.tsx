@@ -1,4 +1,5 @@
-import type { Command, GameEvent, GameState, Point } from '../../engine';
+import type { EffectBatch } from './vfx/plan';
+import type { Command, GameState, Point } from '../../engine';
 import { definition, faction, isStored } from '../../engine';
 import type { Intent } from '../game/selection';
 import { instruction } from '../game/selection';
@@ -11,7 +12,7 @@ export function Battlefield({
   activeIntent,
   selectedId,
   onCell,
-  events,
+  effects,
   canUndo,
   canRedo,
   rewind,
@@ -25,7 +26,7 @@ export function Battlefield({
   activeIntent: Intent;
   selectedId: string | null;
   onCell: (point: Point) => void;
-  events: GameEvent[];
+  effects: EffectBatch[];
   canUndo: boolean;
   canRedo: boolean;
   rewind: (forward?: boolean) => void;
@@ -58,7 +59,7 @@ export function Battlefield({
           intent={activeIntent}
           selectedId={selectedId}
           onCell={onCell}
-          events={events}
+          effects={effects}
         />
       </div>
       <div className="command-bar">

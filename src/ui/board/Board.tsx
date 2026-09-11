@@ -1,5 +1,8 @@
+import { PiecePosition } from './vfx/PiecePosition';
+import { center, type EffectBatch } from './vfx/plan';
+import { PieceFace } from './vfx/PieceFace';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { GameEvent, GameState, Player, Point } from '../../engine';
+import type { GameState, Player, Point } from '../../engine';
 import {
   ALL_CELLS,
   basePoint,
@@ -20,13 +23,13 @@ export function Board({
   intent,
   selectedId,
   onCell,
-  events,
+  effects = [],
 }: {
   state: GameState;
   intent: Intent;
   selectedId: string | null;
   onCell: (p: Point) => void;
-  events: GameEvent[];
+  effects?: EffectBatch[];
 }) {
   const ref = useRef<HTMLDivElement>(null),
     [hover, setHover] = useState<Point | null>(null),
@@ -166,7 +169,9 @@ export function Board({
               aria-hidden="true"
               style={{ left: `${((m.x - 1) / 9) * 100}%`, top: `${((m.y - 1) / 13) * 100}%` }}
             >
-              ❄
+              <svg viewBox="-50 -50 100 100">
+                <path d="M0 -35 V35 M-30 -18 L30 18 M-30 18 L30 -18 M-12 -25 L0 -13 L12 -25 M-12 25 L0 13 L12 25" />
+              </svg>
             </div>
           ))}
           <svg className="siphon-layer" viewBox="0 0 900 1300" aria-hidden="true">
@@ -177,13 +182,18 @@ export function Board({
                 b = l.toId.startsWith('base-')
                   ? basePoint(Number(l.toId.at(-1)) as Player)
                   : s.units.find((u) => u.id === l.toId);
-              return a && b ? (
+              const start = a
+                  ? center(a, 'size' in a && typeof a.size === 'number' ? a.size : 1)
+                  : null,
+                end = b ? center(b, 'size' in b && typeof b.size === 'number' ? b.size : 1) : null;
+              return start && end ? (
                 <g key={l.id}>
+                  <path d={`M${start.x} ${start.y} L${end.x} ${end.y}`} className="siphon-thread" />
                   <path
-                    d={`M${(a.x - 0.5) * 100} ${(a.y - 0.5) * 100} L${(b.x - 0.5) * 100} ${(b.y - 0.5) * 100}`}
-                    className="siphon-thread"
+                    d="M-10 -7 L0 0 L-10 7"
+                    className="siphon-direction"
+                    transform={`translate(${start.x + (end.x - start.x) * 0.7} ${start.y + (end.y - start.y) * 0.7}) rotate(${(Math.atan2(end.y - start.y, end.x - start.x) * 180) / Math.PI})`}
                   />
-                  <circle cx={(b.x - 0.5) * 100} cy={(b.y - 0.5) * 100} r="10" fill="#9272ae" />
                 </g>
               ) : null;
             })}
@@ -218,10 +228,12 @@ export function Board({
                 selected = stack.some((v) => v.id === selectedId),
                 size = u.size;
               return (
-                <div
+                <PiecePosition
+                  unit={u}
+                  batches={effects}
+                  reduced={reduced}
                   key={u.id}
-                  className={`piece-wrap p${u.owner} ${size === 2 ? 'large-piece' : ''} ${selected ? 'piece-selected' : ''} ${d.tier !== 'normal' && typeof u.kind !== 'number' && !['3p', 'grave', 'wall'].includes(String(u.kind)) ? 'ultimate-piece' : ''} ${stats.frozen ? 'neutral-piece' : ''} ${events.some((e) => e.type === 'damage' && e.unitId === u.id) ? 'hurt' : ''} ${events.some((e) => e.type === 'spawn' && e.unitId === u.id) ? 'arriving' : ''}`}
-                  aria-hidden="true"
+                  className={`piece-wrap p${u.owner} ${size === 2 ? 'large-piece' : ''} ${selected ? 'piece-selected' : ''} ${d.tier !== 'normal' && typeof u.kind !== 'number' && !['3p', 'grave', 'wall'].includes(String(u.kind)) ? 'ultimate-piece' : ''} ${stats.frozen ? 'neutral-piece' : ''}`}
                   style={{
                     left: `${((u.x - 1) / 9) * 100}%`,
                     top: `${((u.y - 1) / 13) * 100}%`,
@@ -229,7 +241,7 @@ export function Board({
                     height: `${(size / 13) * 100}%`,
                   }}
                 >
-                  <div className={`piece ${stats.sleeping ? 'sleeping' : ''}`}>
+                  <PieceFace unit={u} batches={effects} reduced={reduced} sleeping={stats.sleeping}>
                     <span className="piece-heading" />
                     <span className="piece-code">
                       {u.kind === '3p'
@@ -254,12 +266,17 @@ export function Board({
                     {u.effects.some((e) => e.type === 'mark') && (
                       <span className="mark-dot">·</span>
                     )}
+                    {u.effects.some((e) => e.type === 'convert' || e.type === 'execute') && (
+                      <span className="pending-seal">
+                        {u.effects.some((e) => e.type === 'execute') ? '灭' : '策'}
+                      </span>
+                    )}
                     {u.equipment.length > 0 && (
                       <span className="gear-dot">{definition(u.equipment[0]).glyph}</span>
                     )}
                     {u.silenced && <span className="silence-dot">禁</span>}
                     {stats.frozen && <span className="frost-crystal">❄</span>}
-                  </div>
+                  </PieceFace>
                   <div className="action-pips">
                     {Array.from(
                       { length: Math.min(6, stats.actions || stats.operationLimit) },
@@ -277,10 +294,10 @@ export function Board({
                   </div>
                   {stats.sleeping && <span className="sleep-badge">休</span>}
                   {stack.length > 1 && <span className="stack-badge">×{stack.length}</span>}
-                </div>
+                </PiecePosition>
               );
             })}
-          <Effects events={events} reduced={reduced} />
+          <Effects batches={effects} reduced={reduced} />
         </div>
       </div>
       <div className="board-legend">

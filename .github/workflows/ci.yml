@@ -41,6 +41,11 @@ jobs:
       - run: npm run test:browser
       - run: npm run test:pages
       - run: npm run test:browser:ai
+      - run: npm run test:browser:vfx
+      - name: Verify historical CLI command fingerprints
+        run: |
+          npm run play:cli -- --replay docs/playtests/cli-human-20260907.jsonl.gz
+          npm run play:cli -- --replay docs/playtests/cli-manual-budget-20260908.jsonl.gz
       - name: Upload the playable standalone HTML
         uses: actions/upload-artifact@v4
         with:

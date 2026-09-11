@@ -116,6 +116,8 @@ npm run test:browser:ai
 
 默认浏览器验收使用 **网络离线的 `file://` 页面**。特定沙箱禁用页面导航时，可使用 `HAOJIE_RENDER_ONLY=1 npm run test:browser` 在内存里渲染同一成品，报告明确标记 `in-memory-render-only`，不把它冒充本地文件和自动存档验收。GitHub CI仍运行默认完整模式。
 
+开发特效预览：`npm run preview:vfx`生成`artifacts/vfx-preview.html`，提供22个真实引擎场景。它不是发行分包，不进入正式游戏入口。视觉、事件和取消契约见[特效说明](docs/VFX.md)。
+
 CI产物：`haojie2-single-html`、`source-snapshot`、`acceptance-evidence`。部署动画、弹道和音效不会驱动规则计时；音效默认关闭，界面遵守系统“减少动态效果”设置。
 
 运行时依赖仍只有React与ReactDOM；构建用esbuild，规则测试用Node测试运行器+tsx，浏览器验收用Playwright。所有依赖已固定在lockfile，第三方运行时许可包含在发行HTML里。

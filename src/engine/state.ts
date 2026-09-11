@@ -1,3 +1,4 @@
+import { enrichEvent } from './event-facts';
 import { simulationRandom } from './random';
 import { definition, isStored, SUMMON_POOL, ULTIMATE_POOL } from './catalog';
 import type {
@@ -36,7 +37,7 @@ export const hasWeapon = (u: Unit, k: Kind) => u.equipment.includes(k);
 export const age = (s: GameState, u: Unit) => s.turns[u.owner] + u.offset / 2 - u.born;
 export const isRunner = (u: Unit) => !u.silenced && (u.kind === 'u12' || u.kind === 'u12p');
 export function emit(s: GameState, event: Omit<GameEvent, 'id'>, message?: string) {
-  const snap = { ...event, id: `e${s.serial++}` };
+  const snap = enrichEvent(s, { ...event, id: `e${s.serial++}` });
   if (event.from) snap.from = { x: event.from.x, y: event.from.y };
   if (event.to) snap.to = { x: event.to.x, y: event.to.y };
   if (event.path) snap.path = event.path.map((p) => ({ x: p.x, y: p.y }));

@@ -1,3 +1,4 @@
+import { useEffectPlayback } from '../board/vfx/useEffectPlayback';
 import { useEffect, useRef, useState } from 'react';
 import type { Command, GameEvent, Session } from '../../engine';
 import { createGame, createSession, dispatch } from '../../engine';
@@ -24,6 +25,7 @@ function boot(props: HaojieGameProps, key: string | null) {
 }
 /** Owns the authoritative snapshot, persistence and disposable audiovisual effects only. */
 export function useGameSession(props: HaojieGameProps) {
+  const playback = useEffectPlayback();
   const storageKey = props.storageKey === undefined ? DEFAULT_STORAGE_KEY : props.storageKey;
   const [initial] = useState(() => boot(props, storageKey));
   const [session, setSession] = useState(initial.session),
@@ -81,6 +83,7 @@ export function useGameSession(props: HaojieGameProps) {
     live.current = next;
     setSession(next);
     setEvents([]);
+    playback.clear();
     if (explicit) setWritable(true);
   }
   function execute(command: Command) {
@@ -89,6 +92,7 @@ export function useGameSession(props: HaojieGameProps) {
     setSession(next);
     setNotice('');
     setEvents(next.present.events.slice(-90));
+    playback.play(next.present.events);
     if (sound) {
       audio.current ??= new Soundscape();
       audio.current.play(next.present.events, true);
@@ -103,6 +107,7 @@ export function useGameSession(props: HaojieGameProps) {
     notice,
     setNotice,
     events,
+    effects: playback.batches,
     sound,
     setSound,
     saveStatus: SAVE_LABELS[status],

@@ -15,18 +15,6 @@
     box-shadow: 0 0 18px #d8c07c66;
   }
 }
-@keyframes hj-hurt {
-  0%,
-  100% {
-    transform: translateX(0);
-  }
-  25% {
-    transform: translateX(-4px);
-  }
-  65% {
-    transform: translateX(3px);
-  }
-}
 @keyframes hj-arrive {
   0% {
     opacity: 0;
@@ -38,58 +26,6 @@
   100% {
     opacity: 1;
     transform: scale(1);
-  }
-}
-@keyframes hj-shot {
-  0% {
-    stroke-dashoffset: 1600;
-    opacity: 1;
-  }
-  65% {
-    stroke-dashoffset: 0;
-    opacity: 0.9;
-  }
-  100% {
-    stroke-dashoffset: 0;
-    opacity: 0;
-  }
-}
-@keyframes hj-impact {
-  0% {
-    opacity: 0;
-    transform: scale(0.2);
-  }
-  25% {
-    opacity: 0.9;
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.6);
-  }
-}
-@keyframes hj-fade {
-  0% {
-    opacity: 0.7;
-  }
-  100% {
-    opacity: 0;
-  }
-}
-@keyframes hj-number {
-  0% {
-    opacity: 0;
-    transform: translateY(5px) scale(0.7);
-  }
-  20% {
-    opacity: 1;
-    transform: translateY(-4px) scale(1.1);
-  }
-  70% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-60px) scale(0.9);
   }
 }
 @keyframes hj-toast {
@@ -119,18 +55,6 @@
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
-  }
-  .hj-game .shot-trail {
-    stroke-dashoffset: 0;
-    opacity: 0.45;
-  }
-  .hj-game .damage-number,
-  .hj-game .effect-label {
-    opacity: 1;
-  }
-  .hj-game .aura-ring,
-  .hj-game .impact-ring {
-    opacity: 0.5;
   }
   .hj-game .piece-wrap {
     will-change: auto;
@@ -177,10 +101,5 @@
   .hj-game .ultimate-reveal:before,
   .hj-game .ultimate-reveal:after {
     animation: none;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .hj-game .shot-core {
-    display: none;
   }
 }

@@ -1,3 +1,4 @@
+import { eventActor, withEventFacts } from './event-facts';
 import { alive, damage, findTarget, performAttack, lowerMax } from './combat';
 import type { Resolution } from './combat';
 import {
@@ -56,6 +57,14 @@ function reachableExit(s: GameState, u: Unit, steps: number) {
   return false;
 }
 export function moveUnit(s: GameState, c: Command, ctx: Resolution) {
+  const u = findUnit(s, c.unitId);
+  return withEventFacts(
+    s,
+    { actor: eventActor(u), ...(isRunner(u) ? { action: 'rush' as const } : {}) },
+    () => resolveMove(s, c, ctx),
+  );
+}
+function resolveMove(s: GameState, c: Command, ctx: Resolution) {
   const u = actor(s, c.unitId),
     to = point(c.x, c.y),
     starting = u.mode === 'none';

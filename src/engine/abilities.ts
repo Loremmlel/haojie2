@@ -1,3 +1,4 @@
+import { eventActor, withEventFacts, type EventAction } from './event-facts';
 import { definition, isStored } from './catalog';
 import {
   alive,
@@ -51,6 +52,11 @@ import {
 import { advanceUnit } from './lifecycle';
 import type { Card, Command, GameState, Kind, Player, Source, Unit } from './types';
 export function chargeAction(s: GameState, c: Command) {
+  return withEventFacts(s, { action: 'charge', actor: eventActor(findUnit(s, c.unitId)) }, () =>
+    resolveCharge(s, c),
+  );
+}
+function resolveCharge(s: GameState, c: Command) {
   const u = actor(s, c.unitId),
     d = definition(u.kind);
   chooseMode(s, u, 'charge');
@@ -77,6 +83,62 @@ export function chargeAction(s: GameState, c: Command) {
   emit(s, { type: 'skill', to: u, owner: u.owner, text: `蓄力 ${u.charge}/${max}` });
 }
 export function useSkill(s: GameState, c: Command, ctx: Resolution) {
+  const u = findUnit(s, c.unitId);
+  const actions: Partial<Record<Kind, EventAction>> = {
+    5: 'quake',
+    7: 'pull',
+    21: 'rush',
+    u6: 'cross',
+    u14: 'siphon',
+    u23: 'pull',
+    u24: 'ice-mark',
+  };
+  const area =
+    u.kind === 5
+      ? ALL_CELLS.filter((p) => ring(u, p))
+      : u.kind === 'u6'
+        ? ALL_CELLS.filter((p) => inSquare(u, p) && (p.x === c.x || p.y === c.y))
+        : u.kind === 'u24'
+          ? [point(c.x, c.y)]
+          : undefined;
+  const linkIds = new Set(s.siphons.map((l) => l.id));
+  const endpointA = c.targetId ? targets(s).find((t) => t.id === c.targetId) : undefined;
+  const endpointB = c.secondId ? targets(s).find((t) => t.id === c.secondId) : undefined;
+  return withEventFacts(
+    s,
+    {
+      action: actions[u.kind] ?? 'buff',
+      ability: u.kind,
+      actor: eventActor(u),
+      ...(area ? { area } : {}),
+    },
+    () => {
+      resolveSkill(s, c, ctx);
+      const summary = s.events.at(-1);
+      if (summary?.type !== 'skill') return;
+      if (u.kind === 'u14') {
+        summary.stage = s.siphons.some((l) => !linkIds.has(l.id)) ? 'apply' : 'blocked';
+        summary.actor = eventActor(endpointA);
+        summary.subject = eventActor(endpointB);
+        if (endpointA) summary.from = { x: endpointA.x, y: endpointA.y };
+        if (endpointB) summary.to = { x: endpointB.x, y: endpointB.y };
+        // A blocked link already has its actual protection event; do not invent a successful flow.
+        if (summary.stage === 'blocked') {
+          delete summary.to;
+          delete summary.actor;
+          delete summary.subject;
+        }
+      } else if (u.kind === 'u24') {
+        summary.to = point(c.x, c.y);
+        delete summary.subject;
+      } else if ((u.kind === 'u7' || u.kind === 'u21') && endpointA) {
+        summary.to = { x: endpointA.x, y: endpointA.y };
+        summary.subject = eventActor(endpointA);
+      }
+    },
+  );
+}
+function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
   const raw = findUnit(s, c.unitId),
     free = raw.kind === 'u7' || raw.kind === 'u14';
   const u = raw.kind === 'u7' ? raw : actor(s, c.unitId);
@@ -128,7 +190,7 @@ export function useSkill(s: GameState, c: Command, ctx: Resolution) {
         '牵引落点必须合法且在钩子射程内。',
       );
       if (!protectedEffect(s, t, source, ctx)) {
-        emit(s, { type: 'move', from: t, to, unitId: t.id, owner: t.owner });
+        emit(s, { type: 'move', stage: 'trigger', from: t, to, unitId: t.id, owner: t.owner });
         Object.assign(t.unit!, to);
       }
       break;
@@ -176,13 +238,22 @@ export function useSkill(s: GameState, c: Command, ctx: Resolution) {
       ensure(u.hp > 10, '突袭扣10血后必须存活。');
       const to = point(c.x, c.y),
         t = findTarget(s, c.targetId);
-      ensure(movementPath(s, u, to, 6), '落点必须在6格可达范围内。');
+      const route = movementPath(s, u, to, 6);
+      ensure(route, '落点必须在6格可达范围内。');
       ensure(
         t.owner !== u.owner && attackPath(s, { ...u, ...to }, t, range),
         '落点无法攻击所选敌方。',
       );
       u.hp -= 10;
-      emit(s, { type: 'move', from: u, to, unitId: u.id, owner: u.owner, text: '神行突袭' });
+      emit(s, {
+        type: 'move',
+        from: u,
+        to,
+        path: route,
+        unitId: u.id,
+        owner: u.owner,
+        text: '神行突袭',
+      });
       Object.assign(u, to);
       u.charge = u.readyCharge = 0;
       performAttack(s, u, t, ctx, { reactive: true });
@@ -294,7 +365,15 @@ export function useSkill(s: GameState, c: Command, ctx: Resolution) {
         to = { x: u.x, y: u.owner === 1 ? u.y + u.size : u.y - v.size };
       ensure(canPlace(s, v, to), '身前没有合法落位。');
       if (!protectedEffect(s, t, source, ctx)) {
-        emit(s, { type: 'move', from: v, to, unitId: v.id, owner: v.owner, text: '超级牵引' });
+        emit(s, {
+          type: 'move',
+          stage: 'trigger',
+          from: v,
+          to,
+          unitId: v.id,
+          owner: v.owner,
+          text: '超级牵引',
+        });
         Object.assign(v, to);
       }
       delete u.hookReadyAt;
@@ -332,6 +411,35 @@ export function useSkill(s: GameState, c: Command, ctx: Resolution) {
   pruneSiphons(s);
 }
 export function cast(s: GameState, c: Command, ctx: Resolution) {
+  const kind = s.hands[s.active].find((v) => v.id === c.cardId)?.kind;
+  const actions: Partial<Record<Kind, EventAction>> = {
+    8: 'bomb',
+    17: 'ward',
+    18: 'execution',
+    22: 'conversion',
+    u9: 'storm',
+    u17: 'clock',
+    u26: 'inner-fire',
+  };
+  const area =
+    kind === 8
+      ? ALL_CELLS.filter((p) => p.x >= c.x! && p.x <= c.x! + 1 && p.y >= c.y! && p.y <= c.y! + 1)
+      : kind === 'u9'
+        ? ALL_CELLS.filter((p) => (c.mode === 'row' ? p.y === c.row : p.x === c.column))
+        : undefined;
+  const target = c.targetId ? targets(s).find((t) => t.id === c.targetId) : undefined;
+  return withEventFacts(
+    s,
+    {
+      ...(kind !== undefined ? { action: actions[kind] ?? 'buff', ability: kind } : {}),
+      stage: 'apply',
+      subject: eventActor(target),
+      ...(area ? { area } : {}),
+    },
+    () => resolveCast(s, c, ctx),
+  );
+}
+function resolveCast(s: GameState, c: Command, ctx: Resolution) {
   const owner = s.active,
     card = s.hands[owner].find((v) => v.id === c.cardId);
   ensure(card && definition(card.kind).spell !== undefined, '请选择法术牌。');
@@ -368,7 +476,14 @@ export function cast(s: GameState, c: Command, ctx: Resolution) {
       s.hands[owner] = s.hands[owner].filter((v) => v.id !== card.id);
       emit(
         s,
-        { type: 'shield', to: mage, owner: mage.owner, text: '法术反制' },
+        {
+          type: 'shield',
+          to: mage,
+          owner: mage.owner,
+          action: 'counter',
+          stage: 'blocked',
+          text: '法术反制',
+        },
         `${definition(card.kind).name}被反制并消耗`,
       );
       return;
@@ -444,6 +559,13 @@ export function cast(s: GameState, c: Command, ctx: Resolution) {
   );
 }
 export function equip(s: GameState, c: Command) {
+  return withEventFacts(
+    s,
+    { action: 'equip', ability: s.hands[s.active].find((v) => v.id === c.cardId)?.kind },
+    () => resolveEquip(s, c),
+  );
+}
+function resolveEquip(s: GameState, c: Command) {
   const card = s.hands[s.active].find((v) => v.id === c.cardId);
   ensure(card && definition(card.kind).weapon !== undefined, '请选择武器牌。');
   const u = findUnit(s, c.targetId),
