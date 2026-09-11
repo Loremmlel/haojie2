@@ -22,8 +22,8 @@ jobs:
           echo '94f9c0e0d1ca33aab2a546d8dc0213b513afac9b9bc22dab087e6db704ec898f  /tmp/vfx-patch.tar.xz' | sha256sum -c -
           mkdir -p /tmp/haojie-vfx
           tar -xJf /tmp/vfx-patch.tar.xz -C /tmp/haojie-vfx
-          git apply --check /tmp/haojie-vfx/vfx.patch
-          git apply /tmp/haojie-vfx/vfx.patch
+          git apply --exclude=.github/workflows/ci.yml --check /tmp/haojie-vfx/vfx.patch
+          git apply --exclude=.github/workflows/ci.yml /tmp/haojie-vfx/vfx.patch
           cp /tmp/haojie-vfx/docs/VFX.md docs/VFX.md
           rm .github/vfx-source.part{0,1,2,3,4} .github/workflows/vfx-import.yml
           git diff --check
