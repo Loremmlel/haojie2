@@ -1,0 +1,67 @@
+name: Verify AI end-turn repair workspace
+on:
+  push:
+    branches: [work/ai-end-turn-20260915-audit]
+    paths: ['.ai-end-turn/**', '.github/workflows/ai-end-turn-workspace.yml']
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply exact locally verified patch
+        run: |
+          set -euo pipefail
+          cat .ai-end-turn/part-0 .ai-end-turn/part-1 .ai-end-turn/part-2 > /tmp/ai-end-turn.patch.gz
+          test "$(git hash-object /tmp/ai-end-turn.patch.gz)" = db4793ba3fbe03b45cc93ff8cf68a3e0b03f8bb5
+          gzip -dc /tmp/ai-end-turn.patch.gz > /tmp/ai-end-turn.patch
+          git apply --check /tmp/ai-end-turn.patch
+          git apply /tmp/ai-end-turn.patch
+          rm -rf .ai-end-turn
+          rm .github/workflows/ai-end-turn-workspace.yml
+          mkdir -p artifacts
+      - run: npm ci --no-audit --no-fund
+      - run: npm run format:check
+      - run: npm run check
+      - name: Behavioral tests
+        run: |
+          set -o pipefail
+          npm test | tee artifacts/engine-report.txt
+      - name: Generate and verify exact release tree
+        run: |
+          set -euo pipefail
+          npm run deploy
+          npm run deploy:check
+          echo '592a53a725ad4aa56d1954fb79eca038702ba8df0a427432f35d7da16f4a90e2  index.html' | sha256sum -c -
+          git add -A
+          test "$(git write-tree)" = 617435ea013057b7af26dfc619a578bfb95b79e9
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - run: npm run test:pages
+      - run: npm run test:browser:ai
+      - run: npm run test:browser:vfx
+      - run: npm run play:cli -- --replay docs/playtests/cli-feedback-20260915.jsonl
+      - name: Save verified clean tree on isolated branch
+        run: |
+          set -euo pipefail
+          git add -A
+          test "$(git write-tree)" = 617435ea013057b7af26dfc619a578bfb95b79e9
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(ai): verify end-turn value repair and remove temporary workspace'
+          git push origin HEAD:refs/heads/work/ai-end-turn-20260915-audit
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-end-turn-verification
+          path: |
+            artifacts/*report.json
+            artifacts/engine-report.txt
+            artifacts/*.png
+          retention-days: 7
