@@ -3,6 +3,7 @@ import { createGame, createSession, dispatch, parseSession } from '../engine';
 import type { Command, GameState, Session } from '../engine';
 import { decisionOwner, fingerprint, observe } from '../ai/observation';
 import { decide } from '../ai/search';
+import { cachedDecision } from '../ai/plan-cache';
 import type { Decision, PlanStep, SearchLimits } from '../ai/types';
 import { allocateBudget, emptyBudget } from '../ai/budget';
 import type { MatchSettings } from './settings';
@@ -56,24 +57,10 @@ export class Arena {
     if (this.budget.commands >= 200) throw new Error('本回合达到200条自动命令，已暂停。');
     const difficulty = matchSettings(this.session).difficulty;
     const start = performance.now();
-    const predicted = this.cache[0];
-    let decision: Decision;
-    if (predicted?.before === fingerprint(s)) {
-      decision = {
-        command: predicted.command,
-        plan: this.cache,
-        stats: {
-          simulations: 0,
-          candidates: 0,
-          depth: 0,
-          replies: 0,
-          sampled: 0,
-          exhausted: false,
-          cached: true,
-        },
-      };
-    } else
-      decision = decide(observe(s), decisionOwner(s), difficulty, {
+    const observation = observe(s);
+    const decision =
+      cachedDecision(observation, this.cache) ??
+      decide(observation, decisionOwner(s), difficulty, {
         ...allocateBudget(s, difficulty, this.budget),
         ...limits,
       });

@@ -1,4 +1,4 @@
-import type { GameState, Player } from '../engine/types';
+import type { Command, GameState, Player } from '../engine/types';
 import {
   iterateCandidateGroups,
   attackCandidates,
@@ -18,7 +18,9 @@ interface Node {
   path: PlanStep[];
   root: string;
   expandable: boolean;
+  sampled?: boolean;
   replyTested?: boolean;
+  endTested?: boolean;
 }
 interface Context {
   count: number;
@@ -146,6 +148,7 @@ function* expand(
         const only = d.outcomes.length === 1 ? d.outcomes[0].state : null;
         result.push({
           outcomes: d.outcomes,
+          sampled: d.sampled,
           score:
             expectation(ctx, d.outcomes) -
             nextPath.filter((p) => p.command.type === 'move').length * 0.2,
@@ -209,6 +212,7 @@ function* attackContinuations(
           const single = d.outcomes.length === 1 ? d.outcomes[0].state : null;
           const node: Node = {
             outcomes: d.outcomes,
+            sampled: current.sampled || d.sampled,
             score: expectation(ctx, d.outcomes),
             root: root.root,
             path: [...current.path, { before: fingerprint(state), command }],
@@ -283,6 +287,87 @@ function* rollout(
   }
   return state;
 }
+/** Compare only settled end-of-turn positions. Never value a partial reaction, a
+ * still-unplaced summon, or one lucky branch as if it were a completed alternative. */
+function* atTurnEnd(ctx: Context, s: GameState, node: Node): Generator<void, Node | null> {
+  if (node.sampled) return null;
+  const outcomes: Outcome[] = [];
+  for (const out of node.outcomes) {
+    if (out.state.winner) {
+      outcomes.push(out);
+      continue;
+    }
+    if (out.state.pending.length) return null;
+    if (out.state.ply === s.ply + 1 && out.state.active !== s.active) {
+      outcomes.push(out);
+      continue;
+    }
+    if (out.state.ply !== s.ply || out.state.active !== s.active || stopped(ctx)) return null;
+    const d = distribution(out.state, { type: 'end' }, DIFFICULTIES[ctx.difficulty].chanceLimit);
+    ctx.count += d.attempts;
+    if (d.sampled) ctx.sampled++;
+    if (d.outcomes.length) ctx.candidates++;
+    yield;
+    if (
+      d.sampled ||
+      !d.outcomes.length ||
+      d.outcomes.some(
+        (o) =>
+          !o.state.winner &&
+          (o.state.pending.length || o.state.ply !== s.ply + 1 || o.state.active === s.active),
+      )
+    )
+      return null;
+    outcomes.push(...d.outcomes.map((o) => ({ ...o, weight: o.weight * out.weight })));
+  }
+  return {
+    ...node,
+    outcomes,
+    score: expectation(ctx, outcomes),
+    expandable: false,
+    endTested: true,
+  };
+}
+/** Last look before ending: use already explored tactical alternatives, not compulsory
+ * movement. This is an independent same-horizon comparison, NOT a score mixed into
+ * the opponent-reply table. Bounded, exact branches only; all work shares the budget. */
+function* reconsiderEnd(
+  ctx: Context,
+  s: GameState,
+  nodes: Node[],
+): Generator<void, { choices: Node[]; checks: number }> {
+  const end = nodes.find((n) => n.path.length === 1 && n.path[0].command.type === 'end');
+  if (!end) return { choices: [], checks: 0 };
+  const baseline = yield* atTurnEnd(ctx, s, end);
+  if (!baseline) return { choices: [], checks: 0 };
+  let best = baseline,
+    checks = 0;
+  const tactical = new Set<Command['type']>(['attack', 'skill', 'charge', 'cast', 'equip']);
+  const seen = new Set<string>();
+  const alternatives = nodes.filter(
+    (n) =>
+      tactical.has(n.path[0].command.type) &&
+      // Sampled branches cannot establish a trustworthy improvement over waiting.
+      !n.sampled &&
+      n.outcomes.length &&
+      n.path.every((step) => tactical.has(step.command.type)),
+  );
+  alternatives.sort(
+    (a, b) =>
+      commandPriority(s, b.path[0].command) - commandPriority(s, a.path[0].command) ||
+      b.path.length - a.path.length,
+  );
+  for (const node of alternatives) {
+    if (stopped(ctx)) break;
+    const key = JSON.stringify(node.path.map((p) => p.command));
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const candidate = yield* atTurnEnd(ctx, s, node);
+    checks++;
+    if (candidate && candidate.score > best.score + 0.01) best = candidate;
+  }
+  return { choices: best === baseline ? [] : [best, baseline], checks };
+}
 export function* search(
   observation: Observation,
   side: Player,
@@ -292,6 +377,8 @@ export function* search(
   const cfg = DIFFICULTIES[difficulty],
     s = imagined(observation),
     max = Math.max(40, limits.simulations ?? cfg.nodes);
+  const reserve = s.phase === 'play' && !s.pending.length ? Math.min(160, Math.floor(max / 5)) : 0;
+  const searchMax = max - reserve;
   const ctx: Context = {
     count: 0,
     candidates: 0,
@@ -299,7 +386,7 @@ export function* search(
     replies: 0,
     depth: 1,
     max,
-    stopAt: max,
+    stopAt: searchMax,
     deadline:
       limits.mode === 'timed'
         ? time() + Math.max(10, limits.milliseconds ?? cfg.decisionMs)
@@ -319,7 +406,7 @@ export function* search(
   if (difficulty === 'hard') {
     if (Number.isFinite(fullDeadline))
       ctx.deadline = time() + Math.max(10, (fullDeadline - time()) * 0.4);
-    ctx.stopAt = Math.max(40, Math.floor(max * 0.4));
+    ctx.stopAt = Math.min(searchMax, Math.max(40, Math.floor(max * 0.4)));
   }
   const roots = yield* expand(ctx, s, []);
   const bestByRoot = new Map<string, Node>();
@@ -327,7 +414,10 @@ export function* search(
     if (!bestByRoot.has(n.root) || n.score > bestByRoot.get(n.root)!.score)
       bestByRoot.set(n.root, n);
   // Keep some budget for genuine adversarial replies instead of spending all of it on our moves.
-  ctx.stopAt = difficulty === 'hard' ? Math.max(ctx.count, Math.floor(max * 0.4)) : max;
+  ctx.stopAt =
+    difficulty === 'hard'
+      ? Math.min(searchMax, Math.max(ctx.count, Math.floor(max * 0.4)))
+      : searchMax;
   const seen = new Set<string>();
   let beam = bestDiverse(roots, cfg.width, seen);
   for (let depth = 2; depth <= cfg.depth && beam.length && !stopped(ctx); depth++) {
@@ -345,7 +435,11 @@ export function* search(
     beam = bestDiverse(children, cfg.width, seen);
   }
   let choices = [...bestByRoot.values()].sort((a, b) => b.score - a.score);
-  ctx.stopAt = max;
+  // Reclaim the safety reserve when END cannot enter the final shortlist.
+  const endCanWin = choices
+    .slice(0, difficulty === 'hard' ? cfg.replyRoots : difficulty === 'easy' ? 3 : 1)
+    .some((n) => n.path[0].command.type === 'end');
+  ctx.stopAt = endCanWin ? searchMax : max;
   ctx.deadline = fullDeadline;
   let replyCandidates = 0,
     replySamples = 0;
@@ -407,6 +501,24 @@ export function* search(
     const near = choices.filter((n) => selected!.score - n.score <= cfg.noise).slice(0, 3);
     selected = near[hash(fingerprint(s)) % near.length];
   }
+  // The cache cannot execute a later end blindly; on a fresh proposed end, inspect
+  // unused tactical value even when the beam/reply budget was exhausted.
+  const searchExhausted = stopped(ctx);
+  const nodeLimitReached = ctx.count >= ctx.stopAt;
+  ctx.stopAt = max;
+  let endTurnChecks = 0,
+    endTurnImproved = false;
+  if (selected?.path[0]?.command.type === 'end' && reserve && !stopped(ctx)) {
+    const audit = yield* reconsiderEnd(ctx, s, roots);
+    endTurnChecks = audit.checks;
+    if (audit.choices.length) {
+      choices = audit.choices;
+      selected = choices[0];
+      endTurnImproved = true;
+      // Completed replies remain in `replies`, but did not select this replacement.
+      replyCandidates = replySamples = 0;
+    }
+  }
   const plan = selected?.path ?? [];
   return {
     command: plan[0]?.command ?? null,
@@ -419,7 +531,11 @@ export function* search(
             alternatives: choices.slice(0, 12).map((node) => ({
               command: node.path[0].command,
               score: node.score,
-              stage: node.replyTested ? ('reply' as const) : ('static' as const),
+              stage: node.endTested
+                ? ('end-turn' as const)
+                : node.replyTested
+                  ? ('reply' as const)
+                  : ('static' as const),
               line: node.path.map((step) => step.command),
               outcomes: node.outcomes.map((out) => ({
                 probability: out.weight,
@@ -444,12 +560,19 @@ export function* search(
       depth: ctx.depth,
       replies: ctx.replies,
       sampled: ctx.sampled,
-      exhausted: stopped(ctx),
+      exhausted: searchExhausted || stopped(ctx),
       mode: limits.mode ?? 'work',
-      stopReason: ctx.count >= max ? 'nodes' : time() >= ctx.deadline ? 'time' : 'complete',
+      stopReason:
+        nodeLimitReached || ctx.count >= max
+          ? 'nodes'
+          : time() >= ctx.deadline
+            ? 'time'
+            : 'complete',
       replyCandidates,
       replySamples,
       selectedDepth: plan.length,
+      endTurnChecks,
+      endTurnImproved,
     },
   };
 }

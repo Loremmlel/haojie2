@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { AiClient } from '../../ai/client';
+import { cachedDecision } from '../../ai/plan-cache';
 import { allocateBudget } from '../../ai/budget';
-import { decisionOwner, fingerprint, observe } from '../../ai/observation';
+import { decisionOwner, observe } from '../../ai/observation';
 import type { Decision, PlanStep } from '../../ai/types';
 import type { Command, Player, Session } from '../../engine';
 import { matchSettings, ownsComputerDecision } from '../../match/history';
@@ -63,27 +64,20 @@ export function useComputer({ session, live, apply, modal, notice }: Port) {
       async () => {
         if (!alive || abort.signal.aborted) return;
         try {
-          const predicted = cache.current[0];
+          const observation = observe(source);
+          const predicted = cachedDecision(observation, cache.current);
           let command: Command | null = null;
-          if (predicted?.before === fingerprint(source)) {
+          if (predicted) {
             command = predicted.command;
-            cache.current.shift();
-            setStats({
-              simulations: 0,
-              candidates: 0,
-              depth: 0,
-              replies: 0,
-              sampled: 0,
-              exhausted: false,
-              cached: true,
-            });
+            cache.current = predicted.plan.slice(1);
+            setStats(predicted.stats);
           } else {
             cache.current = [];
             client.current ??= new AiClient();
             const started = performance.now();
             const result = await client.current.plan({
               id,
-              observation: observe(source),
+              observation,
               side: player,
               difficulty: match.difficulty,
               limits: allocateBudget(source, match.difficulty, budget.current),

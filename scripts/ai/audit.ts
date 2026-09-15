@@ -7,6 +7,7 @@ import { gunzipSync } from 'node:zlib';
 import { createGame, applyCommand } from '../../src/engine';
 import type { GameState } from '../../src/engine';
 import { decide as currentDecide } from '../../src/ai/search';
+import { cachedDecision } from '../../src/ai/plan-cache';
 import { observe, decisionOwner, fingerprint } from '../../src/ai/observation';
 import { allocateBudget as currentBudget, emptyBudget } from '../../src/ai/budget';
 import type { Difficulty, PlanStep } from '../../src/ai/types';
@@ -16,6 +17,7 @@ const baseline = process.argv[3]
   ? ((await import(pathToFileURL(resolve(process.argv[3])).href)) as {
       decide: typeof currentDecide;
       allocateBudget: typeof currentBudget;
+      cachedDecision?: typeof cachedDecision;
     })
   : undefined;
 if (
@@ -75,7 +77,11 @@ if (!process.env.AI_AUDIT_POSITIONS_ONLY) {
     const owner = decisionOwner(s),
       before = fingerprint(s);
     if (budgets[owner].ply !== s.ply) budgets[owner] = { ...emptyBudget(), ply: s.ply };
-    const cached = caches[owner][0]?.before === before;
+    const cached = baseline
+      ? baseline.cachedDecision
+        ? !!baseline.cachedDecision(observe(s), caches[owner])
+        : caches[owner][0]?.before === before
+      : !!cachedDecision(observe(s), caches[owner]);
     const limits = allocateBudget(s, 'hard', budgets[owner]);
     const start = performance.now();
     const d = cached

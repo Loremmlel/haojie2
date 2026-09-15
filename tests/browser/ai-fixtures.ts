@@ -27,3 +27,13 @@ const archer = add(paced, 23, 1, 4, 7);
 archer.born = 1; // Independent of deployment fatigue: this is its active six-shot turn.
 add(paced, 'grave', 2, 4, 8);
 save('pacing', paced, { mode: 'ai', human: 2, difficulty: 'medium' });
+
+// Exact sanitized CLI failure position, before its mistaken deploy -> cached END plan.
+import endTurnPosition from '../fixtures/ai/end-turn-20260915.json';
+import { imagined } from '../../src/ai/observation';
+import type { Observation } from '../../src/ai/types';
+save('end-turn-value', imagined(endTurnPosition as Observation), {
+  mode: 'ai',
+  human: 1,
+  difficulty: 'hard',
+});

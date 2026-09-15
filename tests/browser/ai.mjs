@@ -119,6 +119,18 @@ try {
   scenario(
     'all three modes finish AI opening through the inline offline Worker without receiving true RNG',
   );
+  const verifyEndTurnValue = async (backend) => {
+    await load('end-turn-value');
+    const done = await waitForState((s) => s.present.ply === 19);
+    assert.equal(
+      done.present.units.some((u) => u.id === 'u305'),
+      false,
+      'AI must collect the protected clone instead of running the cached END',
+    );
+    assert.ok(done.present.units.some((u) => u.owner === 2 && u.kind === 9));
+    scenario(`recorded missed attacks are completed before END through ${backend}`);
+  };
+  await verifyEndTurnValue('the inline Worker');
   await verifyPacing({ page, load, exported, waitForState, scenario });
   await load('thinking');
   await button('暂停AI').click();
@@ -186,6 +198,7 @@ try {
   await waitForState((s) => s.present.active === 2);
   assert.match(await page.locator('.opponent-bar').innerText(), /分片/);
   scenario('unsupported Worker falls back to the same cooperatively scheduled planner');
+  await verifyEndTurnValue('the cooperative fallback');
   await page.setViewportSize({ width: 390, height: 844 });
   await button('新对局').click();
   assert.equal(await page.getByLabel('AI难度').count(), 1);

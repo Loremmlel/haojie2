@@ -17,7 +17,7 @@ export interface PlanStep {
 export interface CandidateTrace {
   command: Command;
   score: number;
-  stage: 'static' | 'reply';
+  stage: 'static' | 'reply' | 'end-turn';
   line: Command[];
   outcomes: {
     probability: number;
@@ -48,6 +48,8 @@ export interface Decision {
     replySamples?: number;
     selectedDepth?: number;
     cached?: boolean;
+    endTurnChecks?: number;
+    endTurnImproved?: boolean;
   };
 }
 export interface SearchRequest {
