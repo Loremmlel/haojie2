@@ -1,7 +1,8 @@
 import type { EventFacts } from './event-facts';
 /** All game state is data. No renderer, network or wall clock is required. */
 export type Player = 1 | 2;
-export type Kind = number | '3p' | 'grave' | 'wall' | `u${number}` | 'u12p' | 'firelord';
+export type Kind = number | '3p' | '17p' | 'grave' | 'wall' | `u${number}` | 'u12p' | 'firelord';
+export type AttackDirection = 'up' | 'down' | 'left' | 'right';
 export type Mode = 'none' | 'move' | 'attack' | 'skill' | 'charge';
 export interface Point {
   x: number;
@@ -201,6 +202,8 @@ export interface Command {
   row?: number;
   mode?: string;
   ultimate?: boolean;
+  /** Direction of the final attack-path step; the engine constructs and validates the route. */
+  direction?: AttackDirection;
   charge?: boolean;
   cardIds?: string[];
   sacrificeIds?: string[];

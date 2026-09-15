@@ -4,7 +4,7 @@ import { commandError } from './game';
 import { age, allegiance, getStats, has, now, passive } from './state';
 import type { Card, Command, GameState, Unit } from './types';
 export interface SelectionStep {
-  kind: 'target' | 'point' | 'row' | 'column' | 'death';
+  kind: 'target' | 'point' | 'row' | 'column' | 'death' | 'direction';
   field?: 'targetId' | 'secondId' | 'sacrificeIds';
   label: string;
   relation?: 'friend' | 'enemy' | 'any';
@@ -59,11 +59,11 @@ export function unitActions(s: GameState, u: Unit): ActionSpec[] {
       spec('charge-move', '蓄力 · 移动', { type: 'charge', ...command, mode: 'move' }, [], 'clock'),
     );
   if (!u.silenced) {
-    if (u.kind === 4 || u.kind === 'u2')
+    if (u.kind === 4 || u.kind === 15 || u.kind === 'u2')
       result.push(
         spec(
           'charge-attack',
-          '蓄力 · 攻击',
+          u.kind === 15 ? '蓄力 · +5攻击 / +1射程' : '蓄力 · 攻击',
           { type: 'charge', ...command, mode: 'attack' },
           [],
           'clock',
@@ -82,7 +82,7 @@ export function unitActions(s: GameState, u: Unit): ActionSpec[] {
     const skill = { type: 'skill' as const, ...command };
     switch (u.kind) {
       case 5:
-        result.push(spec('stomp', '震地 · 周围20伤', skill));
+        result.push(spec('stomp', '震地 · 周围15伤', skill));
         break;
       case 6:
         result.push(spec('buff', '鼓舞友军', skill));
@@ -97,16 +97,13 @@ export function unitActions(s: GameState, u: Unit): ActionSpec[] {
         break;
       case 14:
         result.push(
+          spec('sacrifice-summon', '献祭同类 · 获得召唤', { ...skill, mode: 'summon' }, [
+            target('选择射程内另一枚献祭炮', 'friend'),
+          ]),
           spec('sacrifice', '献祭射击', skill, [
             target('献祭 1/2：选择另一友方', 'friend'),
             { kind: 'column', label: '献祭 2/2：选择射击列' },
           ]),
-        );
-        break;
-      case 15:
-        result.push(
-          spec('upgrade-atk', '强化 · +10攻击', { ...skill, mode: 'attack' }),
-          spec('upgrade-range', '强化 · +1射程', { ...skill, mode: 'range' }),
         );
         break;
       case 19:
@@ -183,17 +180,27 @@ export function cardActions(s: GameState, c: Card): ActionSpec[] {
   const d = definition(c.kind),
     base = { cardId: c.id };
   const result: ActionSpec[] = [];
-  if (!isStored(d))
+  if (!isStored(d)) {
     result.push(
       spec(
         'deploy',
-        '部署随从',
+        c.kind === 1 ? '正常部署 · 不扣血' : '部署随从',
         { type: 'deploy', ...base, charge: false },
         [square('选择部署格；2×2以该格为左上角')],
         'plus',
       ),
     );
-  else if (d.weapon !== undefined)
+    if (c.kind === 1)
+      result.push(
+        spec(
+          'deploy-charge',
+          '扣10血 · 冲锋部署',
+          { type: 'deploy', ...base, charge: true },
+          [square('选择冲锋部署格；该随从本回合即可行动')],
+          'sword',
+        ),
+      );
+  } else if (d.weapon !== undefined)
     result.push(
       spec(
         'equip',

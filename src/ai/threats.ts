@@ -12,7 +12,7 @@ import {
   neighbors,
 } from '../engine/geometry';
 import { activeEffect, asTarget, has, passive } from '../engine/state';
-import type { GameState, Player, Target, Unit } from '../engine/types';
+import type { AttackDirection, GameState, Player, Target, Unit } from '../engine/types';
 import { actionWindow, hitDistance, isFrontHit, statsFor } from './spatial';
 /** Damage/utility estimate, not a replacement for exact distribution() at search nodes. */
 export function readyAttack(s: GameState, u: Unit): boolean {
@@ -29,6 +29,7 @@ export function hitPackets(
   s: GameState,
   u: Unit,
   t: Target,
+  direction?: AttackDirection,
 ): { damage: number; probability: number }[] {
   const st = statsFor(s, u);
   if (t.unit && has(s, t.unit, 'immune')) return [{ damage: 0, probability: 1 }];
@@ -50,12 +51,14 @@ export function hitPackets(
   if (t.unit && passive(s, t.unit)) {
     if (
       t.unit.kind === 24 &&
-      isFrontHit(
-        s,
-        u,
-        t,
-        s.units.some((v) => v.id === t.id && (v.x !== t.x || v.y !== t.y)) ? t.id : '',
-      )
+      (direction
+        ? direction === (t.owner === 1 ? 'up' : 'down')
+        : isFrontHit(
+            s,
+            u,
+            t,
+            s.units.some((v) => v.id === t.id && (v.x !== t.x || v.y !== t.y)) ? t.id : '',
+          ))
     )
       packets = packets.map((p) => ({
         ...p,
@@ -67,6 +70,15 @@ export function hitPackets(
         damage: p.damage <= COMBAT_RULES.kingAttackImmunity ? 0 : p.damage,
       }));
   }
+  if (t.unit?.kind === '17p' && !t.unit.silenced)
+    packets = packets.flatMap((p) =>
+      p.damage > 0
+        ? [
+            { damage: 0, probability: p.probability * COMBAT_RULES.littleGoldImmunity },
+            { ...p, probability: p.probability * (1 - COMBAT_RULES.littleGoldImmunity) },
+          ]
+        : [p],
+    );
   return packets;
 }
 export function attackPressure(s: GameState, u: Unit, t: Target, ignoreId = ''): number {
@@ -77,7 +89,13 @@ export function attackPressure(s: GameState, u: Unit, t: Target, ignoreId = ''):
   let amount = packets.reduce((v, p) => v + p.damage * p.probability, 0);
   const one = passive(s, u) && (u.kind === 9 || u.kind === 4 || u.kind === 10);
   const count = one ? 1 : statsFor(s, u).remaining;
-  amount *= count;
+  if (u.kind === 15 && !u.silenced && u.charge > 0) {
+    const empty = { ...u, charge: 0, readyCharge: 0 };
+    const followUp = Number.isFinite(hitDistance(s, empty, t, ignoreId))
+      ? hitPackets(s, empty, t).reduce((v, p) => v + p.damage * p.probability, 0)
+      : 0;
+    amount += Math.max(0, count - 1) * followUp;
+  } else amount *= count;
   if (t.unit) {
     if (passive(s, u) && u.kind === 'u4') amount += 12;
     if (u.equipment.includes('u5')) amount += 15;
@@ -180,7 +198,8 @@ export function analyzePayload(
   for (const victim of view.units) {
     if (victim.owner === u.owner || !topTarget(view, asTarget(victim))) continue;
     let reason = '可兑现';
-    if (has(view, victim, 'immune')) reason = '金身保护';
+    if (type === 'convert' && victim.kind === 5) reason = '大肉比无法被策反';
+    else if (has(view, victim, 'immune')) reason = '金身保护';
     else if (!Number.isFinite(hitDistance(view, carrier, asTarget(victim))))
       reason = '无合法攻击路径';
     else if (

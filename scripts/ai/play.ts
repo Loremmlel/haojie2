@@ -70,7 +70,7 @@ function startRecord() {
   prepareTranscript(record, arena.session, args.includes('--new'));
 }
 const help = `show | actions ID | legal [ID] | go (AI直到轮到人类) | step (AI一步) | save | quit
-summon [ultimate] | begin | deploy CARD X Y [charge] | move UNIT X Y | attack UNIT TARGET
+summon [ultimate] | begin | deploy CARD X Y [charge] | move UNIT X Y | attack UNIT TARGET [up|down|left|right]
 charge UNIT attack/move/skill | cast CARD TARGET | equip CARD TARGET | finish UNIT | react TARGET | end
 复杂技能直接输入JSON，例如 {"type":"skill","unitId":"u8","targetId":"u9","x":5,"y":6}
 --new --seed N --human 1|2 --difficulty hard --save FILE；--command '指令' 可逐条无交互操作。
@@ -90,7 +90,12 @@ function parse(line: string): Command {
     case 'move':
       return { type, unitId: a, x: Number(b), y: Number(c) };
     case 'attack':
-      return { type, unitId: a, targetId: b };
+      return {
+        type,
+        unitId: a,
+        targetId: b,
+        ...(c ? { direction: c as Command['direction'] } : {}),
+      };
     case 'charge':
       return { type, unitId: a, mode: b };
     case 'cast':

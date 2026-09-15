@@ -91,7 +91,8 @@ try {
   await button('普通召唤').click();
   await button('完成召唤，开始行动').click();
   await button('选择冲锋怪随从').click();
-  await page.getByRole('checkbox').check();
+  assert.equal((await readState()).units.length, 0);
+  await button('扣10血 · 冲锋部署').click();
   await choose(2, 3);
   assert.match(await cell(2, 3).getAttribute('aria-label'), /40生命/);
   await button('移动').click();
@@ -243,8 +244,56 @@ try {
   state = await readState();
   assert.equal(state.units.filter((u) => u.operations === 1).length, 2);
   scenario('individual allied clones remain separately selectable and movable');
+  await load('feedback-paths');
+  await choose(4, 4);
+  await button('攻击').click();
+  await choose(4, 6);
+  assert.equal((await readState()).units.find((u) => u.kind === 24).hp, 50);
+  assert.equal(await page.locator('.attack-route-preview polyline').count(), 3);
+  await cell(5, 6).hover();
+  assert.match(await cell(5, 6).getAttribute('aria-label'), /向左命中.*路径4格/);
+  await page.screenshot({ path: 'artifacts/feedback-paths.png', fullPage: true });
+  await choose(5, 6);
+  assert.equal((await readState()).units.find((u) => u.kind === 24).hp, 30);
+  await button('悔棋').click();
+  assert.equal((await readState()).units.find((u) => u.kind === 24).hp, 50);
+  scenario(
+    'feedback: explicit longer flank selection previews actual route and waits for confirmation',
+  );
+  await load('feedback-knockback');
+  await choose(4, 4);
+  await button('攻击').click();
+  await choose(4, 6);
+  await choose(5, 6);
+  state = await readState();
+  assert.deepEqual([state.units[1].x, state.units[1].y], [2, 6]);
+  scenario('feedback: selected incoming path determines knockback');
+  await load('feedback-sacrifice');
+  await choose(3, 4);
+  await button('献祭同类 · 获得召唤').click();
+  await choose(4, 4);
+  assert.equal((await readState()).summonSlots, 1);
+  assert.ok(await button('终极召唤 −2 人头').isVisible());
+  await button('终极召唤 −2 人头').click();
+  state = await readState();
+  assert.equal(state.phase, 'play');
+  assert.equal(state.summonSlots, 0);
+  assert.equal(state.heads[1], 4);
+  scenario('feedback: cannon sacrifice without enemies exposes same-turn ultimate summon');
+  await load('feedback-charge');
+  await choose(3, 4);
+  assert.equal(await page.locator('.charge-meter i.filled').count(), 4);
+  await button('攻击').click();
+  await choose(3, 6);
+  assert.equal((await readState()).units[0].charge, 0);
+  assert.equal(await page.locator('.charge-meter').count(), 0);
+  await choose(3, 6);
+  assert.equal((await readState()).units[1].hp, 40);
+  scenario(
+    'feedback: four-layer charge display clears after first shot and second shot uses base damage',
+  );
   await button('棋子图鉴').click();
-  assert.equal(await page.locator('.codex-card').count(), 59);
+  assert.equal(await page.locator('.codex-card').count(), 60);
   await page.getByRole('textbox', { name: '搜索图鉴' }).fill('免疫塔');
   assert.ok(await page.getByRole('heading', { name: '免疫塔', exact: true }).isVisible());
   await page.getByRole('textbox', { name: '搜索图鉴' }).fill('');
@@ -264,7 +313,7 @@ try {
   );
   await button('关闭弹窗').click();
   scenario(
-    '59-entry searchable codex, 28 ultimate entries, four weapons and confirmed/deferred rules',
+    '60-entry searchable codex, 28 ultimate entries, four weapons and confirmed/deferred rules',
   );
   const beforeInvalid = await readState();
   await page.locator('input[type=file]').setInputFiles({
@@ -306,6 +355,14 @@ try {
   await dismiss();
   await page.screenshot({ path: 'artifacts/mobile.png', fullPage: true });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await load('feedback-paths');
+  await choose(4, 4);
+  await button('攻击').click();
+  await choose(4, 6);
+  await cell(5, 6).focus();
+  await page.keyboard.press('Enter');
+  assert.equal((await readState()).units.find((u) => u.kind === 24).hp, 30);
+  scenario('feedback: mobile and keyboard direction selection requires no hover');
   await load('archer');
   await choose(3, 4);
   await button('攻击').click();

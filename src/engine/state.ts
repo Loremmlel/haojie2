@@ -1,6 +1,6 @@
 import { enrichEvent } from './event-facts';
 import { simulationRandom } from './random';
-import { definition, isStored, SUMMON_POOL, ULTIMATE_POOL } from './catalog';
+import { COMBAT_RULES, definition, isStored, SUMMON_POOL, ULTIMATE_POOL } from './catalog';
 import type {
   Card,
   Command,
@@ -123,6 +123,11 @@ export function draw(s: GameState, owner: Player, count: number, ultimate = fals
         )
       ];
     if (kind === 3 && random(s, [0, 1 / 3, 1]) >= 1 / 3) kind = '3p';
+    if (
+      kind === 17 &&
+      random(s, [0, COMBAT_RULES.goldSpellChance, 1]) >= COMBAT_RULES.goldSpellChance
+    )
+      kind = '17p';
     if (kind === 'u12' && random(s, [0, 0.1, 1]) >= 0.1) kind = 'u12p';
     const group = kind === 'u25' ? `group${s.serial++}` : undefined;
     const d = definition(kind),
@@ -157,7 +162,7 @@ export function getStats(s: GameState, u: Unit): Stats {
   const frozen = has(s, u, 'freeze'),
     stunned = has(s, u, 'stun');
   const a = age(s, u);
-  const sleeping = a <= 0 || (enabled && u.kind === 23 && (a < 2 || a % 2 !== 0));
+  const sleeping = a <= 0 || (enabled && u.kind === 23 && a < 2);
   if (enabled && u.kind === '3p') {
     const n = s.units.filter((v) => {
       for (let dx = 0; dx < v.size; dx++)
@@ -169,6 +174,10 @@ export function getStats(s: GameState, u: Unit): Stats {
     range = n + u.rangeBonus;
   }
   if (enabled && u.kind === 4 && u.charge >= 5) range++;
+  if (enabled && u.kind === 15 && u.chargeType === 'attack') {
+    attack += u.charge * COMBAT_RULES.accumulator.attack;
+    range += u.charge * COMBAT_RULES.accumulator.range;
+  }
   if (enabled && u.kind === 'u2') attack += u.charge * 15;
   if (enabled && u.kind === 'u6' && hasWeapon(u, 'u5')) attack = 10 + u.attackBonus;
   if (hasWeapon(u, 'u5')) range++;

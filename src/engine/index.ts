@@ -38,6 +38,9 @@ export {
   canPlace,
   movementPath,
   attackPath,
+  attackRoutes,
+  selectableAttackRoutes,
+  pathDirection,
   other,
   basePoint,
 } from './geometry';

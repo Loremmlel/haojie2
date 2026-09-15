@@ -37,8 +37,8 @@ export function HandCard({
               ? String(c.kind).toUpperCase()
               : typeof c.kind === 'number'
                 ? String(c.kind).padStart(2, '0')
-                : c.kind === '3p'
-                  ? '03′'
+                : c.kind === '3p' || c.kind === '17p'
+                  ? `${String(c.kind).slice(0, -1).padStart(2, '0')}′`
                   : '◆'}
           </span>
         </div>

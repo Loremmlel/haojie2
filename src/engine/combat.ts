@@ -3,6 +3,7 @@ import { definition, COMBAT_RULES } from './catalog';
 import { attackProfile, vampireRate } from './attack-profile';
 import {
   attackPath,
+  pathDirection,
   basePoint,
   canPlace,
   cells,
@@ -288,6 +289,21 @@ export function damage(
   }
   if (protectedEffect(s, t, source, ctx)) return 0;
   if (
+    u.kind === '17p' &&
+    !u.silenced &&
+    random(s, [0, COMBAT_RULES.littleGoldImmunity, 1]) < COMBAT_RULES.littleGoldImmunity
+  ) {
+    emit(s, {
+      type: 'shield',
+      to: u,
+      owner: u.owner,
+      action: 'ward',
+      stage: 'blocked',
+      text: '小金耶 · 免疫',
+    });
+    return 0;
+  }
+  if (
     !u.silenced &&
     u.kind === 'u18' &&
     source.kind === 'attack' &&
@@ -465,6 +481,7 @@ function knockback(s: GameState, u: Unit, t: Target, path: Point[], ctx: Resolut
   }
 }
 interface AttackOptions {
+  direction?: import('./types').AttackDirection;
   reactive?: boolean;
   unlimited?: boolean;
   forceHostile?: boolean;
@@ -486,7 +503,7 @@ export function performAttack(
     (u.kind === 2 || u.kind === 'u21') &&
     t.unit &&
     allegiance(s, t.unit) === u.owner;
-  return withEventFacts(
+  const result = withEventFacts(
     s,
     {
       action: healing ? 'mend' : 'attack',
@@ -495,6 +512,10 @@ export function performAttack(
     },
     () => resolveAttack(s, u, t, ctx, options),
   );
+  // Clear once per complete attack, including immune/execution hits and piercing volleys.
+  // An invalid attack throws before reaching this point and never spends charge.
+  if (u.kind === 15 && !options.noPierce) u.charge = u.readyCharge = 0;
+  return result;
 }
 function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, options: AttackOptions) {
   const ally = t.unit ? allegiance(s, t.unit) === u.owner : t.owner === u.owner;
@@ -533,8 +554,10 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
   const path =
     hasWeapon(u, 'u28') && !ally
       ? rays[0]
-      : attackPath(s, u, t, options.unlimited ? 117 : stats.range);
+      : attackPath(s, u, t, options.unlimited ? 117 : stats.range, options.direction);
   ensure(path, '目标不在射程内，或所有路径均被阻挡；炎魔之心必须选同一直线。');
+  if (options.direction && hasWeapon(u, 'u28') && !ally)
+    ensure(pathDirection(path) === options.direction, '炎魔之心只能沿所选直线攻击。');
   if (hasWeapon(u, 'u28') && !options.noPierce && !ally) {
     const origin = path[0],
       dx = path[1].x - origin.x,
@@ -686,7 +709,16 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     const conversion = u.effects.find((e) => e.type === 'convert' && activeEffect(s, e, u));
     if (conversion && loss > 0) {
       u.effects = u.effects.filter((e) => e !== conversion);
-      if (!protectedEffect(s, t, skillSource, ctx)) {
+      if (victim.kind === 5)
+        emit(s, {
+          type: 'shield',
+          to: victim,
+          owner: victim.owner,
+          action: 'conversion',
+          stage: 'blocked',
+          text: '大肉比 · 无法策反',
+        });
+      if (victim.kind !== 5 && !protectedEffect(s, t, skillSource, ctx)) {
         victim.owner = u.owner;
         victim.offset = 0;
         victim.born = s.turns[u.owner] - (victim.kind === 23 ? 1 : 0);

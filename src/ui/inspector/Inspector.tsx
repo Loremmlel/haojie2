@@ -92,22 +92,12 @@ export function Inspector({
               </div>
             )}
             {card?.kind === 1 && intent.kind === 'select' && intent.draft.type === 'deploy' && (
-              <label className="charge-choice">
-                <input
-                  type="checkbox"
-                  checked={!!intent.draft.charge}
-                  onChange={(e) =>
-                    setIntent({
-                      ...intent,
-                      draft: { ...intent.draft, charge: e.target.checked },
-                    })
-                  }
-                />
-                <span>
-                  <b>支付10生命，获得冲锋</b>
-                  <small>当前与最大生命变为40</small>
-                </span>
-              </label>
+              <p className="sequence-hint">
+                {intent.draft.charge
+                  ? '冲锋部署：当前与最大生命变为40，本回合即可行动。'
+                  : '正常部署：保留50生命，下个己方回合才可行动。'}
+                可点击另一部署按钮切换。
+              </p>
             )}
           </>
         ) : selectedBase ? (

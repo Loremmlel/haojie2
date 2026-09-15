@@ -95,7 +95,7 @@ export function UnitDetails({ state: s, unit: inspected }: { state: GameState; u
                   length:
                     inspected.kind === 4
                       ? 5
-                      : inspected.kind === 'u2'
+                      : inspected.kind === 'u2' || inspected.kind === 15
                         ? 4
                         : inspected.kind === 21
                           ? 2

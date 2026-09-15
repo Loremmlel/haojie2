@@ -76,3 +76,15 @@ test('command-line entry accepts piped human play and replay without loading or 
     rmSync(folder, { recursive: true, force: true });
   }
 });
+
+test('current rules fixture replays every command and refuses an explicitly different ruleset', () => {
+  const text = readFileSync('docs/playtests/cli-feedback-20260915.jsonl', 'utf8');
+  assert.equal(replayTranscript(text).commands, 31);
+  const [header, ...commands] = text.trim().split('\n');
+  const initial = JSON.parse(header);
+  initial.ruleset = 'different-ruleset';
+  assert.throws(
+    () => replayTranscript([JSON.stringify(initial), ...commands].join('\n')),
+    /规则版本/,
+  );
+});

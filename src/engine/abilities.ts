@@ -1,5 +1,5 @@
 import { eventActor, withEventFacts, type EventAction } from './event-facts';
-import { definition, isStored } from './catalog';
+import { COMBAT_RULES, definition, isStored } from './catalog';
 import {
   alive,
   damage,
@@ -66,13 +66,15 @@ function resolveCharge(s: GameState, c: Command) {
       ? 1
       : mode === 'attack' && u.kind === 4 && !u.silenced
         ? 5
-        : mode === 'attack' && u.kind === 'u2' && !u.silenced
-          ? 4
-          : mode === 'skill' && u.kind === 21 && !u.silenced
-            ? 2
-            : mode === 'skill' && u.kind === 'u6' && !u.silenced && !u.onceUsed
-              ? 1
-              : 0;
+        : mode === 'attack' && u.kind === 15 && !u.silenced
+          ? COMBAT_RULES.accumulator.max
+          : mode === 'attack' && u.kind === 'u2' && !u.silenced
+            ? 4
+            : mode === 'skill' && u.kind === 21 && !u.silenced
+              ? 2
+              : mode === 'skill' && u.kind === 'u6' && !u.silenced && !u.onceUsed
+                ? 1
+                : 0;
   ensure(max > 0, '这枚随从没有此类蓄力。');
   ensure(u.charge < max, '该类蓄力已满。');
   ensure(u.charge === 0 || u.chargeType === mode, '当前蓄力属于另一模式。');
@@ -168,7 +170,7 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
       const victims = targets(s).filter(
         (t) => ring(u, t.unit ?? t) && (t.owner === u.owner || topTarget(s, t)),
       );
-      for (const t of victims) damage(s, t, 20, source, ctx);
+      for (const t of victims) damage(s, t, COMBAT_RULES.giantAreaDamage, source, ctx);
       break;
     }
     case 6:
@@ -199,7 +201,13 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
       const victim = friendly(c.targetId);
       ensure(victim.id !== u.id && victim.kind !== 'u25', '不可献祭自身或克隆军团。');
       ensure(u.maxHp >= 10, '生命上限不足10。');
-      ensure(Number.isInteger(c.column) && c.column! >= 1 && c.column! <= 9, '请选择一列。');
+      const sameKind = victim.kind === 14;
+      const summonOnly = c.mode === 'summon';
+      ensure(!summonOnly || sameKind, '只有献祭另一枚献祭炮才能直接换取召唤。');
+      ensure(
+        summonOnly || (Number.isInteger(c.column) && c.column! >= 1 && c.column! <= 9),
+        '请选择一列。',
+      );
       const candidates = targets(s).filter(
         (t) =>
           t.owner !== u.owner &&
@@ -211,20 +219,21 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
       );
       candidates.sort((a, b) => (u.owner === 1 ? a.y - b.y : b.y - a.y));
       const t = candidates[0];
-      ensure(t, '这一列没有射程内的敌方目标。');
+      ensure(t || sameKind, '这一列没有射程内的敌方目标。');
       const amount = getStats(s, victim).attack;
       lowerMax(s, u, 10, ctx);
       kill(s, victim, { owner: u.owner, unit: u, kind: 'sacrifice' }, ctx);
-      damage(s, t, amount, source, ctx);
+      if (t && !summonOnly) damage(s, t, amount, source, ctx);
+      if (sameKind) {
+        s.summonSlots++;
+        emit(
+          s,
+          { type: 'skill', to: u, owner: u.owner, text: '献祭同类 · 本回合额外召唤+1' },
+          '献祭炮献祭同类，获得一次仅本回合可用的召唤机会（可付2人头升级）。',
+        );
+      }
       break;
     }
-    case 15:
-      ensure(u.upgrades < 3, '强化只能使用3次。');
-      ensure(c.mode === 'attack' || c.mode === 'range', '请选择攻击或射程强化。');
-      if (c.mode === 'attack') u.attackBonus += 10;
-      else u.rangeBonus++;
-      u.upgrades++;
-      break;
     case 19: {
       const to = point(c.x, c.y),
         ghost = template('wall', u.owner, s.turns[u.owner], to);
@@ -640,7 +649,12 @@ export function reroll(s: GameState, c: Command) {
   s.hands[s.active] = s.hands[s.active].filter((v) =>
     card.group ? v.group !== card.group : v.id !== card.id,
   );
-  const cards = draw(s, s.active, 1, definition(card.kind).tier !== 'normal' && card.kind !== '3p');
+  const cards = draw(
+    s,
+    s.active,
+    1,
+    definition(card.kind).tier !== 'normal' && card.kind !== '3p' && card.kind !== '17p',
+  );
   for (const v of cards) v.rerolled = true;
   emit(
     s,
