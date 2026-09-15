@@ -1,3 +1,4 @@
+import { attackRoutes, frontal } from '../engine/geometry';
 /** Read-only spatial estimates. Final commands always use the engine's exact path/legality checks. */
 import { cells, basePoint, inside, distance, neighbors } from '../engine/geometry';
 import { allegiance, getStats, resetUnit } from '../engine/state';
@@ -117,6 +118,11 @@ export function hitDistance(s: GameState, u: Unit, t: Target, ignoreId = ''): nu
   );
 }
 export function isFrontHit(s: GameState, u: Unit, t: Target, ignoreId = ''): boolean {
+  if (!u.equipment.includes('u28')) {
+    const view = ignoreId ? { ...s, units: s.units.filter((v) => v.id !== ignoreId) } : s;
+    const routes = attackRoutes(view, u, t, statsFor(s, u).range);
+    return routes.length > 0 && routes.every((r) => frontal(r.path, t.owner));
+  }
   const d = hitDistance(s, u, t, ignoreId);
   if (!Number.isFinite(d) || d < 1) return false;
   const field = attackField(s, u, statsFor(s, u).range, ignoreId);

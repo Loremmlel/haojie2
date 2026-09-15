@@ -6,6 +6,7 @@ import {
   ALL_CELLS,
   basePoint,
   attackPath,
+  selectableAttackRoutes,
   canPlace,
   cells,
   distance,
@@ -114,6 +115,7 @@ function targetRank(s: GameState, a: ActionSpec, c: Command, t: Target): number 
       : friend
         ? -value
         : value + 30;
+  if (a.id === 'sacrifice-summon') return 30 - value;
   if (a.id === 'reforge-two' || a.id === 'sacrifice')
     return -value + (a.id === 'sacrifice' ? getStats(s, u).attack : 0);
   return friend ? value : value + 30;
@@ -130,7 +132,7 @@ export function commandPriority(s: GameState, c: Command): number {
     if (t.owner === owner && t.unit)
       return Math.min(t.unit.maxHp - t.unit.hp, getStats(s, u).attack) * 0.8;
     const hp = t.unit?.hp ?? s.bases[t.owner];
-    const packets = hitPackets(s, u, t);
+    const packets = hitPackets(s, u, t, c.direction);
     const damage = packets.reduce((v, p) => v + p.probability * Math.min(hp, p.damage), 0);
     const kill = packets.reduce((v, p) => v + (p.damage >= hp ? p.probability : 0), 0);
     return (
@@ -142,6 +144,7 @@ export function commandPriority(s: GameState, c: Command): number {
   }
   if (c.type === 'move' && u && c.x !== undefined && c.y !== undefined)
     return placementValue(s, u, { x: c.x, y: c.y }) - placementValue(s, u, u) + 0.5;
+  if (c.type === 'skill' && u?.kind === 14 && t?.unit?.kind === 14) return 30;
   if (c.type === 'charge') return 8;
   if (c.type === 'cast' || c.type === 'equip') return 12;
   return 6;
@@ -269,6 +272,7 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
           (!t.unit || t.unit.kind === 'u25' || t.unit.hp * 2 < t.unit.maxHp)
         )
           return false;
+        if (a.id === 'sacrifice-summon' && (t.id === u?.id || t.unit?.kind !== 14)) return false;
         if (a.id === 'sacrifice' && (t.id === u?.id || t.unit?.kind === 'u25')) return false;
         // Friendly spells can target a particular clone, attacks still obey top-of-stack rules.
         if (c.type === 'attack' || c.type === 'react') {
@@ -376,11 +380,13 @@ function expand(s: GameState, a: ActionSpec, partial: number): Command[] {
       return last ? next : next.slice(0, partial);
     });
   }
-  if (
-    a.command.type === 'deploy' &&
-    s.hands[s.active].find((c) => c.id === a.command.cardId)?.kind === 1
-  )
-    return drafts.flatMap((c) => [c, { ...c, charge: true }]);
+  if (a.command.type === 'attack')
+    return drafts.flatMap((c) => {
+      const u = s.units.find((u) => u.id === c.unitId),
+        t = targets(s).find((t) => t.id === c.targetId);
+      const routes = u && t ? selectableAttackRoutes(s, u, t) : [];
+      return routes.length > 1 ? routes.map((r) => ({ ...c, direction: r.direction })) : [c];
+    });
   return drafts;
 }
 /** Candidate abstraction shared by all levels; every final command is still engine-validated.
@@ -434,6 +440,16 @@ export function* iterateCandidateGroups(
     for (const a of unitActions(s, transit)) if (a.id === 'move') yield* emit(a);
     return;
   }
+  if (s.summonSlots > 0)
+    yield {
+      family: 'bonus-summon',
+      keep: 2,
+      priority: 1000,
+      commands: [
+        { type: 'summon', ultimate: false },
+        ...(s.heads[s.active] >= 2 ? [{ type: 'summon' as const, ultimate: true }] : []),
+      ],
+    };
   const actions = s.units.filter((u) => u.owner === s.active).flatMap((u) => unitActions(s, u));
   actions.sort((a, b) => Number(b.command.type === 'attack') - Number(a.command.type === 'attack'));
   for (const a of actions) yield* emit(a);

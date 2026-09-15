@@ -1,3 +1,4 @@
+import { COMBAT_RULES } from '../engine/catalog';
 import { definition, isStored } from '../engine/catalog';
 import {
   basePoint,
@@ -57,15 +58,21 @@ export function materialValue(s: GameState, u: Unit): number {
   const attack =
     passive(s, u) && u.kind === 'u2'
       ? Math.max(0, st.attack - u.charge * 15)
-      : passive(s, u) && u.kind === 4
-        ? st.attack / 3
-        : st.attack;
+      : passive(s, u) && u.kind === 15
+        ? Math.max(0, st.attack - u.charge * COMBAT_RULES.accumulator.attack)
+        : passive(s, u) && u.kind === 4
+          ? st.attack / 3
+          : st.attack;
   let value =
     14 +
     u.hp * 0.38 +
     u.maxHp * 0.12 +
     attack * Math.sqrt(st.actions) * (0.65 + 0.3 * ratio) +
-    Math.min(8, st.range) * 2;
+    Math.min(
+      8,
+      st.range - (passive(s, u) && u.kind === 15 ? u.charge * COMBAT_RULES.accumulator.range : 0),
+    ) *
+      2;
   if (passive(s, u)) value += passives[u.kind] ?? 0;
   if (u.kind === 'grave' || u.kind === 'wall') value = 4 + u.hp * 0.16;
   if (u.kind === 'u25') value -= 7;
@@ -271,6 +278,7 @@ export function explainEvaluation(s: GameState, side: Player): EvaluationBreakdo
       sign *
       (headValue(s.heads[p]) +
         s.bonus[p] * 28 +
+        (s.phase === 'play' && s.active === p ? Math.max(0, s.summonSlots) * 28 : 0) +
         s.hands[p].reduce((n, c) => n + cardValue(s, c, p), 0));
     result.position += sign * s.deployRows[p].filter((y) => (p === 1 ? y > 8 : y < 6)).length * 8;
     result.formation += sign * formation(s, p);

@@ -1,6 +1,6 @@
 import { definition } from './catalog';
-import { allegiance, has, passive } from './state';
-import type { GameState, Player, Point, Target, Unit } from './types';
+import { allegiance, getStats, has, passive } from './state';
+import type { AttackDirection, GameState, Player, Point, Target, Unit } from './types';
 export const WIDTH = 9,
   HEIGHT = 13;
 export const ALL_CELLS: Point[] = Array.from({ length: 117 }, (_, i) => ({
@@ -133,7 +133,10 @@ export function attackPath(
   u: Unit,
   target: Target | Point,
   limit: number,
+  direction?: AttackDirection,
 ): Point[] | null {
+  if (direction !== undefined)
+    return attackRoutes(s, u, target, limit).find((r) => r.direction === direction)?.path ?? null;
   const t = 'id' in target ? target : undefined,
     ends = t?.unit ? cells(t.unit) : [target],
     blocked = new Set<string>();
@@ -184,4 +187,64 @@ export function refreshDeployment(s: GameState, owner: Player) {
 }
 export function inSquare(u: Unit, p: Point, radius = 5) {
   return inside(p) && Math.abs(p.x - u.x) <= radius && Math.abs(p.y - u.y) <= radius;
+}
+
+/** Final travel direction, shared by combat, previews and AI. */
+export function pathDirection(path: Point[]): AttackDirection | undefined {
+  if (path.length < 2) return undefined;
+  const a = path.at(-2)!,
+    b = path.at(-1)!;
+  return b.y < a.y ? 'up' : b.y > a.y ? 'down' : b.x < a.x ? 'left' : 'right';
+}
+export interface AttackRoute {
+  direction: AttackDirection;
+  path: Point[];
+}
+/** One shortest legal route per incoming direction, not just globally shortest routes.
+ * Target cells are terminal: a shot cannot pass through its target to hit its back.
+ * No RNG, state mutation or user-supplied path coordinates are involved. */
+export function attackRoutes(
+  s: GameState,
+  u: Unit,
+  target: Target | Point,
+  limit: number,
+): AttackRoute[] {
+  const t = 'id' in target ? target : undefined,
+    ends = new Set((t?.unit ? cells(t.unit) : [target]).map(key)),
+    blocked = new Set<string>();
+  for (const v of s.units)
+    if (v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
+      for (const p of cells(v)) blocked.add(key(p));
+  for (const end of ends) blocked.delete(end);
+  if (t?.id !== `base-${other(u.owner)}`) blocked.add(key(basePoint(other(u.owner))));
+  const queue = cells(u)
+      .filter((p) => !ends.has(key(p)))
+      .map((p) => [p]),
+    seen = new Set(queue.map((p) => key(p[0]))),
+    result = new Map<AttackDirection, Point[]>();
+  for (let i = 0; i < queue.length && result.size < 4; i++) {
+    const path = queue[i];
+    if (path.length - 1 >= limit) continue;
+    for (const p of neighbors(path.at(-1)!)) {
+      if (blocked.has(key(p))) continue;
+      const next = [...path, p];
+      if (ends.has(key(p))) {
+        const direction = pathDirection(next)!;
+        if (!result.has(direction)) result.set(direction, next);
+      } else if (!seen.has(key(p))) {
+        seen.add(key(p));
+        queue.push(next);
+      }
+    }
+  }
+  return [...result].map(([direction, path]) => ({ direction, path }));
+}
+/** Direction-sensitive abilities use this same bounded choice set in UI and AI. */
+export function selectableAttackRoutes(s: GameState, u: Unit, t: Target): AttackRoute[] {
+  if (
+    u.equipment.includes('u28') ||
+    !((u.kind === 'u20' && !u.silenced) || (t.unit?.kind === 24 && !t.unit.silenced))
+  )
+    return [];
+  return attackRoutes(s, u, t, getStats(s, u).range);
 }

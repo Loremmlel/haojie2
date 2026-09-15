@@ -145,7 +145,6 @@ test('all active skill descriptions produce a legal candidate, including multist
     6,
     7,
     14,
-    15,
     19,
     21,
     'u6',

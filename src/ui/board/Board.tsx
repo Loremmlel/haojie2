@@ -14,7 +14,13 @@ import {
   targetAt,
 } from '../../engine';
 import type { Intent } from '../game/selection';
-import { canChoose, intentTone } from '../game/selection';
+import {
+  canChoose,
+  intentTone,
+  intentRoutes,
+  directionArrow,
+  directionLabel,
+} from '../game/selection';
 import { Icon, playerStyle } from '../shared/visuals';
 import { Effects } from './Effects';
 
@@ -46,6 +52,7 @@ export function Board({
     () => new Set(ALL_CELLS.filter((p) => canChoose(s, intent, p)).map((p) => `${p.x},${p.y}`)),
     [s, intent],
   );
+  const routes = useMemo(() => intentRoutes(s, intent), [s, intent]);
   const owner = s.pending[0]?.owner ?? s.active,
     tone = intentTone(intent);
   const draft = intent.kind === 'select' ? intent.draft : null;
@@ -121,13 +128,19 @@ export function Board({
                   p.x < preview.x + previewSize &&
                   p.y >= preview.y &&
                   p.y < preview.y + previewSize;
+                const route = routes.find(
+                  (r) => r.path.at(-2)!.x === p.x && r.path.at(-2)!.y === p.y,
+                );
+                const routeLabel = route
+                  ? `，${directionLabel[route.direction]}，路径${route.path.length - 1}格`
+                  : '';
                 const label = `${p.x}列${p.y}行${t ? `，${t.unit && getStats(s, t.unit).frozen ? '冰冻中立' : faction(t.owner)}${t.unit ? definition(t.unit.kind).name + '，' + format(t.unit.hp) + '生命' : '基地，' + s.bases[t.owner] + '生命'}` : '，空格'}${stack.length > 1 ? `，叠放${stack.length}枚` : ''}${valid ? '，可选择' : ''}`;
                 return (
                   <button
                     role="gridcell"
                     key={col}
                     data-cell={`${p.x},${p.y}`}
-                    aria-label={label}
+                    aria-label={label + routeLabel}
                     aria-selected={selected}
                     tabIndex={focus.x === p.x && focus.y === p.y ? 0 : -1}
                     className={`cell ${row < 5 ? 'north' : row > 7 ? 'south' : 'contested'} ${range ? 'in-range' : ''} ${valid ? `legal ${tone} ${t ? 'occupied-target' : ''}` : ''} ${selected ? 'selected-cell' : ''} ${inPreview ? 'area-preview' : ''}`}
@@ -140,12 +153,33 @@ export function Board({
                     onKeyDown={(e) => navigate(e, p)}
                   >
                     <span className="cell-dot" />
-                    {valid && !t && <span className="target-dot" />}
+                    {valid && !t && !route && <span className="target-dot" />}
+                    {valid && route && (
+                      <span className="route-choice" aria-hidden="true">
+                        {directionArrow[route.direction]}
+                        <small>{route.path.length - 1}</small>
+                      </span>
+                    )}
                   </button>
                 );
               })}
             </div>
           ))}
+          {!!routes.length && (
+            <svg className="attack-route-preview" viewBox="0 0 9 13" aria-hidden="true">
+              {routes.map((r) => {
+                const before = r.path.at(-2)!,
+                  active = hover?.x === before.x && hover?.y === before.y;
+                return (
+                  <polyline
+                    key={r.direction}
+                    className={active ? 'active' : ''}
+                    points={r.path.map((p) => `${p.x - 0.5},${p.y - 0.5}`).join(' ')}
+                  />
+                );
+              })}
+            </svg>
+          )}
           <div className="frontier frontier-one" aria-hidden="true">
             <span>交 锋 区</span>
           </div>

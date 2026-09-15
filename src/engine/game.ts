@@ -80,7 +80,7 @@ export function applyCommand(
       ensure(s.phase === 'play', '先完成回合开始的召唤选择，再进入行动阶段。');
     switch (c.type) {
       case 'summon':
-        ensure(s.phase === 'summon' && s.summonSlots > 0, '本回合开始召唤次数已用完。');
+        ensure(s.summonSlots > 0, '本回合召唤次数已用完。');
         if (c.ultimate) {
           ensure(s.heads[s.active] >= 2, '终极召唤需要2人头。');
           s.heads[s.active] -= 2;
@@ -127,7 +127,7 @@ export function applyCommand(
         const u = actor(s, c.unitId);
         chooseMode(s, u, 'attack');
         const t = findTarget(s, c.targetId);
-        performAttack(s, u, t, ctx);
+        performAttack(s, u, t, ctx, { direction: c.direction });
         u.attacked.push(t.id);
         u.shots++;
         if (u.shots >= getStats(s, u).actions) finishOperation(u);

@@ -3,6 +3,8 @@ import {
   actionError,
   allegiance,
   attackPath,
+  selectableAttackRoutes,
+  targets,
   getStats,
   isLegal,
   movementPath,
@@ -27,12 +29,37 @@ export function advanceIntent(i: Intent, p: Point, s: GameState): Intent {
     if (step.field === 'sacrificeIds') draft.sacrificeIds = [...(draft.sacrificeIds ?? []), t.id];
     else draft[step.field ?? 'targetId'] = t.id;
   }
+  if (step.kind === 'direction') {
+    const route = intentRoutes(s, i).find((r) => {
+      const before = r.path.at(-2)!;
+      return before.x === p.x && before.y === p.y;
+    });
+    if (!route) return i;
+    draft.direction = route.direction;
+  }
   if (step.kind === 'point') {
     draft.x = p.x;
     draft.y = p.y;
   }
   if (step.kind === 'row') draft.row = p.y;
   if (step.kind === 'column') draft.column = p.x;
+  if (step.kind === 'target' && draft.type === 'attack') {
+    const u = s.units.find((u) => u.id === draft.unitId),
+      t = targetAt(s, p);
+    if (u && t && isLegal(s, draft) && selectableAttackRoutes(s, u, t).length > 1)
+      return {
+        ...i,
+        draft,
+        index: i.index + 1,
+        action: {
+          ...i.action,
+          steps: [
+            ...i.action.steps,
+            { kind: 'direction', label: '选择命中方向：点击目标旁高亮格；箭头显示最后一步方向' },
+          ],
+        },
+      };
+  }
   return { ...i, draft, index: i.index + 1 };
 }
 export function commandFor(s: GameState, i: Intent, p: Point): Command | null {
@@ -45,6 +72,10 @@ export function canChoose(s: GameState, i: Intent, p: Point): boolean {
   if (i.kind === 'none' || actionError(s, i.action)) return false;
   const step = i.action.steps[i.index];
   if (!step || step.kind === 'death') return false;
+  if (step.kind === 'direction') {
+    const c = commandFor(s, i, p);
+    return !!c && isLegal(s, c);
+  }
   const complete = commandFor(s, i, p);
   if (complete) return isLegal(s, complete);
   const u = s.units.find((u) => u.id === i.draft.unitId),
@@ -70,6 +101,7 @@ export function canChoose(s: GameState, i: Intent, p: Point): boolean {
         i.draft.sacrificeIds?.includes(t.id))
     )
       return false;
+    if (i.draft.type === 'attack' && !isLegal(s, { ...i.draft, targetId: t.id })) return false;
     if (i.action.id === 'sacrifice' && (t.id === u?.id || t.unit?.kind === 'u25')) return false;
     if (step.range && u && !attackPath(s, u, t, getStats(s, u).range)) return false;
     return true;
@@ -89,4 +121,18 @@ export function intentTone(i: Intent): string {
     : t === 'cast' || t === 'skill' || t === 'equip'
       ? 'magic'
       : 'move';
+}
+
+export const directionLabel = {
+  up: '向上命中',
+  down: '向下命中',
+  left: '向左命中',
+  right: '向右命中',
+} as const;
+export const directionArrow = { up: '↑', down: '↓', left: '←', right: '→' } as const;
+export function intentRoutes(s: GameState, i: Intent) {
+  if (i.kind !== 'select' || i.action.steps[i.index]?.kind !== 'direction') return [];
+  const u = s.units.find((u) => u.id === i.draft.unitId),
+    t = targets(s).find((t) => t.id === i.draft.targetId);
+  return u && t ? selectableAttackRoutes(s, u, t) : [];
 }

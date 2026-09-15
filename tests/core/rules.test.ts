@@ -160,8 +160,8 @@ test('05 shock ring includes four corners, hits large units once and can hurt al
     friend = add(s, 1, 1, 3, 4),
     enemy = add(s, 5, 2, 6, 6);
   s = applyCommand(s, { type: 'skill', unitId: u.id });
-  assert.equal(unit(s, friend.id).hp, 30);
-  assert.equal(unit(s, enemy.id).hp, 91);
+  assert.equal(unit(s, friend.id).hp, 35);
+  assert.equal(unit(s, enemy.id).hp, 96);
   assert.equal(unit(s, u.id).hp, 111);
   assert.ok(commandError(s, { type: 'move', unitId: u.id, x: 4, y: 6 }));
 });
@@ -274,18 +274,19 @@ test('14 sacrifice damage uses current attack and deducts life cap', () => {
     false,
   );
 });
-test('15 upgrading uses the whole operation, lifetime maximum remains three', () => {
+test('15 charge uses a full operation, adds attack and range together, maximum four', () => {
   let s = fixture();
   const u = add(s, 15, 1, 3, 4);
-  s = applyCommand(s, { type: 'skill', unitId: u.id, mode: 'attack' });
-  assert.ok(commandError(s, { type: 'skill', unitId: u.id, mode: 'range' }));
-  s = round(s);
-  s = applyCommand(s, { type: 'skill', unitId: u.id, mode: 'range' });
-  s = round(s);
-  s = applyCommand(s, { type: 'skill', unitId: u.id, mode: 'attack' });
-  s = round(s);
-  assert.ok(commandError(s, { type: 'skill', unitId: u.id, mode: 'range' }));
-  assert.equal(getStats(s, unit(s, u.id)).attack, 25);
+  for (let layer = 1; layer <= 4; layer++) {
+    s = applyCommand(s, { type: 'charge', unitId: u.id, mode: 'attack' });
+    const stats = getStats(s, unit(s, u.id));
+    assert.equal(stats.attack, 5 + layer * 5);
+    assert.equal(stats.range, 2 + layer);
+    assert.ok(commandError(s, { type: 'charge', unitId: u.id, mode: 'attack' }));
+    s = round(s);
+  }
+  assert.ok(commandError(s, { type: 'charge', unitId: u.id, mode: 'attack' }));
+  assert.ok(commandError(s, { type: 'skill', unitId: u.id, mode: 'attack' }));
 });
 test('16 actual overkill loss becomes the optional reflection amount', () => {
   let s = fixture();
@@ -375,7 +376,7 @@ test('23 rests extra turn and creates an eight-neighbor exclusion zone', () => {
   u.born = 1;
   assert.equal(getStats(s, u).remaining, 6);
   s.turns[1] = 4;
-  assert.equal(getStats(s, u).operationsLeft, 0);
+  assert.equal(getStats(s, u).operationsLeft, 1);
   assert.equal(canPlace(s, template(1, 1, 4, { x: 5, y: 5 }), { x: 5, y: 5 }, true), false);
 });
 test('24 shortest-path frontal hit is capped, side hit is not', () => {

@@ -1,4 +1,5 @@
 import type { Definition, Kind } from './types';
+export const RULESET_ID = '2026-09-15';
 /** Numeric combat parameters shared by resolution and read-only AI estimates. */
 export const COMBAT_RULES = {
   charger: { heavyChance: 1 / 12, criticalChance: 1 / 3, heavyBonus: 60, bonus: 20 },
@@ -8,6 +9,10 @@ export const COMBAT_RULES = {
   frontDamageCap: 10,
   kingAttackImmunity: 10,
   catapultMarkDamage: 5,
+  accumulator: { attack: 5, range: 1, max: 4 },
+  giantAreaDamage: 15,
+  goldSpellChance: 1 / 5,
+  littleGoldImmunity: 1 / 2,
 } as const;
 /** Single source for both rule stats and the UI codex. Fractional attributes retain their exact numeric value. */
 export const CATALOG: Definition[] = [
@@ -51,12 +56,12 @@ export const CATALOG: Definition[] = [
     actions: 0,
     move: 0.5,
     description:
-      '抽到时1/3为名刀，否则为残影。范围内友方（含自身）一生避免一次致命伤害并以1血存活。攻击次数为0不妨碍移动：选择蓄力回合后，下一回合可消耗1层移动一格。',
+      '抽到时1/3为名刀，否则为破碎名刀。范围内友方（含自身）一生避免一次致命伤害并以1血存活。攻击次数为0不妨碍移动：选择蓄力回合后，下一回合可消耗1层移动一格。',
   },
   {
     id: '3p',
     tier: 'derived',
-    name: '名刀·残影',
+    name: '破碎名刀',
     glyph: '影',
     role: '异变',
     attack: 40,
@@ -87,13 +92,13 @@ export const CATALOG: Definition[] = [
     name: '大肉比',
     glyph: '岳',
     role: '重装',
-    attack: 15,
+    attack: 10,
     health: 111,
     range: 2,
     actions: 1,
     move: 0.5,
     description:
-      '占2×2格。选择移动蓄力后，下一回合可消耗1层整体移动一格。技能：对体型外围一圈12格（含四个对角）内的目标造成20伤害，包含友方，每单位只结算一次。',
+      '占2×2格。选择移动蓄力后，下一回合可消耗1层整体移动一格。技能：对体型外围一圈12格（含四个对角）内的目标造成15伤害，包含友方，每单位只结算一次。不能被策反。',
     skill: '震地',
     size: 2,
   },
@@ -221,7 +226,7 @@ export const CATALOG: Definition[] = [
     actions: 1,
     move: 1,
     description:
-      '自身生命上限−10，当前生命不超过新上限。消灭范围内另一友方随从，再选择一列，沿进攻方向对射程内该列第一个敌方造成被献祭者的当前攻击力伤害。',
+      '自身生命上限−10，当前生命不超过新上限。消灭范围内另一友方随从，再选择一列，沿进攻方向对射程内该列第一个敌方造成被献祭者的当前攻击力伤害。献祭另一枚献祭炮时，额外获得一次仅本回合可用的召唤机会，可付2人头升级为终极召唤；即使没有可射击的敌人，也可直接献祭同类换取召唤。',
     skill: '献祭射击',
   },
   {
@@ -236,8 +241,8 @@ export const CATALOG: Definition[] = [
     actions: 2,
     move: 1,
     description:
-      '技能：永久+10攻击或+1射程，一生最多强化3次。技能占本回合唯一操作；第四属性2代表选择攻击时能攻击两次，不代表可以强化两次。',
-    skill: '自我强化',
+      '每次主动蓄力同时获得+5攻击与+1射程，最多4层。蓄力占本回合操作；移动保留蓄力，发动一次攻击后全部清空（即使伤害被免疫）。第四属性2代表每回合可攻击两次，第二次使用清空后的数值。',
+    skill: '蓄力',
   },
   {
     id: 16,
@@ -265,8 +270,22 @@ export const CATALOG: Definition[] = [
     actions: 0,
     move: 0,
     description:
-      '使一个友方直到其下回合开始免疫所有伤害与所有敌方技能、法术，包括死吧！和策反。己方献祭等非伤害效果不受阻止。',
+      '抽到17时只有1/5概率获得金身，否则变为小金耶。使一个友方直到其下回合开始免疫所有伤害与所有敌方技能、法术，包括死吧！和策反。己方献祭等非伤害效果不受阻止。',
     spell: 100,
+  },
+  {
+    id: '17p',
+    tier: 'derived',
+    name: '小金耶',
+    glyph: '耶',
+    role: '防御',
+    attack: 10,
+    health: 25,
+    range: 5,
+    actions: 1,
+    move: 1,
+    description:
+      '抽到17时4/5概率变为小金耶。每次将受到正数伤害时独立判定，50%概率免疫该次伤害；沉默后失效。不会免疫非伤害的处决、献祭或策反。',
   },
   {
     id: 18,
@@ -339,7 +358,7 @@ export const CATALOG: Definition[] = [
     actions: 0,
     move: 0,
     description:
-      '使一友方下回合首次对敌方随从造成伤害时，将存活目标变为友方。金身免疫；不能作用基地。新友方本回合疲劳，下一个己方回合即可行动（独行侠也不额外多休息）。',
+      '使一友方下回合首次对敌方随从造成伤害时，将存活目标变为友方。金身免疫；大肉比不能被策反，基地也不能被策反。新友方本回合疲劳，下一个己方回合即可行动（独行侠也不额外多休息）。',
     spell: 3,
   },
   {
@@ -354,7 +373,7 @@ export const CATALOG: Definition[] = [
     actions: 6,
     move: 1,
     description:
-      '部署后第二个己方回合首次行动，此后隔回合行动。选择攻击可攻击6次，但不能混用移动。周围八格不可部署或移动友方。',
+      '部署回合及下一个己方回合休眠，从下下个己方回合起每回合正常行动。选择攻击可攻击6次，但不能混用移动。周围八格不可部署或移动友方。',
   },
   {
     id: 24,
@@ -368,7 +387,7 @@ export const CATALOG: Definition[] = [
     actions: 1,
     move: 1,
     description:
-      '从正面进入的攻击伤害单次最多10。正面指攻击路径最后一步朝向自己的基地。最短合法路径并列时，有正面路线就按正面处理。无方向法术与反伤不受此限制。',
+      '从正面进入的攻击伤害单次最多10。正面指攻击路径最后一步朝向自己的基地。可选择射程内不同命中方向的合法路径，允许绕路从侧面击中。未指定方向的命令沿用最短路径、并列优先正面的默认值。无方向法术与反伤不受此限制。',
   },
   {
     id: 25,
@@ -730,7 +749,7 @@ export const CATALOG: Definition[] = [
     actions: 1,
     move: 1,
     description:
-      '命中后沿攻击路径最后一步方向击退2格。身后有1个单格单位则两者各推1格；2个单位或2×2单位阻挡时不推。两格空间不足且由边界阻挡时，受击者额外−30血。',
+      '攻击时可选择射程内合法路径的最后一步方向，命中后沿该方向击退2格。身后有1个单格单位则两者各推1格；2个单位或2×2单位阻挡时不推。两格空间不足且由边界阻挡时，受击者额外−30血。',
     skill: '击退被动',
     mage: true,
   },
