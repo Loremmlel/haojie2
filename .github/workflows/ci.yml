@@ -42,10 +42,19 @@ jobs:
       - run: npm run test:pages
       - run: npm run test:browser:ai
       - run: npm run test:browser:vfx
-      - name: Verify historical CLI command fingerprints
+      - name: Verify current rules CLI command fingerprints
+        run: npm run play:cli -- --replay docs/playtests/cli-feedback-20260915.jsonl
+      - name: Check out the rules used to record historical playtests
+        uses: actions/checkout@v4
+        with:
+          ref: 3a856cf3177dea7eb8c8c20d942199bd2da2fd1a
+          path: artifacts/legacy-rules
+          persist-credentials: false
+      - name: Verify historical fingerprints under their original rules
         run: |
-          npm run play:cli -- --replay docs/playtests/cli-human-20260907.jsonl.gz
-          npm run play:cli -- --replay docs/playtests/cli-manual-budget-20260908.jsonl.gz
+          ln -s "$GITHUB_WORKSPACE/node_modules" artifacts/legacy-rules/node_modules
+          npm --prefix artifacts/legacy-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-human-20260907.jsonl.gz"
+          npm --prefix artifacts/legacy-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-manual-budget-20260908.jsonl.gz"
       - name: Upload the playable standalone HTML
         uses: actions/upload-artifact@v4
         with:
