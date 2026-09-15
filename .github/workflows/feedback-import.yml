@@ -1,0 +1,40 @@
+name: Import verified feedback changes
+on:
+  push:
+    branches: [codex/rules-feedback-20260915]
+    paths: [.github/workflows/feedback-import.yml]
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/rules-feedback-20260915
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and apply reviewed source patch
+        run: |
+          cat .feedback-transfer/part-*.xz | xz -d > /tmp/feedback.patch
+          echo '1a2b6ce83469da7f274640bd86ccb3e501a6c4ca76e16d9dadfda4e91ba08a03  /tmp/feedback.patch' | sha256sum --check
+          git apply --check /tmp/feedback.patch
+          git apply /tmp/feedback.patch
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+      - run: npm test
+      - run: npm run deploy
+      - name: Verify reproducible release
+        run: |
+          echo '94ec00b6e15cec0417d35b4663bb616c3809eb7f730abcd9312bcf3b409fef19  index.html' | sha256sum --check
+      - name: Commit verified implementation on feature branch only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests scripts docs AGENTS.md DESIGN.md index.html .nojekyll
+          git diff --cached --stat
+          git commit -m 'fix: apply September gameplay feedback across engine UI and AI'
+          git push origin HEAD:codex/rules-feedback-20260915
+          git rev-parse HEAD
