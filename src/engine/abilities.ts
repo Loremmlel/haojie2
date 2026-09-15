@@ -219,7 +219,7 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
       );
       candidates.sort((a, b) => (u.owner === 1 ? a.y - b.y : b.y - a.y));
       const t = candidates[0];
-      ensure(t || (sameKind && summonOnly), '这一列没有射程内的敌方目标。');
+      ensure(t || sameKind, '这一列没有射程内的敌方目标。');
       const amount = getStats(s, victim).attack;
       lowerMax(s, u, 10, ctx);
       kill(s, victim, { owner: u.owner, unit: u, kind: 'sacrifice' }, ctx);
