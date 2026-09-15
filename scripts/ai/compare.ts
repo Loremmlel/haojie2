@@ -5,6 +5,7 @@ import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createGame, createSession, applyCommand, commandError } from '../../src/engine';
 import { decide } from '../../src/ai/search';
+import { cachedDecision } from '../../src/ai/plan-cache';
 import { allocateBudget, emptyBudget } from '../../src/ai/budget';
 import { observe, fingerprint, decisionOwner } from '../../src/ai/observation';
 import type { Decision, Difficulty, PlanStep } from '../../src/ai/types';
@@ -13,6 +14,7 @@ if (!path) throw new Error('Usage: tsx scripts/ai/compare.ts /absolute/path/to/b
 const baseline = (await import(pathToFileURL(path).href)) as {
   decide: typeof decide;
   allocateBudget?: typeof allocateBudget;
+  cachedDecision?: typeof cachedDecision;
 };
 const production = process.env.AI_BUDGET === 'production';
 if (process.env.AI_BUDGET && !['production', 'fixed'].includes(process.env.AI_BUDGET))
@@ -79,7 +81,14 @@ for (const seed of seeds)
         predicted = cache[owner][0];
       let result: Decision;
       try {
-        if (predicted?.before === before)
+        // Legacy bundles predate END revalidation. Do not silently give the old
+        // side the new policy; newer frozen bundles may export their own cache port.
+        const cached = isNew
+          ? cachedDecision(observe(s), cache[owner])
+          : baseline.cachedDecision
+            ? baseline.cachedDecision(observe(s), cache[owner])
+            : predicted?.before === before;
+        if (cached)
           result = {
             command: predicted.command,
             plan: cache[owner],
