@@ -18,6 +18,7 @@ jobs:
       - name: Apply rule patch to the pinned clean baseline
         run: |
           cp .maintenance/feedback.patch.gz.b64 /tmp/feedback.patch.gz.b64
+          python3 .maintenance/check-import.py
           git checkout --detach 471dc71ed936f98c012ffbf0a0bbcb6b7b4cf300
           base64 -d /tmp/feedback.patch.gz.b64 | gzip -d > /tmp/feedback.patch
           git apply --check /tmp/feedback.patch
