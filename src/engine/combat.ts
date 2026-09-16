@@ -125,7 +125,7 @@ export function heal(s: GameState, t: Unit | Target, amount: number, ctx = resol
         damage(
           s,
           target,
-          5,
+          COMBAT_RULES.catapultMarkDamage,
           { owner: e.owner, kind: 'status', unit: s.units.find((v) => v.id === e.sourceId) },
           ctx,
         );
@@ -619,13 +619,14 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     }
     return;
   }
-  const mark =
-    !ally &&
-    u.kind !== 10 &&
-    targetEffects(s, t).find(
-      (e) => e.type === 'mark' && e.owner === u.owner && activeEffect(s, e, t.unit),
-    );
-  if (mark) removeEffect(s, t, mark);
+  const marks =
+    !ally && u.kind !== 10
+      ? targetEffects(s, t).filter(
+          (e) => e.type === 'mark' && e.owner === u.owner && activeEffect(s, e, t.unit),
+        )
+      : [];
+  // One allied follow-up consumes every active stack, even if an earlier packet kills.
+  for (const mark of marks) removeEffect(s, t, mark);
   const profile = attackProfile(
     u.kind,
     options.amount ?? stats.attack,
@@ -640,11 +641,10 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     amount = profile.packets[index < 0 ? profile.packets.length - 1 : index].damage;
   }
   const lifesteal = !u.silenced && u.kind === 'u8' ? vampireRate(u.kills) : 0;
-  let loss = 0;
+  // Conversion requires damage from the attack itself, not a secondary mark explosion.
+  const attackLoss = damage(s, t, amount, { owner: u.owner, unit: u, kind: 'attack', path }, ctx);
+  let loss = attackLoss;
   if (u.kind === 10 && !u.silenced && !ally) {
-    loss = damage(s, t, amount, { owner: u.owner, unit: u, kind: 'attack', path }, ctx);
-    const old = targetEffects(s, t).find((e) => e.type === 'mark' && e.owner === u.owner);
-    if (old) removeEffect(s, t, old);
     const e: Effect = {
       type: 'mark',
       owner: u.owner,
@@ -656,7 +656,7 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     targetEffects(s, t).push(e);
     if (t.unit ? t.unit.hp >= t.unit.maxHp : s.bases[t.owner] >= 300) {
       removeEffect(s, t, e);
-      loss = damage(
+      loss += damage(
         s,
         t,
         COMBAT_RULES.catapultMarkDamage,
@@ -672,8 +672,9 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
         stage: 'apply',
         text: '标记',
       });
-  } else loss = damage(s, t, amount, { owner: u.owner, unit: u, kind: 'attack', path }, ctx);
-  if (mark) {
+  }
+  // Keep separate packets: each stack has its own immunity/death resolution.
+  for (let i = 0; i < marks.length; i++) {
     const start = s.events.length;
     loss += damage(
       s,
@@ -707,7 +708,7 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
   const victim = t.unit;
   if (victim && alive(s, victim) && !ally) {
     const conversion = u.effects.find((e) => e.type === 'convert' && activeEffect(s, e, u));
-    if (conversion && loss > 0) {
+    if (conversion && attackLoss > 0) {
       u.effects = u.effects.filter((e) => e !== conversion);
       if (victim.kind === 5)
         emit(s, {
@@ -756,7 +757,7 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     if (hasWeapon(u, 'u28') || (!u.silenced && u.kind === 'u6' && !hasWeapon(u, 'u5')))
       burn(s, t, skillSource, ctx);
     if (!u.silenced && u.kind === 'u20') knockback(s, u, t, path, ctx);
-  } else if (victim && !ally && loss > 0)
+  } else if (victim && !ally && attackLoss > 0)
     u.effects = u.effects.filter((e) => !(e.type === 'convert' && activeEffect(s, e, u)));
 }
 export function pruneSiphons(s: GameState) {

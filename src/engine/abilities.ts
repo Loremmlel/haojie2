@@ -335,7 +335,8 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
       break;
     }
     case 'u19': {
-      ensure(u.maxHp >= 20, '生命上限不足以支付20点复活代价。');
+      // The final revival may exhaust the caster's remaining cap (25 -> 5 -> 0).
+      // Validate everything first; lowerMax attributes the sacrifice to its own side.
       const record = s.deaths.find((r) => r.id === c.deathId);
       ensure(
         record &&
