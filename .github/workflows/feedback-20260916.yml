@@ -1,0 +1,85 @@
+name: Verify September 16 rule feedback
+on:
+  push:
+    branches: [maintenance/feedback-20260916]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply rule patch to the pinned clean baseline
+        run: |
+          cp .maintenance/feedback.patch.gz.b64 /tmp/feedback.patch.gz.b64
+          git checkout --detach 471dc71ed936f98c012ffbf0a0bbcb6b7b4cf300
+          base64 -d /tmp/feedback.patch.gz.b64 | gzip -d > /tmp/feedback.patch
+          git apply --check /tmp/feedback.patch
+          git apply /tmp/feedback.patch
+          mkdir -p artifacts
+      - run: npm ci --no-audit --no-fund
+      - name: Package pinned dependencies for local investigation
+        run: tar -czf /tmp/haojie2-deps.tar.gz node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: feedback-pinned-dependencies
+          path: /tmp/haojie2-deps.tar.gz
+          retention-days: 1
+      - name: Format changed sources and generate offline HTML
+        run: |
+          npx prettier --write AGENTS.md docs/FEEDBACK-2026-09-16.md docs/RULES.md src/engine/abilities.ts src/engine/catalog.ts src/engine/combat.ts tests/core/marks-conversion.test.ts tests/ultimate/revive-cost.test.ts
+          npm run deploy
+      - run: npm run format:check
+      - run: npm run check
+      - run: |
+          set -o pipefail
+          npm test | tee artifacts/engine-report.txt
+      - run: npm run deploy:check
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - run: npm run test:pages
+      - run: npm run test:browser:ai
+      - run: npm run test:browser:vfx
+      - name: Verify current rules command replay
+        run: npm run play:cli -- --replay docs/playtests/cli-feedback-20260915.jsonl
+      - name: Verify historical replays using the original rules
+        run: |
+          git worktree add --detach artifacts/legacy-rules 3a856cf3177dea7eb8c8c20d942199bd2da2fd1a
+          ln -s "$GITHUB_WORKSPACE/node_modules" artifacts/legacy-rules/node_modules
+          npm --prefix artifacts/legacy-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-human-20260907.jsonl.gz"
+          npm --prefix artifacts/legacy-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-manual-budget-20260908.jsonl.gz"
+      - name: Publish a clean verified candidate, never main
+        run: |
+          git config user.name 'HinanawiTS'
+          git config user.email '110825227+Loremmlel@users.noreply.github.com'
+          git add AGENTS.md docs/FEEDBACK-2026-09-16.md docs/RULES.md src/engine/abilities.ts src/engine/catalog.ts src/engine/combat.ts tests/core/marks-conversion.test.ts tests/ultimate/revive-cost.test.ts index.html
+          git diff --cached --check
+          tree=$(git write-tree)
+          commit=$(git commit-tree "$tree" -p 471dc71ed936f98c012ffbf0a0bbcb6b7b4cf300 -m 'fix(engine): stack catapult marks and correct conversion and final revival costs')
+          git push origin "$commit:refs/heads/fix/playtest-rules-20260916"
+          printf 'commit=%s\ntree=%s\n' "$commit" "$tree" | tee artifacts/candidate.txt
+          sha256sum index.html | tee -a artifacts/candidate.txt
+          git archive --format=tar.gz "$commit" > artifacts/haojie2-verified-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feedback-verification
+          path: |
+            artifacts/engine-report.txt
+            artifacts/candidate.txt
+            artifacts/haojie2-verified-source.tar.gz
+            artifacts/*report.json
+            artifacts/*.png
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: feedback-import-diagnostic
+          path: /tmp/feedback.patch.gz.b64
+          retention-days: 1
