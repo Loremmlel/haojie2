@@ -21,6 +21,13 @@ jobs:
           node-version: '22'
       - name: Install exact dependency tree
         run: npm ci --no-audit --no-fund
+      - name: Package exact dependencies for sandbox verification
+        run: tar -czf /tmp/haojie2-dependencies.tar.gz node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: feedback-verification-dependencies
+          path: /tmp/haojie2-dependencies.tar.gz
+          retention-days: 1
       - name: Package auditable source snapshot
         run: |
           mkdir -p artifacts
