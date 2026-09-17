@@ -25,11 +25,16 @@ export function actionDelay(command: Command, { first, previous, events }: Conte
     (command.type === 'deploy' && previous?.type === 'deploy')
   )
     delay = CADENCE.followUp;
-  if (['cast', 'skill', 'equip', 'craft', 'charge', 'reroll'].includes(command.type))
+  if (['cast', 'skill', 'equip', 'craft', 'synthesize', 'charge', 'reroll'].includes(command.type))
     delay = CADENCE.spell;
   if (command.type === 'summon') delay = CADENCE.summon;
   if (command.type === 'end') delay = CADENCE.end;
-  if (command.type === 'begin' || command.type === 'finish-mode') delay = CADENCE.housekeeping;
+  if (
+    command.type === 'begin' ||
+    command.type === 'skip-synthesis' ||
+    command.type === 'finish-mode'
+  )
+    delay = CADENCE.housekeeping;
 
   // Let an existing hit/health number, summon reveal or movement settle before replacing it.
   // Even a no-op mode transition must not immediately clear the previous action's effects.

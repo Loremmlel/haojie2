@@ -13,6 +13,7 @@ export function SummonControls({
   readOnly?: boolean;
 }) {
   const reaction = s.pending[0];
+  if (s.phase === 'synthesis') return null;
   if ((s.phase !== 'summon' && s.summonSlots <= 0 && !summonRerolls(s).length) || s.winner)
     return null;
   return (

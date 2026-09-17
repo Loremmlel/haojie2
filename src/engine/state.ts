@@ -1,3 +1,4 @@
+import { attackPath } from './geometry';
 import { enrichEvent } from './event-facts';
 import { simulationRandom } from './random';
 import { COMBAT_RULES, definition, isStored, SUMMON_POOL, ULTIMATE_POOL } from './catalog';
@@ -155,12 +156,33 @@ export function draw(s: GameState, owner: Player, count: number, ultimate = fals
   }
   return result;
 }
+export const piercing = (u: Unit) => hasWeapon(u, 'u28') || (u.kind === 'slayer' && !u.silenced);
+export const healingAttack = (u: Unit) =>
+  !u.silenced && (u.kind === 2 || u.kind === 'u21' || u.kind === 'sage');
+export const counterChance = (u: Unit) =>
+  u.kind === 'archmage' ? COMBAT_RULES.archmageCounterChance : u.kind === 'u3' ? 1 / 3 : 0;
+/** Range cannot depend on an aura's attack bonus. Avoid getStats recursion between sages. */
+export function attackAuraSources(s: GameState, target: Unit): Unit[] {
+  if (allegiance(s, target) !== target.owner) return [];
+  return s.units.filter(
+    (u) =>
+      u.kind === 'sage' &&
+      u.owner === target.owner &&
+      passive(s, u) &&
+      attackPath(
+        s,
+        u,
+        asTarget(target),
+        definition(u.kind).range + u.rangeBonus + (hasWeapon(u, 'u5') ? 1 : 0),
+      ),
+  );
+}
 export function getStats(s: GameState, u: Unit): Stats {
   const d = definition(u.kind),
     enabled = !u.silenced;
   let attack = d.attack + u.attackBonus,
     range = d.range + u.rangeBonus,
-    actions = d.actions === 1 / 3 ? 1 : d.actions,
+    actions = d.actions > 0 && d.actions < 1 ? 1 : d.actions,
     move = d.move;
   const frozen = has(s, u, 'freeze'),
     stunned = has(s, u, 'stun');
@@ -209,17 +231,20 @@ export function getStats(s: GameState, u: Unit): Stats {
   attack += u.effects
     .filter((e) => e.type === 'attack' && activeEffect(s, e, u))
     .reduce((a, e) => a + (e.amount ?? 0), 0);
+  attack += attackAuraSources(s, u).length * COMBAT_RULES.sageAuraAttack;
   if (has(s, u, 'inner-fire')) attack = u.hp;
   const operationLimit = enabled && u.kind === 'u27' && a === 1 ? 2 : 1;
   const locked = sleeping || frozen || stunned;
   const operationsLeft = locked ? 0 : Math.max(0, operationLimit - u.operations);
-  const availableAttack = locked
-    ? 0
-    : u.mode === 'attack'
-      ? Math.max(0, actions - u.shots)
-      : u.mode === 'none' && (operationsLeft > 0 || u.bonusAttacks > 0)
-        ? actions
-        : 0;
+  const halfAttackLocked = d.actions === 0.5 && !(u.chargeType === 'attack' && u.readyCharge >= 1);
+  const availableAttack =
+    locked || halfAttackLocked || u.kind === 'firelord'
+      ? 0
+      : u.mode === 'attack'
+        ? Math.max(0, actions - u.shots)
+        : u.mode === 'none' && (operationsLeft > 0 || u.bonusAttacks > 0)
+          ? actions
+          : 0;
   return {
     attack: Math.max(0, attack),
     range: Math.max(0, range),

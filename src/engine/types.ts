@@ -1,7 +1,20 @@
 import type { EventFacts } from './event-facts';
 /** All game state is data. No renderer, network or wall clock is required. */
 export type Player = 1 | 2;
-export type Kind = number | '3p' | '17p' | 'grave' | 'wall' | `u${number}` | 'u12p' | 'firelord';
+export type Kind =
+  | number
+  | '3p'
+  | '17p'
+  | 'grave'
+  | 'wall'
+  | `u${number}`
+  | 'u12p'
+  | 'firelord'
+  | 'sage'
+  | 'formless'
+  | 'slayer'
+  | 'citadel'
+  | 'archmage';
 export type AttackDirection = 'up' | 'down' | 'left' | 'right';
 export type Mode = 'none' | 'move' | 'attack' | 'skill' | 'charge';
 export interface Point {
@@ -97,7 +110,9 @@ export interface Card {
   summonPool?: 'normal' | 'ultimate';
 }
 export interface Reaction {
-  kind: 'death-shot' | 'reflect' | 'bounce' | 'hut-spawn';
+  kind: 'death-shot' | 'reflect' | 'bounce' | 'hut-spawn' | 'hit-pull';
+  /** Fixed struck unit; a follow-up cannot select a different victim. */
+  targetId?: string;
   owner: Player;
   source: Unit;
   amount: number;
@@ -160,7 +175,7 @@ export interface GameState {
   serial: number;
   ply: number;
   active: Player;
-  phase: 'summon' | 'play';
+  phase: 'synthesis' | 'summon' | 'play';
   summonSlots: number;
   turns: Record<Player, number>;
   bases: Record<Player, number>;
@@ -194,8 +209,12 @@ export interface Command {
     | 'cast'
     | 'equip'
     | 'craft'
+    | 'synthesize'
+    | 'skip-synthesis'
     | 'react'
     | 'finish-mode';
+  recipeId?: string;
+  materialIds?: string[];
   unitId?: string;
   cardId?: string;
   targetId?: string;

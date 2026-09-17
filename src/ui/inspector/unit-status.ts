@@ -1,5 +1,7 @@
 import {
   activeEffect,
+  attackAuraSources,
+  COMBAT_RULES,
   asTarget,
   attackPath,
   cells,
@@ -74,6 +76,44 @@ export function unitStatus(s: GameState, u: Unit): StatusEntry[] {
       detail: [timing, rule, sourceLabel(e.sourceId)].filter(Boolean).join(' · '),
     });
   }
+  for (const source of attackAuraSources(s, u))
+    rows.push({
+      key: `aura-${source.id}`,
+      label: '先师光环 · 攻击 +' + COMBAT_RULES.sageAuraAttack,
+      detail: sourceLabel(source.id) + ' · 随范围与来源状态即时更新',
+    });
+  if (u.kind === 'formless')
+    rows.push({
+      key: 'half-attack',
+      label: '半速攻击 / 移动',
+      detail: '需先蓄对应模式1层，下回合可用；一次攻击后可选择牵引原命中目标。',
+    });
+  if (u.kind === 'slayer' && passive(s, u))
+    rows.push({
+      key: 'slayer',
+      label: '穿透 · 吸血 · 反伤',
+      detail: '四向直线穿透，100%攻击吸血，实际受伤50%反弹；反伤不相互反弹。',
+    });
+  if (u.kind === 'firelord')
+    rows.push({
+      key: 'judgement',
+      label: '末日审判 · 己方回合末',
+      detail: '13×13范围最高血敌方80伤，命中格四向只对敌方溅射10；无法主动攻击。',
+    });
+  if (u.kind === 'archmage')
+    rows.push({
+      key: 'counter',
+      label: '万法反制',
+      detail: passive(s, u)
+        ? '2/3概率反制敌方法术；成功生命上限与当前生命+15。'
+        : '能力失效中，不参与反制。',
+    });
+  if (u.kind === 'citadel')
+    rows.push({
+      key: 'citadel',
+      label: '王城死亡召唤',
+      detail: '范围内每枚友方死亡分别触发；包括召唤物，选择合法落点支付10生命上限。',
+    });
   const guards = guardProtections(s, u);
   if (guards.length)
     rows.push({

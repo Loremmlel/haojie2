@@ -37,3 +37,12 @@ save('end-turn-value', imagined(endTurnPosition as Observation), {
   human: 1,
   difficulty: 'hard',
 });
+const fusion = fixture();
+fusion.phase = 'synthesis';
+fusion.summonSlots = 2;
+for (let i = 0; i < 3; i++) {
+  const hut = add(fusion, 'u22', 1, 2 + i, 3);
+  hut.hp = 1;
+  hut.maxHp = 5;
+}
+save('synthesis', fusion, hard);

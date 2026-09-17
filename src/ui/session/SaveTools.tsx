@@ -21,7 +21,7 @@ export function SaveTools({
     );
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `haojie-2.0-turn-${current.present.ply}.json`;
+    anchor.download = `haojie-2.5-turn-${current.present.ply}.json`;
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }

@@ -1,3 +1,5 @@
+import { hitPullDestination, hutSpawnPoints } from './reactions';
+import { protectedEffect } from './combat';
 import { eventActor, withEventFacts } from './event-facts';
 import { alive, damage, findTarget, performAttack, lowerMax } from './combat';
 import type { Resolution } from './combat';
@@ -155,17 +157,45 @@ export function react(s: GameState, c: Command, ctx: Resolution) {
     }
     return;
   }
+  if (r.kind === 'hit-pull') {
+    if (c.mode !== 'pull') return;
+    const to = hitPullDestination(s, r);
+    ensure(to, '原命中目标或来源已失效，或身前没有合法完整落位。');
+    const source = findUnit(s, r.source.id),
+      victim = findUnit(s, r.targetId);
+    if (
+      !protectedEffect(
+        s,
+        { ...victim, unit: victim },
+        { owner: r.owner, unit: source, kind: 'skill' },
+        ctx,
+      )
+    ) {
+      emit(s, {
+        type: 'move',
+        action: 'pull',
+        stage: 'trigger',
+        from: victim,
+        to,
+        unitId: victim.id,
+        owner: victim.owner,
+      });
+      Object.assign(victim, to);
+    }
+    return;
+  }
   if (r.kind === 'hut-spawn') {
     const hut = s.units.find((u) => u.id === r.source.id);
-    if (!hut || hut.silenced) return;
+    const destinations = hutSpawnPoints(s, r);
+    if (!hut || !destinations.length) return;
     if (c.x === undefined) {
+      ensure(hut.kind !== 'citadel', '王城死亡召唤必须选择合法落点。');
       emit(s, { type: 'skill', owner: r.owner, text: '放弃召唤' });
       return;
     }
-    const to = point(c.x, c.y),
-      ghost = template(20, r.owner, s.turns[r.owner], to);
+    const to = point(c.x, c.y);
     ensure(
-      canPlace(s, ghost, to) && attackPath(s, hut, to, getStats(s, hut).range),
+      destinations.some((p) => equal(p, to)),
       '小屋召唤须在其范围内的合法空地。',
     );
     ensure(hut.maxHp >= 10, '小屋生命上限不足。');

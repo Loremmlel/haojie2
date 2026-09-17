@@ -2,7 +2,7 @@
 import { definition, isStored } from './catalog';
 import { rerollCommands } from './summoning';
 import { commandError } from './game';
-import { age, allegiance, getStats, has, now, passive } from './state';
+import { age, allegiance, getStats, has, now, passive, healingAttack } from './state';
 import type { Card, Command, GameState, Unit } from './types';
 export interface SelectionStep {
   kind: 'target' | 'point' | 'row' | 'column' | 'death' | 'direction';
@@ -43,11 +43,11 @@ export function unitActions(s: GameState, u: Unit): ActionSpec[] {
     command = { unitId: u.id };
   if (stats.move > 0)
     result.push(spec('move', '移动', { type: 'move', ...command }, [square()], 'move'));
-  if (stats.actions > 0 && !(u.kind === 'firelord' && !u.silenced))
+  if (stats.actions > 0 && u.kind !== 'firelord')
     result.push(
       spec(
         'attack',
-        u.kind === 2 || u.kind === 'u21' ? '攻击 / 治疗' : '攻击',
+        healingAttack(u) ? '攻击 / 治疗' : '攻击',
         { type: 'attack', ...command },
         [target('选择高亮目标', 'any', 'targetId', true, false)],
         'sword',
@@ -58,6 +58,16 @@ export function unitActions(s: GameState, u: Unit): ActionSpec[] {
   if (stats.move % 1 !== 0)
     result.push(
       spec('charge-move', '蓄力 · 移动', { type: 'charge', ...command, mode: 'move' }, [], 'clock'),
+    );
+  if (definition(u.kind).actions === 0.5)
+    result.push(
+      spec(
+        'charge-attack',
+        '蓄力 · 攻击',
+        { type: 'charge', ...command, mode: 'attack' },
+        [],
+        'clock',
+      ),
     );
   if (!u.silenced) {
     if (u.kind === 4 || u.kind === 15 || u.kind === 'u2')
@@ -253,6 +263,11 @@ export function cardActions(s: GameState, c: Card): ActionSpec[] {
 export function reactionAction(s: GameState): ActionSpec | null {
   const r = s.pending[0];
   if (!r) return null;
+  if (r.kind === 'hit-pull')
+    return {
+      ...spec('hit-pull', '牵引命中目标', { type: 'react', mode: 'pull' }),
+      hint: '可将刚命中的存活棋子拉到无相勾身前，或放弃。',
+    };
   if (r.kind === 'bounce')
     return spec('bounce', 'SZF必须弹出', { type: 'react' }, [
       square('选择上下左右一格免费弹出；连续撞击继续弹出'),
@@ -281,6 +296,7 @@ export function actionError(s: GameState, a: ActionSpec): string | null {
   if (s.winner) return '对局已经结束。';
   if (a.command.type === 'react') return null;
   if (s.pending.length) return '先处理待结算效果。';
+  if (a.command.type === 'synthesize') return s.phase === 'synthesis' ? null : '合成仅限回合开始。';
   if (s.phase !== 'play' && a.command.type !== 'reroll') return '请先完成召唤阶段。';
   const u = a.command.unitId ? s.units.find((v) => v.id === a.command.unitId) : undefined;
   if (!u) return null;

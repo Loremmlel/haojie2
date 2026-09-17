@@ -1,5 +1,5 @@
 import { definition } from './catalog';
-import { allegiance, getStats, has, passive } from './state';
+import { allegiance, getStats, has, passive, piercing } from './state';
 import type { AttackDirection, GameState, Player, Point, Target, Unit } from './types';
 export const WIDTH = 9,
   HEIGHT = 13;
@@ -242,7 +242,7 @@ export function attackRoutes(
 /** Direction-sensitive abilities use this same bounded choice set in UI and AI. */
 export function selectableAttackRoutes(s: GameState, u: Unit, t: Target): AttackRoute[] {
   if (
-    u.equipment.includes('u28') ||
+    piercing(u) ||
     !((u.kind === 'u20' && !u.silenced) || (t.unit?.kind === 24 && !t.unit.silenced))
   )
     return [];

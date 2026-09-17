@@ -46,9 +46,11 @@ export function Scoreboard({ state: s, human }: { state: GameState; human?: Play
             ? '终局'
             : reaction
               ? '效果结算'
-              : s.phase === 'summon'
-                ? '召唤阶段'
-                : '行动阶段'}
+              : s.phase === 'synthesis'
+                ? '选择合成'
+                : s.phase === 'summon'
+                  ? '召唤阶段'
+                  : '行动阶段'}
         </i>
       </div>
     </section>

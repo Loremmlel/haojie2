@@ -1,7 +1,7 @@
 import { attackRoutes, frontal } from '../engine/geometry';
 /** Read-only spatial estimates. Final commands always use the engine's exact path/legality checks. */
 import { cells, basePoint, inside, distance, neighbors } from '../engine/geometry';
-import { allegiance, getStats, resetUnit } from '../engine/state';
+import { allegiance, getStats, resetUnit, piercing } from '../engine/state';
 import type { GameState, Player, Point, Stats, Target, Unit } from '../engine/types';
 const index = (p: Point) => (p.y - 1) * 9 + p.x - 1;
 interface Spatial {
@@ -104,7 +104,7 @@ export function attackField(s: GameState, u: Unit, range: number, ignoreId = '')
 export function hitDistance(s: GameState, u: Unit, t: Target, ignoreId = ''): number {
   const st = statsFor(s, u),
     ends = t.unit ? cells(t.unit) : [t];
-  if (u.equipment.includes('u28')) {
+  if (piercing(u)) {
     let shortest = Infinity;
     for (const a of cells(u))
       for (const b of ends)
@@ -118,7 +118,7 @@ export function hitDistance(s: GameState, u: Unit, t: Target, ignoreId = ''): nu
   );
 }
 export function isFrontHit(s: GameState, u: Unit, t: Target, ignoreId = ''): boolean {
-  if (!u.equipment.includes('u28')) {
+  if (!piercing(u)) {
     const view = ignoreId ? { ...s, units: s.units.filter((v) => v.id !== ignoreId) } : s;
     const routes = attackRoutes(view, u, t, statsFor(s, u).range);
     return routes.length > 0 && routes.every((r) => frontal(r.path, t.owner));

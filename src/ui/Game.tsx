@@ -93,6 +93,7 @@ export function HaojieGame(props: HaojieGameProps) {
                   state={state}
                   cardId={game.cardId}
                   chooseCard={game.chooseCard}
+                  chooseAction={game.chooseAction}
                   run={game.run}
                   readOnly={game.computer.busy}
                 />
@@ -108,7 +109,7 @@ export function HaojieGame(props: HaojieGameProps) {
           <footer className="game-footer">
             <span>
               <i className="live-dot" />
-              浩劫2.1 · 离线单HTML · 双人 / 本地AI
+              浩劫2.5 · 离线单HTML · 双人 / 本地AI
             </span>
             <button onClick={() => game.setModal('rules')}>规则与实施说明</button>
             <span>SEED {state.seed}</span>

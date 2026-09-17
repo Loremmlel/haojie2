@@ -1,3 +1,6 @@
+import { availableSyntheses } from './synthesis';
+import { firelordStrike } from './firelord';
+import { COMBAT_RULES } from './catalog';
 import { eventActor, withEventFacts } from './event-facts';
 import { definition, isStored } from './catalog';
 import { alive, damage, findTarget, freeze, heal, kill, pruneSiphons, resolution } from './combat';
@@ -104,12 +107,16 @@ export function beginTurn(s: GameState, ctx: Resolution) {
   processIceMarks(s, ctx);
   refreshDeployment(s, owner);
   pruneSiphons(s);
-  s.phase = 'summon';
+  s.phase = availableSyntheses(s).length ? 'synthesis' : 'summon';
   s.summonSlots = 2 + s.bonus[owner];
   s.bonus[owner] = 0;
   emit(
     s,
-    { type: 'turn', owner, text: `${faction(owner)} · 召唤阶段` },
+    {
+      type: 'turn',
+      owner,
+      text: `${faction(owner)} · ${s.phase === 'synthesis' ? '合成阶段' : '召唤阶段'}`,
+    },
     `${faction(owner)}第${s.turns[owner]}回合开始，可召唤${s.summonSlots}次`,
   );
 }
@@ -165,46 +172,38 @@ export function endTurn(s: GameState, ctx: Resolution) {
       },
     );
   }
-  for (const lord of [...s.units])
-    if (lord.kind === 'firelord' && passive(s, lord)) {
-      const victims = targets(s)
-        .filter((t) => (t.unit ? allegiance(s, t.unit) !== lord.owner : t.owner !== lord.owner))
-        .filter((t) => attackPath(s, lord, t, getStats(s, lord).range));
-      victims.sort(
-        (a, b) =>
-          (b.unit ? b.unit.hp : s.bases[b.owner]) - (a.unit ? a.unit.hp : s.bases[a.owner]) ||
-          a.y - b.y ||
-          a.x - b.x ||
-          a.id.localeCompare(b.id),
-      );
-      const target = victims[0];
-      if (!target) continue;
-      ctx.token++;
-      withEventFacts(s, { action: 'judgement', actor: eventActor(lord) }, () => {
-        emit(s, {
-          type: 'attack',
-          from: lord,
-          to: target,
-          owner: lord.owner,
-          text: '末日审判',
-          ultimate: true,
-        });
-        const primary = target.unit ? occupants(s, target).map(asTarget) : [target];
-        const splash = targets(s).filter(
-          (t) =>
-            !primary.some((p) => p.id === t.id) &&
-            (t.unit ? cells(t.unit) : [t]).some((c) =>
-              (target.unit ? cells(target.unit) : [target]).some(
-                (p) => Math.max(Math.abs(p.x - c.x), Math.abs(p.y - c.y)) === 1,
-              ),
-            ),
-        );
-        for (const t of primary)
-          damage(s, t, 80, { owner: lord.owner, unit: lord, kind: 'skill' }, ctx);
-        for (const t of splash)
-          damage(s, t, 10, { owner: lord.owner, unit: lord, kind: 'skill' }, ctx);
+  for (const lord of [...s.units]) {
+    if (!alive(s, lord) || lord.owner !== s.active) continue;
+    const strike = firelordStrike(s, lord);
+    if (!strike) continue;
+    ctx.token++;
+    withEventFacts(s, { action: 'judgement', actor: eventActor(lord), area: strike.area }, () => {
+      emit(s, {
+        type: 'attack',
+        from: lord,
+        to: strike.impact,
+        owner: lord.owner,
+        text: '末日审判',
+        ultimate: true,
       });
-    }
+      for (const t of strike.primary)
+        damage(
+          s,
+          t,
+          COMBAT_RULES.firelord.damage,
+          { owner: lord.owner, unit: lord, kind: 'skill' },
+          ctx,
+        );
+      for (const t of strike.splash)
+        damage(
+          s,
+          t,
+          COMBAT_RULES.firelord.splash,
+          { owner: lord.owner, unit: lord, kind: 'skill' },
+          ctx,
+        );
+    });
+  }
   // End effects can require choices. The actual player switch is deferred until that queue drains.
   if (s.pending.length) {
     s.phase = 'play';

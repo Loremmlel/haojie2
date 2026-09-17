@@ -20,7 +20,7 @@ export function UnitDetails({ state: s, unit: inspected }: { state: GameState; u
           {[
             ['sword', '攻击', Math.round(stats.attack * 10) / 10],
             ['heart', '生命', `${Math.round(inspected.hp * 10) / 10}/${inspected.maxHp}`],
-            ['target', '射程', stats.range],
+            ['target', '射程', inspected.kind === 'formless' ? '∞' : stats.range],
             ['clock', '攻击次数', stats.actions],
             ['move', '移动', numberLabel(stats.move)],
           ].map(([icon, label, value]) => (

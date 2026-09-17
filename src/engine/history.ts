@@ -170,7 +170,7 @@ export function validState(s: unknown): s is GameState {
   )
     return false;
   if (
-    !['summon', 'play'].includes(s.phase) ||
+    !['synthesis', 'summon', 'play'].includes(s.phase) ||
     !int(s.summonSlots, -1, 1000) ||
     (s.winner !== undefined && !player(s.winner) && s.winner !== 'draw')
   )
@@ -245,7 +245,8 @@ export function validState(s: unknown): s is GameState {
     !s.pending.every(
       (r: any) =>
         object(r) &&
-        ['death-shot', 'reflect', 'bounce', 'hut-spawn'].includes(r.kind) &&
+        ['death-shot', 'reflect', 'bounce', 'hut-spawn', 'hit-pull'].includes(r.kind) &&
+        (r.kind !== 'hit-pull' || text(r.targetId)) &&
         player(r.owner) &&
         validUnit(r.source, true) &&
         num(r.amount),

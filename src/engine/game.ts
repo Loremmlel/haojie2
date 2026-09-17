@@ -1,4 +1,5 @@
 import { withRandomSource, type RandomSource } from './random';
+import { synthesize } from './synthesis';
 import { normalizeLegacyGuards } from './protection';
 import { definition, isStored } from './catalog';
 import { chargeAction, craft, equip, reroll, useSkill, cast } from './abilities';
@@ -78,9 +79,26 @@ export function applyCommand(
   s.events = [];
   return withRandomSource(s, randomSource, () => {
     const ctx = resolution();
-    if (!['summon', 'begin', 'reroll', 'react'].includes(c.type))
+    if (s.phase === 'synthesis')
+      ensure(
+        ['synthesize', 'skip-synthesis', 'craft', 'react'].includes(c.type),
+        '请先选择合成，或跳过合成进入召唤。',
+      );
+    if (
+      !['summon', 'begin', 'reroll', 'react', 'synthesize', 'skip-synthesis', 'craft'].includes(
+        c.type,
+      )
+    )
       ensure(s.phase === 'play', '先完成回合开始的召唤选择，再进入行动阶段。');
     switch (c.type) {
+      case 'synthesize':
+        synthesize(s, c);
+        break;
+      case 'skip-synthesis':
+        ensure(s.phase === 'synthesis', '当前不是合成窗口。');
+        s.phase = 'summon';
+        emit(s, { type: 'turn', owner: s.active, text: '进入召唤阶段' });
+        break;
       case 'summon':
         ensure(s.summonSlots > 0, '本回合召唤次数已用完。');
         if (c.ultimate) {
