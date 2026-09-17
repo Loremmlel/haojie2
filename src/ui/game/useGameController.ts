@@ -101,7 +101,7 @@ export function useGameController(props: HaojieGameProps) {
       setCardId(null);
       setIntent({ kind: 'none' });
       if (c.type === 'end' || c.type === 'begin') setSelectedId(null);
-      if (c.type === 'deploy')
+      if (c.type === 'deploy' || c.type === 'synthesize')
         setSelectedId(next.present.events.find((e) => e.type === 'spawn')?.unitId ?? null);
       const id =
           c.unitId ?? (c.type === 'react' ? before.present.pending[0]?.source.id : undefined),

@@ -1,3 +1,6 @@
+import { availableSyntheses, synthesisDestinations } from '../engine/synthesis';
+import { canSkipReaction, hutSpawnPoints } from '../engine/reactions';
+import { piercing, healingAttack } from '../engine/state';
 import { baseCoverValue, payloadCoverValue } from './threats';
 import { definition, isStored } from '../engine/catalog';
 import { unitActions, cardActions, reactionAction, actionError } from '../engine/options';
@@ -126,7 +129,13 @@ export function commandPriority(s: GameState, c: Command): number {
   const t = targets(s).find((v) => v.id === c.targetId);
   const owner = decisionOwner(s);
   if (c.type === 'end' || c.type === 'finish-mode') return -0.1;
-  if (c.type === 'summon' || c.type === 'begin' || c.type === 'react') return 1000;
+  if (
+    c.type === 'skip-synthesis' ||
+    c.type === 'summon' ||
+    c.type === 'begin' ||
+    c.type === 'react'
+  )
+    return 1000;
   if (c.type === 'deploy') return 80;
   if (c.type === 'attack' && u && t) {
     if (t.owner === owner && t.unit)
@@ -216,6 +225,10 @@ function points(s: GameState, a: ActionSpec, c: Command): Point[] {
     s.units.find((v) => v.id === c.unitId) ??
     (c.type === 'react' ? s.pending[0]?.source : undefined);
   if ((c.type === 'move' && u && isRunner(u)) || a.id === 'bounce') return u ? neighbors(u) : [];
+  if (a.id === 'hut-spawn')
+    return hutSpawnPoints(s, s.pending[0]).sort(
+      (aPoint, bPoint) => pointRank(s, a, c, bPoint, u) - pointRank(s, a, c, aPoint, u),
+    );
   const all = ALL_CELLS.filter((p) => {
     if (c.type === 'deploy') {
       const card = s.hands[s.active].find((v) => v.id === c.cardId);
@@ -282,7 +295,7 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
             side === owner &&
             t.unit &&
             !view.silenced &&
-            (view.kind === 2 || view.kind === 'u21') &&
+            healingAttack(view) &&
             t.unit.hp === t.unit.maxHp
           )
             return false;
@@ -295,7 +308,7 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
             getStats(s, view).attack <= 10 &&
             !has(s, view, 'execute') &&
             !has(s, view, 'convert') &&
-            !view.equipment.includes('u28')
+            !piercing(view)
           )
             return false;
           // Don't spend visible actions and beam slots on zero-damage, zero-effect hits.
@@ -308,7 +321,7 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
             !has(s, view, 'execute') &&
             !has(s, view, 'convert') &&
             !view.equipment.includes('u5') &&
-            !view.equipment.includes('u28') &&
+            !piercing(view) &&
             !t.unit?.effects.some((e) => e.type === 'mark' && e.owner === owner && e.until > s.ply)
           )
             return false;
@@ -325,7 +338,7 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
             return false;
           if (
             side === owner &&
-            !(view && !view.silenced && (view.kind === 2 || view.kind === 'u21') && t.unit) &&
+            !(view && !view.silenced && healingAttack(view) && t.unit) &&
             !(t.unit?.kind === 16 && !t.unit.silenced && t.id !== view?.id)
           )
             return false;
@@ -333,8 +346,9 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
         if (
           step.range &&
           view &&
-          !view.equipment.includes('u28') &&
-          !attackPath(s, view, t, getStats(s, view).range)
+          (piercing(view)
+            ? !Number.isFinite(hitDistance(s, view, t))
+            : !attackPath(s, view, t, getStats(s, view).range))
         )
           return false;
         return true;
@@ -415,8 +429,60 @@ export function* iterateCandidateGroups(
   };
   if (s.pending.length) {
     yield* emit(reactionAction(s)!);
-    if (s.pending[0].kind !== 'bounce')
+    if (canSkipReaction(s))
       yield { family: 'reaction-skip', commands: [{ type: 'react' }], keep: 1 };
+    return;
+  }
+  if (s.phase === 'synthesis') {
+    // Keep the no-trade option even under the smallest work budget.
+    yield {
+      family: 'synthesis-skip',
+      commands: [{ type: 'skip-synthesis' }],
+      keep: 1,
+      priority: 1000,
+    };
+    for (const { recipe, ids } of availableSyntheses(s)) {
+      const cost = (id: string) => {
+        const u = s.units.find((v) => v.id === id);
+        return u ? unitValue(s, u) : 0;
+      };
+      const ranked = [...ids].sort((a, b) => cost(a) - cost(b));
+      const sets = new Map<string, string[]>();
+      // Cheapest trio, plus alternatives freeing different deployment cells. Bounded,
+      // not combinatorial exhaustive search; the player may choose any legal trio.
+      for (const id of ranked) {
+        const trio = [id, ...ranked.filter((v) => v !== id).slice(0, 2)];
+        sets.set([...trio].sort().join('|'), trio);
+      }
+      let accepted = 0;
+      for (const materialIds of sets.values()) {
+        const destinations = synthesisDestinations(s, recipe, materialIds);
+        if (!destinations.length) continue;
+        const view = {
+          ...s,
+          units:
+            recipe.source === 'board'
+              ? s.units.filter((u) => !materialIds.includes(u.id))
+              : s.units,
+        };
+        const ghost = template(recipe.result, s.active, s.turns[s.active], destinations[0]);
+        destinations.sort(
+          (a, b) => placementValue(view, ghost, b) - placementValue(view, ghost, a),
+        );
+        yield {
+          family: `synthesis:${recipe.id}:${accepted}`,
+          keep: settings.perAction,
+          priority: 80,
+          commands: destinations.map((p) => ({
+            type: 'synthesize',
+            recipeId: recipe.id,
+            materialIds,
+            ...p,
+          })),
+        };
+        if (++accepted >= (difficulty === 'easy' ? 1 : 3)) break;
+      }
+    }
     return;
   }
   if (s.phase === 'summon') {
@@ -454,13 +520,6 @@ export function* iterateCandidateGroups(
   actions.sort((a, b) => Number(b.command.type === 'attack') - Number(a.command.type === 'attack'));
   for (const a of actions) yield* emit(a);
   for (const c of s.hands[s.active]) for (const a of cardActions(s, c)) yield* emit(a);
-  const hearts = s.hands[s.active].filter((c) => c.kind === 'u28');
-  if (hearts.length >= 3)
-    yield {
-      family: 'craft',
-      commands: [{ type: 'craft', cardIds: hearts.slice(0, 3).map((c) => c.id) }],
-      keep: 1,
-    };
   yield { family: 'end', commands: [{ type: 'end' }], keep: 1 };
 }
 export function candidateGroups(s: GameState, difficulty: Difficulty): CandidateGroup[] {

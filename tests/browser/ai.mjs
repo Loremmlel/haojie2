@@ -120,6 +120,14 @@ try {
     'all three modes finish AI opening through the inline offline Worker without receiving true RNG',
   );
   const verifyEndTurnValue = async (backend) => {
+    await load('synthesis');
+    const synthesized = await waitForState((s) => s.present.active === 2);
+    assert.equal(synthesized.present.units.filter((u) => u.kind === 'u22').length, 0);
+    assert.ok(synthesized.present.units.some((u) => u.kind === 'citadel'));
+    assert.ok(synthesized.past.some((s) => s.phase === 'synthesis'));
+    scenario(
+      `2.5 synthesis deploys its result, then completes summon and play phases through ${backend}`,
+    );
     await load('end-turn-value');
     const done = await waitForState((s) => s.present.ply === 19);
     assert.equal(

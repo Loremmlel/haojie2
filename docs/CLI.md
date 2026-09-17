@@ -14,6 +14,8 @@ npm run play:cli -- --new --seed 20260907 --human 1 --difficulty hard --save art
 `show`查看9×13棋盘、棋子ID、阵营、坐标、生命、攻击、射程、剩余攻击、操作模式、蓄力和手牌。棋盘上的101表示P1的第01项棋子，真正命令使用列表里的稳定ID，例如`u7`；基地ID为`base-1`/`base-2`。
 
 ```text
+skip-synthesis               不合成，进入正常召唤
+synthesize sage u1 u2 u3 2 4  在合成窗口用3枚U21合成至圣先师并部署(2,4)
 summon                       普通召唤一次
 summon ultimate              支付人头进行终极召唤
 begin                        完成抽取后进入行动阶段
@@ -25,6 +27,7 @@ charge u7 attack              为攻击蓄力（也支持move/skill）
 cast c20 u7                   对u7施放法术
 equip c21 u7                  装备
 finish u7                     提前结束该单位的连续攻击/移动模式
+react pull                    无相勾牵引刚命中的目标（不带参数的react为放弃）
 react u9                      结算死亡反应或伤害转化
 react 5 6                     弹出或小屋召唤落点
 end                          结束回合
@@ -115,3 +118,9 @@ export { cachedDecision } from './src/ai/plan-cache';
 ```
 
 `compare.ts`与`audit.ts`对未导出`cachedDecision`的旧bundle保留原先的仅指纹缓存策略，不会把新版复核能力偷偷加到旧AI一侧。未改变历史回放的命令和指纹。
+
+## 2.5合成回放
+
+配方ID：`szf`、`sage`、`formless`、`slayer`、`citadel`、`firelord`、`archmage`。`materialIds`对场上材料配方使用棋子ID，`firelord`使用3张U28手牌ID。完整JSON也可调用`{type:"synthesize",recipeId,materialIds,x,y}`。只能在回合开始合成窗口使用；`legal`返回AI筛选过的合法选择，不代替所有可能的材料组合。
+
+`cli-synthesis-20260917.jsonl`是13条命令的专用合成流程脚本，不是胜率或真人实战样本。9月17日之前的回放仍用各自记录时的规则提交验证，不能直接在2.5引擎上重写指纹。

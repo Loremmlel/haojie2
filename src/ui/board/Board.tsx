@@ -86,7 +86,8 @@ export function Board({
       <div className="board-topline">
         <span>
           <i className="live-dot" />
-          {faction(owner)} · {s.phase === 'summon' ? '召唤阶段' : '行动阶段'}
+          {faction(owner)} ·{' '}
+          {s.phase === 'synthesis' ? '合成阶段' : s.phase === 'summon' ? '召唤阶段' : '行动阶段'}
         </span>
         <span>
           9 × 13 <b>/</b> 117格

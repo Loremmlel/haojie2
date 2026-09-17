@@ -1,8 +1,13 @@
 import type { Definition, Kind } from './types';
-export const RULESET_ID = '2026-09-17';
+export const RULESET_ID = '2.5-2026-09-17';
 /** Numeric combat parameters shared by resolution and read-only AI estimates. */
 export const COMBAT_RULES = {
   sacrificeMaxHpCost: 20,
+  sageAuraAttack: 5,
+  slayerReflectRate: 0.5,
+  archmageCounterChance: 2 / 3,
+  archmageCounterHealth: 15,
+  firelord: { radius: 6, damage: 80, splash: 10 },
   charger: { heavyChance: 1 / 12, criticalChance: 1 / 3, heavyBonus: 60, bonus: 20 },
   superCritical: { lethalChance: 1 / 5, doubleChance: 1 / 3, lethalDamage: 100 },
   vampire: { base: 0.2, perKill: 0.2 },
@@ -880,13 +885,87 @@ export const CATALOG: Definition[] = [
     role: '合成',
     attack: 80,
     health: 80,
-    range: 4,
+    range: 6,
     actions: 1,
     move: 0.5,
     description:
-      '不能普通攻击。每个回合结束，对射程内生命最高的敌方造成80伤害，同格叠放者均受击，外围一圈溅射10伤害。半速移动需要蓄力。',
+      '3张未装备炎魔之心在己方回合开始合成。不能主动攻击（沉默也不能）。每个己方回合结束，对以自身为中心13×13内当前生命最高的敌方造成80技能伤害，不受路径阻挡；命中格的敌方叠放者均受击，上下左右四格只对敌方溅射10，每单位一次。半速移动需蓄力。',
   },
 ];
+// Synthesis results never enter either random summon pool.
+CATALOG.push(
+  {
+    id: 'sage',
+    tier: 'derived',
+    name: '至圣先师',
+    glyph: '师',
+    role: '合成',
+    attack: 25,
+    health: 100,
+    range: 5,
+    actions: 2,
+    move: 2,
+    description:
+      '3名超级奶妈合成。攻击敌方造成25基础伤害，攻击友方治疗25；攻击范围内所有友方（含自身）获得+5攻击光环，可叠加，离开范围、沉默或冰冻即失效。亡语：全场友方棋子回满生命，不治疗基地。',
+  },
+  {
+    id: 'formless',
+    tier: 'derived',
+    name: '无相勾',
+    glyph: '相',
+    role: '合成',
+    attack: 10,
+    health: 40,
+    range: 100,
+    actions: 0.5,
+    move: 0.5,
+    description:
+      '3名超级钩子合成。无限射程但仍遵守攻击路径阻挡；攻击、移动均须先用一回合蓄力，下回合消耗对应1层执行一次。命中后可选择将该存活敌方棋子拉到身前合法完整落位，不额外消耗操作，不能拉基地。',
+  },
+  {
+    id: 'slayer',
+    tier: 'derived',
+    name: '杀圣',
+    glyph: '戮',
+    role: '合成',
+    attack: 10,
+    health: 70,
+    range: 6,
+    actions: 2,
+    move: 2,
+    description:
+      '3名精英杀手合成。攻击自带四向直线穿透，实际攻击伤害100%吸血；受到有随从来源的伤害时，将实际扣血的50%反弹给发出者（致死也生效）。反伤不再次反伤。不继承原精英杀手的暴击和击杀成长。',
+  },
+  {
+    id: 'citadel',
+    tier: 'derived',
+    name: '跑得快王城',
+    glyph: '城',
+    role: '合成',
+    attack: 15,
+    health: 180,
+    range: 4,
+    actions: 1,
+    move: 1,
+    description:
+      '3座跑得快小屋合成。范围内每个友方棋子死亡时，必须扣10生命上限并在范围内选择合法位置召唤一只普通20超级跑得快；包括自己召唤的单位。每次死亡分别处理，不按克隆批次合并。无合法位置或上限不足10时不召唤、不扣费；恰好10时先召唤再离场。',
+  },
+  {
+    id: 'archmage',
+    tier: 'derived',
+    name: '万法真君',
+    glyph: '法',
+    role: '合成',
+    mage: true,
+    attack: 30,
+    health: 90,
+    range: 5,
+    actions: 1,
+    move: 1,
+    description:
+      '3名法术反制小法师合成。法师单位。敌方释放法术时有2/3概率反制，法术消耗但无效；成功时自身生命上限和当前生命各+15。多个反制来源按入场顺序独立尝试，首个成功后停止，只有成功来源成长。沉默或冰冻时不反制。',
+  },
+);
 export const LIBRARY = Object.fromEntries(CATALOG.map((d) => [String(d.id), d])) as Record<
   string,
   Definition
@@ -910,6 +989,6 @@ export const RULE_NOTES = [
   '持续法术与多目标技能先确定本次目标，再逐个结算。每个目标一次免疫塔判定，单次效果内被塔挡住的目标不重复消耗塔生命上限。',
   '末日守卫两个概率采用互斥区间。精英杀手暴击率最多100%，吸血可超过100%；第5个人头只加一次射程。',
   '炎魔之心穿透使用四向直线；炎魔之王最高血并列时按棋盘行列与生成顺序确定。伤害造成的连锁反击每条链防止同源无穷循环。',
-  '作者补充确认：冲锋号令储存8个己方回合。善铁及相关合成属于尚未完成的3.0神龛模式，暂缓，不进入2.x规则、图鉴或召唤池。',
+  '作者补充确认：冲锋号令储存8个己方回合。2.5开放七种三合一配方，合成结果不进入随机池；善铁与仅终极池的3.0神龛模式仍暂缓。',
   '正式对局为同屏双人，双方手牌公开。老版存档不自动迁移到新版规则，避免静默改变正在进行的旧棋局。',
 ];

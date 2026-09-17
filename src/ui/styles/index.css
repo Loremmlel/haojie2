@@ -15,6 +15,7 @@
 @import '../board/commands.css';
 @import '../hand/hand.css';
 @import '../hand/summoning.css';
+@import '../hand/synthesis.css';
 @import '../feedback/log.css';
 @import '../feedback/feedback.css';
 @import '../shared/modal.css';

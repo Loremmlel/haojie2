@@ -21,6 +21,7 @@ export function canRerollWith(s: GameState, mage: Unit) {
 /** One rule-owned option list for engine validation, all AI levels and both UI entry points. */
 export function rerollCommands(s: GameState, card: Card): Command[] {
   if (
+    s.phase === 'synthesis' ||
     s.winner ||
     s.pending.length ||
     s.summonSlots !== 0 ||

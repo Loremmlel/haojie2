@@ -23,6 +23,7 @@ export function advanceIntent(i: Intent, p: Point, s: GameState): Intent {
   if (i.kind === 'none') return i;
   const step = i.action.steps[i.index],
     draft = { ...i.draft };
+  if (!step) return i;
   if (step.kind === 'target') {
     const t = targetAt(s, p);
     if (!t) return i;
@@ -63,7 +64,7 @@ export function advanceIntent(i: Intent, p: Point, s: GameState): Intent {
   return { ...i, draft, index: i.index + 1 };
 }
 export function commandFor(s: GameState, i: Intent, p: Point): Command | null {
-  if (i.kind === 'none') return null;
+  if (i.kind === 'none' || !i.action.steps[i.index]) return null;
   const next = advanceIntent(i, p, s);
   if (next.kind === 'select' && next.index >= next.action.steps.length) return next.draft;
   return null;
@@ -109,7 +110,8 @@ export function canChoose(s: GameState, i: Intent, p: Point): boolean {
   return false;
 }
 export function instruction(s: GameState, i: Intent): string {
-  if (i.kind === 'select') return i.action.steps[i.index]?.label ?? '选择目标';
+  if (i.kind === 'select') return i.action.steps[i.index]?.label ?? i.action.hint ?? i.action.label;
+  if (s.phase === 'synthesis') return '回合开始：在合成区选择3个材料及落点，或不合成并进入召唤。';
   if (s.phase === 'summon') return '先决定普通或终极召唤，再查看结果；2人头可替换一次召唤。';
   return '选择随从或手牌。每个随从每回合只能选择一种操作模式；选攻击后可连击。';
 }

@@ -43,7 +43,17 @@ jobs:
       - run: npm run test:browser:ai
       - run: npm run test:browser:vfx
       - name: Verify current rules CLI command fingerprints
-        run: npm run play:cli -- --replay docs/playtests/cli-feedback-20260917.jsonl
+        run: npm run play:cli -- --replay docs/playtests/cli-synthesis-20260917.jsonl
+      - name: Check out the September 17 feedback rules
+        uses: actions/checkout@v4
+        with:
+          ref: 9b6abdb8b02e9e0814c99574b7aff989d3a84f63
+          path: artifacts/september17-rules
+          persist-credentials: false
+      - name: Verify the unmodified September 17 feedback recording
+        run: |
+          ln -s "$GITHUB_WORKSPACE/node_modules" artifacts/september17-rules/node_modules
+          npm --prefix artifacts/september17-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-feedback-20260917.jsonl"
       - name: Check out the September 15 feedback rules
         uses: actions/checkout@v4
         with:

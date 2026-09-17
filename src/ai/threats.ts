@@ -1,3 +1,4 @@
+import { firelordStrike } from '../engine/firelord';
 import { attackProfile } from '../engine/attack-profile';
 import { COMBAT_RULES } from '../engine/catalog';
 import {
@@ -83,6 +84,16 @@ export function hitPackets(
   return packets;
 }
 export function attackPressure(s: GameState, u: Unit, t: Target, ignoreId = ''): number {
+  if (u.kind === 'firelord') {
+    if (t.unit && has(s, t.unit, 'immune')) return 0;
+    const view = t.unit ? { ...s, units: [...s.units.filter((v) => v.id !== t.id), t.unit] } : s;
+    const strike = firelordStrike(view, u);
+    return strike?.primary.some((v) => v.id === t.id)
+      ? COMBAT_RULES.firelord.damage
+      : strike?.splash.some((v) => v.id === t.id)
+        ? COMBAT_RULES.firelord.splash
+        : 0;
+  }
   if (!readyAttack(s, u) || !Number.isFinite(hitDistance(s, u, t, ignoreId))) return 0;
   if (u.kind === 9 && passive(s, u) && u.attacked.includes(t.id)) return 0;
   if (t.unit && has(s, t.unit, 'immune')) return 0;

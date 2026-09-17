@@ -70,6 +70,7 @@ function startRecord() {
   prepareTranscript(record, arena.session, args.includes('--new'));
 }
 const help = `show | actions ID | legal [ID] | go (AI直到轮到人类) | step (AI一步) | save | quit
+synthesize RECIPE MATERIAL1 MATERIAL2 MATERIAL3 X Y | skip-synthesis
 summon [ultimate] | begin | deploy CARD X Y [charge] | move UNIT X Y | attack UNIT TARGET [up|down|left|right]
 charge UNIT attack/move/skill | cast CARD TARGET | equip CARD TARGET | finish UNIT | react TARGET | end
 复杂技能直接输入JSON，例如 {"type":"skill","unitId":"u8","targetId":"u9","x":5,"y":6}
@@ -78,8 +79,19 @@ charge UNIT attack/move/skill | cast CARD TARGET | equip CARD TARGET | finish UN
 --replay FILE.jsonl 重放并逐步核对指纹。legal只是候选，不限制原始JSON的合法操作。`;
 function parse(line: string): Command {
   if (line.startsWith('{')) return JSON.parse(line);
-  const [type, a, b, c, d] = line.split(/\s+/);
+  const parts = line.split(/\s+/);
+  const [type, a, b, c, d] = parts;
   switch (type) {
+    case 'skip-synthesis':
+      return { type: 'skip-synthesis' };
+    case 'synthesize':
+      return {
+        type: 'synthesize',
+        recipeId: parts[1],
+        materialIds: parts.slice(2, 5),
+        x: Number(parts[5]),
+        y: Number(parts[6]),
+      };
     case 'summon':
       return { type, ultimate: a === 'ultimate' };
     case 'begin':
@@ -104,6 +116,7 @@ function parse(line: string): Command {
     case 'finish':
       return { type: 'finish-mode', unitId: a };
     case 'react':
+      if (a === 'pull') return { type, mode: 'pull' };
       return { type, ...(b ? { x: Number(a), y: Number(b) } : { targetId: a }) };
     default:
       throw new Error('未知命令，输入 help。');

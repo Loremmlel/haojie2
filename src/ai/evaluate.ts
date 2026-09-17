@@ -48,6 +48,11 @@ const passives: Partial<Record<Unit['kind'], number>> = {
   u23: 18,
   u24: 17,
   firelord: 65,
+  sage: 55,
+  formless: 38,
+  slayer: 60,
+  citadel: 55,
+  archmage: 55,
 };
 /** Strategic asset value, separate from legal availability and tactical reach. */
 export function materialValue(s: GameState, u: Unit): number {
@@ -62,7 +67,9 @@ export function materialValue(s: GameState, u: Unit): number {
         ? Math.max(0, st.attack - u.charge * COMBAT_RULES.accumulator.attack)
         : passive(s, u) && u.kind === 4
           ? st.attack / 3
-          : st.attack;
+          : definition(u.kind).actions === 0.5
+            ? st.attack / 2
+            : st.attack;
   let value =
     14 +
     u.hp * 0.38 +
@@ -74,6 +81,13 @@ export function materialValue(s: GameState, u: Unit): number {
     ) *
       2;
   if (passive(s, u)) value += passives[u.kind] ?? 0;
+  if (passive(s, u) && u.kind === 'sage')
+    value += Math.min(
+      60,
+      s.units
+        .filter((v) => v.id !== u.id && allegiance(s, v) === u.owner)
+        .reduce((n, v) => n + (v.maxHp - v.hp) * 0.18, 0),
+    );
   if (u.kind === 'grave' || u.kind === 'wall') value = 4 + u.hp * 0.16;
   if (u.kind === 'u25') value -= 7;
   if (u.kind === 'u12' || u.kind === 'u12p') value += 30;
@@ -164,7 +178,21 @@ export function placementValue(s: GameState, u: Unit, p: Point, nextFullTurn = f
     ...cells(moved).map((q) => distance(q, enemyBase)),
     ...enemies.map(separation),
   );
-  const support = [2, 3, 6, 'u3', 'u13', 'u14', 'u15', 'u19', 'u21', 'u22'].includes(u.kind);
+  const support = [
+    2,
+    3,
+    6,
+    'u3',
+    'u13',
+    'u14',
+    'u15',
+    'u19',
+    'u21',
+    'u22',
+    'sage',
+    'citadel',
+    'archmage',
+  ].includes(u.kind);
   const range = st.range,
     speed = Math.max(0.5, Math.min(3, st.move));
   const turnsToContact = Math.max(0, nearest - range) / speed;

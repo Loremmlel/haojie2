@@ -409,6 +409,7 @@ export function* search(
       ctx.deadline = time() + Math.max(10, (fullDeadline - time()) * 0.4);
     ctx.stopAt = Math.min(searchMax, Math.max(40, Math.floor(max * 0.4)));
   }
+  const synthesisOnly = s.phase === 'synthesis' && !s.pending.length;
   const roots = yield* expand(ctx, s, []);
   const bestByRoot = new Map<string, Node>();
   for (const n of roots)
@@ -421,7 +422,11 @@ export function* search(
       : searchMax;
   const seen = new Set<string>();
   let beam = bestDiverse(roots, cfg.width, seen);
-  for (let depth = 2; depth <= cfg.depth && beam.length && !stopped(ctx); depth++) {
+  for (
+    let depth = 2;
+    depth <= cfg.depth && !synthesisOnly && beam.length && !stopped(ctx);
+    depth++
+  ) {
     const children: Node[] = [];
     for (const parent of beam) {
       if (stopped(ctx)) break;
@@ -444,7 +449,13 @@ export function* search(
   ctx.deadline = fullDeadline;
   let replyCandidates = 0,
     replySamples = 0;
-  if (difficulty === 'hard' && s.phase !== 'summon' && choices.length > 1 && !stopped(ctx)) {
+  if (
+    difficulty === 'hard' &&
+    !synthesisOnly &&
+    s.phase !== 'summon' &&
+    choices.length > 1 &&
+    !stopped(ctx)
+  ) {
     const shortlist = choices.slice(0, cfg.replyRoots);
     const sums = shortlist.map(() => 0);
     // Publish only COMPLETE PAIRED scenarios. A completed first round remains useful even
@@ -495,6 +506,7 @@ export function* search(
   let selected = choices[0];
   if (
     difficulty === 'easy' &&
+    !synthesisOnly &&
     s.phase !== 'summon' &&
     selected &&
     Math.abs(selected.score) < 90000

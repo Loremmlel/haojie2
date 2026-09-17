@@ -1,6 +1,6 @@
 import type { EffectBatch } from './vfx/plan';
 import type { Command, GameState, Point } from '../../engine';
-import { definition, faction, isStored } from '../../engine';
+import { definition, faction, isStored, canSkipReaction, commandError } from '../../engine';
 import type { Intent } from '../game/selection';
 import { instruction } from '../game/selection';
 import { Icon } from '../shared/visuals';
@@ -36,6 +36,9 @@ export function Battlefield({
   readOnly?: boolean;
 }) {
   const reaction = s.pending[0],
+    maySkip = canSkipReaction(s),
+    pullError =
+      reaction?.kind === 'hit-pull' ? commandError(s, { type: 'react', mode: 'pull' }) : null,
     minions = s.hands[s.active].filter((c) => !isStored(definition(c.kind))).length;
   return (
     <section className="battle-column">
@@ -72,13 +75,26 @@ export function Battlefield({
             <Icon name="redo" />
           </button>
         </div>
+        {reaction?.kind === 'hit-pull' && (
+          <button
+            className="primary"
+            disabled={readOnly || !!pullError}
+            onClick={() => run({ type: 'react', mode: 'pull' })}
+          >
+            牵引命中目标
+          </button>
+        )}
         {reaction ? (
           <button
             className="secondary finish-button"
-            disabled={readOnly || reaction.kind === 'bounce'}
+            disabled={readOnly || !maySkip}
             onClick={() => run({ type: 'react' })}
           >
-            {reaction.kind === 'bounce' ? '必须弹出空地' : '放弃此效果'}
+            {reaction.kind === 'bounce'
+              ? '必须弹出空地'
+              : !maySkip
+                ? '请选择召唤落点'
+                : '放弃此效果'}
             <Icon name="arrow" />
           </button>
         ) : (
@@ -95,12 +111,16 @@ export function Battlefield({
       </div>
       <p className="turn-hint">
         {reaction
-          ? '效果由所属玩家处理，之后回到原有流程。'
-          : s.phase === 'summon'
-            ? '在手牌区完成召唤选择，再开始行动。'
-            : minions
-              ? `还有 ${minions} 枚随从待部署。`
-              : '可以继续操作，或交给对手。'}
+          ? pullError
+            ? `${pullError}可放弃此效果。`
+            : '效果由所属玩家处理，之后回到原有流程。'
+          : s.phase === 'synthesis'
+            ? '合成与部署一次确认；可取消选点或悔棋。'
+            : s.phase === 'summon'
+              ? '在手牌区完成召唤选择，再开始行动。'
+              : minions
+                ? `还有 ${minions} 枚随从待部署。`
+                : '可以继续操作，或交给对手。'}
       </p>
     </section>
   );

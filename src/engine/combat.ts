@@ -30,6 +30,8 @@ import {
   getStats,
   has,
   hasWeapon,
+  healingAttack,
+  piercing,
   now,
   passive,
   random,
@@ -162,6 +164,20 @@ export function kill(
     !u.group ||
     (!s.units.some((v) => v.group === u.group) &&
       ![...s.hands[1], ...s.hands[2]].some((c) => c.group === u.group));
+  for (const city of s.units)
+    if (
+      city.kind === 'citadel' &&
+      city.owner === u.owner &&
+      allegiance(s, snap) === u.owner &&
+      passive(s, city) &&
+      attackPath(s, city, asTarget(snap), getStats(s, city).range)
+    )
+      s.pending.push({
+        kind: 'hut-spawn',
+        owner: city.owner,
+        source: structuredClone(city),
+        amount: 0,
+      });
   if (!groupFinal) return;
   const enabled = !u.silenced;
   const denyHead = enabled && u.kind === 20 && random(s, [0, 0.5, 1]) < 0.5;
@@ -207,6 +223,9 @@ export function kill(
     }
     if (u.kind === 2)
       s.pending.push({ kind: 'death-shot', owner: u.owner, source: snap, amount: 20 });
+    if (u.kind === 'sage' && passive(s, snap))
+      for (const friend of [...s.units])
+        if (allegiance(s, friend) === u.owner) heal(s, friend, friend.maxHp - friend.hp, ctx);
     if (u.kind === 'u21')
       for (const friend of [...s.units])
         if (
@@ -351,6 +370,24 @@ export function damage(
   if (u.hp <= 0) kill(s, u, source, ctx);
   if (
     loss > 0 &&
+    snap.kind === 'slayer' &&
+    passive(s, snap) &&
+    source.unit &&
+    source.unit.id !== u.id &&
+    source.kind !== 'reflect'
+  ) {
+    const attacker = s.units.find((v) => v.id === source.unit!.id);
+    if (attacker)
+      damage(
+        s,
+        asTarget(attacker),
+        loss * COMBAT_RULES.slayerReflectRate,
+        { owner: snap.owner, unit: snap, kind: 'reflect', retaliated: true },
+        ctx,
+      );
+  }
+  if (
+    loss > 0 &&
     !snap.silenced &&
     u.kind === 16 &&
     source.unit &&
@@ -493,11 +530,7 @@ export function performAttack(
   options: AttackOptions = {},
 ) {
   const healing =
-    !options.forceHostile &&
-    !u.silenced &&
-    (u.kind === 2 || u.kind === 'u21') &&
-    t.unit &&
-    allegiance(s, t.unit) === u.owner;
+    !options.forceHostile && healingAttack(u) && t.unit && allegiance(s, t.unit) === u.owner;
   const result = withEventFacts(
     s,
     {
@@ -509,7 +542,8 @@ export function performAttack(
   );
   // Clear once per complete attack, including immune/execution hits and piercing volleys.
   // An invalid attack throws before reaching this point and never spends charge.
-  if (u.kind === 15 && !options.noPierce) u.charge = u.readyCharge = 0;
+  if ((u.kind === 15 || definition(u.kind).actions === 0.5) && !options.noPierce)
+    u.charge = u.readyCharge = 0;
   return result;
 }
 function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, options: AttackOptions) {
@@ -517,14 +551,17 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
   ensure(
     !ally ||
       options.forceHostile ||
-      (t.unit &&
-        ((!u.silenced && (u.kind === 2 || u.kind === 'u21')) ||
-          (t.unit.kind === 16 && !t.unit.silenced && t.id !== u.id))),
+      (t.unit && (healingAttack(u) || (t.unit.kind === 16 && !t.unit.silenced && t.id !== u.id))),
     '只能攻击敌方或中立；奶妈可治疗友方，伤害转化器可受友伤。',
   );
   ensure(topTarget(s, t), '单体攻击或技能只能命中当前叠放栈顶。');
   const stats = getStats(s, u);
-  ensure(u.kind !== 'firelord' || u.silenced, '炎魔之王不能普通攻击。');
+  ensure(u.kind !== 'firelord', '炎魔之王不能普通攻击。');
+  if (!options.reactive && definition(u.kind).actions === 0.5)
+    ensure(
+      u.readyCharge >= 1 && u.chargeType === 'attack',
+      '半速攻击需要在回合开始已有1层攻击蓄力。',
+    );
   if (!options.reactive) {
     ensure(u.kind !== 4 || u.silenced || u.readyCharge >= 2, '定炮回合开始至少有2层蓄力才可开炮。');
     ensure(
@@ -547,13 +584,13 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     .filter((p) => p.length - 1 <= stats.range)
     .sort((a, b) => a.length - b.length);
   const path =
-    hasWeapon(u, 'u28') && !ally
+    piercing(u) && !ally
       ? rays[0]
       : attackPath(s, u, t, options.unlimited ? 117 : stats.range, options.direction);
   ensure(path, '目标不在射程内，或所有路径均被阻挡；炎魔之心必须选同一直线。');
-  if (options.direction && hasWeapon(u, 'u28') && !ally)
+  if (options.direction && piercing(u) && !ally)
     ensure(pathDirection(path) === options.direction, '炎魔之心只能沿所选直线攻击。');
-  if (hasWeapon(u, 'u28') && !options.noPierce && !ally) {
+  if (piercing(u) && !options.noPierce && !ally) {
     const origin = path[0],
       dx = path[1].x - origin.x,
       dy = path[1].y - origin.y,
@@ -567,7 +604,7 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
         if (!victims.some((old) => old.id === v.id) && topTarget(s, v)) victims.push(v);
     }
     for (const victim of victims)
-      if (!victim.unit || alive(s, victim.unit))
+      if (alive(s, u) && (!victim.unit || alive(s, victim.unit)))
         performAttack(s, u, victim, ctx, {
           ...options,
           noPierce: true,
@@ -585,16 +622,10 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     path,
     unitId: u.id,
     owner: u.owner,
-    text: ally && (u.kind === 2 || u.kind === 'u21') ? '治疗' : '攻击',
+    text: ally && healingAttack(u) ? '治疗' : '攻击',
     ultimate: definition(u.kind).tier !== 'normal',
   });
-  if (
-    ally &&
-    !options.forceHostile &&
-    !u.silenced &&
-    (u.kind === 2 || u.kind === 'u21') &&
-    t.unit
-  ) {
+  if (ally && !options.forceHostile && healingAttack(u) && t.unit) {
     heal(s, t.unit, u.kind === 2 ? 20 : 25, ctx);
     return;
   }
@@ -635,7 +666,13 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     const index = profile.cuts.slice(1).findIndex((cut) => roll < cut);
     amount = profile.packets[index < 0 ? profile.packets.length - 1 : index].damage;
   }
-  const lifesteal = !u.silenced && u.kind === 'u8' ? vampireRate(u.kills) : 0;
+  const lifesteal = !u.silenced
+    ? u.kind === 'slayer'
+      ? 1
+      : u.kind === 'u8'
+        ? vampireRate(u.kills)
+        : 0
+    : 0;
   // Conversion requires damage from the attack itself, not a secondary mark explosion.
   const attackLoss = damage(s, t, amount, { owner: u.owner, unit: u, kind: 'attack', path }, ctx);
   let loss = attackLoss;
@@ -752,6 +789,14 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     if (hasWeapon(u, 'u28') || (!u.silenced && u.kind === 'u6' && !hasWeapon(u, 'u5')))
       burn(s, t, skillSource, ctx);
     if (!u.silenced && u.kind === 'u20') knockback(s, u, t, path, ctx);
+    if (u.kind === 'formless' && passive(s, u) && alive(s, u))
+      s.pending.push({
+        kind: 'hit-pull',
+        owner: u.owner,
+        source: structuredClone(u),
+        targetId: victim.id,
+        amount: 0,
+      });
   } else if (victim && !ally && attackLoss > 0)
     u.effects = u.effects.filter((e) => !(e.type === 'convert' && activeEffect(s, e, u)));
 }

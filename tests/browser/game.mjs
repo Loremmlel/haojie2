@@ -24,6 +24,7 @@ const checks = [],
   errors = [],
   network = [];
 let page;
+let lastExportAt = 0;
 const button = (name) => page.getByRole('button', { name, exact: true });
 const cell = (x, y) => page.locator(`[data-cell="${x},${y}"]`);
 async function choose(x, y) {
@@ -44,6 +45,9 @@ async function load(name) {
   }
 }
 async function readState() {
+  // Real downloads are rate-limited by Chromium; test inspection must not spam them.
+  await new Promise((r) => setTimeout(r, Math.max(0, 180 - (Date.now() - lastExportAt))));
+  lastExportAt = Date.now();
   const waiting = page.waitForEvent('download');
   await button('导出存档').click();
   const d = await waiting;
@@ -71,7 +75,7 @@ async function open(viewport, reducedMotion = 'no-preference') {
   });
   if (renderOnly) await p.setContent(html);
   else await p.goto(pathToFileURL(resolve('dist/index.html')).href);
-  await p.getByRole('heading', { name: '浩劫2.1', exact: true }).waitFor();
+  await p.getByRole('heading', { name: '浩劫2.5', exact: true }).waitFor();
   return { p, context };
 }
 try {
@@ -220,13 +224,70 @@ try {
   assert.ok(state.units.find((u) => u.kind === 'u6').onceUsed);
   scenario('charged cross attack distinguishes center damage from arm damage');
   await load('craft');
-  await page.getByRole('button', { name: /3枚炎魔之心/ }).click();
-  await button('选择炎魔之王随从').click();
+  for (const box of await page.locator('.synthesis-controls input[type=checkbox]').all())
+    await box.check();
+  await button('选择落点 · 合成炎魔之王').click();
   await choose(2, 4);
   state = await readState();
   assert.equal(state.hands[1].length, 0);
   assert.equal(state.units[0].kind, 'firelord');
   scenario('three stored hearts synthesize a deployable firelord');
+  await load('synthesis');
+  const beforeFusion = await readState();
+  assert.equal(await button('普通召唤').count(), 0);
+  const materials = page.locator('.synthesis-controls input[type=checkbox]');
+  for (let i = 0; i < 3; i++) await materials.nth(i).check();
+  assert.equal(await materials.nth(3).isDisabled(), true);
+  await page.screenshot({ path: 'artifacts/synthesis-desktop.png', fullPage: true });
+  await button('选择落点 · 合成至圣先师').click();
+  await cancel();
+  assert.deepEqual(await readState(), beforeFusion);
+  await button('选择落点 · 合成至圣先师').click();
+  await choose(2, 3);
+  const fused = await readState();
+  assert.equal(fused.units.filter((u) => u.kind === 'u21').length, 1);
+  assert.equal(fused.units.find((u) => u.kind === 'sage').hp, 100);
+  assert.equal(fused.units.find((u) => u.kind === 26).hp, 1);
+  assert.equal(fused.deaths.length, 0);
+  assert.equal(fused.pending.length, 0);
+  assert.equal(fused.phase, 'synthesis');
+  assert.equal(fused.summonSlots, 2);
+  assert.equal(fused.rng, beforeFusion.rng);
+  await button('悔棋').click();
+  assert.deepEqual(await readState(), beforeFusion);
+  await button('重做').click();
+  assert.deepEqual(await readState(), fused);
+  await button('不再合成，进入召唤').click();
+  assert.equal((await readState()).phase, 'summon');
+  assert.equal(await button('普通召唤').count(), 1);
+  scenario(
+    '2.5 synthesis selects exactly three board materials, permits cancellation and atomic undo/redo, and closes before normal summons',
+  );
+  await load('formless');
+  await choose(3, 4);
+  await button('攻击').click();
+  await choose(3, 10);
+  const awaitingPull = await readState();
+  assert.equal(awaitingPull.pending[0].kind, 'hit-pull');
+  // A fixed-target choice must not turn a board click into an implicit confirmation.
+  await choose(9, 9);
+  assert.deepEqual(await readState(), awaitingPull);
+  await button('放弃此效果').click();
+  assert.equal((await readState()).units[1].y, 10);
+  await button('悔棋').click();
+  await button('牵引命中目标').click();
+  assert.equal((await readState()).units[1].y, 5);
+  scenario(
+    '2.5 formless hit exposes optional pull and decline without retargeting or charging another attack',
+  );
+  await load('citadel-spawn');
+  assert.equal(await button('请选择召唤落点').isDisabled(), true);
+  await choose(3, 5);
+  state = await readState();
+  assert.equal(state.units[0].maxHp, 170);
+  assert.equal(state.units[1].kind, 20);
+  assert.equal(state.pending.length, 0);
+  scenario('2.5 citadel requires a legal spawn choice and pays ten maximum health exactly once');
   await load('reroll');
   assert.equal(await page.getByRole('region', { name: '召唤改判' }).count(), 0);
   await button('普通召唤').click();
@@ -345,7 +406,7 @@ try {
     'feedback: four-layer charge display clears after first shot and second shot uses base damage',
   );
   await button('棋子图鉴').click();
-  assert.equal(await page.locator('.codex-card').count(), 60);
+  assert.equal(await page.locator('.codex-card').count(), 65);
   await page.getByRole('textbox', { name: '搜索图鉴' }).fill('免疫塔');
   assert.ok(await page.getByRole('heading', { name: '免疫塔', exact: true }).isVisible());
   await page.getByRole('textbox', { name: '搜索图鉴' }).fill('');
@@ -365,7 +426,7 @@ try {
   );
   await button('关闭弹窗').click();
   scenario(
-    '60-entry searchable codex, 28 ultimate entries, four weapons and confirmed/deferred rules',
+    '65-entry searchable codex, 28 ultimate entries, four weapons and confirmed/deferred rules',
   );
   const beforeInvalid = await readState();
   await page.locator('input[type=file]').setInputFiles({
@@ -376,7 +437,7 @@ try {
   assert.deepEqual(await readState(), beforeInvalid);
   if (!renderOnly) {
     await page.reload();
-    await page.getByRole('heading', { name: '浩劫2.1', exact: true }).waitFor();
+    await page.getByRole('heading', { name: '浩劫2.5', exact: true }).waitFor();
     assert.deepEqual(await readState(), beforeInvalid);
     scenario('file:// local save reloads and malformed imports never replace the current match');
   } else
@@ -415,6 +476,22 @@ try {
   await page.keyboard.press('Enter');
   assert.equal((await readState()).units.find((u) => u.kind === 24).hp, 30);
   scenario('feedback: mobile and keyboard direction selection requires no hover');
+  await load('synthesis');
+  const mobileMaterials = page.locator('.synthesis-controls input[type=checkbox]');
+  for (let i = 0; i < 3; i++) {
+    await mobileMaterials.nth(i).focus();
+    await page.keyboard.press('Space');
+  }
+  await button('选择落点 · 合成至圣先师').focus();
+  await page.keyboard.press('Enter');
+  await cell(2, 3).focus();
+  await page.keyboard.press('Enter');
+  assert.ok((await readState()).units.some((u) => u.kind === 'sage'));
+  await page.screenshot({ path: 'artifacts/synthesis-mobile.png', fullPage: true });
+  assert.ok(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+  );
+  scenario('2.5 synthesis is operable with keyboard only at 390px without horizontal overflow');
   await load('unit-status');
   await choose(4, 4);
   assert.match(

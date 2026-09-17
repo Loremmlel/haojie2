@@ -13,9 +13,13 @@ export function DefinitionStats({ d }: { d: Definition }) {
     );
   }
   const values = [
-    ['sword', '攻击', d.id === '3p' ? '40−5n' : d.id === 'u21' ? '±25' : numberLabel(d.attack)],
+    [
+      'sword',
+      '攻击',
+      d.id === '3p' ? '40−5n' : d.id === 'u21' || d.id === 'sage' ? '±25' : numberLabel(d.attack),
+    ],
     ['heart', '生命', d.health],
-    ['target', '射程', d.id === '3p' ? 'n' : d.range],
+    ['target', '射程', d.id === '3p' ? 'n' : d.id === 'formless' ? '∞' : d.range],
     ['clock', '攻次', numberLabel(d.actions)],
     ['move', '移动', numberLabel(d.move)],
   ];

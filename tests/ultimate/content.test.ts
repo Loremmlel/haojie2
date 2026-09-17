@@ -500,9 +500,10 @@ test('U28 penetration hits enemies behind blockers along the selected cardinal l
 test('three unspent hearts craft a deployable firelord, without adding undefined Shantie content', () => {
   const s = fixture(),
     ids = [card(s, 'u28'), card(s, 'u28'), card(s, 'u28')],
-    n = applyCommand(s, { type: 'craft', cardIds: ids });
-  assert.equal(n.hands[1].length, 1);
-  assert.equal(n.hands[1][0].kind, 'firelord');
+    start = { ...s, phase: 'synthesis' as const, summonSlots: 2 },
+    n = applyCommand(start, { type: 'craft', cardIds: ids, x: 2, y: 4 });
+  assert.equal(n.hands[1].length, 0);
+  assert.equal(n.units[0].kind, 'firelord');
   assert.ok(commandError(n, { type: 'end' }));
   assert.throws(() => definition('shantie' as any));
 });

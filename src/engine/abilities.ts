@@ -1,3 +1,4 @@
+import { synthesize } from './synthesis';
 import { eventActor, withEventFacts, type EventAction } from './event-facts';
 import { rerollCommands, summonPool } from './summoning';
 import { COMBAT_RULES, definition, isStored } from './catalog';
@@ -36,6 +37,7 @@ import {
   allegiance,
   asTarget,
   chooseMode,
+  counterChance,
   draw,
   emit,
   ensure,
@@ -65,17 +67,19 @@ function resolveCharge(s: GameState, c: Command) {
   const max =
     mode === 'move' && d.move % 1 !== 0
       ? 1
-      : mode === 'attack' && u.kind === 4 && !u.silenced
-        ? 5
-        : mode === 'attack' && u.kind === 15 && !u.silenced
-          ? COMBAT_RULES.accumulator.max
-          : mode === 'attack' && u.kind === 'u2' && !u.silenced
-            ? 4
-            : mode === 'skill' && u.kind === 21 && !u.silenced
-              ? 2
-              : mode === 'skill' && u.kind === 'u6' && !u.silenced && !u.onceUsed
-                ? 1
-                : 0;
+      : mode === 'attack' && d.actions === 0.5
+        ? 1
+        : mode === 'attack' && u.kind === 4 && !u.silenced
+          ? 5
+          : mode === 'attack' && u.kind === 15 && !u.silenced
+            ? COMBAT_RULES.accumulator.max
+            : mode === 'attack' && u.kind === 'u2' && !u.silenced
+              ? 4
+              : mode === 'skill' && u.kind === 21 && !u.silenced
+                ? 2
+                : mode === 'skill' && u.kind === 'u6' && !u.silenced && !u.onceUsed
+                  ? 1
+                  : 0;
   ensure(max > 0, '这枚随从没有此类蓄力。');
   ensure(u.charge < max, '该类蓄力已满。');
   ensure(u.charge === 0 || u.chargeType === mode, '当前蓄力属于另一模式。');
@@ -485,8 +489,14 @@ function resolveCast(s: GameState, c: Command, ctx: Resolution) {
       '不可献祭克隆军团，且友方需至少半血。',
     );
   }
-  for (const mage of s.units.filter((u) => u.owner !== owner && u.kind === 'u3' && passive(s, u)))
-    if (random(s, [0, 1 / 3, 1]) < 1 / 3) {
+  for (const mage of s.units
+    .filter((u) => u.owner !== owner && counterChance(u) > 0 && passive(s, u))
+    .sort((a, b) => a.deployedAt - b.deployedAt))
+    if (random(s, [0, counterChance(mage), 1]) < counterChance(mage)) {
+      if (mage.kind === 'archmage') {
+        mage.maxHp += COMBAT_RULES.archmageCounterHealth;
+        heal(s, mage, COMBAT_RULES.archmageCounterHealth, ctx);
+      }
       s.hands[owner] = s.hands[owner].filter((v) => v.id !== card.id);
       emit(
         s,
@@ -623,26 +633,7 @@ function resolveEquip(s: GameState, c: Command) {
   });
 }
 export function craft(s: GameState, c: Command) {
-  ensure(
-    c.cardIds?.length === 3 && new Set(c.cardIds).size === 3,
-    '请选择3张不同的未装备炎魔之心。',
-  );
-  ensure(
-    c.cardIds.every((id) => s.hands[s.active].some((v) => v.id === id && v.kind === 'u28')),
-    '合成仅接受手牌中的炎魔之心。',
-  );
-  s.hands[s.active] = s.hands[s.active].filter((v) => !c.cardIds!.includes(v.id));
-  s.hands[s.active].push({
-    id: `c${s.serial++}`,
-    kind: 'firelord',
-    drawnAt: s.turns[s.active],
-    summonedPly: s.ply,
-  });
-  emit(
-    s,
-    { type: 'summon', owner: s.active, text: '炎魔之王', ultimate: true },
-    '3张炎魔之心合成为炎魔之王，需当回合部署',
-  );
+  synthesize(s, { ...c, type: 'synthesize', recipeId: 'firelord', materialIds: c.cardIds });
 }
 export function reroll(s: GameState, c: Command) {
   const card = s.hands[s.active].find((v) => v.id === c.cardId);
