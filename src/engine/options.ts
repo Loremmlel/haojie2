@@ -1,5 +1,6 @@
 /** Renderer-independent command descriptions. The UI selects values; the engine validates them. */
 import { definition, isStored } from './catalog';
+import { rerollCommands } from './summoning';
 import { commandError } from './game';
 import { age, allegiance, getStats, has, now, passive } from './state';
 import type { Card, Command, GameState, Unit } from './types';
@@ -237,23 +238,15 @@ export function cardActions(s: GameState, c: Card): ActionSpec[] {
         target('选择法术目标', c.kind === 'u26' ? 'any' : 'friend', 'targetId', false),
       ]),
     );
-  if (c.summonedPly === s.ply) {
-    if (c.kind === 'u13' && s.turns[s.active] <= 5 && !c.rerolled)
-      result.push(spec('self-reroll', '改判自身 · 前5回合', { type: 'reroll', cardId: c.id }));
-    for (const mage of s.units)
-      if (
-        mage.kind === 'u13' &&
-        mage.owner === s.active &&
-        passive(s, mage) &&
-        mage.freeUsed !== now(s, mage)
-      )
-        result.push(
-          spec(`reroll-${mage.id}`, `改判 · (${mage.x},${mage.y})`, {
-            type: 'reroll',
-            unitId: mage.id,
-            cardId: c.id,
-          }),
-        );
+  for (const command of rerollCommands(s, c)) {
+    const mage = s.units.find((u) => u.id === command.unitId);
+    result.push(
+      spec(
+        mage ? `reroll-${mage.id}` : 'self-reroll',
+        mage ? `改判 · (${mage.x},${mage.y})` : '改判自身 · 前5回合',
+        command,
+      ),
+    );
   }
   return result;
 }

@@ -71,7 +71,11 @@ export interface Unit extends Point {
   kills: number;
   attackBonus: number;
   rangeBonus: number;
+  /** Legacy aggregate flag; new protections are spent per source, not per recipient. */
   guardUsed: boolean;
+  guardSourceIds?: string[];
+  /** U13 allowance follows the real turn, not U17's independent unit clock. */
+  rerollUsedPly?: number;
   effects: Effect[];
   equipment: Kind[];
   silenced: boolean;
@@ -90,6 +94,7 @@ export interface Card {
   group?: string;
   rerolled?: boolean;
   summonedPly: number;
+  summonPool?: 'normal' | 'ultimate';
 }
 export interface Reaction {
   kind: 'death-shot' | 'reflect' | 'bounce' | 'hut-spawn';

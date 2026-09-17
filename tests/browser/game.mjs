@@ -195,12 +195,13 @@ try {
   await button('攻击').click();
   await choose(3, 6);
   state = await readState();
-  assert.equal(
-    state.units.some((u) => u.kind === 5),
-    false,
-  );
+  assert.equal(state.units.find((u) => u.kind === 5).hp, 101);
   assert.equal(state.units[0].offset, 2);
-  scenario('haste advances only one unit and activates its scheduled execution effect');
+  assert.match(
+    await page.getByRole('region', { name: '棋子当前状态' }).innerText(),
+    /待生效.*死吧！/,
+  );
+  scenario('haste readies one unit but leaves execution waiting for the actual next own turn');
   await load('counter');
   await button('选择金身法术').click();
   await choose(3, 4);
@@ -227,13 +228,64 @@ try {
   assert.equal(state.units[0].kind, 'firelord');
   scenario('three stored hearts synthesize a deployable firelord');
   await load('reroll');
-  await button('选择冲锋怪随从').click();
-  await page.getByRole('button', { name: '改判 · (3,4)', exact: true }).click();
+  assert.equal(await page.getByRole('region', { name: '召唤改判' }).count(), 0);
+  await button('普通召唤').click();
+  assert.match(
+    await page.getByRole('region', { name: '召唤改判' }).innerText(),
+    /场上法师剩余 2 次/,
+  );
+  await button('完成召唤，开始行动').click();
   state = await readState();
-  assert.equal(state.units[0].freeUsed, state.ply);
-  assert.equal(state.hands[1][0].rerolled, true);
-  assert.equal(state.summonSlots, 1);
-  scenario('reroll replaces a revealed summon without consuming an additional summon slot');
+  assert.ok(state.units.every((u) => u.rerollUsedPly === undefined));
+  scenario('declining reroll enters play without spending a source');
+  await load('reroll');
+  await button('普通召唤').click();
+  await page.getByText('是，选择召唤结果', { exact: true }).click();
+  await page.locator('.reroll-results button').first().click();
+  state = await readState();
+  assert.equal(state.units[0].rerollUsedPly, state.ply);
+  assert.equal(state.units[1].rerollUsedPly, undefined);
+  assert.equal(state.summonSlots, 0);
+  assert.equal(state.heads[1], 6);
+  assert.match(
+    await page.getByRole('region', { name: '召唤改判' }).innerText(),
+    /场上法师剩余 1 次/,
+  );
+  await page.locator('.reroll-results button').first().click();
+  const allRerolled = await readState();
+  assert.equal(allRerolled.units[1].rerollUsedPly, allRerolled.ply);
+  assert.equal(await page.getByRole('region', { name: '召唤改判' }).count(), 0);
+  await button('悔棋').click();
+  assert.match(
+    await page.getByRole('region', { name: '召唤改判' }).innerText(),
+    /场上法师剩余 1 次/,
+  );
+  await button('重做').click();
+  assert.deepEqual(await readState(), allRerolled);
+  scenario(
+    'explicit post-summon rerolls consume each source once, preserve cost and survive undo/redo',
+  );
+  await load('reroll-self');
+  await page.getByText('是，选择召唤结果', { exact: true }).click();
+  await page.locator('.reroll-results button').first().click();
+  state = await readState();
+  assert.ok(state.hands[1].every((c) => c.rerolled && c.summonPool === 'ultimate'));
+  assert.equal(state.units.length, 0);
+  await load('reroll-self-expired');
+  assert.equal(await page.getByRole('region', { name: '召唤改判' }).count(), 0);
+  scenario(
+    'self-reforge needs no deployed mage during the first five own turns, but is absent in turn six',
+  );
+  await load('unit-status');
+  await choose(4, 4);
+  const statusText = await page.getByRole('region', { name: '棋子当前状态' }).innerText();
+  assert.match(statusText, /待生效.*死吧！/);
+  assert.match(statusText, /名刀保护.*剩余 1 次/);
+  assert.match(statusText, /已消耗.*可用/);
+  assert.match(statusText, /装备.*寒冰法杖/);
+  assert.match(statusText, /免疫塔保护/);
+  await page.screenshot({ path: 'artifacts/feedback-status-desktop.png', fullPage: true });
+  scenario('piece inspector exposes exact pending effects, equipment and individual knife sources');
   await load('clone-control');
   await choose(3, 4);
   await button('移动').click();
@@ -288,7 +340,7 @@ try {
   assert.equal((await readState()).units[0].charge, 0);
   assert.equal(await page.locator('.charge-meter').count(), 0);
   await choose(3, 6);
-  assert.equal((await readState()).units[1].hp, 40);
+  assert.equal((await readState()).units[1].hp, 20);
   scenario(
     'feedback: four-layer charge display clears after first shot and second shot uses base damage',
   );
@@ -363,6 +415,31 @@ try {
   await page.keyboard.press('Enter');
   assert.equal((await readState()).units.find((u) => u.kind === 24).hp, 30);
   scenario('feedback: mobile and keyboard direction selection requires no hover');
+  await load('unit-status');
+  await choose(4, 4);
+  assert.match(
+    await page.getByRole('region', { name: '棋子当前状态' }).innerText(),
+    /名刀保护.*剩余 1 次/,
+  );
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: 'artifacts/feedback-status-mobile.png', fullPage: true });
+  await load('reroll');
+  await button('普通召唤').click();
+  const summary = page.locator('.reroll-controls summary');
+  await summary.focus();
+  await page.keyboard.press('Enter');
+  assert.ok(await page.locator('.reroll-results button').first().isVisible());
+  await page.locator('.reroll-results button').first().focus();
+  await page.keyboard.press('Enter');
+  assert.match(
+    await page.getByRole('region', { name: '召唤改判' }).innerText(),
+    /场上法师剩余 1 次/,
+  );
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: 'artifacts/feedback-reroll-mobile.png', fullPage: true });
+  scenario(
+    '390px source-aware statuses and keyboard-only post-summon reroll stay within the viewport',
+  );
   await load('archer');
   await choose(3, 4);
   await button('攻击').click();

@@ -56,6 +56,7 @@ function scenarioKey(
     u?.moves,
     u?.operations,
     u?.freeUsed,
+    ...(u?.rerollUsedPly === undefined ? [] : [u.rerollUsedPly]),
   ]);
 }
 const time = () => (typeof performance === 'undefined' ? Date.now() : performance.now());

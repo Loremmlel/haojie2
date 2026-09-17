@@ -1,7 +1,8 @@
 import type { Session } from './history';
+import { normalizeLegacyGuards } from './protection';
 import type { Player } from './types';
 
-/** 2.0.1 author correction: old U17 cards lacked an expiry. Keep schema v2 and every snapshot. */
+/** Author corrections are applied to every snapshot, keeping the v2 format and storage key. */
 export function normalizeHornStorage(input: Session): Session {
   const session = structuredClone(input);
   for (const state of [
@@ -10,6 +11,7 @@ export function normalizeHornStorage(input: Session): Session {
     ...session.future,
     ...(session.humanAnchor ? [session.humanAnchor] : []),
   ]) {
+    normalizeLegacyGuards(state);
     for (const player of [1, 2] as Player[]) {
       state.hands[player] = state.hands[player].filter((card) => {
         if (card.kind !== 'u17') return true;

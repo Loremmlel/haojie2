@@ -11,7 +11,8 @@ import {
   canPlace,
   neighbors,
 } from '../engine/geometry';
-import { activeEffect, asTarget, has, passive } from '../engine/state';
+import { activeEffect, asTarget, effectClock, has, passive } from '../engine/state';
+import { availableGuardians } from '../engine/protection';
 import type { AttackDirection, GameState, Player, Target, Unit } from '../engine/types';
 import { actionWindow, hitDistance, isFrontHit, statsFor } from './spatial';
 /** Damage/utility estimate, not a replacement for exact distribution() at search nodes. */
@@ -135,16 +136,7 @@ export function markFollowUp(s: GameState, target: Target, owner: Player, until:
     )
       continue;
     const hp = target.unit?.hp ?? view.bases[target.owner];
-    const guarded =
-      target.unit &&
-      !target.unit.guardUsed &&
-      view.units.some(
-        (v) =>
-          v.kind === 3 &&
-          v.owner === target.owner &&
-          passive(view, v) &&
-          attackPath(view, v, target, statsFor(view, v).range),
-      );
+    const guarded = target.unit && availableGuardians(view, target.unit).length > 0;
     const packets = hitPackets(view, u, target);
     let probability = packets.reduce(
       (n, p) => n + (p.damage < hp || guarded ? p.probability : 0),
@@ -190,7 +182,7 @@ export function analyzePayload(
   };
   const effect = u.effects.find((e) => e.type === type);
   if (!effect) return result;
-  const view = actionWindow(s, u.owner, effect.from > s.ply + u.offset);
+  const view = actionWindow(s, u.owner, effect.from > effectClock(s, effect, u));
   result.window = view.ply;
   const carrier = view.units.find((v) => v.id === u.id);
   if (!carrier || !activeEffect(view, effect, carrier) || !readyAttack(view, carrier))
@@ -218,7 +210,13 @@ export function analyzePayload(
         : type === 'execute'
           ? 1
           : hitPackets(view, carrier, asTarget(victim)).reduce(
-              (n, p) => n + (p.damage > 0 && p.damage < victim.hp ? p.probability : 0),
+              (n, p) =>
+                n +
+                (p.damage > 0 &&
+                (p.damage < victim.hp ||
+                  (victim.hp > 1 && availableGuardians(view, victim).length > 0))
+                  ? p.probability
+                  : 0),
               0,
             );
     if (!probability && reason === '可兑现') reason = '没有造成正伤害后存活的分支';
@@ -232,7 +230,7 @@ export function analyzePayload(
   result.survival = Math.max(0.12, 1 - 0.75 * Math.min(1, incoming(s, u) / Math.max(1, u.hp)));
   result.value =
     Math.max(0, ...result.targets.map((t) => t.value)) *
-    (effect.from > s.ply + u.offset ? 0.55 : 0.8) *
+    (effect.from > effectClock(s, effect, u) ? 0.55 : 0.8) *
     result.survival;
   result.targets.sort((a, b) => b.value - a.value);
   return result;

@@ -309,7 +309,7 @@ test('U16 boots grant a complete attack operation after movement', () => {
   assert.equal(unit(s, u.id).bonusAttacks, 0);
   assert.ok(commandError(s, { type: 'move', unitId: u.id, x: 1, y: 4 }));
 });
-test('U17 advances exactly one unit, enabling fresh summon plus next-turn execute immediately', () => {
+test('U17 readies a fresh summon but cannot activate next-own-turn execution early', () => {
   let s = fixture();
   const id = card(s, 9),
     execute = card(s, 18),
@@ -323,10 +323,8 @@ test('U17 advances exactly one unit, enabling fresh summon plus next-turn execut
   assert.equal(s.turns[1], 3);
   assert.equal(getStats(s, unit(s, u.id)).remaining, 2);
   s = strike(s, unit(s, u.id), unit(s, enemy.id));
-  assert.equal(
-    s.units.some((u) => u.id === enemy.id),
-    false,
-  );
+  assert.equal(unit(s, enemy.id).hp, enemy.hp - 10);
+  assert.ok(unit(s, u.id).effects.some((e) => e.type === 'execute'));
   assert.equal(definition('u17').spell, 8);
 });
 test('U18 ignores attacks <=10, retaliates after real damage, does not loop forever', () => {

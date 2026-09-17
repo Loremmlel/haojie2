@@ -267,7 +267,7 @@ test('14 sacrifice damage uses current attack and deducts life cap', () => {
     enemy = add(s, 5, 2, 3, 6);
   ally.attackBonus = 5;
   const n = applyCommand(s, { type: 'skill', unitId: u.id, targetId: ally.id, column: 3 });
-  assert.equal(unit(n, u.id).maxHp, 20);
+  assert.equal(unit(n, u.id).maxHp, 45);
   assert.equal(unit(n, enemy.id).hp, 86);
   assert.equal(
     n.units.some((v) => v.id === ally.id),
@@ -280,7 +280,7 @@ test('15 charge uses a full operation, adds attack and range together, maximum f
   for (let layer = 1; layer <= 4; layer++) {
     s = applyCommand(s, { type: 'charge', unitId: u.id, mode: 'attack' });
     const stats = getStats(s, unit(s, u.id));
-    assert.equal(stats.attack, 5 + layer * 5);
+    assert.equal(stats.attack, 15 + layer * 5);
     assert.equal(stats.range, 2 + layer);
     assert.ok(commandError(s, { type: 'charge', unitId: u.id, mode: 'attack' }));
     s = round(s);

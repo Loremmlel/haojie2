@@ -95,7 +95,7 @@ test('all difficulty levels choose an available certain base kill', () => {
     assert.equal(next.winner, 1, `${d}: ${JSON.stringify(result.command)}`);
   }
 });
-test('beam planning finds execution + horn + attack from a freshly deployed unit', () => {
+test('beam planning cannot turn a fresh execution plus horn into an immediate kill', () => {
   const s = fixture(),
     a = add(s, 9, 1, 4, 4),
     b = add(s, 5, 2, 4, 6);
@@ -104,12 +104,13 @@ test('beam planning finds execution + horn + attack from a freshly deployed unit
   card(s, 18);
   card(s, 'u17');
   const result = plan(s, 'medium');
-  assert.ok(result.plan.length >= 3, JSON.stringify(result));
+  assert.ok(result.command, JSON.stringify(result));
   let next = s;
   for (const step of result.plan) next = applyCommand(next, step.command);
   assert.equal(
     next.units.some((u) => u.id === b.id),
-    false,
+    true,
+    'latest rule: execution must wait for the next actual own turn',
   );
 });
 test('hard level actually expands opponent decisions instead of labelling a wider beam adversarial', () => {
