@@ -1,4 +1,5 @@
 import { withRandomSource, type RandomSource } from './random';
+import { normalizeLegacyGuards } from './protection';
 import { definition, isStored } from './catalog';
 import { chargeAction, craft, equip, reroll, useSkill, cast } from './abilities';
 import { findTarget, performAttack, pruneSiphons, resolution } from './combat';
@@ -73,6 +74,7 @@ export function applyCommand(
     '小BW正在冲撞经过敌方，必须先用剩余移动次数回到空地。',
   );
   const s = structuredClone(previous);
+  normalizeLegacyGuards(s);
   s.events = [];
   return withRandomSource(s, randomSource, () => {
     const ctx = resolution();

@@ -1,4 +1,5 @@
 import { eventActor, withEventFacts, type EventAction } from './event-facts';
+import { rerollCommands, summonPool } from './summoning';
 import { COMBAT_RULES, definition, isStored } from './catalog';
 import {
   alive,
@@ -200,7 +201,10 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
     case 14: {
       const victim = friendly(c.targetId);
       ensure(victim.id !== u.id && victim.kind !== 'u25', '不可献祭自身或克隆军团。');
-      ensure(u.maxHp >= 10, '生命上限不足10。');
+      ensure(
+        u.maxHp >= COMBAT_RULES.sacrificeMaxHpCost,
+        `生命上限不足${COMBAT_RULES.sacrificeMaxHpCost}。`,
+      );
       const sameKind = victim.kind === 14;
       const summonOnly = c.mode === 'summon';
       ensure(!summonOnly || sameKind, '只有献祭另一枚献祭炮才能直接换取召唤。');
@@ -221,7 +225,7 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
       const t = candidates[0];
       ensure(t || sameKind, '这一列没有射程内的敌方目标。');
       const amount = getStats(s, victim).attack;
-      lowerMax(s, u, 10, ctx);
+      lowerMax(s, u, COMBAT_RULES.sacrificeMaxHpCost, ctx);
       kill(s, victim, { owner: u.owner, unit: u, kind: 'sacrifice' }, ctx);
       if (t && !summonOnly) damage(s, t, amount, source, ctx);
       if (sameKind) {
@@ -515,7 +519,17 @@ function resolveCast(s: GameState, c: Command, ctx: Resolution) {
       const u = target!.unit!;
       const type = card.kind === 17 ? 'immune' : card.kind === 18 ? 'execute' : 'convert';
       u.effects = u.effects.filter((e) => e.type !== type);
-      addEffect(s, u, type, owner, card.kind === 17 ? 0 : 2, 2);
+      addEffect(
+        s,
+        u,
+        type,
+        owner,
+        card.kind === 17 ? 0 : 2,
+        card.kind === 17 ? 2 : 1,
+        undefined,
+        undefined,
+        card.kind !== 17,
+      );
       emit(s, { type: 'shield', to: u, owner, text: definition(card.kind).name });
       break;
     }
@@ -638,24 +652,16 @@ export function reroll(s: GameState, c: Command) {
       s.hands[s.active].filter((v) => v.group === card.group).length === 8,
       '已有克隆部署，不可对半批军团改判。',
     );
-  const self = card.kind === 'u13' && s.turns[s.active] <= 5 && !card.rerolled && !c.unitId;
-  if (!self) {
-    const u = findUnit(s, c.unitId);
-    ensure(
-      u.kind === 'u13' && u.owner === s.active && passive(s, u) && u.freeUsed !== now(s, u),
-      '需要一名本回合尚未改判的友方改判小法师。',
-    );
-    u.freeUsed = now(s, u);
-  }
+  ensure(s.summonSlots === 0, '请先用完本回合的召唤次数，再选择改判。');
+  ensure(
+    rerollCommands(s, card).some((option) => option.unitId === c.unitId),
+    '需要一名本回合尚未改判的友方改判小法师，或前五回合刚抽到的自身。',
+  );
+  if (c.unitId) findUnit(s, c.unitId).rerollUsedPly = s.ply;
   s.hands[s.active] = s.hands[s.active].filter((v) =>
     card.group ? v.group !== card.group : v.id !== card.id,
   );
-  const cards = draw(
-    s,
-    s.active,
-    1,
-    definition(card.kind).tier !== 'normal' && card.kind !== '3p' && card.kind !== '17p',
-  );
+  const cards = draw(s, s.active, 1, summonPool(card) === 'ultimate');
   for (const v of cards) v.rerolled = true;
   emit(
     s,

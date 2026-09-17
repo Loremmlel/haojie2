@@ -1,7 +1,8 @@
 import type { Definition, Kind } from './types';
-export const RULESET_ID = '2026-09-15';
+export const RULESET_ID = '2026-09-17';
 /** Numeric combat parameters shared by resolution and read-only AI estimates. */
 export const COMBAT_RULES = {
+  sacrificeMaxHpCost: 20,
   charger: { heavyChance: 1 / 12, criticalChance: 1 / 3, heavyBonus: 60, bonus: 20 },
   superCritical: { lethalChance: 1 / 5, doubleChance: 1 / 3, lethalDamage: 100 },
   vampire: { base: 0.2, perKill: 0.2 },
@@ -56,7 +57,7 @@ export const CATALOG: Definition[] = [
     actions: 0,
     move: 0.5,
     description:
-      '抽到时1/3为名刀，否则为破碎名刀。范围内友方（含自身）一生避免一次致命伤害并以1血存活。攻击次数为0不妨碍移动：选择蓄力回合后，下一回合可消耗1层移动一格。',
+      '抽到时1/3为名刀，否则为破碎名刀。范围内友方（含自身）各获得一次与本名刀绑定的致命伤害保护，触发后以1血存活。多个名刀按入场顺序独立结算；来源离场、失效或超出范围时，不再提供保护，重新进入范围不会补回已用次数。攻击次数为0不妨碍移动：选择蓄力回合后，下一回合可消耗1层移动一格。',
   },
   {
     id: '3p',
@@ -220,13 +221,13 @@ export const CATALOG: Definition[] = [
     name: '献祭炮',
     glyph: '祭',
     role: '献祭',
-    attack: 0,
-    health: 30,
+    attack: 5,
+    health: 65,
     range: 3,
     actions: 1,
     move: 1,
     description:
-      '自身生命上限−10，当前生命不超过新上限。消灭范围内另一友方随从，再选择一列，沿进攻方向对射程内该列第一个敌方造成被献祭者的当前攻击力伤害。献祭另一枚献祭炮时，额外获得一次仅本回合可用的召唤机会，可付2人头升级为终极召唤；即使没有可射击的敌人，也可直接献祭同类换取召唤。',
+      '自身生命上限−20，当前生命不超过新上限。消灭范围内另一友方随从，再选择一列，沿进攻方向对射程内该列第一个敌方造成被献祭者的当前攻击力伤害。献祭另一枚献祭炮时，额外获得一次仅本回合可用的召唤机会，可付2人头升级为终极召唤；即使没有可射击的敌人，也可直接献祭同类换取召唤。',
     skill: '献祭射击',
   },
   {
@@ -235,8 +236,8 @@ export const CATALOG: Definition[] = [
     name: '蓄力怪',
     glyph: '炼',
     role: '成长',
-    attack: 5,
-    health: 30,
+    attack: 15,
+    health: 35,
     range: 2,
     actions: 2,
     move: 1,
@@ -299,7 +300,7 @@ export const CATALOG: Definition[] = [
     actions: 0,
     move: 0,
     description:
-      '使一友方下个回合命中的首个敌方随从立即死亡。不能处决基地；金身可免疫。效果只在该下回合有效。',
+      '施放当回合无效；使一友方在下个实际己方回合命中的首个敌方随从立即死亡，绕过所有名刀保护。不能处决基地；金身可免疫。冲锋号令不能提前生效，效果在该己方回合结束后失效。',
     spell: 7,
   },
   {
@@ -358,7 +359,7 @@ export const CATALOG: Definition[] = [
     actions: 0,
     move: 0,
     description:
-      '使一友方下回合首次以攻击本身对敌方随从造成正伤害时，将存活目标变为友方。零伤害或被免伤不触发、不消耗策反；投石标记爆炸不计作攻击本身的伤害。金身免疫；大肉比不能被策反，基地也不能被策反。新友方本回合疲劳，下一个己方回合即可行动（独行侠也不额外多休息）。',
+      '施放当回合无效；使一友方在下个实际己方回合首次以攻击本身对敌方随从造成正伤害时，将存活目标变为友方。零伤害或被免伤不触发、不消耗策反；投石标记爆炸不计作攻击本身的伤害。金身免疫；大肉比不能被策反，基地也不能被策反。新友方本回合疲劳，下一个己方回合即可行动（独行侠也不额外多休息）。冲锋号令不能提前生效；未触发的策反在该己方回合结束后失效。',
     spell: 3,
   },
   {
@@ -643,7 +644,7 @@ export const CATALOG: Definition[] = [
     actions: 1,
     move: 1,
     description:
-      '每回合一次，可将本次召唤的一张牌重新抽取，保留原召唤池。前五个己方回合内，自己被抽到时也可直接重抽自己一次；不连锁重复。',
+      '每个实际己方回合每名法师各可改判一次，冲锋号令不会刷新次数。召唤次数用完后，可将本回合的一次召唤结果消除并从原卡池自动重抽，不额外扣费；克隆军团按完整一批替换。前五个己方回合内，自己被抽到时也可直接重抽自己一次；不连锁重复。',
     skill: '改判',
     mage: true,
   },
@@ -704,7 +705,7 @@ export const CATALOG: Definition[] = [
     actions: 0,
     move: 0,
     description:
-      '使一友方随从独立于战场提前进入自己的下回合：刷新操作，推进其效果时钟、部署疲劳和已预约的死吧！等效果。储存限制8个己方回合，包含抽到的回合。',
+      '使一友方随从独立于战场提前进入自己的下回合：刷新操作，推进其独立效果时钟、部署疲劳与已存蓄力。不提前触发死吧！或策反，也不刷新改判次数；这些使用实际回合计时。储存限制8个己方回合，包含抽到的回合。',
     spell: 8,
   },
   {

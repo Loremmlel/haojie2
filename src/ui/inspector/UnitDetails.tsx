@@ -1,19 +1,9 @@
 import type { GameState, Unit } from '../../engine';
-import { definition, getStats, now } from '../../engine';
+import { getStats } from '../../engine';
+import { UnitStatus } from './UnitStatus';
 import { Icon, numberLabel } from '../shared/visuals';
 
 export function UnitDetails({ state: s, unit: inspected }: { state: GameState; unit: Unit }) {
-  const effectNames: Record<string, string> = {
-    attack: '攻击强化',
-    immune: '金身',
-    execute: '死吧！',
-    convert: '策反',
-    mark: '投石标记',
-    freeze: '冰冻 · 中立',
-    burn: '灼烧',
-    stun: '眩晕',
-    'inner-fire': '心灵之火',
-  };
   const modeNames: Record<string, string> = {
     none: '尚未选择',
     move: '移动模式',
@@ -60,22 +50,7 @@ export function UnitDetails({ state: s, unit: inspected }: { state: GameState; u
         )}
       </>
       <>
-        <div className="status-tags">
-          {inspected.silenced && <span>原技能已沉默</span>}
-          {inspected.guardUsed && <span>名刀已用</span>}
-          {inspected.effects.map((e, i) => (
-            <span key={i}>
-              {e.from > now(s, inspected) ? '下回合 · ' : ''}
-              {effectNames[e.type]}
-            </span>
-          ))}
-          {inspected.equipment.map((k) => (
-            <span className="equipment-tag" key={k}>
-              {definition(k).name}
-            </span>
-          ))}
-          {inspected.kills > 0 && <span>击杀 {inspected.kills}</span>}
-        </div>
+        <UnitStatus state={s} unit={inspected} />
         {inspected.charge > 0 && (
           <div className="charge-meter">
             <span>

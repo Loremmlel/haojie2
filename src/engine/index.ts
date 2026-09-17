@@ -15,6 +15,7 @@ export {
   getStats,
   faction,
   activeEffect,
+  effectClock,
   template,
   asTarget,
   RuleError,
@@ -46,3 +47,6 @@ export {
 } from './geometry';
 export { unitActions, cardActions, reactionAction, actionError } from './options';
 export type { ActionSpec, SelectionStep } from './options';
+
+export { availableGuardians, guardProtections } from './protection';
+export { canRerollWith, rerollCommands, summonRerolls, summonPool } from './summoning';

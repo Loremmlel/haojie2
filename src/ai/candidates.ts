@@ -87,7 +87,7 @@ function targetRank(s: GameState, a: ActionSpec, c: Command, t: Target): number 
       ...t.unit,
       effects: [
         ...t.unit.effects,
-        { type, owner, from: now(s, t.unit) + 2, until: now(s, t.unit) + 4 },
+        { type, owner, from: s.ply + 2, until: s.ply + 3, global: true },
       ],
     } as Unit;
     const view = { ...s, units: s.units.map((v) => (v.id === carrier.id ? carrier : v)) };

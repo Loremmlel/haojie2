@@ -150,6 +150,11 @@ function validUnit(u: unknown, dead = false): u is Unit {
     return false;
   return (
     (u.group === undefined || text(u.group)) &&
+    (u.guardSourceIds === undefined ||
+      (list(u.guardSourceIds) &&
+        u.guardSourceIds.every((id) => text(id)) &&
+        new Set(u.guardSourceIds).size === u.guardSourceIds.length)) &&
+    (u.rerollUsedPly === undefined || int(u.rerollUsedPly, 1)) &&
     ['expiresAt', 'hookReadyAt', 'hookExpiresAt'].every((k) => u[k] === undefined || int(u[k]))
   );
 }
@@ -231,6 +236,9 @@ export function validState(s: unknown): s is GameState {
         return false;
       ids.add(c.id);
       if (c.group !== undefined && !text(c.group)) return false;
+      if (c.summonPool !== undefined && !['normal', 'ultimate'].includes(c.summonPool))
+        return false;
+      if (c.rerolled !== undefined && typeof c.rerolled !== 'boolean') return false;
     }
   }
   if (

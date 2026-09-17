@@ -1,4 +1,5 @@
 import { eventActor, withEventFacts } from './event-facts';
+import { availableGuardians, spentGuardSources } from './protection';
 import { definition, COMBAT_RULES } from './catalog';
 import { attackProfile, vampireRate } from './attack-profile';
 import {
@@ -322,18 +323,10 @@ export function damage(
   if (!u.silenced && u.kind === 24 && source.path && frontal(source.path, u.owner))
     amount = Math.min(amount, COMBAT_RULES.frontDamageCap);
   const before = u.hp;
-  const guardian =
-    !u.guardUsed &&
-    amount >= u.hp &&
-    s.units.find(
-      (v) =>
-        v.kind === 3 &&
-        allegiance(s, v) === u.owner &&
-        passive(s, v) &&
-        attackPath(s, v, t, getStats(s, v).range),
-    );
+  const guardian = amount >= u.hp && availableGuardians(s, u)[0];
   if (guardian) {
     u.hp = 1;
+    u.guardSourceIds = [...spentGuardSources(s, u), guardian.id];
     u.guardUsed = true;
     emit(s, {
       type: 'shield',
@@ -342,6 +335,8 @@ export function damage(
       action: 'ward',
       stage: 'blocked',
       text: '名刀',
+      actor: eventActor(guardian),
+      ability: 3,
     });
   } else u.hp = Math.max(0, Math.round((u.hp - amount) * 1e6) / 1e6);
   const loss = before - u.hp;

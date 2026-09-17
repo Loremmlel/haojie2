@@ -193,7 +193,7 @@ test('feedback 14: sacrificing another cannon grants a same-turn summon even wit
   const after = applyCommand(s, c);
   assert.equal(after.summonSlots, 1);
   assert.equal(after.phase, 'play');
-  assert.equal(unit(after, a.id).maxHp, 20);
+  assert.equal(unit(after, a.id).maxHp, 45);
   assert.equal(
     after.units.some((u) => u.id === b.id),
     false,
@@ -237,7 +237,7 @@ test('feedback 14: normal sacrifice still needs a shot, while cannon-on-cannon c
   const enemy = add(s, 'grave', 2, 3, 6);
   const n = applyCommand(s, { type: 'skill', unitId: a.id, targetId: b.id, column: 3 });
   assert.equal(n.summonSlots, 1);
-  assert.equal(unit(n, enemy.id).hp, 70);
+  assert.equal(unit(n, enemy.id).hp, 65);
   const normal = applyCommand(s, { type: 'skill', unitId: a.id, targetId: friend.id, column: 3 });
   assert.equal(normal.summonSlots, 0);
   assert.equal(unit(normal, enemy.id).hp, 60);
@@ -249,11 +249,11 @@ test('feedback 15: only the first shot receives charge; moves preserve it, attac
     b = add(s, 'grave', 2, 3, 6);
   a.charge = a.readyCharge = 4;
   let n = applyCommand(s, { type: 'attack', unitId: a.id, targetId: b.id });
-  assert.equal(unit(n, b.id).hp, 45);
+  assert.equal(unit(n, b.id).hp, 35);
   assert.equal(unit(n, a.id).charge, 0);
   assert.equal(getStats(n, unit(n, a.id)).range, 2);
   n = applyCommand(n, { type: 'attack', unitId: a.id, targetId: b.id });
-  assert.equal(unit(n, b.id).hp, 40);
+  assert.equal(unit(n, b.id).hp, 20);
   const moved = applyCommand(s, { type: 'move', unitId: a.id, x: 4, y: 4 });
   assert.equal(unit(moved, a.id).charge, 4);
   b.effects.push({ type: 'immune', from: s.ply, until: s.ply + 2, owner: 2 });
@@ -376,6 +376,7 @@ test('feedback 17p: reroll remains in the normal pool; zero-damage attacks do no
   assert.equal(n.hands[1][0].kind, 1);
   const a = add(s, 14, 1, 3, 5),
     b = add(s, '17p', 2, 3, 6);
+  a.attackBonus = -5; // This test needs a real zero-damage attack after cannon's base buff.
   applyCommand(s, { type: 'attack', unitId: a.id, targetId: b.id }, () => {
     throw new Error('zero damage must not roll');
   });

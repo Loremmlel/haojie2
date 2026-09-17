@@ -1,4 +1,6 @@
 import type { Command, GameState } from '../../engine';
+import { summonRerolls } from '../../engine';
+import { RerollControls } from './RerollControls';
 import { Icon } from '../shared/visuals';
 
 export function SummonControls({
@@ -11,7 +13,8 @@ export function SummonControls({
   readOnly?: boolean;
 }) {
   const reaction = s.pending[0];
-  if ((s.phase !== 'summon' && s.summonSlots <= 0) || s.winner) return null;
+  if ((s.phase !== 'summon' && s.summonSlots <= 0 && !summonRerolls(s).length) || s.winner)
+    return null;
   return (
     <div className="summon-controls">
       <p>
@@ -34,6 +37,7 @@ export function SummonControls({
         <Icon name="spark" />
         终极召唤 <span>−2 人头</span>
       </button>
+      <RerollControls state={s} run={run} readOnly={readOnly || !!reaction} />
       {s.phase === 'summon' && (
         <button
           className="primary"

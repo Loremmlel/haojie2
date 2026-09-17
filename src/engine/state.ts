@@ -26,8 +26,10 @@ export function ensure(value: unknown, message: string): asserts value {
 }
 export const faction = (p: Player) => (p === 1 ? '苍穹方' : '赤焰方');
 export const now = (s: GameState, u: Unit) => s.ply + u.offset;
+export const effectClock = (s: GameState, e: Effect, u?: Unit) =>
+  e.global || !u ? s.ply : now(s, u);
 export const activeEffect = (s: GameState, e: Effect, u?: Unit) =>
-  e.from <= (e.global || !u ? s.ply : now(s, u)) && e.until > (e.global || !u ? s.ply : now(s, u));
+  e.from <= effectClock(s, e, u) && e.until > effectClock(s, e, u);
 export const has = (s: GameState, u: Unit, type: Effect['type']) =>
   u.effects.some((e) => e.type === type && activeEffect(s, e, u));
 export const allegiance = (s: GameState, u: Unit): Player | 0 =>
@@ -138,6 +140,7 @@ export function draw(s: GameState, owner: Player, count: number, ultimate = fals
         kind,
         drawnAt: s.turns[owner],
         summonedPly: s.ply,
+        summonPool: ultimate ? 'ultimate' : 'normal',
         ...(limit !== undefined && limit >= 0 ? { expiresAt: s.turns[owner] + limit } : {}),
         ...(group ? { group } : {}),
       };
@@ -303,8 +306,9 @@ export function addEffect(
   duration: number,
   amount?: number,
   sourceId?: string,
+  global = false,
 ) {
-  const base = now(s, u);
+  const base = global ? s.ply : now(s, u);
   u.effects.push({
     type,
     owner,
@@ -312,6 +316,7 @@ export function addEffect(
     until: base + delay + duration,
     ...(amount === undefined ? {} : { amount }),
     ...(sourceId === undefined ? {} : { sourceId }),
+    ...(global ? { global: true } : {}),
   });
 }
 export function storageRemaining(s: GameState, c: Card) {
