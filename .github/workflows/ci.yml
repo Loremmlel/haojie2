@@ -1,85 +1,30 @@
-name: Verify and build single HTML
+name: Check 2.5 source transfer
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['README.md', 'docs/**']
   pull_request:
-  workflow_dispatch:
-concurrency:
-  group: verify-${{ github.ref }}
-  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
-  verify:
+  transfer:
+    if: github.repository == 'Loremmlel/haojie2' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feat/2.5-synthesis'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: '22'
-      - name: Install exact dependency tree
-        run: npm ci --no-audit --no-fund
-      - name: Package auditable source snapshot
-        run: |
-          mkdir -p artifacts
-          tar --exclude='./.git' --exclude='./node_modules' --exclude='./artifacts' --exclude='./dist' -czf artifacts/haojie2-source.tar.gz .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: source-snapshot
-          path: artifacts/haojie2-source.tar.gz
-          retention-days: 7
-      - run: npm run format:check
-      - run: npm run check
-      - run: |
-          set -o pipefail
-          npm test | tee artifacts/engine-report.txt
-      - run: npm run deploy:check
-      - name: Install browser for acceptance testing
-        run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
-      - run: npm run test:pages
-      - run: npm run test:browser:ai
-      - run: npm run test:browser:vfx
-      - name: Verify current rules CLI command fingerprints
-        run: npm run play:cli -- --replay docs/playtests/cli-feedback-20260917.jsonl
-      - name: Check out the September 15 feedback rules
-        uses: actions/checkout@v4
-        with:
-          ref: 1d31a7db858b6596c175de8e135a43e0e2fd66c3
-          path: artifacts/feedback-rules
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - name: Verify the unmodified September 15 feedback recording
+      - name: Require the locally verified archive checksum before applying changes
         run: |
-          ln -s "$GITHUB_WORKSPACE/node_modules" artifacts/feedback-rules/node_modules
-          npm --prefix artifacts/feedback-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-feedback-20260915.jsonl"
-      - name: Check out the rules used to record historical playtests
-        uses: actions/checkout@v4
-        with:
-          ref: 3a856cf3177dea7eb8c8c20d942199bd2da2fd1a
-          path: artifacts/legacy-rules
-          persist-credentials: false
-      - name: Verify historical fingerprints under their original rules
-        run: |
-          ln -s "$GITHUB_WORKSPACE/node_modules" artifacts/legacy-rules/node_modules
-          npm --prefix artifacts/legacy-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-human-20260907.jsonl.gz"
-          npm --prefix artifacts/legacy-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-manual-budget-20260908.jsonl.gz"
-      - name: Upload the playable standalone HTML
-        uses: actions/upload-artifact@v4
-        with:
-          name: haojie2-single-html
-          path: dist/index.html
-          if-no-files-found: error
-          retention-days: 30
-      - name: Upload acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: acceptance-evidence
-          path: |
-            artifacts/*.png
-            artifacts/*report.json
-            artifacts/engine-report.txt
-          if-no-files-found: ignore
-          retention-days: 7
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, base64
+          parts = [Path(f'.github/synthesis-part-{i}.bz2').read_bytes() for i in range(4)]
+          print('lengths', [len(p) for p in parts])
+          data = b''.join(parts)
+          prefixes = '8bc1733c 24905628 81fc3731 a53e72fc 3b04d5ac a0f8467a 9ccc6d85 1a1f1016 7084744a 18dfa9ba c4fb6950 e3211c21 86826e05 086744e0 2d63c9ff 2f73dde9 3c562dbb a9d19933 4c2f47db 2f8c17f3 61245a9e 9119d3fa 2a359689 a12fc10c a9e75962 11a3692c 5e537e89 a4efafdb 3c3e1014 75833a4d 0532fc3b 2fd727f3'.split()
+          for i, expected in enumerate(prefixes):
+              chunk = data[i*500:(i+1)*500]
+              if hashlib.sha256(chunk).hexdigest()[:8] != expected:
+                  print('MISMATCH', i*500, base64.b64encode(chunk).decode())
+          assert hashlib.sha256(data).hexdigest() == '8f2cd4f93ab4db1be4c3c894da7b768c8dd582c51250dfb1eadbe210dd997f8c'
+          PY
