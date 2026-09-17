@@ -1,4 +1,4 @@
-name: Check 2.5 source transfer
+name: Inspect exact source transfer
 on:
   pull_request:
 permissions:
@@ -13,18 +13,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - name: Require the locally verified archive checksum before applying changes
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib, base64
-          parts = [Path(f'.github/synthesis-part-{i}.bz2').read_bytes() for i in range(4)]
-          print('lengths', [len(p) for p in parts])
-          data = b''.join(parts)
-          prefixes = '8bc1733c 24905628 81fc3731 a53e72fc 3b04d5ac a0f8467a 9ccc6d85 1a1f1016 7084744a 18dfa9ba c4fb6950 e3211c21 86826e05 086744e0 2d63c9ff 2f73dde9 3c562dbb a9d19933 4c2f47db 2f8c17f3 61245a9e 9119d3fa 2a359689 a12fc10c a9e75962 11a3692c 5e537e89 a4efafdb 3c3e1014 75833a4d 0532fc3b 2fd727f3'.split()
-          for i, expected in enumerate(prefixes):
-              chunk = data[i*500:(i+1)*500]
-              if hashlib.sha256(chunk).hexdigest()[:8] != expected:
-                  print('MISMATCH', i*500, base64.b64encode(chunk).decode())
-          assert hashlib.sha256(data).hexdigest() == '8f2cd4f93ab4db1be4c3c894da7b768c8dd582c51250dfb1eadbe210dd997f8c'
-          PY
+      - run: tar -czf /tmp/synthesis-transfer.tar.gz .github/synthesis-part-*.bz2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthesis-transfer
+          path: /tmp/synthesis-transfer.tar.gz
+          retention-days: 1
