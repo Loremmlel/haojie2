@@ -13,7 +13,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,8 +42,20 @@ jobs:
       - run: npm run test:pages
       - run: npm run test:browser:ai
       - run: npm run test:browser:vfx
+      - run: npm run test:browser:shrine
+      - run: node --import tsx scripts/ai/shrine-smoke.ts
       - name: Verify current rules CLI command fingerprints
-        run: npm run play:cli -- --replay docs/playtests/cli-synthesis-20260917.jsonl
+        run: npm run play:cli -- --replay docs/playtests/cli-shrine-20260918.jsonl
+      - name: Check out the original 2.5 synthesis rules
+        uses: actions/checkout@v4
+        with:
+          ref: ae797bf25cc7f25ad746a43662324c8a3ec4fe46
+          path: artifacts/synthesis-rules
+          persist-credentials: false
+      - name: Verify the unmodified 2.5 synthesis recording
+        run: |
+          ln -s "$GITHUB_WORKSPACE/node_modules" artifacts/synthesis-rules/node_modules
+          npm --prefix artifacts/synthesis-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-synthesis-20260917.jsonl"
       - name: Check out the September 17 feedback rules
         uses: actions/checkout@v4
         with:
