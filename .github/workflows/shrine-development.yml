@@ -1,0 +1,23 @@
+name: Shrine development validation
+on:
+  push:
+    branches: [feat/3.0-shrine-mode]
+    paths: ['.github/workflows/shrine-development.yml', '.github/shrine-update.patch.gz.b64']
+permissions:
+  contents: read
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - run: tar -czf haojie2-dependencies.tar.gz node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shrine-development-dependencies
+          path: haojie2-dependencies.tar.gz
+          retention-days: 1
