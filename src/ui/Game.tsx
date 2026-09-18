@@ -1,3 +1,4 @@
+import { SummonChoiceDialog } from './shrine/SummonChoiceDialog';
 import { OpponentBar } from './opponent/OpponentBar';
 import { Battlefield } from './board/Battlefield';
 import { BattleLog } from './feedback/BattleLog';
@@ -35,7 +36,8 @@ export function HaojieGame(props: HaojieGameProps) {
                 {game.match.mode === 'ai' ? 'LOCAL AI DUEL' : 'LOCAL TWO-PLAYER DUEL'}
               </p>
               <p>
-                普通召唤 × 26 <i /> 终极召唤 × 28
+                {state.mode === 'shrine' ? '神龛模式 · 神龛 × 16' : '经典模式 · 普通 × 26'} <i />{' '}
+                终极 × 28
               </p>
             </div>
             <Scoreboard
@@ -68,6 +70,9 @@ export function HaojieGame(props: HaojieGameProps) {
               rewind={game.rewind}
               run={game.run}
               onCancel={game.cancel}
+              onTargetLayer={(layer) =>
+                game.setIntent((i) => (i.kind === 'select' ? { ...i, targetLayer: layer } : i))
+              }
               endError={game.endError}
               readOnly={game.computer.busy}
             />
@@ -90,6 +95,7 @@ export function HaojieGame(props: HaojieGameProps) {
 
               <div className="hand-scroll" tabIndex={0} aria-label="手牌与战报">
                 <HandPanel
+                  match={game.match}
                   state={state}
                   cardId={game.cardId}
                   chooseCard={game.chooseCard}
@@ -109,7 +115,7 @@ export function HaojieGame(props: HaojieGameProps) {
           <footer className="game-footer">
             <span>
               <i className="live-dot" />
-              浩劫2.5 · 离线单HTML · 双人 / 本地AI
+              浩劫3.0 · 经典 / 神龛 · 离线单HTML · 双人 / 本地AI
             </span>
             <button onClick={() => game.setModal('rules')}>规则与实施说明</button>
             <span>SEED {state.seed}</span>
@@ -117,6 +123,14 @@ export function HaojieGame(props: HaojieGameProps) {
         </div>
       </main>
       <Feedback events={game.events} notice={game.notice} onDismiss={() => game.setNotice('')} />
+      {game.choiceCommand && (
+        <SummonChoiceDialog
+          state={state}
+          command={game.choiceCommand}
+          onClose={game.cancelChoice}
+          onConfirm={game.confirmChoice}
+        />
+      )}
       <GameDialogs
         key={game.modal ?? 'closed'}
         modal={game.modal}

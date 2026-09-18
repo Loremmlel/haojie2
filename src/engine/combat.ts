@@ -1,3 +1,24 @@
+import { chargeFor, consumeCharge, attackChargeKind } from './traits';
+import {
+  abilityKinds,
+  allPieces,
+  anyTrait,
+  canAttackFriend,
+  hasTrait,
+  isLandmark,
+  isShrine,
+  signedAttack,
+} from './traits';
+import {
+  damageBonus,
+  demolish,
+  healingBlocked,
+  landmarkAt,
+  liveLandmark,
+  returnDeathWeapons,
+  stealOnKill,
+  syncBanners,
+} from './shrines';
 import { eventActor, withEventFacts } from './event-facts';
 import { availableGuardians, spentGuardSources } from './protection';
 import { definition, COMBAT_RULES } from './catalog';
@@ -48,7 +69,9 @@ export const resolution = (): Resolution => ({
   protection: new Map(),
   token: 0,
 });
-export const alive = (s: GameState, u: Unit) => s.units.some((v) => v.id === u.id);
+export const alive = (s: GameState, u: Unit) =>
+  s.units.some((v) => v.id === u.id) ||
+  !!s.landmarks?.some((v) => v.id === u.id && v.dormantSince === undefined);
 export function findTarget(s: GameState, id?: string): Target {
   const t = targets(s).find((t) => t.id === id);
   ensure(t, '请选择有效的目标。');
@@ -81,7 +104,7 @@ export function protectedEffect(s: GameState, t: Target, source: Source, ctx: Re
   if (ctx.protection.has(key)) return ctx.protection.get(key)!;
   const tower = s.units.find(
     (u) =>
-      u.kind === 'u15' &&
+      hasTrait(u, 'u15') &&
       u.owner === t.owner &&
       passive(s, u) &&
       attackPath(s, u, t, getStats(s, u).range),
@@ -112,6 +135,7 @@ export function heal(s: GameState, t: Unit | Target, amount: number, ctx = resol
   const target = 'kind' in t ? asTarget(t) : t,
     u = target.unit;
   if (u && !alive(s, u)) return;
+  if (healingBlocked(s, target.owner)) return;
   const gain = Math.max(0, Math.min(amount, u ? u.maxHp - u.hp : 300 - s.bases[target.owner]));
   if (u) u.hp = Math.round((u.hp + gain) * 1e6) / 1e6;
   else s.bases[target.owner] += gain;
@@ -141,7 +165,23 @@ export function kill(
   ctx = resolution(),
 ) {
   if (!alive(s, u)) return;
+  if (isLandmark(u)) {
+    demolish(s, u);
+    return;
+  }
   const snap = structuredClone(u);
+  const inheritor = source.unit && s.units.find((v) => v.id === source.unit!.id);
+  if (
+    inheritor &&
+    inheritor.id !== u.id &&
+    source.owner !== undefined &&
+    source.kind !== 'expire'
+  ) {
+    if (source.owner !== u.owner && inheritor.equipment.includes('s15'))
+      inheritor.bladeQualified = true;
+    stealOnKill(s, inheritor, u);
+  }
+  returnDeathWeapons(s, u);
   u.hp = 0;
   s.units = s.units.filter((v) => v.id !== u.id);
   s.deaths.push({
@@ -166,7 +206,7 @@ export function kill(
       ![...s.hands[1], ...s.hands[2]].some((c) => c.group === u.group));
   for (const city of s.units)
     if (
-      city.kind === 'citadel' &&
+      hasTrait(city, 'citadel') &&
       city.owner === u.owner &&
       allegiance(s, snap) === u.owner &&
       passive(s, city) &&
@@ -178,12 +218,19 @@ export function kill(
         source: structuredClone(city),
         amount: 0,
       });
+  syncBanners(s);
   if (!groupFinal) return;
   const enabled = !u.silenced;
-  const denyHead = enabled && u.kind === 20 && random(s, [0, 0.5, 1]) < 0.5;
+  const denyHead = enabled && hasTrait(u, 20) && random(s, [0, 0.5, 1]) < 0.5;
   const enemyKill =
-    source.owner !== undefined && source.owner !== u.owner && source.kind !== 'expire';
-  if (enemyKill && !denyHead) {
+    source.owner !== undefined &&
+    source.owner !== u.owner &&
+    source.kind !== 'expire' &&
+    !source.ignoreHead;
+  if (
+    (enemyKill || (source.creditFriendly && source.owner === u.owner && !source.ignoreHead)) &&
+    !denyHead
+  ) {
     s.heads[source.owner!]++;
     emit(
       s,
@@ -200,7 +247,7 @@ export function kill(
   const killer = source.unit && s.units.find((v) => v.id === source.unit!.id);
   if (enemyKill && killer && !killer.silenced) {
     killer.kills++;
-    if (killer.kind === 26) {
+    if (hasTrait(killer, 26)) {
       const step = (killer.kills - 1) % 3;
       if (step === 0) {
         killer.maxHp += 10;
@@ -209,24 +256,24 @@ export function kill(
       if (step === 1) killer.attackBonus += 5;
       if (step === 2) killer.rangeBonus++;
     }
-    if (killer.kind === 'u8' && killer.kills === 5) killer.rangeBonus++;
-    if (killer.kind === 'u23') {
+    if (hasTrait(killer, 'u8') && killer.kills === 5) killer.rangeBonus++;
+    if (hasTrait(killer, 'u23')) {
       killer.hookReadyAt = now(s, killer) + 2;
       killer.hookExpiresAt = now(s, killer) + 4;
     }
   }
   if (enabled) {
-    if (u.kind === 11) s.bonus[u.owner]++;
-    if (u.kind === 12) {
+    if (hasTrait(u, 11)) s.bonus[u.owner]++;
+    if (hasTrait(u, 12)) {
       const grave = addUnit(s, 'grave', u.owner, u);
       grave.size = 1;
     }
-    if (u.kind === 2)
+    if (hasTrait(u, 2))
       s.pending.push({ kind: 'death-shot', owner: u.owner, source: snap, amount: 20 });
-    if (u.kind === 'sage' && passive(s, snap))
+    if (hasTrait(u, 'sage') && passive(s, snap))
       for (const friend of [...s.units])
         if (allegiance(s, friend) === u.owner) heal(s, friend, friend.maxHp - friend.hp, ctx);
-    if (u.kind === 'u21')
+    if (hasTrait(u, 'u21'))
       for (const friend of [...s.units])
         if (
           friend.owner === u.owner &&
@@ -234,7 +281,7 @@ export function kill(
         )
           heal(s, friend, 25, ctx);
     if (
-      u.kind === 20 &&
+      hasTrait(u, 20) &&
       !denyHead &&
       source.unit &&
       source.unit.id !== u.id &&
@@ -253,7 +300,7 @@ export function kill(
   }
   for (const hut of [...s.units])
     if (
-      hut.kind === 'u22' &&
+      hasTrait(hut, 'u22') &&
       hut.owner === u.owner &&
       passive(s, hut) &&
       attackPath(s, hut, asTarget(snap), getStats(s, hut).range)
@@ -281,7 +328,7 @@ export function damage(
   source: Source,
   ctx = resolution(),
 ): number {
-  amount = Math.max(0, amount);
+  amount = Math.max(0, amount + (source.modified ? 0 : damageBonus(s, source)));
   if (amount <= 0) return 0;
   if (!t.unit) {
     const loss = Math.min(s.bases[t.owner], amount);
@@ -296,6 +343,15 @@ export function damage(
   }
   const u = t.unit;
   if (!alive(s, u)) return 0;
+  if (
+    isLandmark(u) &&
+    source.owner !== u.owner &&
+    ['attack', 'collision'].includes(source.kind) &&
+    !(source.unit && piercing(source.unit))
+  ) {
+    const cover = occupants(s, u).find((v) => allegiance(s, v) === u.owner);
+    if (cover) return damage(s, asTarget(cover), amount, { ...source, modified: true }, ctx);
+  }
   if (has(s, u, 'immune')) {
     emit(s, {
       type: 'shield',
@@ -309,7 +365,7 @@ export function damage(
   }
   if (protectedEffect(s, t, source, ctx)) return 0;
   if (
-    u.kind === '17p' &&
+    hasTrait(u, '17p') &&
     !u.silenced &&
     random(s, [0, COMBAT_RULES.littleGoldImmunity, 1]) < COMBAT_RULES.littleGoldImmunity
   ) {
@@ -325,7 +381,7 @@ export function damage(
   }
   if (
     !u.silenced &&
-    u.kind === 'u18' &&
+    hasTrait(u, 'u18') &&
     source.kind === 'attack' &&
     amount <= COMBAT_RULES.kingAttackImmunity
   ) {
@@ -339,7 +395,7 @@ export function damage(
     });
     return 0;
   }
-  if (!u.silenced && u.kind === 24 && source.path && frontal(source.path, u.owner))
+  if (!u.silenced && hasTrait(u, 24) && source.path && frontal(source.path, u.owner))
     amount = Math.min(amount, COMBAT_RULES.frontDamageCap);
   const before = u.hp;
   const guardian = amount >= u.hp && availableGuardians(s, u)[0];
@@ -365,12 +421,19 @@ export function damage(
       { type: 'damage', to: u, unitId: u.id, amount: loss, owner: u.owner },
       `${definition(u.kind).name}受到${loss}伤害`,
     );
-  if (loss > 0 && !u.silenced && u.kind === 'u10') u.attackBonus += 15;
+  if (loss > 0) {
+    u.receivedDamage = (u.receivedDamage ?? []).filter((r) => r.ply >= s.ply - 1);
+    const current = u.receivedDamage.find((r) => r.ply === s.ply);
+    if (current) current.amount += loss;
+    else u.receivedDamage.push({ ply: s.ply, amount: loss });
+  }
+  if (u.hp <= u.maxHp) delete u.overMaxFromBanner;
+  if (loss > 0 && !u.silenced && hasTrait(u, 'u10')) u.attackBonus += 15;
   const snap = structuredClone(u);
   if (u.hp <= 0) kill(s, u, source, ctx);
   if (
     loss > 0 &&
-    snap.kind === 'slayer' &&
+    hasTrait(snap, 'slayer') &&
     passive(s, snap) &&
     source.unit &&
     source.unit.id !== u.id &&
@@ -389,7 +452,7 @@ export function damage(
   if (
     loss > 0 &&
     !snap.silenced &&
-    u.kind === 16 &&
+    hasTrait(u, 16) &&
     source.unit &&
     source.owner === u.owner &&
     source.unit.id !== u.id
@@ -399,7 +462,7 @@ export function damage(
     loss > 0 &&
     alive(s, u) &&
     !u.silenced &&
-    u.kind === 'u18' &&
+    hasTrait(u, 'u18') &&
     source.unit &&
     source.unit.id !== u.id &&
     !has(s, u, 'freeze') &&
@@ -513,6 +576,8 @@ function knockback(s: GameState, u: Unit, t: Target, path: Point[], ctx: Resolut
   }
 }
 interface AttackOptions {
+  mode?: string;
+  hits?: { id: string; actual: number }[];
   direction?: import('./types').AttackDirection;
   reactive?: boolean;
   unlimited?: boolean;
@@ -529,8 +594,25 @@ export function performAttack(
   ctx = resolution(),
   options: AttackOptions = {},
 ) {
+  const ally = t.unit ? allegiance(s, t.unit) === u.owner : t.owner === u.owner;
   const healing =
-    !options.forceHostile && healingAttack(u) && t.unit && allegiance(s, t.unit) === u.owner;
+    !options.forceHostile &&
+    (definition(u.kind).attack < 0 ||
+      (!u.silenced && hasTrait(u, 's14')) ||
+      (signedAttack(u)
+        ? options.mode === 'heal' || (options.mode === undefined && ally)
+        : healingAttack(u) && ally));
+  ensure(
+    options.mode === undefined || options.mode === 'heal' || options.mode === 'damage',
+    '请选择伤害或治疗。',
+  );
+  ensure(!healing || !!t.unit, '治疗攻击只能选择棋子。');
+  ensure(
+    options.mode !== 'heal' || healingAttack(u) || definition(u.kind).attack < 0,
+    '该棋子不能选择治疗。',
+  );
+  const hits = options.hits ?? [];
+
   const result = withEventFacts(
     s,
     {
@@ -538,12 +620,53 @@ export function performAttack(
       actor: eventActor(u),
       subject: eventActor(t),
     },
-    () => resolveAttack(s, u, t, ctx, options),
+    () => resolveAttack(s, u, t, ctx, { ...options, hits, mode: healing ? 'heal' : 'damage' }),
   );
   // Clear once per complete attack, including immune/execution hits and piercing volleys.
   // An invalid attack throws before reaching this point and never spends charge.
-  if ((u.kind === 15 || definition(u.kind).actions === 0.5) && !options.noPierce)
-    u.charge = u.readyCharge = 0;
+  if (!options.noPierce) {
+    if (hasTrait(u, 15)) consumeCharge(u, 15);
+    const charged = attackChargeKind(u);
+    if (charged !== undefined) consumeCharge(u, charged);
+  }
+  if (!options.noPierce && !options.reactive && !u.silenced) {
+    if (hasTrait(u, 's3')) {
+      const convert = random(s, [0, 1 / 3, 1]) < 1 / 3;
+      const victim = t.unit;
+      if (
+        convert &&
+        victim &&
+        alive(s, victim) &&
+        allegiance(s, victim) === other(u.owner) &&
+        !isShrine(victim) &&
+        !hasTrait(victim, 5) &&
+        hits.some((h) => h.id === victim.id && h.actual > 0) &&
+        !protectedEffect(s, asTarget(victim), { owner: u.owner, unit: u, kind: 'skill' }, ctx)
+      ) {
+        victim.owner = u.owner;
+        victim.offset = 0;
+        victim.born = s.turns[u.owner] - (hasTrait(victim, 23) ? 1 : 0);
+        victim.effects = [];
+        resetUnit(s, victim);
+        victim.operations = 1;
+        emit(s, {
+          type: 'skill',
+          to: victim,
+          owner: u.owner,
+          action: 'conversion',
+          text: 'CX · 策反',
+        });
+      }
+      if (random(s, [0, 1 / 4, 1]) < 1 / 4) {
+        s.summonSlots++;
+        emit(s, { type: 'summon', owner: u.owner, text: 'CX · 本回合额外召唤+1' });
+      }
+    }
+    if (hasTrait(u, 's12') && random(s, [0, 3 / 5, 1]) < 3 / 5 && alive(s, u)) {
+      u.extraOperations = (u.extraOperations ?? 0) + 1;
+      emit(s, { type: 'skill', to: u, owner: u.owner, text: '先攻 · 额外完整操作+1' });
+    }
+  }
   return result;
 }
 function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, options: AttackOptions) {
@@ -551,21 +674,29 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
   ensure(
     !ally ||
       options.forceHostile ||
-      (t.unit && (healingAttack(u) || (t.unit.kind === 16 && !t.unit.silenced && t.id !== u.id))),
-    '只能攻击敌方或中立；奶妈可治疗友方，伤害转化器可受友伤。',
+      (t.unit && (canAttackFriend(u, t.unit) || options.mode === 'heal')),
+    '该棋子不能对所选友方进行这种攻击。',
   );
-  ensure(topTarget(s, t), '单体攻击或技能只能命中当前叠放栈顶。');
+  ensure(t.id !== u.id || options.mode === 'heal', '不能通过普通攻击自杀；玉碎使用独立命令。');
+  ensure(
+    topTarget(s, t) || (piercing(u) && t.unit && isLandmark(t.unit)),
+    '非穿透攻击优先命中地标上的友方棋子或叠放栈顶。',
+  );
   const stats = getStats(s, u);
-  ensure(u.kind !== 'firelord', '炎魔之王不能普通攻击。');
-  if (!options.reactive && definition(u.kind).actions === 0.5)
+  ensure(!hasTrait(u, 'firelord'), '炎魔之王不能普通攻击。');
+  const charged = attackChargeKind(u);
+  if (!options.reactive && charged !== undefined)
     ensure(
-      u.readyCharge >= 1 && u.chargeType === 'attack',
+      chargeFor(u, charged).readyCharge >= 1 && chargeFor(u, charged).chargeType === 'attack',
       '半速攻击需要在回合开始已有1层攻击蓄力。',
     );
   if (!options.reactive) {
-    ensure(u.kind !== 4 || u.silenced || u.readyCharge >= 2, '定炮回合开始至少有2层蓄力才可开炮。');
     ensure(
-      u.kind !== 9 || u.silenced || !u.attacked.includes(t.id),
+      !hasTrait(u, 4) || u.silenced || chargeFor(u, 4).readyCharge >= 2,
+      '定炮回合开始至少有2层蓄力才可开炮。',
+    );
+    ensure(
+      !hasTrait(u, 9) || u.silenced || !u.attacked.includes(t.id),
       '射手不能重复攻击本回合的同一目标。',
     );
   }
@@ -585,12 +716,15 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     .sort((a, b) => a.length - b.length);
   const path =
     piercing(u) && !ally
-      ? rays[0]
+      ? (rays[0] ??
+        (cells(u).some((p) => (t.unit ? cells(t.unit) : [t]).some((q) => equal(p, q)))
+          ? [{ x: u.x, y: u.y }]
+          : undefined))
       : attackPath(s, u, t, options.unlimited ? 117 : stats.range, options.direction);
   ensure(path, '目标不在射程内，或所有路径均被阻挡；炎魔之心必须选同一直线。');
   if (options.direction && piercing(u) && !ally)
     ensure(pathDirection(path) === options.direction, '炎魔之心只能沿所选直线攻击。');
-  if (piercing(u) && !options.noPierce && !ally) {
+  if (piercing(u) && !options.noPierce && !ally && path.length > 1) {
     const origin = path[0],
       dx = path[1].x - origin.x,
       dy = path[1].y - origin.y,
@@ -601,7 +735,11 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
         (v) => (v.unit ? cells(v.unit) : [v]).some((c) => equal(c, p)) && hostile(s, u, v),
       );
       for (const v of rows)
-        if (!victims.some((old) => old.id === v.id) && topTarget(s, v)) victims.push(v);
+        if (
+          !victims.some((old) => old.id === v.id) &&
+          (topTarget(s, v) || (v.unit && isLandmark(v.unit)))
+        )
+          victims.push(v);
     }
     for (const victim of victims)
       if (alive(s, u) && (!victim.unit || alive(s, victim.unit)))
@@ -622,11 +760,26 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     path,
     unitId: u.id,
     owner: u.owner,
-    text: ally && healingAttack(u) ? '治疗' : '攻击',
+    text: options.mode === 'heal' ? '治疗' : '攻击',
     ultimate: definition(u.kind).tier !== 'normal',
   });
-  if (ally && !options.forceHostile && healingAttack(u) && t.unit) {
-    heal(s, t.unit, u.kind === 2 ? 20 : 25, ctx);
+  if (options.mode === 'heal' && !options.forceHostile) {
+    if (!protectedEffect(s, t, { owner: u.owner, unit: u, kind: 'skill' }, ctx)) {
+      heal(
+        s,
+        t,
+        definition(u.kind).attack < 0 || hasTrait(u, 's14')
+          ? 20
+          : signedAttack(u)
+            ? Math.abs(definition(u.kind).attack)
+            : hasTrait(u, 2)
+              ? 20
+              : 25,
+        ctx,
+      );
+      if (t.unit && alive(s, t.unit) && hasWeapon(u, 's16'))
+        addEffect(s, t.unit, 'attack', u.owner, 0, 2, -15, u.id, true);
+    }
     return;
   }
   const skillSource: Source = { owner: u.owner, unit: u, kind: 'skill' };
@@ -646,37 +799,57 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
     return;
   }
   const marks =
-    !ally && u.kind !== 10
+    !ally && !hasTrait(u, 10)
       ? targetEffects(s, t).filter(
           (e) => e.type === 'mark' && e.owner === u.owner && activeEffect(s, e, t.unit),
         )
       : [];
   // One allied follow-up consumes every active stack, even if an earlier packet kills.
   for (const mark of marks) removeEffect(s, t, mark);
-  const profile = attackProfile(
-    u.kind,
-    options.amount ?? stats.attack,
-    u.kills,
-    u.silenced,
-    !t.unit,
-  );
-  let amount = profile.packets[0].damage;
-  if (profile.cuts) {
-    const roll = random(s, profile.cuts);
-    const index = profile.cuts.slice(1).findIndex((cut) => roll < cut);
-    amount = profile.packets[index < 0 ? profile.packets.length - 1 : index].damage;
+  let amount = options.amount ?? stats.attack;
+  for (const kind of abilityKinds(u)) {
+    const profile = attackProfile(kind, amount, u.kills, u.silenced, !t.unit);
+    amount = profile.packets[0].damage;
+    if (profile.cuts) {
+      const roll = random(s, profile.cuts),
+        index = profile.cuts.slice(1).findIndex((cut) => roll < cut);
+      amount = profile.packets[index < 0 ? profile.packets.length - 1 : index].damage;
+    }
   }
+  const wounded = t.unit ? Math.max(0, t.unit.maxHp - t.unit.hp) : 300 - s.bases[t.owner];
+  const reflected =
+    !u.silenced && hasTrait(u, 's6')
+      ? (u.receivedDamage ?? []).filter((v) => v.ply >= s.ply - 1).reduce((n, v) => n + v.amount, 0)
+      : 0;
   const lifesteal = !u.silenced
-    ? u.kind === 'slayer'
+    ? hasTrait(u, 'slayer')
       ? 1
-      : u.kind === 'u8'
+      : hasTrait(u, 'u8')
         ? vampireRate(u.kills)
         : 0
     : 0;
   // Conversion requires damage from the attack itself, not a secondary mark explosion.
-  const attackLoss = damage(s, t, amount, { owner: u.owner, unit: u, kind: 'attack', path }, ctx);
+  const packet: Source = {
+    owner: u.owner,
+    unit: u,
+    kind: 'attack',
+    path,
+    creditFriendly: ally && (signedAttack(u) || hasTrait(u, 's5')),
+  };
+  const attackLoss = damage(s, t, amount, packet, ctx);
+  options.hits?.push({ id: t.id, actual: attackLoss });
   let loss = attackLoss;
-  if (u.kind === 10 && !u.silenced && !ally) {
+  if (hasWeapon(u, 's15') && wounded > 0) loss += damage(s, t, wounded, packet, ctx);
+  if (reflected > 0) loss += damage(s, t, reflected, packet, ctx);
+  if (
+    t.unit &&
+    alive(s, t.unit) &&
+    hasWeapon(u, 's16') &&
+    !protectedEffect(s, t, { owner: u.owner, unit: u, kind: 'skill' }, ctx)
+  )
+    addEffect(s, t.unit, 'attack', u.owner, 0, 2, -15, u.id, true);
+
+  if (hasTrait(u, 10) && !u.silenced && !ally) {
     const e: Effect = {
       type: 'mark',
       owner: u.owner,
@@ -735,14 +908,14 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
   }
   // The first-attack weapon applies to this complete attack, not to every turn hit.
   if (hasWeapon(u, 'u11') && options.weaponFirst === undefined) u.weaponFirstUsed = true;
-  if (!u.silenced && u.kind === 'u2') u.charge = u.readyCharge = 0;
-  if (!u.silenced && u.kind === 4) u.charge = u.readyCharge = 0;
+  if (!u.silenced && hasTrait(u, 'u2')) consumeCharge(u, 'u2');
+  if (!u.silenced && hasTrait(u, 4)) consumeCharge(u, 4);
   const victim = t.unit;
   if (victim && alive(s, victim) && !ally) {
     const conversion = u.effects.find((e) => e.type === 'convert' && activeEffect(s, e, u));
     if (conversion && attackLoss > 0) {
       u.effects = u.effects.filter((e) => e !== conversion);
-      if (victim.kind === 5)
+      if (hasTrait(victim, 5))
         emit(s, {
           type: 'shield',
           to: victim,
@@ -751,10 +924,10 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
           stage: 'blocked',
           text: '大肉比 · 无法策反',
         });
-      if (victim.kind !== 5 && !protectedEffect(s, t, skillSource, ctx)) {
+      if (!hasTrait(victim, 5) && !protectedEffect(s, t, skillSource, ctx)) {
         victim.owner = u.owner;
         victim.offset = 0;
-        victim.born = s.turns[u.owner] - (victim.kind === 23 ? 1 : 0);
+        victim.born = s.turns[u.owner] - (hasTrait(victim, 23) ? 1 : 0);
         victim.effects = [];
         resetUnit(s, victim);
         victim.operations = 1;
@@ -773,7 +946,7 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
         return;
       }
     }
-    if (!u.silenced && u.kind === 'u4' && !protectedEffect(s, t, skillSource, ctx)) {
+    if (!u.silenced && hasTrait(u, 'u4') && !protectedEffect(s, t, skillSource, ctx)) {
       victim.silenced = true;
       addEffect(s, victim, 'stun', u.owner, 0, 2, undefined, u.id);
       emit(s, {
@@ -786,10 +959,10 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
       });
     }
     if (hasWeapon(u, 'u5')) freeze(s, t, skillSource, ctx);
-    if (hasWeapon(u, 'u28') || (!u.silenced && u.kind === 'u6' && !hasWeapon(u, 'u5')))
+    if (hasWeapon(u, 'u28') || (!u.silenced && hasTrait(u, 'u6') && !hasWeapon(u, 'u5')))
       burn(s, t, skillSource, ctx);
-    if (!u.silenced && u.kind === 'u20') knockback(s, u, t, path, ctx);
-    if (u.kind === 'formless' && passive(s, u) && alive(s, u))
+    if (!u.silenced && hasTrait(u, 'u20')) knockback(s, u, t, path, ctx);
+    if (hasTrait(u, 'formless') && passive(s, u) && alive(s, u))
       s.pending.push({
         kind: 'hit-pull',
         owner: u.owner,

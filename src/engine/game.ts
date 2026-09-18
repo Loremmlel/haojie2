@@ -1,3 +1,16 @@
+import {
+  activateAura,
+  captureClockFrame,
+  chooseShrine,
+  chooseSummons,
+  clockRestore,
+  extraSummon,
+  initializeShrines,
+  shatter,
+  summon,
+  syncBanners,
+} from './shrines';
+import { canDeployKind, hasTrait } from './traits';
 import { withRandomSource, type RandomSource } from './random';
 import { synthesize } from './synthesis';
 import { normalizeLegacyGuards } from './protection';
@@ -22,7 +35,7 @@ import {
   template,
 } from './state';
 import type { Command, GameState, Kind, Player } from './types';
-export function createGame(seed = 20260907): GameState {
+export function createGame(seed = 20260907, mode: 'classic' | 'shrine' = 'classic'): GameState {
   ensure(Number.isSafeInteger(seed), '种子须为整数。');
   const normalized = seed >>> 0 || 2654435769;
   const s: GameState = {
@@ -50,7 +63,8 @@ export function createGame(seed = 20260907): GameState {
     log: [],
     events: [],
   };
-  beginTurn(s, resolution());
+  if (mode === 'shrine') initializeShrines(s);
+  else beginTurn(s, resolution());
   return s;
 }
 export function applyCommand(
@@ -64,7 +78,7 @@ export function applyCommand(
   ensure(previous.summonSlots !== -1 || c.type === 'react', '当前正在结算回合结束效果。');
   const transit = previous.units.find(
     (u) =>
-      u.kind === 'u12p' &&
+      hasTrait(u, 'u12p') &&
       u.mode === 'move' &&
       previous.units.some(
         (v) => v.id !== u.id && cells(v).some((p) => cells(u).some((q) => equal(p, q))),
@@ -79,17 +93,38 @@ export function applyCommand(
   s.events = [];
   return withRandomSource(s, randomSource, () => {
     const ctx = resolution();
+    if (s.phase === 'shrine-draft') ensure(c.type === 'choose-shrine', '请先秘密选择神龛。');
+    if (s.phase === 'shrine-setup')
+      ensure(
+        ['deploy', 'equip', 'activate-aura', 'finish-shrine-setup'].includes(c.type),
+        '第0回合仅能部署、装备、启用或储存神龛。',
+      );
+    if (s.summonOffer) ensure(c.type === 'choose-summons', '请先从候选召唤中选出两个结果。');
     if (s.phase === 'synthesis')
       ensure(
         ['synthesize', 'skip-synthesis', 'craft', 'react'].includes(c.type),
         '请先选择合成，或跳过合成进入召唤。',
       );
     if (
-      !['summon', 'begin', 'reroll', 'react', 'synthesize', 'skip-synthesis', 'craft'].includes(
-        c.type,
-      )
+      ![
+        'choose-shrine',
+        'finish-shrine-setup',
+        'activate-aura',
+        'extra-summon',
+        'choose-summons',
+        'summon',
+        'begin',
+        'reroll',
+        'react',
+        'synthesize',
+        'skip-synthesis',
+        'craft',
+      ].includes(c.type)
     )
-      ensure(s.phase === 'play', '先完成回合开始的召唤选择，再进入行动阶段。');
+      ensure(
+        s.phase === 'play' || s.phase === 'shrine-setup',
+        '先完成回合开始的召唤选择，再进入行动阶段。',
+      );
     switch (c.type) {
       case 'synthesize':
         synthesize(s, c);
@@ -99,14 +134,40 @@ export function applyCommand(
         s.phase = 'summon';
         emit(s, { type: 'turn', owner: s.active, text: '进入召唤阶段' });
         break;
-      case 'summon':
-        ensure(s.summonSlots > 0, '本回合召唤次数已用完。');
-        if (c.ultimate) {
-          ensure(s.heads[s.active] >= 2, '终极召唤需要2人头。');
-          s.heads[s.active] -= 2;
+      case 'choose-shrine':
+        chooseShrine(s, c);
+        break;
+      case 'finish-shrine-setup':
+        ensure(s.phase === 'shrine-setup', '当前不是神龛入场阶段。');
+        (s.shrineSetupDone ??= []).push(s.active);
+        if (s.active === 1) s.active = 2;
+        else {
+          s.active = 1;
+          s.ply = 1;
+          beginTurn(s, ctx);
         }
-        draw(s, s.active, 1, !!c.ultimate);
-        s.summonSlots--;
+        break;
+      case 'activate-aura':
+        ensure(
+          s.phase === 'play' || s.phase === 'shrine-setup',
+          '请在行动或开局入场阶段启用光环。',
+        );
+        activateAura(s, c);
+        break;
+      case 'choose-summons':
+        chooseSummons(s, c);
+        break;
+      case 'extra-summon':
+        extraSummon(s, c);
+        break;
+      case 'clock':
+        clockRestore(s, c, ctx);
+        break;
+      case 'shatter':
+        shatter(s, c, ctx);
+        break;
+      case 'summon':
+        summon(s, c);
         break;
       case 'begin':
         ensure(s.phase === 'summon' && s.summonSlots === 0, '请先完成所有召唤。');
@@ -126,17 +187,11 @@ export function applyCommand(
         break;
       case 'deploy': {
         const card = s.hands[s.active].find((v) => v.id === c.cardId);
-        ensure(card && !isStored(definition(card.kind)), '请选择待部署随从。');
+        ensure(card && canDeployKind(card.kind), '请选择待部署随从。');
         const to = point(c.x, c.y),
           ghost = template(card.kind, s.active, s.turns[s.active], to);
         ensure(canPlace(s, ghost, to, true), '非法部署：检查行权限、占位、基地与独行侠禁区。');
-        const u = addUnit(s, card.kind, s.active, to, card.group);
-        if (card.kind === 1 && c.charge) {
-          u.hp -= 10;
-          u.maxHp -= 10;
-          u.born--;
-          u.chargedOnDeploy = true;
-        }
+        addUnit(s, card.kind, s.active, to, card.group, !!c.charge);
         s.hands[s.active] = s.hands[s.active].filter((v) => v.id !== card.id);
         break;
       }
@@ -147,7 +202,7 @@ export function applyCommand(
         const u = actor(s, c.unitId);
         chooseMode(s, u, 'attack');
         const t = findTarget(s, c.targetId);
-        performAttack(s, u, t, ctx, { direction: c.direction });
+        performAttack(s, u, t, ctx, { direction: c.direction, mode: c.mode });
         u.attacked.push(t.id);
         u.shots++;
         if (u.shots >= getStats(s, u).actions) finishOperation(u);
@@ -174,6 +229,7 @@ export function applyCommand(
       default:
         throw new RuleError('无法识别的游戏命令。');
     }
+    syncBanners(s);
     pruneSiphons(s);
     if (s.bases[1] <= 0 || s.bases[2] <= 0) {
       s.winner = s.bases[1] <= 0 && s.bases[2] <= 0 ? 'draw' : s.bases[1] <= 0 ? 2 : 1;

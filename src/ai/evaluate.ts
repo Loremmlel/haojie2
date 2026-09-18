@@ -1,3 +1,13 @@
+import { landmarkAt, liveLandmark } from '../engine/shrines';
+import { auraValue, shrinePrior } from './shrines';
+import {
+  hasTrait,
+  isLandmark,
+  chargeFor,
+  abilityKinds,
+  allPieces,
+  canDeployKind,
+} from '../engine/traits';
 import { COMBAT_RULES } from '../engine/catalog';
 import { definition, isStored } from '../engine/catalog';
 import {
@@ -57,7 +67,7 @@ const passives: Partial<Record<Unit['kind'], number>> = {
 /** Strategic asset value, separate from legal availability and tactical reach. */
 export function materialValue(s: GameState, u: Unit): number {
   const st = statsFor(s, u),
-    ratio = u.hp / u.maxHp;
+    ratio = Math.min(1, u.hp / u.maxHp);
   // Stored burst damage is a one-use resource, not permanent DPS. Counting it twice
   // made the cannon/charger prefer keeping its charge over actually firing.
   const attack =
@@ -69,7 +79,7 @@ export function materialValue(s: GameState, u: Unit): number {
           ? st.attack / 3
           : definition(u.kind).actions === 0.5
             ? st.attack / 2
-            : st.attack;
+            : Math.max(0, st.attack);
   let value =
     14 +
     u.hp * 0.38 +
@@ -80,7 +90,10 @@ export function materialValue(s: GameState, u: Unit): number {
       st.range - (passive(s, u) && u.kind === 15 ? u.charge * COMBAT_RULES.accumulator.range : 0),
     ) *
       2;
-  if (passive(s, u)) value += passives[u.kind] ?? 0;
+  if (passive(s, u))
+    value +=
+      abilityKinds(u).reduce<number>((n, k) => n + (passives[k] ?? 0), 0) +
+      (definition(u.kind).tier === 'shrine' ? shrinePrior(u.kind) * 0.35 : 0);
   if (passive(s, u) && u.kind === 'sage')
     value += Math.min(
       60,
@@ -136,7 +149,9 @@ export function unitValue(s: GameState, u: Unit): number {
 }
 export function cardValue(s: GameState, c: Card, owner: Player): number {
   const d = definition(c.kind);
-  if (!isStored(d)) {
+  if (d.aura) return (auraValue[c.kind] ?? 50) * 0.75;
+  if (d.tier === 'shrine' && d.weapon !== undefined) return shrinePrior(c.kind) * 0.6;
+  if (canDeployKind(c.kind)) {
     const raw = template(c.kind, owner, 0, { x: 5, y: owner === 1 ? 6 : 8 });
     return materialValue(s, raw) * 0.76;
   }
@@ -171,7 +186,7 @@ export function placementValue(s: GameState, u: Unit, p: Point, nextFullTurn = f
   const moved = u.x === p.x && u.y === p.y ? u : { ...u, x: p.x, y: p.y },
     st = statsFor(s, moved),
     enemyBase = basePoint(other(u.owner));
-  const enemies = s.units.filter((v) => v.id !== u.id && allegiance(s, v) !== u.owner);
+  const enemies = allPieces(s).filter((v) => v.id !== u.id && allegiance(s, v) !== u.owner);
   const separation = (v: Unit) =>
     Math.min(...cells(v).flatMap((q) => cells(moved).map((a) => distance(a, q))));
   const nearest = Math.min(
@@ -192,7 +207,9 @@ export function placementValue(s: GameState, u: Unit, p: Point, nextFullTurn = f
     'sage',
     'citadel',
     'archmage',
-  ].includes(u.kind);
+    's4',
+    's14',
+  ].some((k) => hasTrait(u, k as Unit['kind']));
   const range = st.range,
     speed = Math.max(0.5, Math.min(3, st.move));
   const turnsToContact = Math.max(0, nearest - range) / speed;
@@ -224,6 +241,13 @@ export function placementValue(s: GameState, u: Unit, p: Point, nextFullTurn = f
       : Math.min(45, 14 + st.attack * 0.35);
   const stacked = occupantsAt(s, p).filter((v) => v.id !== u.id && v.owner === u.owner).length;
   if (!nextFullTurn && u.kind === 'u25' && stacked) score -= Math.pow(stacked, 1.35) * 2;
+  const land = landmarkAt(s, p);
+  if (!isLandmark(u) && liveLandmark(land) && land.owner === u.owner)
+    score += hasTrait(land, 's1') ? 12 : 5;
+  if (isLandmark(u))
+    score += hasTrait(u, 's8')
+      ? 28
+      : s.units.filter((v) => v.owner === u.owner && distance(v, p) <= 4).length * 4;
   return score;
 }
 function formation(s: GameState, side: Player): number {
@@ -318,9 +342,19 @@ export function explainEvaluation(s: GameState, side: Player): EvaluationBreakdo
           0.9 *
           markFollowUp(s, { id: `base-${p}`, owner: p, ...basePoint(p) }, e.owner, e.until);
   }
+  for (const p of [1, 2] as Player[]) {
+    result.effects +=
+      (p === side ? 1 : -1) *
+      (s.auras?.[p] ?? []).reduce((n, a) => n + (auraValue[a.kind] ?? 0), 0);
+    result.effects +=
+      (p === side ? 1 : -1) *
+      (s.landmarks ?? [])
+        .filter((l) => l.owner === p && l.dormantSince !== undefined)
+        .reduce((n, l) => n + shrinePrior(l.kind) * 0.12, 0);
+  }
   const assets: Record<Player, number> = { 1: 0, 2: 0 };
-  for (const u of s.units) assets[u.owner] += materialValue(s, u);
-  for (const u of s.units) {
+  for (const u of allPieces(s)) assets[u.owner] += materialValue(s, u);
+  for (const u of allPieces(s)) {
     const sign = u.owner === side ? 1 : -1;
     result.force += sign * unitValue(s, u);
     result.position += sign * placementValue(s, u, u, true);

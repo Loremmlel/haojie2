@@ -75,7 +75,7 @@ async function open(viewport, reducedMotion = 'no-preference') {
   });
   if (renderOnly) await p.setContent(html);
   else await p.goto(pathToFileURL(resolve('dist/index.html')).href);
-  await p.getByRole('heading', { name: '浩劫2.5', exact: true }).waitFor();
+  await p.getByRole('heading', { name: '浩劫3.0', exact: true }).waitFor();
   return { p, context };
 }
 try {
@@ -406,27 +406,27 @@ try {
     'feedback: four-layer charge display clears after first shot and second shot uses base damage',
   );
   await button('棋子图鉴').click();
-  assert.equal(await page.locator('.codex-card').count(), 65);
+  assert.equal(await page.locator('.codex-card').count(), 82);
   await page.getByRole('textbox', { name: '搜索图鉴' }).fill('免疫塔');
   assert.ok(await page.getByRole('heading', { name: '免疫塔', exact: true }).isVisible());
   await page.getByRole('textbox', { name: '搜索图鉴' }).fill('');
   await button('终极').click();
   assert.equal(await page.locator('.codex-card').count(), 28);
   await button('武器').click();
-  assert.equal(await page.locator('.codex-card').count(), 4);
+  assert.equal(await page.locator('.codex-card').count(), 7);
   await page.screenshot({ path: 'artifacts/codex.png', fullPage: true });
   await button('关闭弹窗').click();
   await button('规则').click();
   await page.locator('.interpretations summary').click();
   assert.ok(
     await page
-      .getByText(/善铁.*3.0神龛模式/)
+      .getByText(/3.0新增独立神龛模式/)
       .first()
       .isVisible(),
   );
   await button('关闭弹窗').click();
   scenario(
-    '65-entry searchable codex, 28 ultimate entries, four weapons and confirmed/deferred rules',
+    '82-entry searchable codex, 28 ultimate entries, seven weapons and confirmed/deferred rules',
   );
   const beforeInvalid = await readState();
   await page.locator('input[type=file]').setInputFiles({
@@ -437,7 +437,7 @@ try {
   assert.deepEqual(await readState(), beforeInvalid);
   if (!renderOnly) {
     await page.reload();
-    await page.getByRole('heading', { name: '浩劫2.5', exact: true }).waitFor();
+    await page.getByRole('heading', { name: '浩劫3.0', exact: true }).waitFor();
     assert.deepEqual(await readState(), beforeInvalid);
     scenario('file:// local save reloads and malformed imports never replace the current match');
   } else
@@ -524,7 +524,7 @@ try {
   assert.match(await cell(3, 6).getAttribute('aria-label'), /60生命/);
   await button('棋子图鉴').click();
   await button('武器').click();
-  assert.equal(await page.locator('.codex-card').count(), 4);
+  assert.equal(await page.locator('.codex-card').count(), 7);
   await button('关闭弹窗').click();
   await mobile.context.close();
   scenario('390px mobile layout, reduced motion, attack controls and weapon codex');

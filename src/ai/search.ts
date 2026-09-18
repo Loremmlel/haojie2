@@ -1,3 +1,4 @@
+import { draftDecision } from './shrines';
 import type { Command, GameState, Player } from '../engine/types';
 import {
   iterateCandidateGroups,
@@ -403,13 +404,14 @@ export function* search(
       plan: [],
       stats: { simulations: 0, candidates: 0, depth: 0, replies: 0, sampled: 0, exhausted: false },
     };
+  if (s.phase === 'shrine-draft') return draftDecision(s, side);
   const fullDeadline = ctx.deadline;
   if (difficulty === 'hard') {
     if (Number.isFinite(fullDeadline))
       ctx.deadline = time() + Math.max(10, (fullDeadline - time()) * 0.4);
     ctx.stopAt = Math.min(searchMax, Math.max(40, Math.floor(max * 0.4)));
   }
-  const synthesisOnly = s.phase === 'synthesis' && !s.pending.length;
+  const synthesisOnly = ['synthesis', 'shrine-setup'].includes(s.phase) && !s.pending.length;
   const roots = yield* expand(ctx, s, []);
   const bestByRoot = new Map<string, Node>();
   for (const n of roots)

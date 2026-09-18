@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { ActionSpec, GameState } from '../../engine';
-import { definition, faction, getStats, occupants } from '../../engine';
+import { definition, faction, getStats, occupants, landmarkAt } from '../../engine';
 import type { Intent } from '../game/selection';
 import { DefinitionStats } from '../shared/DefinitionStats';
 import { Icon, Rune } from '../shared/visuals';
@@ -30,7 +30,7 @@ export function Inspector({
   chooseAction: (action: ActionSpec) => void;
   onRules: () => void;
 }) {
-  const unit = s.units.find((u) => u.id === selectedId),
+  const unit = [...s.units, ...(s.landmarks ?? [])].find((u) => u.id === selectedId),
     card = s.hands[s.active].find((c) => c.id === cardId),
     reaction = s.pending[0];
   const inspected = reaction?.source ?? unit,
@@ -48,7 +48,9 @@ export function Inspector({
       <section className="panel inspector">
         <div className="panel-heading">
           <h2>{reaction ? '待结算效果' : card ? '召唤详情' : '棋子情报'}</h2>
-          <span>{d?.tier === 'ultimate' ? 'ULTIMATE' : 'INSPECT'}</span>
+          <span>
+            {d?.tier === 'shrine' ? 'SHRINE' : d?.tier === 'ultimate' ? 'ULTIMATE' : 'INSPECT'}
+          </span>
         </div>
         {d ? (
           <>
@@ -73,10 +75,13 @@ export function Inspector({
               </summary>
               <p className="ability-copy">{d.description}</p>
             </details>
-            {unit && occupants(s, unit).length > 1 && (
+            {unit && occupants(s, unit).length + (landmarkAt(s, unit) ? 1 : 0) > 1 && (
               <div className="stack-selector">
                 <span>同格棋子 · 点击切换</span>
-                {occupants(s, unit).map((v, i) => (
+                {[
+                  ...occupants(s, unit),
+                  ...(landmarkAt(s, unit) ? [landmarkAt(s, unit)!] : []),
+                ].map((v, i) => (
                   <button
                     className={v.id === selectedId ? 'active' : ''}
                     onClick={() => {
@@ -85,7 +90,7 @@ export function Inspector({
                     }}
                     key={v.id}
                   >
-                    {i + 1}
+                    {v.id === landmarkAt(s, unit)?.id ? '地标' : i + 1}
                     {v.id === selectedId ? ' ✓' : ''}
                   </button>
                 ))}

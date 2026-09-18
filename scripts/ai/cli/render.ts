@@ -1,3 +1,4 @@
+import { allPieces } from '../../../src/engine/traits';
 import { definition } from '../../../src/engine/catalog';
 import { cells } from '../../../src/engine/geometry';
 import { getStats } from '../../../src/engine/state';
@@ -6,7 +7,7 @@ import { unitActions, cardActions } from '../../../src/engine/options';
 import type { GameState, Command } from '../../../src/engine/types';
 export function render(s: GameState): string {
   const out = [
-    `ply ${s.ply} | P${s.active} ${s.phase} | 决策 P${decisionOwner(s)} | 基地 ${s.bases[1]}/${s.bases[2]} | 人头 ${s.heads[1]}/${s.heads[2]} | 召唤槽 ${s.summonSlots}`,
+    `${s.mode === 'shrine' ? '神龛模式' : '经典模式'} | ply ${s.ply} | P${s.active} ${s.phase} | 决策 P${decisionOwner(s)} | 基地 ${s.bases[1]}/${s.bases[2]} | 人头 ${s.heads[1]}/${s.heads[2]} | 召唤槽 ${s.summonSlots}`,
   ];
   out.push('     ' + Array.from({ length: 9 }, (_, i) => String(i + 1).padStart(4)).join(''));
   for (let y = 1; y <= 13; y++) {
@@ -41,6 +42,37 @@ export function render(s: GameState): string {
           )
           .join(' | '),
     );
+  if (s.shrineDraft)
+    for (const p of [1, 2] as const) {
+      const d = s.shrineDraft;
+      out.push(
+        `P${p}神龛候选: ${d.offers[p].map((k) => `${k}=${definition(k).name}`).join(' | ')}; ${d.revealed ? '已揭示 ' + definition(d.choices[p]!.kind).name : d.committed[p] ? '已锁定，尚未揭示' : '待选择'}`,
+      );
+    }
+  for (const l of s.landmarks ?? [])
+    out.push(
+      `地标 P${l.owner} ${l.id} ${definition(l.kind).name} (${l.x},${l.y}) HP${l.hp}/${l.maxHp}${l.dormantSince !== undefined ? ` 休眠 重建${l.rebuildTicks}/${definition(l.kind).landmark!.rebuild}` : ' 生效'}`,
+    );
+  if (s.auras)
+    for (const p of [1, 2] as const)
+      out.push(
+        `P${p}光环: ` +
+          s.auras[p]
+            .map(
+              (a) =>
+                definition(a.kind).name +
+                (a.parity ? ' ' + a.parity : '') +
+                (a.usedPly === s.ply ? ' 本回合已用' : ''),
+            )
+            .join(' | '),
+      );
+  if (s.summonOffer)
+    out.push(
+      '待选两个召唤结果: ' +
+        s.summonOffer.groups
+          .map((g, i) => `${i}: ${definition(g[0].kind).name} ×${g.length}`)
+          .join(' | '),
+    );
   if (s.pending.length)
     out.push('待反应: ' + s.pending.map((r) => `${r.kind}/P${r.owner}/${r.source.id}`).join(', '));
   if (s.winner) out.push(`结果: ${s.winner}`);
@@ -49,7 +81,8 @@ export function render(s: GameState): string {
 export function describe(s: GameState, c: Command): string {
   const name = (id?: string) =>
     id
-      ? (s.units.find((u) => u.id === id)?.kind ?? s.hands[s.active].find((v) => v.id === id)?.kind)
+      ? (allPieces(s).find((u) => u.id === id)?.kind ??
+        s.hands[s.active].find((v) => v.id === id)?.kind)
       : undefined;
   const u = name(c.unitId),
     card = name(c.cardId),
@@ -57,7 +90,7 @@ export function describe(s: GameState, c: Command): string {
   return `${c.type} ${u !== undefined ? definition(u).name : (c.unitId ?? '')}${card !== undefined ? ' ' + definition(card).name : ''}${c.targetId ? ' → ' + (t !== undefined ? definition(t).name : c.targetId) : ''}${c.x !== undefined ? ` (${c.x},${c.y})` : ''}${c.ultimate ? ' 终极' : ''}${c.mode ? ' ' + c.mode : ''}`.trim();
 }
 export function actions(s: GameState, id?: string): string {
-  const unit = s.units.find((u) => u.id === id),
+  const unit = allPieces(s).find((u) => u.id === id),
     card = [...s.hands[1], ...s.hands[2]].find((c) => c.id === id);
   const all = unit ? unitActions(s, unit) : card ? cardActions(s, card) : [];
   return (

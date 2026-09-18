@@ -1,3 +1,5 @@
+import { grantLaoqian } from './shrines';
+import { hasAura } from './traits';
 /** Author's 2.5 recipes. Eligibility and atomic placement are shared by UI and AI. */
 import { definition } from './catalog';
 import { ALL_CELLS, canPlace } from './geometry';
@@ -10,6 +12,7 @@ export interface SynthesisRecipe {
   source: 'board' | 'hand';
 }
 export const SYNTHESIS_RECIPES: readonly SynthesisRecipe[] = [
+  { id: 'laoqian', material: 'u13', result: 'laoqian', source: 'board' },
   { id: 'szf', material: 'u12p', result: 'u12', source: 'board' },
   { id: 'sage', material: 'u21', result: 'sage', source: 'board' },
   { id: 'formless', material: 'u23', result: 'formless', source: 'board' },
@@ -19,6 +22,7 @@ export const SYNTHESIS_RECIPES: readonly SynthesisRecipe[] = [
   { id: 'archmage', material: 'u3', result: 'archmage', source: 'board' },
 ];
 export function synthesisMaterials(s: GameState, recipe: SynthesisRecipe): string[] {
+  if (recipe.result === 'laoqian' && hasAura(s, s.active, 'laoqian')) return [];
   return recipe.source === 'board'
     ? s.units
         .filter((u) => u.kind === recipe.material && allegiance(s, u) === s.active)
@@ -48,12 +52,14 @@ export function synthesisPlacement(
     !ids.every((id) => synthesisMaterials(s, recipe).includes(id))
   )
     return false;
+  if (definition(recipe.result).aura) return true;
   const view =
     recipe.source === 'board' ? { ...s, units: s.units.filter((u) => !ids.includes(u.id)) } : s;
   const ghost = template(recipe.result, s.active, s.turns[s.active], to);
   return canPlace(view, ghost, to, true);
 }
 export function synthesisDestinations(s: GameState, recipe: SynthesisRecipe, ids: string[]) {
+  if (definition(recipe.result).aura) return [];
   return ALL_CELLS.filter((p) => synthesisPlacement(s, recipe, ids, p));
 }
 export function synthesize(s: GameState, c: Command) {
@@ -61,7 +67,7 @@ export function synthesize(s: GameState, c: Command) {
   const recipe = SYNTHESIS_RECIPES.find((r) => r.id === c.recipeId);
   ensure(recipe, '请选择有效的合成配方。');
   const ids = c.materialIds ?? [];
-  const to = point(c.x, c.y);
+  const to = definition(recipe.result).aura ? { x: 0, y: 0 } : point(c.x, c.y);
   ensure(
     synthesisPlacement(s, recipe, ids, to),
     '需要3个不同的合法材料，以及移除材料后己方召唤区域内的合法落点。',
@@ -74,6 +80,11 @@ export function synthesize(s: GameState, c: Command) {
     );
     s.iceMarks = s.iceMarks.filter((m) => !ids.includes(m.sourceId));
   } else s.hands[s.active] = s.hands[s.active].filter((v) => !ids.includes(v.id));
+  if (recipe.result === 'laoqian') {
+    grantLaoqian(s);
+    if (!availableSyntheses(s).length) s.phase = 'summon';
+    return;
+  }
   const result = addUnit(s, recipe.result, s.active, to);
   emit(
     s,

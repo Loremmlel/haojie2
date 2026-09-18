@@ -62,3 +62,23 @@ export { attackAuraSources, piercing, healingAttack, counterChance } from './sta
 export { hitPullDestination, hutSpawnPoints, canSkipReaction } from './reactions';
 export { availableGuardians, guardProtections } from './protection';
 export { canRerollWith, rerollCommands, summonRerolls, summonPool } from './summoning';
+
+export { SHRINE_POOL, FLAG_CELLS } from './catalog';
+export {
+  allPieces,
+  abilityKinds,
+  isLandmark,
+  isShrine,
+  hasAura,
+  aura,
+  signedAttack,
+  canDeployKind,
+} from './traits';
+export {
+  landmarkAt,
+  liveLandmark,
+  landmarkSquare,
+  canChooseSummon,
+  selectableSummons,
+  commandSummonPool,
+} from './shrines';

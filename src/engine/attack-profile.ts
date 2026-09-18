@@ -52,3 +52,21 @@ export function attackProfile(
     packets: [{ damage: kind === 'u27' && base ? rules.minerBaseDamage : attack, probability: 1 }],
   };
 }
+
+export function combinedAttackPackets(
+  kinds: readonly Kind[],
+  attack: number,
+  kills: number,
+  silenced: boolean,
+  base: boolean,
+): DamagePacket[] {
+  let result: DamagePacket[] = [{ damage: attack, probability: 1 }];
+  for (const kind of kinds)
+    result = result.flatMap((p) =>
+      attackProfile(kind, p.damage, kills, silenced, base).packets.map((q) => ({
+        damage: q.damage,
+        probability: p.probability * q.probability,
+      })),
+    );
+  return result;
+}

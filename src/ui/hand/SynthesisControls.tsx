@@ -75,12 +75,16 @@ export function SynthesisControls({
           <p className="synthesis-note">
             材料移除不触发亡语、不产人头；装备和效果不继承。落点确认前不会花费材料。
           </p>
-          {selected.length === 3 && !locations.length && (
+          {selected.length === 3 && !locations.length && !definition(option.recipe.result).aura && (
             <p role="status">移除所选材料后仍没有合法召唤格，请换一组材料或跳过合成。</p>
           )}
           <button
             className="primary"
-            disabled={disabled || !locations.length}
+            disabled={
+              disabled ||
+              selected.length !== 3 ||
+              (!locations.length && !definition(option.recipe.result).aura)
+            }
             onClick={() =>
               chooseAction({
                 id: 'synthesis-' + option.recipe.id,
@@ -91,13 +95,14 @@ export function SynthesisControls({
                   recipeId: option.recipe.id,
                   materialIds: [...selected],
                 },
-                steps: [
-                  { kind: 'point', label: '选择合成落点：点击高亮格，移除所选3个材料并召唤' },
-                ],
+                steps: definition(option.recipe.result).aura
+                  ? []
+                  : [{ kind: 'point', label: '选择合成落点：点击高亮格，移除所选3个材料并召唤' }],
               })
             }
           >
-            选择落点 · 合成{definition(option.recipe.result).name}
+            {definition(option.recipe.result).aura ? '启用光环' : '选择落点'} · 合成
+            {definition(option.recipe.result).name}
           </button>
         </>
       )}

@@ -39,10 +39,12 @@ const save = flag('save', 'artifacts/cli-session.json')!,
   record = flag('record', save.replace(/\.json$/, '') + '.jsonl')!;
 const match = {
   mode: 'ai' as const,
+  rules: flag('rules', 'classic'),
   human: integer('human', 1, 1, 2),
   difficulty: flag('difficulty', 'hard'),
 };
-if (!validMatch(match)) throw new Error('difficulty 必须为 easy / medium / hard');
+if (!validMatch(match))
+  throw new Error('difficulty 必须为 easy / medium / hard；rules 必须为 classic / shrine');
 const source = flag(
   'load',
   args.includes('--new') ? undefined : existsSync(save) ? save : undefined,
@@ -70,11 +72,13 @@ function startRecord() {
   prepareTranscript(record, arena.session, args.includes('--new'));
 }
 const help = `show | actions ID | legal [ID] | go (AI直到轮到人类) | step (AI一步) | save | quit
-synthesize RECIPE MATERIAL1 MATERIAL2 MATERIAL3 X Y | skip-synthesis
+choose-shrine PLAYER KIND [odd|even] | finish-shrine-setup | activate-aura CARD
+extra-summon [ultimate|normal] | choose-summons INDEX1 INDEX2 (0起) | clock TARGET | shatter UNIT TARGET
+synthesize RECIPE MATERIAL1 MATERIAL2 MATERIAL3 [X Y] | skip-synthesis
 summon [ultimate] | begin | deploy CARD X Y [charge] | move UNIT X Y | attack UNIT TARGET [up|down|left|right]
 charge UNIT attack/move/skill | cast CARD TARGET | equip CARD TARGET | finish UNIT | react TARGET | end
 复杂技能直接输入JSON，例如 {"type":"skill","unitId":"u8","targetId":"u9","x":5,"y":6}
---new --seed N --human 1|2 --difficulty hard --save FILE；--command '指令' 可逐条无交互操作。
+--new --rules classic|shrine --seed N --human 1|2 --difficulty hard --save FILE；--command '指令' 可逐条无交互操作。
 --mode work|timed；默认work按固定模拟预算。--ms显式启用timed，可用--mode work覆盖。
 --replay FILE.jsonl 重放并逐步核对指纹。legal只是候选，不限制原始JSON的合法操作。`;
 function parse(line: string): Command {
@@ -82,6 +86,25 @@ function parse(line: string): Command {
   const parts = line.split(/\s+/);
   const [type, a, b, c, d] = parts;
   switch (type) {
+    case 'choose-shrine':
+      return {
+        type,
+        player: Number(a) as 1 | 2,
+        shrineKind: b as Command['shrineKind'],
+        parity: c as Command['parity'],
+      };
+    case 'finish-shrine-setup':
+      return { type };
+    case 'activate-aura':
+      return { type, cardId: a };
+    case 'extra-summon':
+      return { type, ultimate: a !== 'normal' };
+    case 'choose-summons':
+      return { type, offerIndices: [Number(a), Number(b)] };
+    case 'clock':
+      return { type, targetId: a };
+    case 'shatter':
+      return { type, unitId: a, targetId: b };
     case 'skip-synthesis':
       return { type: 'skip-synthesis' };
     case 'synthesize':
@@ -89,8 +112,7 @@ function parse(line: string): Command {
         type: 'synthesize',
         recipeId: parts[1],
         materialIds: parts.slice(2, 5),
-        x: Number(parts[5]),
-        y: Number(parts[6]),
+        ...(parts[5] && parts[6] ? { x: Number(parts[5]), y: Number(parts[6]) } : {}),
       };
     case 'summon':
       return { type, ultimate: a === 'ultimate' };
@@ -106,7 +128,11 @@ function parse(line: string): Command {
         type,
         unitId: a,
         targetId: b,
-        ...(c ? { direction: c as Command['direction'] } : {}),
+        ...(c
+          ? ['heal', 'damage'].includes(c)
+            ? { mode: c }
+            : { direction: c as Command['direction'] }
+          : {}),
       };
     case 'charge':
       return { type, unitId: a, mode: b };

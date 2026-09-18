@@ -1,6 +1,7 @@
 import type { ActionSpec, Command, GameState, Point } from '../../engine';
 import {
   actionError,
+  allPieces,
   allegiance,
   attackPath,
   selectableAttackRoutes,
@@ -9,23 +10,39 @@ import {
   isLegal,
   movementPath,
   targetAt,
+  landmarkAt,
+  liveLandmark,
+  asTarget,
 } from '../../engine';
 export type Intent =
   | { kind: 'none' }
-  | { kind: 'select'; action: ActionSpec; draft: Command; index: number };
+  | {
+      kind: 'select';
+      action: ActionSpec;
+      draft: Command;
+      index: number;
+      targetLayer?: 'unit' | 'landmark';
+    };
 export const startIntent = (a: ActionSpec): Intent => ({
   kind: 'select',
   action: a,
   draft: { ...a.command },
   index: 0,
 });
+function selectedTarget(s: GameState, i: Intent, p: Point) {
+  if (i.kind === 'select' && i.targetLayer === 'landmark') {
+    const land = landmarkAt(s, p);
+    return liveLandmark(land) ? asTarget(land) : undefined;
+  }
+  return targetAt(s, p);
+}
 export function advanceIntent(i: Intent, p: Point, s: GameState): Intent {
   if (i.kind === 'none') return i;
   const step = i.action.steps[i.index],
     draft = { ...i.draft };
   if (!step) return i;
   if (step.kind === 'target') {
-    const t = targetAt(s, p);
+    const t = selectedTarget(s, i, p);
     if (!t) return i;
     if (step.field === 'sacrificeIds') draft.sacrificeIds = [...(draft.sacrificeIds ?? []), t.id];
     else draft[step.field ?? 'targetId'] = t.id;
@@ -45,8 +62,8 @@ export function advanceIntent(i: Intent, p: Point, s: GameState): Intent {
   if (step.kind === 'row') draft.row = p.y;
   if (step.kind === 'column') draft.column = p.x;
   if (step.kind === 'target' && draft.type === 'attack') {
-    const u = s.units.find((u) => u.id === draft.unitId),
-      t = targetAt(s, p);
+    const u = allPieces(s).find((u) => u.id === draft.unitId),
+      t = selectedTarget(s, i, p);
     if (u && t && isLegal(s, draft) && selectableAttackRoutes(s, u, t).length > 1)
       return {
         ...i,
@@ -79,8 +96,8 @@ export function canChoose(s: GameState, i: Intent, p: Point): boolean {
   }
   const complete = commandFor(s, i, p);
   if (complete) return isLegal(s, complete);
-  const u = s.units.find((u) => u.id === i.draft.unitId),
-    t = targetAt(s, p);
+  const u = allPieces(s).find((u) => u.id === i.draft.unitId),
+    t = selectedTarget(s, i, p);
   if (step.kind === 'point') {
     if (i.action.id === 'dash' && u) return !!movementPath(s, u, p, 6);
     return true;
@@ -111,6 +128,11 @@ export function canChoose(s: GameState, i: Intent, p: Point): boolean {
 }
 export function instruction(s: GameState, i: Intent): string {
   if (i.kind === 'select') return i.action.steps[i.index]?.label ?? i.action.hint ?? i.action.label;
+  if (s.phase === 'shrine-draft')
+    return '第0回合：双方各选一个神龛；对手候选可见，双方锁定后才公布。';
+  if (s.phase === 'shrine-setup') return '第0回合：依次部署、装备或启用神龛，也可留在储存区。';
+  if (s.phase === 'summon' && s.mode === 'shrine')
+    return '常驻两次免费终极召唤；可在回合开始花3人头额外终极召唤，或2人头普通召唤。';
   if (s.phase === 'synthesis') return '回合开始：在合成区选择3个材料及落点，或不合成并进入召唤。';
   if (s.phase === 'summon') return '先决定普通或终极召唤，再查看结果；2人头可替换一次召唤。';
   return '选择随从或手牌。每个随从每回合只能选择一种操作模式；选攻击后可连击。';
@@ -134,7 +156,7 @@ export const directionLabel = {
 export const directionArrow = { up: '↑', down: '↓', left: '←', right: '→' } as const;
 export function intentRoutes(s: GameState, i: Intent) {
   if (i.kind !== 'select' || i.action.steps[i.index]?.kind !== 'direction') return [];
-  const u = s.units.find((u) => u.id === i.draft.unitId),
+  const u = allPieces(s).find((u) => u.id === i.draft.unitId),
     t = targets(s).find((t) => t.id === i.draft.targetId);
   return u && t ? selectableAttackRoutes(s, u, t) : [];
 }

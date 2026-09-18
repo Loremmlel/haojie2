@@ -1,3 +1,15 @@
+import {
+  chargeFor,
+  moveChargeKind,
+  attackChargeKind,
+  abilityKinds,
+  allPieces,
+  canDeployKind,
+  hasTrait,
+  isLandmark,
+  signedAttack,
+} from './traits';
+import { canShatter } from './shrines';
 /** Renderer-independent command descriptions. The UI selects values; the engine validates them. */
 import { definition, isStored } from './catalog';
 import { rerollCommands } from './summoning';
@@ -38,28 +50,60 @@ const spec = (
   free = false,
 ): ActionSpec => ({ id, label, command, steps, icon, free });
 export function unitActions(s: GameState, u: Unit): ActionSpec[] {
+  if (isLandmark(u) && u.hp <= 0) return [];
   const result: ActionSpec[] = [],
     stats = getStats(s, u),
     command = { unitId: u.id };
   if (stats.move > 0)
     result.push(spec('move', '移动', { type: 'move', ...command }, [square()], 'move'));
-  if (stats.actions > 0 && u.kind !== 'firelord')
+  if (stats.actions > 0 && !hasTrait(u, 'firelord')) {
+    if (signedAttack(u)) {
+      result.push(
+        spec(
+          'attack',
+          '攻击 · 造成伤害',
+          { type: 'attack', ...command, mode: 'damage' },
+          [target('选择伤害目标（可选友方）', 'any', 'targetId', true, false)],
+          'sword',
+        ),
+      );
+      result.push(
+        spec(
+          'heal',
+          '攻击 · 治疗生命',
+          { type: 'attack', ...command, mode: 'heal' },
+          [target('选择治疗目标', 'any')],
+          'spark',
+        ),
+      );
+    } else
+      result.push(
+        spec(
+          'attack',
+          healingAttack(u) ? '攻击 / 治疗' : '攻击',
+          { type: 'attack', ...command },
+          [target('选择高亮目标', 'any', 'targetId', true, false)],
+          'sword',
+        ),
+      );
+  }
+  if (canShatter(s, u))
     result.push(
       spec(
-        'attack',
-        healingAttack(u) ? '攻击 / 治疗' : '攻击',
-        { type: 'attack', ...command },
-        [target('选择高亮目标', 'any', 'targetId', true, false)],
+        'shatter',
+        '玉碎 · 自杀伤敌',
+        { type: 'shatter', ...command },
+        [target('选择玉碎伤害目标；自杀不产人头', 'enemy', 'targetId', true, false)],
         'sword',
       ),
     );
   if (u.mode === 'move' || u.mode === 'attack')
     result.push(spec('finish', '结束本次操作', { type: 'finish-mode', ...command }, [], 'check'));
-  if (stats.move % 1 !== 0)
+  if (moveChargeKind(u) === u.kind)
     result.push(
       spec('charge-move', '蓄力 · 移动', { type: 'charge', ...command, mode: 'move' }, [], 'clock'),
     );
-  if (definition(u.kind).actions === 0.5)
+  if (attackChargeKind(u) === u.kind)
     result.push(
       spec(
         'charge-attack',
@@ -185,17 +229,43 @@ export function unitActions(s: GameState, u: Unit): ActionSpec[] {
         break;
     }
   }
+  if (!u.silenced)
+    for (const kind of u.traits ?? []) {
+      const usage = u.abilityUsage?.[kind];
+      const borrowed = {
+        ...u,
+        ...chargeFor(u, kind),
+        kind,
+        traits: undefined,
+        onceUsed: usage?.once ?? false,
+        freeUsed: usage?.free ?? -1,
+      };
+      for (const a of unitActions(s, borrowed))
+        if (a.command.type === 'skill' || a.command.type === 'charge')
+          result.push({
+            ...a,
+            id: `${a.id}:${kind}`,
+            label: `${definition(kind).name} · ${a.label}`,
+            command: { ...a.command, ability: kind },
+          });
+    }
   return result;
 }
 export function cardActions(s: GameState, c: Card): ActionSpec[] {
   const d = definition(c.kind),
     base = { cardId: c.id };
   const result: ActionSpec[] = [];
-  if (!isStored(d)) {
+  if (canDeployKind(c.kind)) {
     result.push(
       spec(
         'deploy',
-        c.kind === 1 ? '正常部署 · 不扣血' : '部署随从',
+        c.kind === 1
+          ? '正常部署 · 不扣血'
+          : d.landmark
+            ? '部署地标'
+            : d.tier === 'shrine'
+              ? '部署神龛'
+              : '部署随从',
         { type: 'deploy', ...base, charge: false },
         [square('选择部署格；2×2以该格为左上角')],
         'plus',
@@ -211,7 +281,9 @@ export function cardActions(s: GameState, c: Card): ActionSpec[] {
           'sword',
         ),
       );
-  } else if (d.weapon !== undefined)
+  } else if (d.aura)
+    result.push(spec('activate-aura', '启用永久光环', { type: 'activate-aura', ...base }));
+  else if (d.weapon !== undefined)
     result.push(
       spec(
         'equip',
@@ -292,21 +364,35 @@ export function reactionAction(s: GameState): ActionSpec | null {
   );
 }
 export function actionError(s: GameState, a: ActionSpec): string | null {
+  const id = a.id.split(':')[0];
   if (!a.steps.length) return commandError(s, a.command);
   if (s.winner) return '对局已经结束。';
   if (a.command.type === 'react') return null;
   if (s.pending.length) return '先处理待结算效果。';
   if (a.command.type === 'synthesize') return s.phase === 'synthesis' ? null : '合成仅限回合开始。';
+  if (s.phase === 'shrine-setup' && ['deploy', 'equip', 'activate-aura'].includes(a.command.type))
+    return null;
   if (s.phase !== 'play' && a.command.type !== 'reroll') return '请先完成召唤阶段。';
-  const u = a.command.unitId ? s.units.find((v) => v.id === a.command.unitId) : undefined;
+  const u = a.command.unitId ? allPieces(s).find((v) => v.id === a.command.unitId) : undefined;
   if (!u) return null;
   const stats = getStats(s, u);
-  if (u.owner !== s.active && a.id !== 'giant') return '不是该随从所属方回合。';
-  if (stats.frozen || stats.stunned || (stats.sleeping && a.id !== 'giant'))
+  const reserve = chargeFor(u, a.command.ability ?? u.kind);
+  const moveCharge = moveChargeKind(u);
+  const usage =
+    a.command.ability && a.command.ability !== u.kind
+      ? u.abilityUsage?.[a.command.ability]
+      : undefined;
+  const onceUsed =
+    a.command.ability && a.command.ability !== u.kind ? (usage?.once ?? false) : u.onceUsed;
+  const freeUsed =
+    a.command.ability && a.command.ability !== u.kind ? (usage?.free ?? -1) : u.freeUsed;
+  if (u.owner !== s.active && id !== 'giant') return '不是该随从所属方回合。';
+  if (stats.frozen || stats.stunned || (stats.sleeping && id !== 'giant'))
     return '正在疲劳、休整、冰冻或眩晕中。';
   if (a.command.type === 'attack') {
     if (!stats.remaining) return '没有可用攻击操作。';
-    if (u.kind === 4 && !u.silenced && u.readyCharge < 2) return '回合开始需要2层攻击蓄力。';
+    if (hasTrait(u, 4) && !u.silenced && chargeFor(u, 4).readyCharge < 2)
+      return '回合开始需要2层攻击蓄力。';
     return null;
   }
   if (
@@ -315,16 +401,21 @@ export function actionError(s: GameState, a: ActionSpec): string | null {
       stats.operationsLeft <= 0)
   )
     return '本回合已选其他模式或操作已用完。';
-  if (a.command.type === 'move' && stats.move % 1 !== 0 && u.mode === 'none' && u.readyCharge < 1)
+  if (
+    a.command.type === 'move' &&
+    moveCharge !== undefined &&
+    u.mode === 'none' &&
+    chargeFor(u, moveCharge).readyCharge < 1
+  )
     return '须先蓄力，下一回合开始才可移动。';
-  if (a.id === 'dash' && (u.readyCharge < 2 || u.hp <= 10))
+  if (id === 'dash' && (reserve.readyCharge < 2 || u.hp <= 10))
     return '需2层已就绪的技能蓄力，且生命大于10。';
-  if (a.id === 'cross' && (u.readyCharge < 1 || u.onceUsed))
+  if (id === 'cross' && (reserve.readyCharge < 1 || onceUsed))
     return '需要就绪的技能蓄力，且未使用过十字浩劫。';
-  if (a.free && (u.freeUsed === now(s, u) || (a.id === 'giant' && u.onceUsed)))
+  if (a.free && (freeUsed === now(s, u) || (id === 'giant' && onceUsed)))
     return '免费能力的次数已经用完。';
   if (
-    a.id === 'superhook' &&
+    id === 'superhook' &&
     !(u.hookReadyAt !== undefined && u.hookReadyAt <= now(s, u) && u.hookExpiresAt! > now(s, u))
   )
     return '超级牵引仅在击杀后的下个己方回合可用。';

@@ -1,3 +1,4 @@
+import { hasTrait } from './traits';
 import { ALL_CELLS, attackPath, canPlace } from './geometry';
 import { allegiance, getStats, passive, template } from './state';
 import type { GameState, Reaction } from './types';
@@ -31,6 +32,6 @@ export function canSkipReaction(s: GameState) {
   if (!r) return false;
   return (
     r.kind !== 'bounce' &&
-    !(r.kind === 'hut-spawn' && r.source.kind === 'citadel' && hutSpawnPoints(s, r).length)
+    !(r.kind === 'hut-spawn' && hasTrait(r.source, 'citadel') && hutSpawnPoints(s, r).length)
   );
 }

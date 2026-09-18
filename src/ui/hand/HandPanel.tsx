@@ -1,3 +1,5 @@
+import { ShrinePanel } from '../shrine/ShrinePanel';
+import type { MatchSettings } from '../../match/settings';
 import type { ActionSpec, Command, GameState } from '../../engine';
 import { faction } from '../../engine';
 import { Icon } from '../shared/visuals';
@@ -7,6 +9,7 @@ import { SummonControls } from './SummonControls';
 
 export function HandPanel({
   state: s,
+  match,
   cardId,
   chooseCard,
   chooseAction,
@@ -14,6 +17,7 @@ export function HandPanel({
   readOnly = false,
 }: {
   state: GameState;
+  match: MatchSettings;
   cardId: string | null;
   chooseCard: (id: string) => void;
   chooseAction: (a: ActionSpec) => void;
@@ -26,11 +30,15 @@ export function HandPanel({
     <section className={`panel hand-panel ${s.phase === 'summon' ? 'summoning' : ''}`}>
       <div className="panel-heading">
         <h2>
-          {s.phase === 'synthesis'
-            ? '回合开始 · 合成'
-            : s.phase === 'summon'
-              ? '召唤仪式'
-              : '本回合手牌'}
+          {s.phase === 'shrine-draft'
+            ? '第0回合 · 神龛暗选'
+            : s.phase === 'shrine-setup'
+              ? '第0回合 · 入场'
+              : s.phase === 'synthesis'
+                ? '回合开始 · 合成'
+                : s.phase === 'summon'
+                  ? '召唤仪式'
+                  : '本回合手牌'}
           {s.phase !== 'synthesis' && <b>{hand.length}</b>}
         </h2>
         <Icon name="spark" size={17} />
@@ -44,12 +52,25 @@ export function HandPanel({
           readOnly={readOnly}
         />
       )}
+      <ShrinePanel
+        state={s}
+        match={match}
+        run={run}
+        chooseAction={chooseAction}
+        readOnly={readOnly}
+      />
       <SummonControls state={s} run={run} readOnly={readOnly} />
-      <p className="hand-intro">
-        <span className={`tiny-side p${s.active}`} />
-        {faction(s.active)}
-        <span>随从必须部署 · 法术与武器可储存</span>
-      </p>
+      {s.phase !== 'shrine-draft' && (
+        <p className="hand-intro">
+          <span className={`tiny-side p${s.active}`} />
+          {faction(s.active)}
+          <span>
+            {s.mode === 'shrine'
+              ? '神龛可储存 · 随机随从须部署'
+              : '随从必须部署 · 法术与武器可储存'}
+          </span>
+        </p>
+      )}
       <div className="hand-cards">
         {hand.map((c) => (
           <HandCard

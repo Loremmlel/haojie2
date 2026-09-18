@@ -2,7 +2,7 @@ import type { GameState, Player } from '../engine/types';
 import type { Observation } from './types';
 export const decisionOwner = (s: Pick<GameState, 'pending' | 'active'>): Player =>
   s.pending[0]?.owner ?? s.active;
-function fields(s: GameState): Observation {
+function fields(s: GameState, viewer: Player = decisionOwner(s)): Observation {
   // Explicit whitelist: adding a future secret field to GameState must not expose it to the AI.
   return {
     version: s.version,
@@ -24,11 +24,32 @@ function fields(s: GameState): Observation {
     hazards: s.hazards,
     siphons: s.siphons,
     iceMarks: s.iceMarks,
+    ...(s.mode ? { mode: s.mode } : {}),
+    ...(s.landmarks ? { landmarks: s.landmarks } : {}),
+    ...(s.auras ? { auras: s.auras } : {}),
+    ...(s.regularSummons !== undefined ? { regularSummons: s.regularSummons } : {}),
+    ...(s.summonOffer ? { summonOffer: s.summonOffer } : {}),
+    ...(s.shrineSetupDone ? { shrineSetupDone: s.shrineSetupDone } : {}),
+    ...(s.clockFrames ? { clockFrames: s.clockFrames } : {}),
+    ...(s.shrineDraft
+      ? {
+          shrineDraft: {
+            offers: s.shrineDraft.offers,
+            committed: s.shrineDraft.committed,
+            revealed: s.shrineDraft.revealed,
+            choices: s.shrineDraft.revealed
+              ? s.shrineDraft.choices
+              : s.shrineDraft.choices[viewer]
+                ? { [viewer]: s.shrineDraft.choices[viewer] }
+                : {},
+          },
+        }
+      : {}),
     ...(s.winner ? { winner: s.winner } : {}),
   };
 }
-export function observe(s: GameState): Observation {
-  return structuredClone(fields(s));
+export function observe(s: GameState, viewer: Player = decisionOwner(s)): Observation {
+  return structuredClone(fields(s, viewer));
 }
 export function imagined(o: Observation): GameState {
   return { ...structuredClone(o), seed: 1, rng: 1, events: [], log: [] };

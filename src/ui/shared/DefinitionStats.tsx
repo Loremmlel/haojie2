@@ -1,6 +1,13 @@
 import type { Definition } from '../../engine';
 import { Icon, numberLabel } from './visuals';
 export function DefinitionStats({ d }: { d: Definition }) {
+  if (d.aura)
+    return (
+      <div className="spell-duration">
+        <Icon name="spark" />
+        永久光环 · 启用后整局生效
+      </div>
+    );
   if (d.spell !== undefined || d.weapon !== undefined) {
     const limit = d.spell ?? d.weapon!;
     return (
@@ -16,10 +23,16 @@ export function DefinitionStats({ d }: { d: Definition }) {
     [
       'sword',
       '攻击',
-      d.id === '3p' ? '40−5n' : d.id === 'u21' || d.id === 'sage' ? '±25' : numberLabel(d.attack),
+      d.id === '3p'
+        ? '40−5n'
+        : d.id === 'u21' || d.id === 'sage'
+          ? '±25'
+          : d.signedAttack
+            ? `±${Math.abs(d.attack)}`
+            : numberLabel(d.attack),
     ],
     ['heart', '生命', d.health],
-    ['target', '射程', d.id === '3p' ? 'n' : d.id === 'formless' ? '∞' : d.range],
+    ['target', '射程', d.id === '3p' ? 'n' : d.id === 'formless' || d.id === 's7' ? '∞' : d.range],
     ['clock', '攻次', numberLabel(d.actions)],
     ['move', '移动', numberLabel(d.move)],
   ];

@@ -1,9 +1,11 @@
 import { validMatch, type MatchSettings } from '../match/settings';
 import { applyCommand } from './game';
 import { normalizeHornStorage } from './migrations';
-import { definition, isStored } from './catalog';
+import { definition, SHRINE_POOL } from './catalog';
+import { canDeployKind, hasTrait, isLandmark } from './traits';
+import { landmarkSquare } from './shrines';
 import { cells, inside, key, basePoint, equal } from './geometry';
-import type { Command, GameState, Player, Unit } from './types';
+import type { Command, GameState, Player, Unit, Landmark } from './types';
 export interface Session {
   format: 'haojie-session-v2';
   match?: MatchSettings;
@@ -62,7 +64,7 @@ const list = (v: unknown, max = 2000): v is any[] => Array.isArray(v) && v.lengt
 const validKind = (k: unknown, unit = false) => {
   try {
     const d = definition(k as Unit['kind']);
-    return !unit || !isStored(d);
+    return !unit || canDeployKind(d.id);
   } catch {
     return false;
   }
@@ -88,7 +90,7 @@ function effects(v: unknown) {
         int(e.until) &&
         e.until > e.from &&
         player(e.owner) &&
-        (e.amount === undefined || num(e.amount)) &&
+        (e.amount === undefined || num(e.amount, -1e6)) &&
         (e.sourceId === undefined || text(e.sourceId)) &&
         (e.global === undefined || typeof e.global === 'boolean'),
     )
@@ -107,7 +109,7 @@ function validUnit(u: unknown, dead = false): u is Unit {
   if (
     !num(u.hp, dead ? 0 : 0.000001) ||
     !num(u.maxHp, dead ? 0 : 0.000001) ||
-    u.hp > u.maxHp ||
+    (u.hp > u.maxHp && u.overMaxFromBanner !== true) ||
     !int(u.born, -1) ||
     !int(u.offset) ||
     !int(u.deployedAt) ||
@@ -149,6 +151,7 @@ function validUnit(u: unknown, dead = false): u is Unit {
   )
     return false;
   return (
+    unitExtensions(u) &&
     (u.group === undefined || text(u.group)) &&
     (u.guardSourceIds === undefined ||
       (list(u.guardSourceIds) &&
@@ -158,19 +161,236 @@ function validUnit(u: unknown, dead = false): u is Unit {
     ['expiresAt', 'hookReadyAt', 'hookExpiresAt'].every((k) => u[k] === undefined || int(u[k]))
   );
 }
+/** Additive v3 fields keep existing v2 saves readable without trusting malformed snapshots. */
+function unitExtensions(u: Record<string, any>): boolean {
+  return (
+    (u.traits === undefined ||
+      (list(u.traits, 100) &&
+        u.traits.every((k) => validKind(k, true)) &&
+        new Set(u.traits).size === u.traits.length)) &&
+    (u.abilityUsage === undefined ||
+      (object(u.abilityUsage) &&
+        Object.keys(u.abilityUsage).length <= 100 &&
+        Object.entries(u.abilityUsage).every(
+          ([k, v]) =>
+            validKind(/^\d+$/.test(k) ? Number(k) : k, true) &&
+            object(v) &&
+            typeof v.once === 'boolean' &&
+            int(v.free, -1),
+        ))) &&
+    (u.abilityCharges === undefined ||
+      (object(u.abilityCharges) &&
+        Object.entries(u.abilityCharges).length <= 100 &&
+        Object.entries(u.abilityCharges).every(
+          ([k, c]) =>
+            validKind(/^\d+$/.test(k) ? Number(k) : k, true) &&
+            object(c) &&
+            int(c.charge, 0, 5) &&
+            int(c.readyCharge, 0, 5) &&
+            c.readyCharge <= c.charge &&
+            ['move', 'attack', 'skill'].includes(c.chargeType) &&
+            int(c.lastCharge, -1),
+        ))) &&
+    (u.equipmentIds === undefined ||
+      (object(u.equipmentIds) &&
+        Object.entries(u.equipmentIds).every(([k, v]) => u.equipment.includes(k) && text(v)))) &&
+    (u.extraOperations === undefined || int(u.extraOperations, 0, 1000)) &&
+    (u.bannerHp === undefined || (int(u.bannerHp, 0, 1000) && u.bannerHp % 10 === 0)) &&
+    (u.overMaxFromBanner === undefined || typeof u.overMaxFromBanner === 'boolean') &&
+    (u.bladeQualified === undefined || typeof u.bladeQualified === 'boolean') &&
+    (u.receivedDamage === undefined ||
+      (list(u.receivedDamage, 2) &&
+        u.receivedDamage.every((r) => object(r) && int(r.ply) && num(r.amount)) &&
+        new Set(u.receivedDamage.map((r) => r.ply)).size === u.receivedDamage.length))
+  );
+}
+function validCard(c: any, ids: Set<string>, zero: boolean): boolean {
+  if (
+    !object(c) ||
+    !text(c.id) ||
+    ids.has(c.id) ||
+    !validKind(c.kind) ||
+    !int(c.drawnAt) ||
+    !int(c.summonedPly, zero ? 0 : 1) ||
+    (c.expiresAt !== undefined && !int(c.expiresAt, 1))
+  )
+    return false;
+  if (c.group !== undefined && !text(c.group)) return false;
+  if (c.summonPool !== undefined && !['normal', 'ultimate'].includes(c.summonPool)) return false;
+  if (c.rerolled !== undefined && typeof c.rerolled !== 'boolean') return false;
+  if (c.parity !== undefined && (c.kind !== 's9' || !['odd', 'even'].includes(c.parity)))
+    return false;
+  ids.add(c.id);
+  return true;
+}
+function shrineFields(
+  s: Record<string, any>,
+  ids: Set<string>,
+  occupied: Map<string, Unit[]>,
+): boolean {
+  if (s.mode !== undefined && s.mode !== 'shrine') return false;
+  if (s.regularSummons !== undefined && !int(s.regularSummons, 0, 2)) return false;
+  if (
+    s.shrineSetupDone !== undefined &&
+    (!list(s.shrineSetupDone, 2) ||
+      !s.shrineSetupDone.every(player) ||
+      new Set(s.shrineSetupDone).size !== s.shrineSetupDone.length)
+  )
+    return false;
+  if (s.auras !== undefined) {
+    if (!object(s.auras)) return false;
+    for (const p of [1, 2]) {
+      const a = s.auras[p];
+      if (
+        !list(a, 5) ||
+        !a.every(
+          (v) =>
+            object(v) &&
+            validKind(v.kind) &&
+            definition(v.kind).aura &&
+            (v.kind !== 's9' || ['odd', 'even'].includes(v.parity)) &&
+            (v.usedPly === undefined || int(v.usedPly, 0, s.ply)),
+        ) ||
+        new Set(a.map((v) => v.kind)).size !== a.length
+      )
+        return false;
+    }
+  }
+  if (s.landmarks !== undefined) {
+    if (!list(s.landmarks, 117)) return false;
+    const squares = new Set<string>();
+    for (const raw of s.landmarks) {
+      const l = raw as Landmark;
+      if (
+        !validUnit(l, l.dormantSince !== undefined) ||
+        !isLandmark(l) ||
+        l.size !== 1 ||
+        ids.has(l.id) ||
+        !landmarkSquare(l.kind, l) ||
+        squares.has(key(l))
+      )
+        return false;
+      if (
+        l.dormantSince !== undefined &&
+        (!int(l.dormantSince, 0, s.ply) ||
+          l.hp !== 0 ||
+          !int(l.rebuildTicks, 0, definition(l.kind).landmark!.rebuild))
+      )
+        return false;
+      if (l.dormantSince === undefined && (l.hp <= 0 || l.rebuildTicks !== undefined)) return false;
+      const occupants = occupied.get(key(l)) ?? [];
+      if (occupants.length > 1 && !occupants.some((u) => hasTrait(u, 'u12') || hasTrait(u, 'u12p')))
+        return false;
+      squares.add(key(l));
+      ids.add(l.id);
+    }
+  }
+  if (s.shrineDraft !== undefined) {
+    const d = s.shrineDraft;
+    if (
+      s.mode !== 'shrine' ||
+      !object(d) ||
+      !object(d.offers) ||
+      !object(d.committed) ||
+      !object(d.choices) ||
+      typeof d.revealed !== 'boolean'
+    )
+      return false;
+    for (const p of [1, 2]) {
+      const offers = d.offers[p],
+        choice = d.choices[p];
+      if (
+        !list(offers, 3) ||
+        offers.length !== 3 ||
+        !offers.every((k) => SHRINE_POOL.includes(k)) ||
+        new Set(offers).size !== 3 ||
+        typeof d.committed[p] !== 'boolean'
+      )
+        return false;
+      if (
+        d.committed[p] !== !!choice ||
+        (choice &&
+          (!object(choice) ||
+            !offers.includes(choice.kind) ||
+            (choice.kind === 's9' && !['odd', 'even'].includes(choice.parity))))
+      )
+        return false;
+    }
+    if (d.revealed !== (d.committed[1] && d.committed[2])) return false;
+    if (s.phase === 'shrine-draft' && d.revealed) return false;
+    if (s.phase !== 'shrine-draft' && !d.revealed) return false;
+  } else if (s.mode === 'shrine') return false;
+  if (
+    s.ply === 0 &&
+    !(
+      s.mode === 'shrine' &&
+      ['shrine-draft', 'shrine-setup'].includes(s.phase) &&
+      s.turns[1] === 0 &&
+      s.turns[2] === 0
+    )
+  )
+    return false;
+  if (s.ply > 0 && ['shrine-draft', 'shrine-setup'].includes(s.phase)) return false;
+  if (s.summonOffer !== undefined) {
+    const o = s.summonOffer;
+    if (
+      !object(o) ||
+      o.owner !== s.active ||
+      o.count !== 2 ||
+      !list(o.groups, 4) ||
+      o.groups.length < 3
+    )
+      return false;
+    for (const group of o.groups)
+      if (
+        !list(group, 8) ||
+        !group.length ||
+        !group.every((c) => validCard(c, ids, s.mode === 'shrine')) ||
+        (group.length > 1 && !group.every((c) => c.kind === 'u25' && c.group === group[0].group))
+      )
+        return false;
+  }
+  if (s.clockFrames !== undefined) {
+    if (!object(s.clockFrames)) return false;
+    for (const p of [1, 2]) {
+      if (!object(s.clockFrames[p])) return false;
+      for (const k of ['current', 'previous']) {
+        const f = s.clockFrames[p][k];
+        if (f === undefined) continue;
+        if (
+          !object(f) ||
+          !int(f.ply, 0, s.ply) ||
+          !object(f.turns) ||
+          ![1, 2].every((p) => int(f.turns[p])) ||
+          !list(f.units, 920) ||
+          !f.units.every((u) => validUnit(u) && !isLandmark(u)) ||
+          new Set(f.units.map((u) => u.id)).size !== f.units.length
+        )
+          return false;
+      }
+    }
+  }
+  // Carried shrine cards keep their identity across death/stealing; it may exist in one place only.
+  for (const u of [...s.units, ...(s.landmarks ?? [])])
+    for (const id of Object.values(u.equipmentIds ?? {}) as string[]) {
+      if (ids.has(id)) return false;
+      ids.add(id);
+    }
+  return true;
+}
 export function validState(s: unknown): s is GameState {
   if (
     !object(s) ||
     s.version !== 2 ||
     !player(s.active) ||
-    !int(s.ply, 1) ||
+    !int(s.ply, 0) ||
     !int(s.seed, 1, 4294967295) ||
     !int(s.rng, 1, 4294967295) ||
     !int(s.serial, 1)
   )
     return false;
   if (
-    !['synthesis', 'summon', 'play'].includes(s.phase) ||
+    !['synthesis', 'summon', 'play', 'shrine-draft', 'shrine-setup'].includes(s.phase) ||
     !int(s.summonSlots, -1, 1000) ||
     (s.winner !== undefined && !player(s.winner) && s.winner !== 'draw')
   )
@@ -184,16 +404,16 @@ export function validState(s: unknown): s is GameState {
   const ids = new Set<string>(),
     occupied = new Map<string, Unit[]>();
   for (const raw of s.units) {
-    if (!validUnit(raw) || ids.has(raw.id)) return false;
+    if (!validUnit(raw) || isLandmark(raw) || ids.has(raw.id)) return false;
     const u = raw;
     ids.add(u.id);
     for (const p of cells(u)) {
       if (!inside(p)) return false;
       const old = occupied.get(key(p)) ?? [];
       const transit =
-        u.kind === 'u12' ||
-        u.kind === 'u12p' ||
-        old.some((v) => v.kind === 'u12' || v.kind === 'u12p');
+        hasTrait(u, 'u12') ||
+        hasTrait(u, 'u12p') ||
+        old.some((v) => hasTrait(v, 'u12') || hasTrait(v, 'u12p'));
       if (
         old.length &&
         !transit &&
@@ -223,24 +443,9 @@ export function validState(s: unknown): s is GameState {
       !list(s.hands[p], 2000)
     )
       return false;
-    for (const c of s.hands[p]) {
-      if (
-        !object(c) ||
-        !text(c.id) ||
-        ids.has(c.id) ||
-        !validKind(c.kind) ||
-        !int(c.drawnAt) ||
-        !int(c.summonedPly, 1) ||
-        (c.expiresAt !== undefined && !int(c.expiresAt, 1))
-      )
-        return false;
-      ids.add(c.id);
-      if (c.group !== undefined && !text(c.group)) return false;
-      if (c.summonPool !== undefined && !['normal', 'ultimate'].includes(c.summonPool))
-        return false;
-      if (c.rerolled !== undefined && typeof c.rerolled !== 'boolean') return false;
-    }
+    for (const c of s.hands[p]) if (!validCard(c, ids, s.mode === 'shrine')) return false;
   }
+  if (!shrineFields(s, ids, occupied)) return false;
   if (
     !s.pending.every(
       (r: any) =>

@@ -29,3 +29,13 @@
 ## 验证
 
 `tests/browser/game.mjs` 覆盖部署、方向选择、取消/悔棋、额外召唤、蓄力条、多来源改判/自我重铸、状态面板、390px/键盘交互；`tests/browser/ai.mjs` 覆盖AI及多宽度布局。真实file://离线验收由CI执行；沙箱setContent结果只称渲染与交互验证。
+
+## 神龛工作流（3.0）
+
+业务来源 `docs/CHANGELOG-3.0.md` 与 `docs/RULES.md`。保留既有token/字体/格线与侧栏滚动所有权，不新建视觉主题。开局沿用 `MatchOptions` 原生radio区分规则模式和对战模式，不把两者揉成一个枚举。`ShrineControls` 在手牌区显示本人3张候选与可展开的对方候选；共同揭示前不读对方私有结果，不因AI正在选择而换成人类看不见的AI私有页面。
+
+地标用格内底座+名称/血量（或休眠计数）表示，与随从图形分层；叠放详情的按钮和连续点击棋盘使用同一候选次序。需要选单个目标时，`ActionPanel` 提供“棋子优先 / 选地标”，仍以引擎合法高亮为准，非法点保持操作而不花费资源。地标休眠详情无无效行动按钮；`UnitStatus` 显示倒计时和占位等待原因。
+
+永久光环由手牌侧栏 `AuraPanel` 展示双方状态；时钟沿用棋盘目标选择、取消、错误提示和悔棋。`SummonControls` 统一承载免费常驻与付人头额外召唤；`OfferChoice` 使用原生checkbox恰选2个，克隆一整批单列。牢千K沿用 `SynthesisControls` 的三材料确认，但光环不需落点；原生select只负责下一次匹配来源池的自选计划，不提前消费次数。
+
+规范所有者：规则数值catalog；操作合法性engine；选择/取消/反馈useGameController与现有Toast；模态shared/Modal；棋盘层选择Inspector/ActionPanel；原生radio/checkbox/select与details接受平台键盘/弹层行为。自选计划只在本地UI暂存，换局/载入/悔棋清除。成功/错误不移动棋盘，手机侧栏继续文档流。`tests/browser/shrine.mjs`覆盖全部新流、双方人机身份、Worker/回退、390px、键盘与零外部网络请求。

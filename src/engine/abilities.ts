@@ -1,3 +1,14 @@
+import {
+  withAbilityCharge,
+  abilityKinds,
+  hasTrait,
+  isLandmark,
+  isMage,
+  refusesWeapons,
+  refusesFriendlyAttackBuff,
+  weaponHealth,
+} from './traits';
+import { installEquipment } from './shrines';
 import { synthesize } from './synthesis';
 import { eventActor, withEventFacts, type EventAction } from './event-facts';
 import { rerollCommands, summonPool } from './summoning';
@@ -55,13 +66,17 @@ import {
 import { advanceUnit } from './lifecycle';
 import type { Card, Command, GameState, Kind, Player, Source, Unit } from './types';
 export function chargeAction(s: GameState, c: Command) {
-  return withEventFacts(s, { action: 'charge', actor: eventActor(findUnit(s, c.unitId)) }, () =>
-    resolveCharge(s, c),
-  );
+  return withEventFacts(s, { action: 'charge', actor: eventActor(findUnit(s, c.unitId)) }, () => {
+    const u = findUnit(s, c.unitId),
+      kind = c.ability ?? u.kind;
+    ensure(hasTrait(u, kind), '该棋子没有选定的蓄力能力。');
+    return withAbilityCharge(u, kind, () => resolveCharge(s, c));
+  });
 }
 function resolveCharge(s: GameState, c: Command) {
   const u = actor(s, c.unitId),
-    d = definition(u.kind);
+    kind = c.ability ?? u.kind,
+    d = definition(kind);
   chooseMode(s, u, 'charge');
   const mode = c.mode as 'move' | 'attack' | 'skill';
   const max =
@@ -69,15 +84,18 @@ function resolveCharge(s: GameState, c: Command) {
       ? 1
       : mode === 'attack' && d.actions === 0.5
         ? 1
-        : mode === 'attack' && u.kind === 4 && !u.silenced
+        : mode === 'attack' && kind === 4 && !u.silenced
           ? 5
-          : mode === 'attack' && u.kind === 15 && !u.silenced
+          : mode === 'attack' && kind === 15 && !u.silenced
             ? COMBAT_RULES.accumulator.max
-            : mode === 'attack' && u.kind === 'u2' && !u.silenced
+            : mode === 'attack' && kind === 'u2' && !u.silenced
               ? 4
-              : mode === 'skill' && u.kind === 21 && !u.silenced
+              : mode === 'skill' && kind === 21 && !u.silenced
                 ? 2
-                : mode === 'skill' && u.kind === 'u6' && !u.silenced && !u.onceUsed
+                : mode === 'skill' &&
+                    kind === 'u6' &&
+                    !u.silenced &&
+                    !(u.kind === 'u6' ? u.onceUsed : u.abilityUsage?.u6?.once)
                   ? 1
                   : 0;
   ensure(max > 0, '这枚随从没有此类蓄力。');
@@ -90,7 +108,9 @@ function resolveCharge(s: GameState, c: Command) {
   emit(s, { type: 'skill', to: u, owner: u.owner, text: `蓄力 ${u.charge}/${max}` });
 }
 export function useSkill(s: GameState, c: Command, ctx: Resolution) {
-  const u = findUnit(s, c.unitId);
+  const u = findUnit(s, c.unitId),
+    kind = c.ability ?? u.kind;
+  ensure(hasTrait(u, kind), '该棋子没有选定的技能。');
   const actions: Partial<Record<Kind, EventAction>> = {
     5: 'quake',
     7: 'pull',
@@ -101,11 +121,11 @@ export function useSkill(s: GameState, c: Command, ctx: Resolution) {
     u24: 'ice-mark',
   };
   const area =
-    u.kind === 5
+    kind === 5
       ? ALL_CELLS.filter((p) => ring(u, p))
-      : u.kind === 'u6'
+      : kind === 'u6'
         ? ALL_CELLS.filter((p) => inSquare(u, p) && (p.x === c.x || p.y === c.y))
-        : u.kind === 'u24'
+        : kind === 'u24'
           ? [point(c.x, c.y)]
           : undefined;
   const linkIds = new Set(s.siphons.map((l) => l.id));
@@ -114,16 +134,26 @@ export function useSkill(s: GameState, c: Command, ctx: Resolution) {
   return withEventFacts(
     s,
     {
-      action: actions[u.kind] ?? 'buff',
-      ability: u.kind,
+      action: actions[kind] ?? 'buff',
+      ability: kind,
       actor: eventActor(u),
       ...(area ? { area } : {}),
     },
     () => {
-      resolveSkill(s, c, ctx);
+      const native = { once: u.onceUsed, free: u.freeUsed };
+      if (kind !== u.kind) {
+        u.onceUsed = u.abilityUsage?.[kind]?.once ?? false;
+        u.freeUsed = u.abilityUsage?.[kind]?.free ?? -1;
+      }
+      withAbilityCharge(u, kind, () => resolveSkill(s, c, ctx));
+      if (kind !== u.kind) {
+        (u.abilityUsage ??= {})[kind] = { once: u.onceUsed, free: u.freeUsed };
+        u.onceUsed = native.once;
+        u.freeUsed = native.free;
+      }
       const summary = s.events.at(-1);
       if (summary?.type !== 'skill') return;
-      if (u.kind === 'u14') {
+      if (kind === 'u14') {
         summary.stage = s.siphons.some((l) => !linkIds.has(l.id)) ? 'apply' : 'blocked';
         summary.actor = eventActor(endpointA);
         summary.subject = eventActor(endpointB);
@@ -135,10 +165,10 @@ export function useSkill(s: GameState, c: Command, ctx: Resolution) {
           delete summary.actor;
           delete summary.subject;
         }
-      } else if (u.kind === 'u24') {
+      } else if (kind === 'u24') {
         summary.to = point(c.x, c.y);
         delete summary.subject;
-      } else if ((u.kind === 'u7' || u.kind === 'u21') && endpointA) {
+      } else if ((kind === 'u7' || kind === 'u21') && endpointA) {
         summary.to = { x: endpointA.x, y: endpointA.y };
         summary.subject = eventActor(endpointA);
       }
@@ -147,8 +177,10 @@ export function useSkill(s: GameState, c: Command, ctx: Resolution) {
 }
 function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
   const raw = findUnit(s, c.unitId),
-    free = raw.kind === 'u7' || raw.kind === 'u14';
-  const u = raw.kind === 'u7' ? raw : actor(s, c.unitId);
+    kind = c.ability ?? raw.kind,
+    free = kind === 'u7' || kind === 'u14';
+  const u = kind === 'u7' ? raw : actor(s, c.unitId);
+  ensure(hasTrait(u, kind), '该棋子没有选定的技能。');
   ensure(!u.silenced, '沉默已移除此随从的技能。');
   ensure(!has(s, u, 'freeze') && !has(s, u, 'stun'), '冻结或眩晕中不能施放技能。');
   if (!free) chooseMode(s, u, 'skill');
@@ -164,13 +196,13 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
   const enemy = (id?: string, global = false) => {
     const t = findTarget(s, id);
     ensure(
-      t.unit && allegiance(s, t.unit) !== u.owner && topTarget(s, t),
+      t.unit && !isLandmark(t.unit) && allegiance(s, t.unit) !== u.owner && topTarget(s, t),
       '请选择敌方或中立的栈顶随从。',
     );
     ensure(global || attackPath(s, u, t, range), '目标不在技能射程内。');
     return t;
   };
-  switch (u.kind) {
+  switch (kind) {
     case 5: {
       const victims = targets(s).filter(
         (t) => ring(u, t.unit ?? t) && (t.owner === u.owner || topTarget(s, t)),
@@ -182,7 +214,7 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
       for (const friend of s.units)
         if (
           allegiance(s, friend) === u.owner &&
-          friend.kind !== 10 &&
+          !refusesFriendlyAttackBuff(friend) &&
           attackPath(s, u, asTarget(friend), range)
         )
           addEffect(s, friend, 'attack', u.owner, 2, 2, 10, u.id);
@@ -303,7 +335,11 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
       ensure(!u.onceUsed, '巨大化一生只能用一次。');
       const v = findUnit(s, c.targetId);
       ensure(
-        v.owner === u.owner && v.id !== u.id && v.size === 1 && !has(s, v, 'freeze'),
+        v.owner === u.owner &&
+          v.id !== u.id &&
+          v.size === 1 &&
+          !isLandmark(v) &&
+          !has(s, v, 'freeze'),
         '请选择另一个单格友方随从。',
       );
       ensure(canPlace(s, { ...v, size: 2 }, v), '周围空间不足，无法形成完整2×2占位。');
@@ -421,7 +457,7 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
       type: 'skill',
       to: u,
       owner: u.owner,
-      text: definition(u.kind).skill ?? '技能',
+      text: definition(kind).skill ?? '技能',
       ultimate: definition(u.kind).tier !== 'normal',
     },
     `${definition(u.kind).name}施放技能`,
@@ -493,7 +529,7 @@ function resolveCast(s: GameState, c: Command, ctx: Resolution) {
     .filter((u) => u.owner !== owner && counterChance(u) > 0 && passive(s, u))
     .sort((a, b) => a.deployedAt - b.deployedAt))
     if (random(s, [0, counterChance(mage), 1]) < counterChance(mage)) {
-      if (mage.kind === 'archmage') {
+      if (hasTrait(mage, 'archmage')) {
         mage.maxHp += COMBAT_RULES.archmageCounterHealth;
         heal(s, mage, COMBAT_RULES.archmageCounterHealth, ctx);
       }
@@ -547,8 +583,8 @@ function resolveCast(s: GameState, c: Command, ctx: Resolution) {
       if (c.mode === 'double') {
         for (const id of c.sacrificeIds!)
           kill(s, findUnit(s, id), { owner, kind: 'sacrifice' }, ctx);
-        draw(s, owner, 2);
-      } else draw(s, owner, 1);
+        draw(s, owner, 2, s.mode === 'shrine', c.chosenKind);
+      } else draw(s, owner, 1, s.mode === 'shrine', c.chosenKind);
       break;
     }
     case 'u9': {
@@ -602,27 +638,21 @@ export function equip(s: GameState, c: Command) {
 function resolveEquip(s: GameState, c: Command) {
   const card = s.hands[s.active].find((v) => v.id === c.cardId);
   ensure(card && definition(card.kind).weapon !== undefined, '请选择武器牌。');
-  const u = findUnit(s, c.targetId),
-    d = definition(u.kind);
-  ensure(allegiance(s, u) === s.active, '只能装备给友方随从，冰冻中立随从不可装备。');
-  ensure(card.kind !== 'u5' || d.mage, '寒冰法杖仅限文档指定的法师名单。');
-  ensure(card.kind !== 'u28' || !d.mage, '炎魔之心仅限非法师。');
+  const u = findUnit(s, c.targetId);
+  ensure(allegiance(s, u) === s.active && !isLandmark(u), '只能给非中立的友方随从装备武器。');
+  ensure(!refusesWeapons(u), '投石机与YYF不能装备武器。');
+  ensure(!['u5', 's16'].includes(String(card.kind)) || isMage(u), '这件法杖仅限法师。');
+  ensure(card.kind !== 'u28' || !isMage(u), '炎魔之心仅限非法师。');
   ensure(
     card.kind !== 'u28' || !u.chargedOnDeploy || u.deployedAt !== s.ply,
     '冲锋随从部署当回合不能装备炎魔之心。',
   );
-  for (const old of u.equipment) {
-    if (old === 'u11') u.maxHp -= 25;
-    if (old === 'u28') u.maxHp -= 5;
-  }
-  u.hp = Math.min(u.hp, u.maxHp);
-  u.equipment = [card.kind];
-  if (card.kind === 'u11') u.maxHp += 25;
-  if (card.kind === 'u28') {
-    u.maxHp += 5;
-    u.hp += 5;
-    u.effects = u.effects.filter((e) => e.type !== 'freeze');
-  }
+  const nextMax =
+    u.maxHp -
+    u.equipment.reduce<number>((n, k) => n + weaponHealth(k), 0) +
+    weaponHealth(card.kind);
+  ensure(nextMax > 0, '更换这件武器会使生命上限归零，不能装备。');
+  installEquipment(u, card.kind, card.id);
   s.hands[s.active] = s.hands[s.active].filter((v) => v.id !== card.id);
   emit(s, {
     type: 'shield',
@@ -652,7 +682,7 @@ export function reroll(s: GameState, c: Command) {
   s.hands[s.active] = s.hands[s.active].filter((v) =>
     card.group ? v.group !== card.group : v.id !== card.id,
   );
-  const cards = draw(s, s.active, 1, summonPool(card) === 'ultimate');
+  const cards = draw(s, s.active, 1, summonPool(card) === 'ultimate', c.chosenKind);
   for (const v of cards) v.rerolled = true;
   emit(
     s,

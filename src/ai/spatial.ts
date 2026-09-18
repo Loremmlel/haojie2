@@ -1,3 +1,4 @@
+import { allPieces } from '../engine/traits';
 import { attackRoutes, frontal } from '../engine/geometry';
 /** Read-only spatial estimates. Final commands always use the engine's exact path/legality checks. */
 import { cells, basePoint, inside, distance, neighbors } from '../engine/geometry';
@@ -16,13 +17,14 @@ function spatial(s: GameState): Spatial {
   let result = cache.get(s);
   if (!result) {
     const occupants = Array.from({ length: 117 }, () => [] as Unit[]);
-    for (const u of s.units) for (const p of cells(u)) if (inside(p)) occupants[index(p)].push(u);
+    for (const u of allPieces(s))
+      for (const p of cells(u)) if (inside(p)) occupants[index(p)].push(u);
     result = {
       occupants,
       stats: new Map(),
       reaches: new Map(),
       windows: new Map(),
-      members: new Set(s.units),
+      members: new Set(allPieces(s)),
     };
     cache.set(s, result);
   }
@@ -58,11 +60,18 @@ export function actionWindow(s: GameState, side: Player, next = false): GameStat
     phase: 'play',
     pending: [],
     turns: { ...s.turns, [side]: s.turns[side] + (delta ? 1 : 0) },
+    ...(s.landmarks
+      ? { landmarks: s.landmarks.map((l) => ({ ...l, effects: [...l.effects] })) }
+      : {}),
     units: s.units
       .filter((u) => u.expiresAt === undefined || u.expiresAt > s.ply + delta)
-      .map((u) => ({ ...u, effects: [...u.effects] })),
+      .map((u) => ({
+        ...u,
+        effects: [...u.effects],
+        ...(u.abilityCharges ? { abilityCharges: structuredClone(u.abilityCharges) } : {}),
+      })),
   };
-  if (delta) for (const u of view.units) if (u.owner === side) resetUnit(view, u);
+  if (delta) for (const u of allPieces(view)) if (u.owner === side) resetUnit(view, u);
   data.windows.set(key, view);
   return view;
 }
@@ -108,7 +117,7 @@ export function hitDistance(s: GameState, u: Unit, t: Target, ignoreId = ''): nu
     let shortest = Infinity;
     for (const a of cells(u))
       for (const b of ends)
-        if ((a.x === b.x || a.y === b.y) && distance(a, b) > 0)
+        if ((a.x === b.x || a.y === b.y) && (distance(a, b) > 0 || t.id !== u.id))
           shortest = Math.min(shortest, distance(a, b));
     return shortest <= st.range ? shortest : Infinity;
   }

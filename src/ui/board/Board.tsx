@@ -5,6 +5,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { GameState, Player, Point } from '../../engine';
 import {
   ALL_CELLS,
+  allPieces,
+  liveLandmark,
+  landmarkAt,
   basePoint,
   cells,
   definition,
@@ -56,7 +59,7 @@ export function Board({
   const owner = s.pending[0]?.owner ?? s.active,
     tone = intentTone(intent);
   const draft = intent.kind === 'select' ? intent.draft : null;
-  const acting = draft?.unitId ? s.units.find((u) => u.id === draft.unitId) : undefined;
+  const acting = draft?.unitId ? allPieces(s).find((u) => u.id === draft.unitId) : undefined;
   const currentCard = draft?.cardId
     ? s.hands[s.active].find((c) => c.id === draft.cardId)
     : undefined;
@@ -87,7 +90,15 @@ export function Board({
         <span>
           <i className="live-dot" />
           {faction(owner)} ·{' '}
-          {s.phase === 'synthesis' ? '合成阶段' : s.phase === 'summon' ? '召唤阶段' : '行动阶段'}
+          {s.phase === 'shrine-draft'
+            ? '秘密选神龛'
+            : s.phase === 'shrine-setup'
+              ? '神龛入场'
+              : s.phase === 'synthesis'
+                ? '合成阶段'
+                : s.phase === 'summon'
+                  ? '召唤阶段'
+                  : '行动阶段'}
         </span>
         <span>
           9 × 13 <b>/</b> 117格
@@ -141,7 +152,13 @@ export function Board({
                     role="gridcell"
                     key={col}
                     data-cell={`${p.x},${p.y}`}
-                    aria-label={label + routeLabel}
+                    aria-label={
+                      label +
+                      routeLabel +
+                      (landmarkAt(s, p)
+                        ? `，地标${definition(landmarkAt(s, p)!.kind).name}，${liveLandmark(landmarkAt(s, p)) ? '生效中' : '休眠中'}`
+                        : '')
+                    }
                     aria-selected={selected}
                     tabIndex={focus.x === p.x && focus.y === p.y ? 0 : -1}
                     className={`cell ${row < 5 ? 'north' : row > 7 ? 'south' : 'contested'} ${range ? 'in-range' : ''} ${valid ? `legal ${tone} ${t ? 'occupied-target' : ''}` : ''} ${selected ? 'selected-cell' : ''} ${inPreview ? 'area-preview' : ''}`}
@@ -250,6 +267,26 @@ export function Board({
               </div>
             );
           })}
+          {(s.landmarks ?? []).map((l) => (
+            <div
+              key={l.id}
+              aria-hidden="true"
+              className={`landmark-tile p${l.owner} ${liveLandmark(l) ? '' : 'dormant'} ${l.id === selectedId ? 'selected' : ''}`}
+              style={{
+                left: `${((l.x - 1) / 9) * 100}%`,
+                top: `${((l.y - 1) / 13) * 100}%`,
+                width: `${100 / 9}%`,
+                height: `${100 / 13}%`,
+              }}
+            >
+              <span>{definition(l.kind).glyph}</span>
+              <b>
+                {liveLandmark(l)
+                  ? l.hp
+                  : `休${Math.max(0, definition(l.kind).landmark!.rebuild - (l.rebuildTicks ?? 0))}`}
+              </b>
+            </div>
+          ))}
           {s.units
             .filter(
               (u) =>
@@ -345,6 +382,7 @@ export function Board({
           目标
         </span>
         <span>❄ 冰冻中立</span>
+        <span>▱ 地标 · 同格点击切换</span>
         <span className="hover-coordinate">
           {hover ? `(${hover.x}, ${hover.y})` : '方向键选格'}
         </span>

@@ -14,7 +14,9 @@ export type Kind =
   | 'formless'
   | 'slayer'
   | 'citadel'
-  | 'archmage';
+  | 'archmage'
+  | `s${number}`
+  | 'laoqian';
 export type AttackDirection = 'up' | 'down' | 'left' | 'right';
 export type Mode = 'none' | 'move' | 'attack' | 'skill' | 'charge';
 export interface Point {
@@ -26,7 +28,7 @@ export interface Definition {
   name: string;
   glyph: string;
   role: string;
-  tier: 'normal' | 'ultimate' | 'derived';
+  tier: 'normal' | 'ultimate' | 'derived' | 'shrine';
   attack: number;
   health: number;
   range: number;
@@ -38,6 +40,9 @@ export interface Definition {
   weapon?: number;
   size?: number;
   mage?: boolean;
+  aura?: boolean;
+  signedAttack?: boolean;
+  landmark?: { rebuild: number; allowed?: Point[] };
 }
 export interface Effect {
   type:
@@ -94,6 +99,16 @@ export interface Unit extends Point {
   silenced: boolean;
   freeUsed: number;
   onceUsed: boolean;
+  /** Skill identities acquired by ZF without changing its printed identity. */
+  traits?: Kind[];
+  abilityUsage?: Partial<Record<Kind, { once: boolean; free: number }>>;
+  abilityCharges?: Partial<Record<Kind, AbilityCharge>>;
+  equipmentIds?: Partial<Record<Kind, string>>;
+  extraOperations?: number;
+  bannerHp?: number;
+  overMaxFromBanner?: boolean;
+  bladeQualified?: boolean;
+  receivedDamage?: { ply: number; amount: number }[];
   group?: string;
   expiresAt?: number;
   hookReadyAt?: number;
@@ -108,6 +123,7 @@ export interface Card {
   rerolled?: boolean;
   summonedPly: number;
   summonPool?: 'normal' | 'ultimate';
+  parity?: 'odd' | 'even';
 }
 export interface Reaction {
   kind: 'death-shot' | 'reflect' | 'bounce' | 'hut-spawn' | 'hit-pull';
@@ -175,7 +191,15 @@ export interface GameState {
   serial: number;
   ply: number;
   active: Player;
-  phase: 'synthesis' | 'summon' | 'play';
+  phase: 'shrine-draft' | 'shrine-setup' | 'synthesis' | 'summon' | 'play';
+  mode?: 'shrine';
+  landmarks?: Landmark[];
+  auras?: Record<Player, Aura[]>;
+  shrineDraft?: ShrineDraft;
+  shrineSetupDone?: Player[];
+  regularSummons?: number;
+  summonOffer?: { owner: Player; groups: Card[][]; count: 2 };
+  clockFrames?: Record<Player, { current?: ClockFrame; previous?: ClockFrame }>;
   summonSlots: number;
   turns: Record<Player, number>;
   bases: Record<Player, number>;
@@ -212,7 +236,20 @@ export interface Command {
     | 'synthesize'
     | 'skip-synthesis'
     | 'react'
-    | 'finish-mode';
+    | 'finish-mode'
+    | 'choose-shrine'
+    | 'finish-shrine-setup'
+    | 'activate-aura'
+    | 'extra-summon'
+    | 'choose-summons'
+    | 'clock'
+    | 'shatter';
+  player?: Player;
+  shrineKind?: Kind;
+  parity?: 'odd' | 'even';
+  chosenKind?: Kind;
+  offerIndices?: number[];
+  ability?: Kind;
   recipeId?: string;
   materialIds?: string[];
   unitId?: string;
@@ -256,4 +293,34 @@ export interface Source {
   kind: 'attack' | 'spell' | 'skill' | 'status' | 'collision' | 'reflect' | 'sacrifice' | 'expire';
   path?: Point[];
   retaliated?: boolean;
+  creditFriendly?: boolean;
+  ignoreHead?: boolean;
+  modified?: boolean;
+}
+
+export interface AbilityCharge {
+  charge: number;
+  readyCharge: number;
+  chargeType: 'move' | 'attack' | 'skill';
+  lastCharge: number;
+}
+export interface Landmark extends Unit {
+  dormantSince?: number;
+  rebuildTicks?: number;
+}
+export interface Aura {
+  kind: Kind;
+  parity?: 'odd' | 'even';
+  usedPly?: number;
+}
+export interface ShrineDraft {
+  offers: Record<Player, Kind[]>;
+  committed: Record<Player, boolean>;
+  choices: Partial<Record<Player, { kind: Kind; parity?: 'odd' | 'even' }>>;
+  revealed: boolean;
+}
+export interface ClockFrame {
+  ply: number;
+  turns: Record<Player, number>;
+  units: Unit[];
 }
