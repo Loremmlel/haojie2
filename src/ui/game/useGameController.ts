@@ -11,6 +11,10 @@ import {
   createGame,
   createSession,
   occupants,
+  allPieces,
+  landmarkAt,
+  canChooseSummon,
+  commandSummonPool,
   reactionAction,
   targetAt,
   unitActions,
@@ -30,10 +34,11 @@ export function useGameController(props: HaojieGameProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null),
     [cardId, setCardId] = useState<string | null>(null);
   const [modal, setModal] = useState<GameModal>(null);
+  const [choiceCommand, setChoiceCommand] = useState<Command | null>(null);
   const s = session.present,
     controller = s.pending[0]?.owner ?? s.active,
     hand = s.hands[s.active],
-    unit = s.units.find((u) => u.id === selectedId),
+    unit = [...s.units, ...(s.landmarks ?? [])].find((u) => u.id === selectedId),
     card = hand.find((c) => c.id === cardId),
     reaction = s.pending[0];
   const computer = useComputer({
@@ -44,7 +49,7 @@ export function useGameController(props: HaojieGameProps) {
       cancel();
       setSelectedId(c.unitId ?? null);
     },
-    modal,
+    modal: choiceCommand ? 'new' : modal,
     notice: setNotice,
   });
   const activeIntent =
@@ -76,6 +81,7 @@ export function useGameController(props: HaojieGameProps) {
   }
   function replace(next: Session, explicit = false) {
     computer.cancel();
+    setChoiceCommand(null);
     game.replace(next, explicit);
     cancel();
   }
@@ -90,6 +96,17 @@ export function useGameController(props: HaojieGameProps) {
   }
   useGameHotkeys(scope, !!modal, rewind, cancel);
   function run(c: Command) {
+    if (
+      !ownsComputerDecision(live.current) &&
+      commandSummonPool(live.current.present, c) &&
+      canChooseSummon(live.current.present)
+    ) {
+      setChoiceCommand(c);
+      return;
+    }
+    executeRun(c);
+  }
+  function executeRun(c: Command) {
     if (ownsComputerDecision(live.current)) {
       setNotice('当前由AI决策，可查看棋盘或悔棋。');
       return;
@@ -105,7 +122,7 @@ export function useGameController(props: HaojieGameProps) {
         setSelectedId(next.present.events.find((e) => e.type === 'spawn')?.unitId ?? null);
       const id =
           c.unitId ?? (c.type === 'react' ? before.present.pending[0]?.source.id : undefined),
-        u = next.present.units.find((u) => u.id === id);
+        u = allPieces(next.present).find((u) => u.id === id);
       if (u && !next.present.pending.length && (u.mode === 'attack' || u.mode === 'move')) {
         const a = unitActions(next.present, u).find((a) => a.id === u.mode);
         if (a && !actionError(next.present, a)) setIntent(startIntent(a));
@@ -137,11 +154,12 @@ export function useGameController(props: HaojieGameProps) {
   }
   function onCell(p: Point) {
     if (activeIntent.kind === 'none') {
-      const stack = occupants(s, p);
+      const land = landmarkAt(s, p);
+      const stack = [...occupants(s, p), ...(land ? [land] : [])];
       if (stack.length > 1) {
         const idx = stack.findIndex((u) => u.id === selectedId);
         setSelectedId(stack[(idx + 1) % stack.length].id);
-      } else setSelectedId(targetAt(s, p)?.id ?? null);
+      } else setSelectedId(stack[0]?.id ?? targetAt(s, p)?.id ?? null);
       setCardId(null);
       return;
     }
@@ -172,7 +190,12 @@ export function useGameController(props: HaojieGameProps) {
     try {
       replace(
         createSession(
-          demo ? createDemoGame() : createGame(seedText.trim() ? Number(seedText) : randomSeed()),
+          demo
+            ? createDemoGame()
+            : createGame(
+                seedText.trim() ? Number(seedText) : randomSeed(),
+                match.rules ?? 'classic',
+              ),
           match,
         ),
         true,
@@ -218,5 +241,11 @@ export function useGameController(props: HaojieGameProps) {
     onCell,
     newGame,
     importSession,
+    choiceCommand,
+    cancelChoice: () => setChoiceCommand(null),
+    confirmChoice: (c: Command) => {
+      setChoiceCommand(null);
+      executeRun(c);
+    },
   };
 }

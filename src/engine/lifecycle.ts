@@ -1,3 +1,5 @@
+import { allPieces, hasTrait } from './traits';
+import { captureClockFrame, endShrines, rebuildLandmarks, syncBanners } from './shrines';
 import { availableSyntheses } from './synthesis';
 import { firelordStrike } from './firelord';
 import { COMBAT_RULES } from './catalog';
@@ -62,6 +64,7 @@ export function advanceUnit(s: GameState, u: Unit, ctx: Resolution) {
 export function beginTurn(s: GameState, ctx: Resolution) {
   const owner = s.active;
   s.turns[owner]++;
+  rebuildLandmarks(s);
   for (const u of [...s.units]) {
     u.effects = u.effects.filter((e) => e.until > (e.global ? s.ply : now(s, u)));
     if (u.expiresAt !== undefined && u.expiresAt <= s.ply) kill(s, u, { kind: 'expire' }, ctx);
@@ -110,6 +113,9 @@ export function beginTurn(s: GameState, ctx: Resolution) {
   s.phase = availableSyntheses(s).length ? 'synthesis' : 'summon';
   s.summonSlots = 2 + s.bonus[owner];
   s.bonus[owner] = 0;
+  if (s.mode === 'shrine') s.regularSummons = 2;
+  syncBanners(s);
+  captureClockFrame(s);
   emit(
     s,
     {
@@ -124,7 +130,7 @@ export function endTurn(s: GameState, ctx: Resolution) {
   ensure(s.phase === 'play', '请先完成召唤并进入行动阶段。');
   for (const u of s.units)
     ensure(
-      u.kind !== 'u12p' ||
+      !hasTrait(u, 'u12p') ||
         !s.units.some(
           (v) => v.id !== u.id && cells(v).some((p) => cells(u).some((c) => equal(c, p))),
         ),
@@ -144,7 +150,7 @@ export function endTurn(s: GameState, ctx: Resolution) {
   }
   s.hands[s.active] = s.hands[s.active].filter((c) => isStored(definition(c.kind)));
   // DOTs and persistent links resolve at every player's end, as explicitly documented.
-  for (const u of [...s.units])
+  for (const u of [...allPieces(s)])
     for (const e of [...u.effects])
       if ((e.type === 'burn' || e.type === 'freeze') && activeEffect(s, e, u)) {
         ctx.token++;
@@ -204,6 +210,7 @@ export function endTurn(s: GameState, ctx: Resolution) {
         );
     });
   }
+  endShrines(s, ctx);
   // End effects can require choices. The actual player switch is deferred until that queue drains.
   if (s.pending.length) {
     s.phase = 'play';

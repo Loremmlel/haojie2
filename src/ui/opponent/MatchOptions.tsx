@@ -11,6 +11,16 @@ export function MatchOptions({
   return (
     <fieldset className="match-options">
       <legend>对战模式</legend>
+      <label className="rules-choice">
+        规则模式
+        <select
+          value={value.rules ?? 'classic'}
+          onChange={(e) => onChange({ ...value, rules: e.target.value as 'classic' | 'shrine' })}
+        >
+          <option value="classic">经典模式 · 普通召唤</option>
+          <option value="shrine">神龛模式 · 第0回合选神龛</option>
+        </select>
+      </label>
       <div className="mode-choices">
         {(['local', 'ai'] as const).map((mode) => (
           <label key={mode}>

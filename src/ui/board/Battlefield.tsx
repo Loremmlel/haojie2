@@ -18,6 +18,7 @@ export function Battlefield({
   rewind,
   run,
   onCancel,
+  onTargetLayer,
   endError,
   readOnly = false,
 }: {
@@ -32,6 +33,7 @@ export function Battlefield({
   rewind: (forward?: boolean) => void;
   run: (command: Command) => void;
   onCancel: () => void;
+  onTargetLayer: (layer: 'unit' | 'landmark') => void;
   endError: string | null;
   readOnly?: boolean;
 }) {
@@ -56,6 +58,23 @@ export function Battlefield({
           </button>
         )}
       </div>
+      {activeIntent.kind === 'select' &&
+        activeIntent.action.steps[activeIntent.index]?.kind === 'target' &&
+        !!s.landmarks?.length &&
+        !reaction && (
+          <div className="target-layer" role="group" aria-label="选择目标层">
+            {(['unit', 'landmark'] as const).map((layer) => (
+              <button
+                key={layer}
+                disabled={readOnly}
+                aria-pressed={(activeIntent.targetLayer ?? 'unit') === layer}
+                onClick={() => onTargetLayer(layer)}
+              >
+                {layer === 'unit' ? '目标：随从 / 基地' : '目标：地标'}
+              </button>
+            ))}
+          </div>
+        )}
       <div className="board-viewport">
         <Board
           state={s}

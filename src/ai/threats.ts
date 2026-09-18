@@ -1,5 +1,15 @@
+import {
+  abilityKinds,
+  allPieces,
+  hasTrait,
+  anyTrait,
+  isLandmark,
+  chargeFor,
+  consumeCharge,
+} from '../engine/traits';
+import { damageBonus } from '../engine/shrines';
 import { firelordStrike } from '../engine/firelord';
-import { attackProfile } from '../engine/attack-profile';
+import { combinedAttackPackets } from '../engine/attack-profile';
 import { COMBAT_RULES } from '../engine/catalog';
 import {
   attackPath,
@@ -12,7 +22,7 @@ import {
   canPlace,
   neighbors,
 } from '../engine/geometry';
-import { activeEffect, asTarget, effectClock, has, passive } from '../engine/state';
+import { piercing, activeEffect, asTarget, effectClock, has, passive } from '../engine/state';
 import { availableGuardians } from '../engine/protection';
 import type { AttackDirection, GameState, Player, Target, Unit } from '../engine/types';
 import { actionWindow, hitDistance, isFrontHit, statsFor } from './spatial';
@@ -24,7 +34,10 @@ export function readyAttack(s: GameState, u: Unit): boolean {
     !st.sleeping &&
     !st.frozen &&
     !st.stunned &&
-    !(passive(s, u) && ((u.kind === 4 && u.readyCharge < 2) || u.kind === 'firelord'))
+    !(
+      passive(s, u) &&
+      ((hasTrait(u, 4) && chargeFor(u, 4).readyCharge < 2) || hasTrait(u, 'firelord'))
+    )
   );
 }
 export function hitPackets(
@@ -35,9 +48,11 @@ export function hitPackets(
 ): { damage: number; probability: number }[] {
   const st = statsFor(s, u);
   if (t.unit && has(s, t.unit, 'immune')) return [{ damage: 0, probability: 1 }];
-  let packets = attackProfile(u.kind, st.attack, u.kills, !passive(s, u), !t.unit).packets;
+  if (st.attack < 0 || (t.unit && isLandmark(t.unit) && !topTarget(s, t) && !piercing(u)))
+    return [{ damage: 0, probability: 1 }];
+  let packets = combinedAttackPackets(abilityKinds(u), st.attack, u.kills, !passive(s, u), !t.unit);
   if (passive(s, u)) {
-    if (u.kind === 10)
+    if (hasTrait(u, 10))
       packets = [
         {
           damage:
@@ -50,9 +65,26 @@ export function hitPackets(
         },
       ];
   }
+  return defendedPackets(s, u, t, packets, direction);
+}
+function defendedPackets(
+  s: GameState,
+  u: Unit,
+  t: Target,
+  packets: { damage: number; probability: number }[],
+  direction?: AttackDirection,
+) {
+  if (t.unit && has(s, t.unit, 'immune')) return [{ damage: 0, probability: 1 }];
+  const bonus = damageBonus(s, { owner: u.owner, unit: u, kind: 'attack' });
+  if (bonus) packets = packets.map((p) => ({ ...p, damage: p.damage + bonus }));
   if (t.unit && passive(s, t.unit)) {
+    if (hasTrait(t.unit, 'u18'))
+      packets = packets.map((p) => ({
+        ...p,
+        damage: p.damage <= COMBAT_RULES.kingAttackImmunity ? 0 : p.damage,
+      }));
     if (
-      t.unit.kind === 24 &&
+      hasTrait(t.unit, 24) &&
       (direction
         ? direction === (t.owner === 1 ? 'up' : 'down')
         : isFrontHit(
@@ -66,13 +98,8 @@ export function hitPackets(
         ...p,
         damage: Math.min(COMBAT_RULES.frontDamageCap, p.damage),
       }));
-    if (t.unit.kind === 'u18')
-      packets = packets.map((p) => ({
-        ...p,
-        damage: p.damage <= COMBAT_RULES.kingAttackImmunity ? 0 : p.damage,
-      }));
   }
-  if (t.unit?.kind === '17p' && !t.unit.silenced)
+  if (t.unit && hasTrait(t.unit, '17p') && !t.unit.silenced)
     packets = packets.flatMap((p) =>
       p.damage > 0
         ? [
@@ -84,34 +111,63 @@ export function hitPackets(
   return packets;
 }
 export function attackPressure(s: GameState, u: Unit, t: Target, ignoreId = ''): number {
-  if (u.kind === 'firelord') {
+  if (hasTrait(u, 'firelord')) {
     if (t.unit && has(s, t.unit, 'immune')) return 0;
     const view = t.unit ? { ...s, units: [...s.units.filter((v) => v.id !== t.id), t.unit] } : s;
     const strike = firelordStrike(view, u);
     return strike?.primary.some((v) => v.id === t.id)
-      ? COMBAT_RULES.firelord.damage
+      ? COMBAT_RULES.firelord.damage + damageBonus(view, { owner: u.owner, unit: u, kind: 'skill' })
       : strike?.splash.some((v) => v.id === t.id)
-        ? COMBAT_RULES.firelord.splash
+        ? COMBAT_RULES.firelord.splash +
+          damageBonus(view, { owner: u.owner, unit: u, kind: 'skill' })
         : 0;
   }
-  if (!readyAttack(s, u) || !Number.isFinite(hitDistance(s, u, t, ignoreId))) return 0;
-  if (u.kind === 9 && passive(s, u) && u.attacked.includes(t.id)) return 0;
+  if (
+    statsFor(s, u).attack < 0 ||
+    !readyAttack(s, u) ||
+    !Number.isFinite(hitDistance(s, u, t, ignoreId))
+  )
+    return 0;
+  if (hasTrait(u, 9) && passive(s, u) && u.attacked.includes(t.id)) return 0;
   if (t.unit && has(s, t.unit, 'immune')) return 0;
   const packets = hitPackets(s, u, t);
   let amount = packets.reduce((v, p) => v + p.damage * p.probability, 0);
-  const one = passive(s, u) && (u.kind === 9 || u.kind === 4 || u.kind === 10);
+  const one = passive(s, u) && (hasTrait(u, 9) || hasTrait(u, 4) || hasTrait(u, 10));
   const count = one ? 1 : statsFor(s, u).remaining;
-  if (u.kind === 15 && !u.silenced && u.charge > 0) {
-    const empty = { ...u, charge: 0, readyCharge: 0 };
+  if (hasTrait(u, 15) && !u.silenced && chargeFor(u, 15).charge > 0) {
+    const empty = { ...u, abilityCharges: structuredClone(u.abilityCharges) };
+    consumeCharge(empty, 15);
     const followUp = Number.isFinite(hitDistance(s, empty, t, ignoreId))
       ? hitPackets(s, empty, t).reduce((v, p) => v + p.damage * p.probability, 0)
       : 0;
     amount += Math.max(0, count - 1) * followUp;
   } else amount *= count;
+  if (
+    (u.equipment.includes('s15') || hasTrait(u, 's6')) &&
+    (!t.unit || !isLandmark(t.unit) || topTarget(s, t) || piercing(u))
+  ) {
+    const extras = [
+      u.equipment.includes('s15')
+        ? Math.max(0, (t.unit?.maxHp ?? 300) - (t.unit?.hp ?? s.bases[t.owner]))
+        : 0,
+      !u.silenced && hasTrait(u, 's6')
+        ? (u.receivedDamage ?? [])
+            .filter((r) => r.ply >= s.ply - 1)
+            .reduce((n, r) => n + r.amount, 0)
+        : 0,
+    ];
+    for (const extra of extras)
+      if (extra > 0) {
+        const packets = defendedPackets(s, u, t, [{ damage: extra, probability: 1 }]);
+        amount += count * packets.reduce((n, p) => n + p.damage * p.probability, 0);
+      }
+  }
   if (t.unit) {
-    if (passive(s, u) && u.kind === 'u4') amount += 12;
+    if (u.equipment.includes('s16') && !has(s, t.unit, 'immune'))
+      amount += Math.min(15, Math.max(0, statsFor(s, t.unit).attack)) * 0.5;
+    if (passive(s, u) && hasTrait(u, 'u4')) amount += 12;
     if (u.equipment.includes('u5')) amount += 15;
-    if (passive(s, u) && u.kind === 'u6' && !u.equipment.includes('u5')) amount += 15;
+    if (passive(s, u) && hasTrait(u, 'u6') && !u.equipment.includes('u5')) amount += 15;
   }
   return amount;
 }
@@ -121,14 +177,14 @@ export function incoming(s: GameState, target: Unit, nextFullTurn = false): numb
   const original = s.units.find((u) => u.id === target.id);
   const ignore = original && (original.x !== target.x || original.y !== target.y) ? target.id : '';
   let total = 0;
-  for (const v of view.units)
+  for (const v of allPieces(view))
     if (v.owner !== target.owner && v.id !== target.id) total += attackPressure(view, v, t, ignore);
   return total;
 }
 export function baseThreat(s: GameState, defender: Player): number {
   const view = actionWindow(s, other(defender));
   const target = { id: `base-${defender}`, owner: defender, ...basePoint(defender) };
-  return view.units
+  return allPieces(view)
     .filter((u) => u.owner !== defender)
     .reduce((v, u) => v + attackPressure(view, u, target), 0);
 }
@@ -140,9 +196,9 @@ export function markFollowUp(s: GameState, target: Target, owner: Player, until:
   for (const u of view.units) {
     if (
       u.owner !== owner ||
-      u.kind === 10 ||
+      hasTrait(u, 10) ||
       !readyAttack(view, u) ||
-      (u.kind === 9 && !u.silenced && u.attacked.includes(target.id)) ||
+      (hasTrait(u, 9) && !u.silenced && u.attacked.includes(target.id)) ||
       !Number.isFinite(hitDistance(view, u, target))
     )
       continue;
@@ -201,14 +257,14 @@ export function analyzePayload(
   for (const victim of view.units) {
     if (victim.owner === u.owner || !topTarget(view, asTarget(victim))) continue;
     let reason = '可兑现';
-    if (type === 'convert' && victim.kind === 5) reason = '大肉比无法被策反';
+    if (type === 'convert' && hasTrait(victim, 5)) reason = '大肉比无法被策反';
     else if (has(view, victim, 'immune')) reason = '金身保护';
     else if (!Number.isFinite(hitDistance(view, carrier, asTarget(victim))))
       reason = '无合法攻击路径';
     else if (
       view.units.some(
         (v) =>
-          v.kind === 'u15' &&
+          hasTrait(v, 'u15') &&
           v.owner === victim.owner &&
           passive(view, v) &&
           attackPath(view, v, asTarget(victim), statsFor(view, v).range),

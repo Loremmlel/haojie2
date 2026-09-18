@@ -1,3 +1,5 @@
+import { allPieces, hasTrait, isLandmark } from './traits';
+import { landmarkAt, landmarkSquare, liveLandmark } from './shrines';
 import { definition } from './catalog';
 import { allegiance, getStats, has, passive, piercing } from './state';
 import type { AttackDirection, GameState, Player, Point, Target, Unit } from './types';
@@ -26,7 +28,7 @@ export const occupants = (s: GameState, p: Point) =>
 export const occupant = (s: GameState, p: Point) => occupants(s, p)[0];
 export function targets(s: GameState): Target[] {
   return [
-    ...s.units.map((u) => ({ id: u.id, owner: u.owner, x: u.x, y: u.y, unit: u })),
+    ...allPieces(s).map((u) => ({ id: u.id, owner: u.owner, x: u.x, y: u.y, unit: u })),
     ...([1, 2] as Player[]).map((p) => ({ id: `base-${p}`, owner: p, ...basePoint(p) })),
   ];
 }
@@ -35,6 +37,10 @@ export function targetAt(s: GameState, p: Point): Target | undefined {
 }
 export function topTarget(s: GameState, t: Target) {
   if (!t.unit) return true;
+  if (isLandmark(t.unit)) {
+    const over = occupant(s, t);
+    return !over || allegiance(s, over) !== t.owner;
+  }
   return occupant(s, t)?.id === t.id;
 }
 export function adjacent(a: Unit, b: Unit) {
@@ -59,8 +65,31 @@ export function canPlace(
     footprint = cells(moved);
   if (footprint.some((p) => !inside(p) || equal(p, basePoint(1)) || equal(p, basePoint(2))))
     return false;
-  if (deployment && u.kind !== 'u27' && footprint.some((p) => !s.deployRows[u.owner].includes(p.y)))
+  if (isLandmark(u)) {
+    if (!deployment) return equal(u, at);
+    if (!landmarkSquare(u.kind, at) || landmarkAt(s, at)) return false;
+    const over = occupants(s, at).filter((v) => !ignore.includes(v.id));
+    return over.length <= 1 && over.every((v) => allegiance(s, v) === u.owner);
+  }
+  if (
+    deployment &&
+    !hasTrait(u, 'u27') &&
+    footprint.some((p) => {
+      const land = landmarkAt(s, p);
+      return (
+        !s.deployRows[u.owner].includes(p.y) &&
+        !(liveLandmark(land) && allegiance(s, land) === u.owner)
+      );
+    })
+  )
     return false;
+  for (const p of footprint) {
+    const land = landmarkAt(s, p);
+    if (!land) continue;
+    if (deployment && liveLandmark(land) && allegiance(s, land) !== u.owner) return false;
+    // Landmarks support one unit, never a clone stack, even while dormant.
+    if (occupants(s, p).some((v) => v.id !== u.id && !ignore.includes(v.id))) return false;
+  }
   const others = s.units.filter((v) => v.id !== u.id && !ignore.includes(v.id));
   if (
     others.some(
@@ -81,7 +110,7 @@ export function canPlace(
     others.some(
       (v) =>
         allegiance(s, v) === u.owner &&
-        ((v.kind === 23 && passive(s, v)) || (u.kind === 23 && passive(s, u))) &&
+        ((hasTrait(v, 23) && passive(s, v)) || (hasTrait(u, 23) && passive(s, u))) &&
         cells(v).some((c) =>
           footprint.some((p) => Math.max(Math.abs(c.x - p.x), Math.abs(c.y - p.y)) <= 1),
         ),
@@ -140,7 +169,7 @@ export function attackPath(
   const t = 'id' in target ? target : undefined,
     ends = t?.unit ? cells(t.unit) : [target],
     blocked = new Set<string>();
-  for (const v of s.units)
+  for (const v of allPieces(s))
     if (v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
       for (const p of cells(v)) blocked.add(key(p));
   // When attacking a stack, other members on its target square are not intervening blockers.
@@ -159,7 +188,8 @@ export function attackPath(
       const next = [...path, p];
       if (ends.some((e) => equal(e, p))) {
         fallback ??= next;
-        if (t?.unit?.kind !== 24 || t.unit.silenced || frontal(next, t.owner)) return next;
+        if (!t?.unit || !hasTrait(t.unit, 24) || t.unit.silenced || frontal(next, t.owner))
+          return next;
         continue;
       }
       if (!seen.has(key(p))) {
@@ -212,7 +242,7 @@ export function attackRoutes(
   const t = 'id' in target ? target : undefined,
     ends = new Set((t?.unit ? cells(t.unit) : [target]).map(key)),
     blocked = new Set<string>();
-  for (const v of s.units)
+  for (const v of allPieces(s))
     if (v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
       for (const p of cells(v)) blocked.add(key(p));
   for (const end of ends) blocked.delete(end);
@@ -243,7 +273,7 @@ export function attackRoutes(
 export function selectableAttackRoutes(s: GameState, u: Unit, t: Target): AttackRoute[] {
   if (
     piercing(u) ||
-    !((u.kind === 'u20' && !u.silenced) || (t.unit?.kind === 24 && !t.unit.silenced))
+    !((hasTrait(u, 'u20') && !u.silenced) || (t.unit && hasTrait(t.unit, 24) && !t.unit.silenced))
   )
     return [];
   return attackRoutes(s, u, t, getStats(s, u).range);

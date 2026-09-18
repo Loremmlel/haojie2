@@ -1,3 +1,4 @@
+import { hasTrait } from './traits';
 import { SUMMON_POOL, ULTIMATE_POOL } from './catalog';
 import { now, passive } from './state';
 import type { Card, Command, GameState, Unit } from './types';
@@ -10,7 +11,7 @@ export function summonPool(card: Card): 'normal' | 'ultimate' | undefined {
 }
 export function canRerollWith(s: GameState, mage: Unit) {
   return (
-    mage.kind === 'u13' &&
+    hasTrait(mage, 'u13') &&
     mage.owner === s.active &&
     passive(s, mage) &&
     (mage.rerollUsedPly === undefined
@@ -21,7 +22,8 @@ export function canRerollWith(s: GameState, mage: Unit) {
 /** One rule-owned option list for engine validation, all AI levels and both UI entry points. */
 export function rerollCommands(s: GameState, card: Card): Command[] {
   if (
-    s.phase === 'synthesis' ||
+    ['synthesis', 'shrine-draft', 'shrine-setup'].includes(s.phase) ||
+    s.summonOffer ||
     s.winner ||
     s.pending.length ||
     s.summonSlots !== 0 ||

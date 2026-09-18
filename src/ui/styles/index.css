@@ -21,6 +21,7 @@
 @import '../shared/modal.css';
 @import '../library/codex.css';
 @import '../library/rules.css';
+@import '../shrine/shrine.css';
 @import 'motion.css';
 
 @import '../opponent/opponent.css';

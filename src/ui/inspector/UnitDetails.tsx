@@ -1,5 +1,5 @@
 import type { GameState, Unit } from '../../engine';
-import { getStats } from '../../engine';
+import { getStats, definition, abilityKinds } from '../../engine';
 import { UnitStatus } from './UnitStatus';
 import { Icon, numberLabel } from '../shared/visuals';
 
@@ -15,12 +15,35 @@ export function UnitDetails({ state: s, unit: inspected }: { state: GameState; u
   const stats = getStats(s, inspected);
   return (
     <>
+      {definition(inspected.kind).landmark && (
+        <p className="shrine-status" role="status">
+          {(inspected as import('../../engine').Landmark).dormantSince !== undefined
+            ? `地标休眠 · 重建还需${Math.max(0, definition(inspected.kind).landmark!.rebuild - ((inspected as import('../../engine').Landmark).rebuildTicks ?? 0))}个己方回合。到期后，敌方或中立占位会阻止重建。`
+            : '地标生效 · 可与一个棋子同格，点击同格可切换查看。'}
+        </p>
+      )}
+      {abilityKinds(inspected).length > 1 && (
+        <details className="ability-details">
+          <summary>强夺获得的能力 · {abilityKinds(inspected).length - 1}</summary>
+          {abilityKinds(inspected)
+            .filter((k) => k !== inspected.kind)
+            .map((k) => (
+              <p key={k}>
+                <b>{definition(k).name}</b>：{definition(k).description}
+              </p>
+            ))}
+        </details>
+      )}
       <>
         <div className="live-stats">
           {[
             ['sword', '攻击', Math.round(stats.attack * 10) / 10],
             ['heart', '生命', `${Math.round(inspected.hp * 10) / 10}/${inspected.maxHp}`],
-            ['target', '射程', inspected.kind === 'formless' ? '∞' : stats.range],
+            [
+              'target',
+              '射程',
+              inspected.kind === 'formless' || inspected.kind === 's7' ? '∞' : stats.range,
+            ],
             ['clock', '攻击次数', stats.actions],
             ['move', '移动', numberLabel(stats.move)],
           ].map(([icon, label, value]) => (

@@ -1,3 +1,15 @@
+import {
+  allPieces,
+  hasTrait,
+  anyTrait,
+  isLandmark,
+  isMage,
+  signedAttack,
+  chargeFor,
+  attackChargeKind,
+  refusesFriendlyAttackBuff,
+} from './traits';
+import { bannerCount, consumeChosenSummon, onLandmarkDeployment, syncBanners } from './shrines';
 import { attackPath } from './geometry';
 import { enrichEvent } from './event-facts';
 import { simulationRandom } from './random';
@@ -38,7 +50,7 @@ export const allegiance = (s: GameState, u: Unit): Player | 0 =>
 export const passive = (s: GameState, u: Unit) => !u.silenced && !has(s, u, 'freeze');
 export const hasWeapon = (u: Unit, k: Kind) => u.equipment.includes(k);
 export const age = (s: GameState, u: Unit) => s.turns[u.owner] + u.offset / 2 - u.born;
-export const isRunner = (u: Unit) => !u.silenced && (u.kind === 'u12' || u.kind === 'u12p');
+export const isRunner = (u: Unit) => !u.silenced && anyTrait(u, ['u12', 'u12p']);
 export function emit(s: GameState, event: Omit<GameEvent, 'id'>, message?: string) {
   const snap = enrichEvent(s, { ...event, id: `e${s.serial++}` });
   if (event.from) snap.from = { x: event.from.x, y: event.from.y };
@@ -99,12 +111,28 @@ export function template(kind: Kind, owner: Player, born: number, at: Point, id 
     onceUsed: false,
   };
 }
-export function addUnit(s: GameState, kind: Kind, owner: Player, at: Point, group?: string): Unit {
+export function addUnit(
+  s: GameState,
+  kind: Kind,
+  owner: Player,
+  at: Point,
+  group?: string,
+  charge = false,
+): Unit {
   const u = template(kind, owner, s.turns[owner], at, `u${s.serial++}`);
   u.deployedAt = s.ply;
   if (group) u.group = group;
   if (['u1', 'u12', 'u12p'].includes(String(kind))) u.born--;
-  s.units.push(u);
+  if (kind === 1 && charge) {
+    u.hp -= 10;
+    u.maxHp -= 10;
+    u.born--;
+    u.chargedOnDeploy = true;
+  }
+  if (isLandmark(u)) (s.landmarks ??= []).push(u);
+  else s.units.push(u);
+  onLandmarkDeployment(s, u);
+  syncBanners(s);
   emit(
     s,
     { type: 'spawn', to: at, unitId: u.id, owner, ultimate: definition(kind).tier !== 'normal' },
@@ -112,26 +140,37 @@ export function addUnit(s: GameState, kind: Kind, owner: Player, at: Point, grou
   );
   return u;
 }
-export function draw(s: GameState, owner: Player, count: number, ultimate = false): Card[] {
+export function draw(
+  s: GameState,
+  owner: Player,
+  count: number,
+  ultimate = false,
+  chosenKind?: Kind,
+): Card[] {
   const result: Card[] = [];
+  if (chosenKind !== undefined) consumeChosenSummon(s, owner, chosenKind, ultimate);
   for (let i = 0; i < count; i++) {
     const pool = ultimate ? ULTIMATE_POOL : SUMMON_POOL;
     let kind =
-      pool[
-        Math.floor(
-          random(
-            s,
-            Array.from({ length: pool.length + 1 }, (_, i) => i / pool.length),
-          ) * pool.length,
-        )
-      ];
-    if (kind === 3 && random(s, [0, 1 / 3, 1]) >= 1 / 3) kind = '3p';
+      i === 0 && chosenKind !== undefined
+        ? chosenKind
+        : pool[
+            Math.floor(
+              random(
+                s,
+                Array.from({ length: pool.length + 1 }, (_, i) => i / pool.length),
+              ) * pool.length,
+            )
+          ];
+    const chosen = i === 0 && chosenKind !== undefined;
+    if (!chosen && kind === 3 && random(s, [0, 1 / 3, 1]) >= 1 / 3) kind = '3p';
     if (
+      !chosen &&
       kind === 17 &&
       random(s, [0, COMBAT_RULES.goldSpellChance, 1]) >= COMBAT_RULES.goldSpellChance
     )
       kind = '17p';
-    if (kind === 'u12' && random(s, [0, 0.1, 1]) >= 0.1) kind = 'u12p';
+    if (!chosen && kind === 'u12' && random(s, [0, 0.1, 1]) >= 0.1) kind = 'u12p';
     const group = kind === 'u25' ? `group${s.serial++}` : undefined;
     const d = definition(kind),
       limit = d.spell ?? d.weapon;
@@ -156,24 +195,28 @@ export function draw(s: GameState, owner: Player, count: number, ultimate = fals
   }
   return result;
 }
-export const piercing = (u: Unit) => hasWeapon(u, 'u28') || (u.kind === 'slayer' && !u.silenced);
+export const piercing = (u: Unit) => hasWeapon(u, 'u28') || (hasTrait(u, 'slayer') && !u.silenced);
 export const healingAttack = (u: Unit) =>
-  !u.silenced && (u.kind === 2 || u.kind === 'u21' || u.kind === 'sage');
+  definition(u.kind).attack < 0 ||
+  signedAttack(u) ||
+  (!u.silenced && anyTrait(u, [2, 'u21', 's14']));
 export const counterChance = (u: Unit) =>
-  u.kind === 'archmage' ? COMBAT_RULES.archmageCounterChance : u.kind === 'u3' ? 1 / 3 : 0;
+  hasTrait(u, 'archmage') ? COMBAT_RULES.archmageCounterChance : hasTrait(u, 'u3') ? 1 / 3 : 0;
 /** Range cannot depend on an aura's attack bonus. Avoid getStats recursion between sages. */
 export function attackAuraSources(s: GameState, target: Unit): Unit[] {
-  if (allegiance(s, target) !== target.owner) return [];
+  if (allegiance(s, target) !== target.owner || refusesFriendlyAttackBuff(target)) return [];
   return s.units.filter(
     (u) =>
-      u.kind === 'sage' &&
+      hasTrait(u, 'sage') &&
       u.owner === target.owner &&
       passive(s, u) &&
       attackPath(
         s,
         u,
         asTarget(target),
-        definition(u.kind).range + u.rangeBonus + (hasWeapon(u, 'u5') ? 1 : 0),
+        definition(u.kind).range +
+          u.rangeBonus +
+          (hasWeapon(u, 'u5') || hasWeapon(u, 's16') ? 1 : 0),
       ),
   );
 }
@@ -182,13 +225,13 @@ export function getStats(s: GameState, u: Unit): Stats {
     enabled = !u.silenced;
   let attack = d.attack + u.attackBonus,
     range = d.range + u.rangeBonus,
-    actions = d.actions > 0 && d.actions < 1 ? 1 : d.actions,
+    actions = isLandmark(u) ? 1 : d.actions > 0 && d.actions < 1 ? 1 : d.actions,
     move = d.move;
   const frozen = has(s, u, 'freeze'),
     stunned = has(s, u, 'stun');
   const a = age(s, u);
-  const sleeping = a <= 0 || (enabled && u.kind === 23 && a < 2);
-  if (enabled && u.kind === '3p') {
+  const sleeping = isLandmark(u) ? u.hp <= 0 : a <= 0 || (enabled && hasTrait(u, 23) && a < 2);
+  if (enabled && hasTrait(u, '3p')) {
     const n = s.units.filter((v) => {
       for (let dx = 0; dx < v.size; dx++)
         for (let dy = 0; dy < v.size; dy++)
@@ -198,18 +241,19 @@ export function getStats(s: GameState, u: Unit): Stats {
     attack = Math.max(0, 40 - 5 * n) + u.attackBonus;
     range = n + u.rangeBonus;
   }
-  if (enabled && u.kind === 4 && u.charge >= 5) range++;
-  if (enabled && u.kind === 15 && u.chargeType === 'attack') {
-    attack += u.charge * COMBAT_RULES.accumulator.attack;
-    range += u.charge * COMBAT_RULES.accumulator.range;
+  if (enabled && hasTrait(u, 4) && chargeFor(u, 4).charge >= 5) range++;
+  if (enabled && hasTrait(u, 15) && chargeFor(u, 15).chargeType === 'attack') {
+    attack += chargeFor(u, 15).charge * COMBAT_RULES.accumulator.attack;
+    range += chargeFor(u, 15).charge * COMBAT_RULES.accumulator.range;
   }
-  if (enabled && u.kind === 'u2') attack += u.charge * 15;
-  if (enabled && u.kind === 'u6' && hasWeapon(u, 'u5')) attack = 10 + u.attackBonus;
-  if (hasWeapon(u, 'u5')) range++;
+  if (enabled && hasTrait(u, 'u2')) attack += chargeFor(u, 'u2').charge * 15;
+  if (enabled && hasTrait(u, 'u6') && hasWeapon(u, 'u5')) attack = 10 + u.attackBonus;
+  if (hasWeapon(u, 'u5') || hasWeapon(u, 's16')) range++;
+  if (hasWeapon(u, 's2') || hasWeapon(u, 's15')) attack += 20;
   if (hasWeapon(u, 'u11')) attack += 5;
   if (
     enabled &&
-    u.kind === 12 &&
+    hasTrait(u, 12) &&
     s.units.some(
       (v) =>
         allegiance(s, v) !== u.owner &&
@@ -232,13 +276,20 @@ export function getStats(s: GameState, u: Unit): Stats {
     .filter((e) => e.type === 'attack' && activeEffect(s, e, u))
     .reduce((a, e) => a + (e.amount ?? 0), 0);
   attack += attackAuraSources(s, u).length * COMBAT_RULES.sageAuraAttack;
+  if (!refusesFriendlyAttackBuff(u) && allegiance(s, u) === u.owner)
+    attack += bannerCount(s, u.owner) * 10;
   if (has(s, u, 'inner-fire')) attack = u.hp;
-  const operationLimit = enabled && u.kind === 'u27' && a === 1 ? 2 : 1;
+  if (definition(u.kind).attack < 0 || (enabled && hasTrait(u, 's14'))) attack = -20;
+  const operationLimit =
+    (enabled && hasTrait(u, 'u27') && a === 1 ? 2 : 1) + (u.extraOperations ?? 0);
   const locked = sleeping || frozen || stunned;
   const operationsLeft = locked ? 0 : Math.max(0, operationLimit - u.operations);
-  const halfAttackLocked = d.actions === 0.5 && !(u.chargeType === 'attack' && u.readyCharge >= 1);
+  const chargeKind = attackChargeKind(u),
+    reserve = chargeKind === undefined ? undefined : chargeFor(u, chargeKind);
+  const halfAttackLocked =
+    !!reserve && !(reserve.chargeType === 'attack' && reserve.readyCharge >= 1);
   const availableAttack =
-    locked || halfAttackLocked || u.kind === 'firelord'
+    locked || halfAttackLocked || hasTrait(u, 'firelord')
       ? 0
       : u.mode === 'attack'
         ? Math.max(0, actions - u.shots)
@@ -246,7 +297,10 @@ export function getStats(s: GameState, u: Unit): Stats {
           ? actions
           : 0;
   return {
-    attack: Math.max(0, attack),
+    attack:
+      attack < 0 && (definition(u.kind).attack < 0 || (enabled && hasTrait(u, 's14')))
+        ? -20
+        : Math.max(0, attack),
     range: Math.max(0, range),
     actions: Math.max(0, actions),
     remaining: availableAttack,
@@ -260,7 +314,7 @@ export function getStats(s: GameState, u: Unit): Stats {
   };
 }
 export function findUnit(s: GameState, id?: string): Unit {
-  const u = s.units.find((u) => u.id === id);
+  const u = allPieces(s).find((u) => u.id === id);
   ensure(u, '请选择仍在场上的随从。');
   return u;
 }
@@ -320,6 +374,9 @@ export function resetUnit(s: GameState, u: Unit) {
   u.bonusSequence = false;
   u.weaponFirstUsed = false;
   u.readyCharge = u.charge;
+  if (u.extraOperations !== undefined) u.extraOperations = 0;
+  for (const reserve of Object.values(u.abilityCharges ?? {}))
+    if (reserve) reserve.readyCharge = reserve.charge;
   u.effects = u.effects.filter((e) => e.until > (e.global ? s.ply : now(s, u)));
 }
 export function addEffect(

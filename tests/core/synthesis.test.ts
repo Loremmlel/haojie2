@@ -42,7 +42,7 @@ const fuse = (recipeId: string, materialIds: string[], x = 2, y = 3): Command =>
 test('2.5 seven recipes remove exactly three materials atomically, deploy fresh units, and leave both random pools unchanged', () => {
   assert.equal(SUMMON_POOL.length, 26);
   assert.equal(ULTIMATE_POOL.length, 28);
-  for (const { id } of SYNTHESIS_RECIPES) {
+  for (const { id } of SYNTHESIS_RECIPES.filter((r) => !definition(r.result).aura)) {
     const { s, recipe, ids } = fusionFixture(id);
     if (recipe.source === 'board') {
       s.units[0].hp = 1;

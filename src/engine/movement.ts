@@ -1,3 +1,4 @@
+import { chargeFor, consumeCharge, moveChargeKind, hasTrait, isLandmark } from './traits';
 import { hitPullDestination, hutSpawnPoints } from './reactions';
 import { protectedEffect } from './combat';
 import { eventActor, withEventFacts } from './event-facts';
@@ -40,7 +41,8 @@ export function emptyFor(s: GameState, u: Unit, p: Point = u) {
 }
 function canEnter(s: GameState, u: Unit, p: Point) {
   if (!inside(p) || equal(p, basePoint(u.owner))) return false;
-  if (u.kind === 'u12p' && equal(p, basePoint(u.owner === 1 ? 2 : 1))) return false;
+  if (hasTrait(u, 'u12p') && !hasTrait(u, 'u12') && equal(p, basePoint(u.owner === 1 ? 2 : 1)))
+    return false;
   return !occupants(s, p).some((v) => v.id !== u.id && allegiance(s, v) === u.owner);
 }
 function reachableExit(s: GameState, u: Unit, steps: number) {
@@ -70,12 +72,18 @@ function resolveMove(s: GameState, c: Command, ctx: Resolution) {
   const u = actor(s, c.unitId),
     to = point(c.x, c.y),
     starting = u.mode === 'none';
+  ensure(!isLandmark(u), '地标不能移动。');
   chooseMode(s, u, 'move');
+  const charged = moveChargeKind(u),
+    reserve = charged === undefined ? undefined : chargeFor(u, charged);
   if (isRunner(u)) {
     if (starting) {
-      ensure(u.readyCharge >= 1 && u.chargeType === 'move', '需要在回合开始已有1层移动蓄力。');
+      ensure(
+        reserve && reserve.readyCharge >= 1 && reserve.chargeType === 'move',
+        '需要在回合开始已有1层移动蓄力。',
+      );
       u.moves = 5;
-      u.charge = u.readyCharge = 0;
+      consumeCharge(u, charged!);
     }
     ensure(
       u.moves > 0 && distance(u, to) === 1 && canEnter(s, u, to),
@@ -89,9 +97,9 @@ function resolveMove(s: GameState, c: Command, ctx: Resolution) {
     u.moves--;
     if (t) damage(s, t, 30, { owner: u.owner, unit: u, kind: 'collision' }, ctx);
     if (!alive(s, u)) return;
-    if (u.kind === 'u12' && t) {
+    if (hasTrait(u, 'u12') && t) {
       s.pending.unshift({ kind: 'bounce', owner: u.owner, source: structuredClone(u), amount: 30 });
-    } else if (u.kind === 'u12p')
+    } else if (hasTrait(u, 'u12p') && !hasTrait(u, 'u12'))
       ensure(
         emptyFor(s, u) || (u.moves > 0 && reachableExit(s, u, u.moves)),
         '剩余移动次数无法返回空地，不能进行这次冲撞。',
@@ -103,18 +111,18 @@ function resolveMove(s: GameState, c: Command, ctx: Resolution) {
     return;
   }
   let limit = getStats(s, u).move;
-  if (limit % 1 !== 0) {
+  if (charged !== undefined) {
     ensure(
-      u.readyCharge >= 1 && u.chargeType === 'move',
+      reserve && reserve.readyCharge >= 1 && reserve.chargeType === 'move',
       '分数移动需要在回合开始已有1层移动蓄力。',
     );
-    limit *= 2;
+    if (limit % 1) limit *= 2;
   }
-  const path = movementPath(s, u, to, limit, u.kind === 13 && !u.silenced);
+  const path = movementPath(s, u, to, limit, hasTrait(u, 13) && !u.silenced);
   ensure(path, '移动距离、路径、占位或独行侠禁区不合法。');
   emit(s, { type: 'move', from: u, to, path, unitId: u.id, owner: u.owner });
   Object.assign(u, to);
-  if (getStats(s, u).move % 1 !== 0) u.charge = u.readyCharge = 0;
+  if (charged !== undefined) consumeCharge(u, charged);
   finishOperation(u);
   if (hasWeapon(u, 'u16')) u.bonusAttacks++;
 }
@@ -189,7 +197,7 @@ export function react(s: GameState, c: Command, ctx: Resolution) {
     const destinations = hutSpawnPoints(s, r);
     if (!hut || !destinations.length) return;
     if (c.x === undefined) {
-      ensure(hut.kind !== 'citadel', '王城死亡召唤必须选择合法落点。');
+      ensure(!hasTrait(hut, 'citadel'), '王城死亡召唤必须选择合法落点。');
       emit(s, { type: 'skill', owner: r.owner, text: '放弃召唤' });
       return;
     }

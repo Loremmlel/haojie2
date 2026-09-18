@@ -124,3 +124,17 @@ export { cachedDecision } from './src/ai/plan-cache';
 配方ID：`szf`、`sage`、`formless`、`slayer`、`citadel`、`firelord`、`archmage`。`materialIds`对场上材料配方使用棋子ID，`firelord`使用3张U28手牌ID。完整JSON也可调用`{type:"synthesize",recipeId,materialIds,x,y}`。只能在回合开始合成窗口使用；`legal`返回AI筛选过的合法选择，不代替所有可能的材料组合。
 
 `cli-synthesis-20260917.jsonl`是13条命令的专用合成流程脚本，不是胜率或真人实战样本。9月17日之前的回放仍用各自记录时的规则提交验证，不能直接在2.5引擎上重写指纹。
+
+## 3.0 神龛模式
+
+```sh
+npm run play:cli -- --new --rules shrine --seed 90 --human 1 --difficulty hard
+npm run play:cli -- --replay docs/playtests/cli-shrine-20260918.jsonl
+node --import tsx scripts/ai/shrine-smoke.ts
+```
+
+`--rules classic|shrine`选择规则；原`--mode work|timed`仍只表示AI预算算法，二者独立。`show`显示公开的双方候选和锁定状态，不提前显示已锁定的选择；地标另列血量与休眠重建，永久光环另列状态。JSON命令覆盖全部能力。
+
+新增快捷命令：`choose-shrine PLAYER KIND [odd|even]`（神龛s1..s16）；`finish-shrine-setup`；`activate-aura CARD`；`extra-summon ultimate|normal`；`choose-summons INDEX1 INDEX2`（从0编号）；`clock TARGET`；`shatter UNIT TARGET`。正负攻击可写 `attack UNIT TARGET heal|damage`；强夺主动能力用JSON的`ability`字段；自选用对应召唤JSON的`chosenKind`。
+
+3名场上U13的光环合成：`synthesize laoqian ID1 ID2 ID3`，不填坐标；其他合成仍需X Y。当前82命令回放包括从真实种子90抽出的候选、双方秘密选择、(7,9)举旗入场、老千K、8个全局回合。后续动作来自固定预算AI，记录是真实规则PRNG结果，不是对作者胜率报告。旧2.5回放固定在ae797bf25cc7f25ad746a43662324c8a3ec4fe46验证，不覆盖旧指纹。

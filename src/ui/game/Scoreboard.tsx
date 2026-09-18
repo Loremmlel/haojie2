@@ -46,11 +46,15 @@ export function Scoreboard({ state: s, human }: { state: GameState; human?: Play
             ? '终局'
             : reaction
               ? '效果结算'
-              : s.phase === 'synthesis'
-                ? '选择合成'
-                : s.phase === 'summon'
-                  ? '召唤阶段'
-                  : '行动阶段'}
+              : s.phase === 'shrine-draft'
+                ? '秘密选神龛'
+                : s.phase === 'shrine-setup'
+                  ? '神龛入场'
+                  : s.phase === 'synthesis'
+                    ? '选择合成'
+                    : s.phase === 'summon'
+                      ? '召唤阶段'
+                      : '行动阶段'}
         </i>
       </div>
     </section>

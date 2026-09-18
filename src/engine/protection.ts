@@ -1,3 +1,4 @@
+import { hasTrait } from './traits';
 import { attackPath } from './geometry';
 import { allegiance, asTarget, getStats, passive } from './state';
 import type { GameState, Unit } from './types';
@@ -7,7 +8,9 @@ import type { GameState, Unit } from './types';
 export function spentGuardSources(s: GameState, u: Unit): readonly string[] {
   return (
     u.guardSourceIds ??
-    (u.guardUsed ? s.units.filter((v) => v.kind === 3 && v.owner === u.owner).map((v) => v.id) : [])
+    (u.guardUsed
+      ? s.units.filter((v) => hasTrait(v, 3) && v.owner === u.owner).map((v) => v.id)
+      : [])
   );
 }
 export function normalizeLegacyGuards(s: GameState) {
@@ -22,7 +25,7 @@ export function guardProtections(s: GameState, u: Unit) {
   return s.units
     .filter(
       (v) =>
-        v.kind === 3 &&
+        hasTrait(v, 3) &&
         allegiance(s, v) === u.owner &&
         passive(s, v) &&
         attackPath(s, v, asTarget(u), getStats(s, v).range),

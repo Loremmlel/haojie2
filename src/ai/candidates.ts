@@ -1,3 +1,14 @@
+import { canRestoreClock, commandSummonPool, damageBonus, healingBlocked } from '../engine/shrines';
+import {
+  hasTrait,
+  abilityKinds,
+  allPieces,
+  isLandmark,
+  signedAttack,
+  hasAura,
+  canAttackFriend,
+} from '../engine/traits';
+import { regularSummonCommands, summonChoices } from './shrines';
 import { availableSyntheses, synthesisDestinations } from '../engine/synthesis';
 import { canSkipReaction, hutSpawnPoints } from '../engine/reactions';
 import { piercing, healingAttack } from '../engine/state';
@@ -72,7 +83,7 @@ function targetRank(s: GameState, a: ActionSpec, c: Command, t: Target): number 
   const owner = decisionOwner(s),
     friend = (t.unit ? allegiance(s, t.unit) : t.owner) === owner;
   const caster =
-    s.units.find((u) => u.id === c.unitId) ??
+    allPieces(s).find((u) => u.id === c.unitId) ??
     (c.type === 'react' ? s.pending[0]?.source : undefined);
   const cardKind = s.hands[s.active].find((v) => v.id === c.cardId)?.kind;
   if (caster?.kind === 10 && !caster.silenced && !friend) {
@@ -100,7 +111,8 @@ function targetRank(s: GameState, a: ActionSpec, c: Command, t: Target): number 
   const u = t.unit,
     value = unitValue(s, u);
   if (c.type === 'attack' || c.type === 'react') {
-    if (friend) return (u.maxHp - u.hp) * 2;
+    if (c.mode === 'heal' || (friend && c.mode !== 'damage')) return (u.maxHp - u.hp) * 2;
+    if (friend) return -value;
     const shots = caster ? getStats(s, caster).remaining : 1;
     const packets = caster ? hitPackets(s, caster, t) : [];
     const burst = packets.length === 1 && caster?.kind !== 9 && caster?.kind !== 10 ? shots : 1;
@@ -125,7 +137,7 @@ function targetRank(s: GameState, a: ActionSpec, c: Command, t: Target): number 
 }
 /** Cheap ordering for narrow rollout policies, never a substitute for engine validation. */
 export function commandPriority(s: GameState, c: Command): number {
-  const u = s.units.find((v) => v.id === c.unitId);
+  const u = allPieces(s).find((v) => v.id === c.unitId);
   const t = targets(s).find((v) => v.id === c.targetId);
   const owner = decisionOwner(s);
   if (c.type === 'end' || c.type === 'finish-mode') return -0.1;
@@ -138,8 +150,15 @@ export function commandPriority(s: GameState, c: Command): number {
     return 1000;
   if (c.type === 'deploy') return 80;
   if (c.type === 'attack' && u && t) {
-    if (t.owner === owner && t.unit)
-      return Math.min(t.unit.maxHp - t.unit.hp, getStats(s, u).attack) * 0.8;
+    if (t.owner === owner && t.unit) {
+      if (c.mode === 'heal' || (c.mode !== 'damage' && healingAttack(u)))
+        return healingBlocked(s, owner)
+          ? 0
+          : Math.max(0, Math.min(t.unit.maxHp - t.unit.hp, Math.abs(definition(u.kind).attack))) *
+              0.8;
+      const gain = hasTrait(u, 's5') && abilityKinds(t.unit).some((k) => !hasTrait(u, k)) ? 65 : 0;
+      return gain - materialValue(s, t.unit) * 0.8;
+    }
     const hp = t.unit?.hp ?? s.bases[t.owner];
     const packets = hitPackets(s, u, t, c.direction);
     const damage = packets.reduce((v, p) => v + p.probability * Math.min(hp, p.damage), 0);
@@ -196,7 +215,7 @@ function pointRank(s: GameState, a: ActionSpec, c: Command, p: Point, u?: Unit):
       (u ? distance(p, u) * 0.1 : 0)
     );
   if (a.id === 'hook') {
-    const victim = s.units.find((v) => v.id === c.targetId);
+    const victim = allPieces(s).find((v) => v.id === c.targetId);
     if (victim) return -placementValue(s, victim, p);
   }
   if (a.id === 'blast' || a.id === 'cross' || a.id === 'ice-mark') {
@@ -222,7 +241,7 @@ function pointRank(s: GameState, a: ActionSpec, c: Command, p: Point, u?: Unit):
 }
 function points(s: GameState, a: ActionSpec, c: Command): Point[] {
   const u =
-    s.units.find((v) => v.id === c.unitId) ??
+    allPieces(s).find((v) => v.id === c.unitId) ??
     (c.type === 'react' ? s.pending[0]?.source : undefined);
   if ((c.type === 'move' && u && isRunner(u)) || a.id === 'bounce') return u ? neighbors(u) : [];
   if (a.id === 'hut-spawn')
@@ -238,7 +257,7 @@ function points(s: GameState, a: ActionSpec, c: Command): Point[] {
       const st = getStats(s, u);
       const limit = st.move % 1 ? st.move * 2 : st.move;
       return (
-        distance(u, p) <= limit && !!movementPath(s, u, p, limit, u.kind === 13 && !u.silenced)
+        distance(u, p) <= limit && !!movementPath(s, u, p, limit, hasTrait(u, 13) && !u.silenced)
       );
     }
     if (a.id === 'dash' && u) return distance(u, p) <= 6 && !!movementPath(s, u, p, 6);
@@ -246,7 +265,7 @@ function points(s: GameState, a: ActionSpec, c: Command): Point[] {
     if ((a.id === 'cross' || a.id === 'ice-mark') && u)
       return Math.abs(p.x - u.x) <= 5 && Math.abs(p.y - u.y) <= 5;
     if (a.id === 'hook' && u) {
-      const v = s.units.find((v) => v.id === c.targetId);
+      const v = allPieces(s).find((v) => v.id === c.targetId);
       return (
         !!v &&
         !equal(v, p) &&
@@ -269,7 +288,7 @@ function points(s: GameState, a: ActionSpec, c: Command): Point[] {
 function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): Command[] {
   if (step.kind === 'target') {
     const u =
-      s.units.find((v) => v.id === c.unitId) ??
+      allPieces(s).find((v) => v.id === c.unitId) ??
       (c.type === 'react' ? s.pending[0]?.source : undefined);
     const view = u && a.id === 'dash' && c.x !== undefined ? { ...u, x: c.x, y: c.y! } : u;
     return targets(s)
@@ -289,14 +308,16 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
         if (a.id === 'sacrifice' && (t.id === u?.id || t.unit?.kind === 'u25')) return false;
         // Friendly spells can target a particular clone, attacks still obey top-of-stack rules.
         if (c.type === 'attack' || c.type === 'react') {
-          if (!topTarget(s, t)) return false;
+          if (!topTarget(s, t) && !(view && piercing(view) && t.unit && isLandmark(t.unit)))
+            return false;
           if (
             view &&
             side === owner &&
             t.unit &&
             !view.silenced &&
             healingAttack(view) &&
-            t.unit.hp === t.unit.maxHp
+            c.mode !== 'damage' &&
+            t.unit.hp >= t.unit.maxHp
           )
             return false;
           if (
@@ -317,10 +338,17 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
             view &&
             side !== owner &&
             getStats(s, view).attack === 0 &&
-            !(passive(s, view) && (view.kind === 10 || view.kind === 'u6')) &&
+            damageBonus(s, { owner: view.owner, unit: view, kind: 'attack' }) === 0 &&
+            !(
+              passive(s, view) &&
+              (hasTrait(view, 10) ||
+                hasTrait(view, 'u6') ||
+                hasTrait(view, 's3') ||
+                hasTrait(view, 's12'))
+            ) &&
             !has(s, view, 'execute') &&
             !has(s, view, 'convert') &&
-            !view.equipment.includes('u5') &&
+            !view.equipment.some((k) => ['u5', 's15', 's16'].includes(String(k))) &&
             !piercing(view) &&
             !t.unit?.effects.some((e) => e.type === 'mark' && e.owner === owner && e.until > s.ply)
           )
@@ -336,12 +364,7 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
             !markFollowUp(s, t, owner, s.ply + 2)
           )
             return false;
-          if (
-            side === owner &&
-            !(view && !view.silenced && healingAttack(view) && t.unit) &&
-            !(t.unit?.kind === 16 && !t.unit.silenced && t.id !== view?.id)
-          )
-            return false;
+          if (side === owner && !(view && t.unit && canAttackFriend(view, t.unit))) return false;
         }
         if (
           step.range &&
@@ -396,7 +419,7 @@ function expand(s: GameState, a: ActionSpec, partial: number): Command[] {
   }
   if (a.command.type === 'attack')
     return drafts.flatMap((c) => {
-      const u = s.units.find((u) => u.id === c.unitId),
+      const u = allPieces(s).find((u) => u.id === c.unitId),
         t = targets(s).find((t) => t.id === c.targetId);
       const routes = u && t ? selectableAttackRoutes(s, u, t) : [];
       return routes.length > 1 ? routes.map((r) => ({ ...c, direction: r.direction })) : [c];
@@ -412,11 +435,16 @@ export function* iterateCandidateGroups(
   if (s.winner) return;
   const settings = DIFFICULTIES[difficulty];
   const make = (a: ActionSpec): CandidateGroup | null => {
+    const identity = a.id;
+    a = { ...a, id: a.id.split(':')[0] };
     if (actionError(s, a)) return null;
-    const commands = expand(s, a, settings.partial);
+    const commands = expand(s, a, settings.partial).flatMap((c) => {
+      const pool = commandSummonPool(s, c);
+      return pool ? summonChoices(s, c, pool === 'ultimate') : [c];
+    });
     return commands.length
       ? {
-          family: `${a.command.unitId ?? a.command.cardId ?? 'system'}:${a.id}`,
+          family: `${a.command.unitId ?? a.command.cardId ?? 'system'}:${identity}`,
           commands,
           priority: commandPriority(s, commands[0]),
           keep: a.command.type === 'attack' ? Math.max(8, settings.perAction) : settings.perAction,
@@ -433,6 +461,36 @@ export function* iterateCandidateGroups(
       yield { family: 'reaction-skip', commands: [{ type: 'react' }], keep: 1 };
     return;
   }
+  if (s.phase === 'shrine-draft') {
+    const p = s.active;
+    for (const kind of s.shrineDraft?.offers[p] ?? [])
+      yield {
+        family: 'draft',
+        commands: [
+          {
+            type: 'choose-shrine',
+            player: p,
+            shrineKind: kind,
+            ...(kind === 's9' ? { parity: 'odd' as const } : {}),
+          },
+        ],
+        keep: 1,
+      };
+    return;
+  }
+  if (s.phase === 'shrine-setup') {
+    for (const c of s.hands[s.active]) for (const a of cardActions(s, c)) yield* emit(a);
+    yield { family: 'shrine-store', commands: [{ type: 'finish-shrine-setup' }], keep: 1 };
+    return;
+  }
+  if (s.summonOffer) {
+    const commands: Command[] = [];
+    for (let i = 0; i < s.summonOffer.groups.length; i++)
+      for (let j = i + 1; j < s.summonOffer.groups.length; j++)
+        commands.push({ type: 'choose-summons', offerIndices: [i, j] });
+    yield { family: 'choose-summons', commands, keep: commands.length };
+    return;
+  }
   if (s.phase === 'synthesis') {
     // Keep the no-trade option even under the smallest work budget.
     yield {
@@ -443,7 +501,7 @@ export function* iterateCandidateGroups(
     };
     for (const { recipe, ids } of availableSyntheses(s)) {
       const cost = (id: string) => {
-        const u = s.units.find((v) => v.id === id);
+        const u = allPieces(s).find((v) => v.id === id);
         return u ? unitValue(s, u) : 0;
       };
       const ranked = [...ids].sort((a, b) => cost(a) - cost(b));
@@ -456,6 +514,15 @@ export function* iterateCandidateGroups(
       }
       let accepted = 0;
       for (const materialIds of sets.values()) {
+        if (definition(recipe.result).aura) {
+          yield {
+            family: `synthesis:${recipe.id}`,
+            keep: 1,
+            priority: 80,
+            commands: [{ type: 'synthesize', recipeId: recipe.id, materialIds }],
+          };
+          break;
+        }
         const destinations = synthesisDestinations(s, recipe, materialIds);
         if (!destinations.length) continue;
         const view = {
@@ -489,19 +556,24 @@ export function* iterateCandidateGroups(
     yield {
       family: 'summon',
       keep: 2,
-      commands:
-        s.summonSlots > 0
-          ? [
-              { type: 'summon', ultimate: false },
-              ...(s.heads[s.active] >= 2 ? [{ type: 'summon' as const, ultimate: true }] : []),
-            ]
-          : [{ type: 'begin' }],
+      commands: s.summonSlots > 0 ? regularSummonCommands(s) : [{ type: 'begin' }],
     };
+    if (s.mode === 'shrine') {
+      for (const ultimate of [false, true])
+        if (s.heads[s.active] >= (ultimate ? 3 : 2))
+          yield {
+            family: `head-summon:${ultimate}`,
+            keep: 3,
+            commands: summonChoices(s, { type: 'extra-summon', ultimate }, ultimate),
+          };
+    }
     for (const c of s.hands[s.active])
       for (const a of cardActions(s, c)) if (a.command.type === 'reroll') yield* emit(a);
     return;
   }
-  const transit = s.units.find((u) => u.kind === 'u12p' && u.mode === 'move' && !canPlace(s, u, u));
+  const transit = allPieces(s).find(
+    (u) => hasTrait(u, 'u12p') && !hasTrait(u, 'u12') && u.mode === 'move' && !canPlace(s, u, u),
+  );
   if (transit) {
     for (const a of unitActions(s, transit)) if (a.id === 'move') yield* emit(a);
     return;
@@ -511,14 +583,21 @@ export function* iterateCandidateGroups(
       family: 'bonus-summon',
       keep: 2,
       priority: 1000,
-      commands: [
-        { type: 'summon', ultimate: false },
-        ...(s.heads[s.active] >= 2 ? [{ type: 'summon' as const, ultimate: true }] : []),
-      ],
+      commands: regularSummonCommands(s),
     };
-  const actions = s.units.filter((u) => u.owner === s.active).flatMap((u) => unitActions(s, u));
+  const actions = allPieces(s)
+    .filter((u) => u.owner === s.active)
+    .flatMap((u) => unitActions(s, u));
   actions.sort((a, b) => Number(b.command.type === 'attack') - Number(a.command.type === 'attack'));
   for (const a of actions) yield* emit(a);
+  if (hasAura(s, s.active, 's10'))
+    yield {
+      family: 'clock',
+      keep: 5,
+      commands: s.units
+        .filter((u) => canRestoreClock(s, u))
+        .map((u) => ({ type: 'clock', targetId: u.id })),
+    };
   for (const c of s.hands[s.active]) for (const a of cardActions(s, c)) yield* emit(a);
   yield { family: 'end', commands: [{ type: 'end' }], keep: 1 };
 }
@@ -528,7 +607,7 @@ export function candidateGroups(s: GameState, difficulty: Difficulty): Candidate
 
 /** Cheap tactical follow-ups: reuse the same target rules without enumerating all movements. */
 export function attackCandidates(s: GameState, id: string): Command[] {
-  const unit = s.units.find((u) => u.id === id);
+  const unit = allPieces(s).find((u) => u.id === id);
   if (!unit || s.pending.length) return [];
   const action = unitActions(s, unit).find((a) => a.command.type === 'attack');
   return action && !actionError(s, action) ? expand(s, action, 1) : [];
