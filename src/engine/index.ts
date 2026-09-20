@@ -85,3 +85,9 @@ export {
   selectableSummons,
   commandSummonPool,
 } from './shrines';
+
+export { inspectCommand, queryCommandError, canAttemptCommand } from './game';
+export type { CommandInspection } from './game';
+export { parseCommand, actorCommandError, applyPlayerCommand } from './authority';
+export { getPlayerView, HAOJIE_RULESET, PLAYER_VIEW_VERSION } from './player-view';
+export type { PlayerView } from './player-view';

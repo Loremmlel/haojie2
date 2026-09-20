@@ -13,9 +13,9 @@ import { canShatter } from './shrines';
 /** Renderer-independent command descriptions. The UI selects values; the engine validates them. */
 import { definition, isStored } from './catalog';
 import { rerollCommands } from './summoning';
-import { commandError } from './game';
+import { queryCommandError } from './game';
 import { age, allegiance, getStats, has, now, passive, healingAttack, hasWeapon } from './state';
-import type { Card, Command, GameState, Unit } from './types';
+import type { Card, Command, GamePosition, Unit } from './types';
 export interface SelectionStep {
   kind: 'target' | 'point' | 'row' | 'column' | 'death' | 'direction' | 'path';
   field?: 'targetId' | 'secondId' | 'sacrificeIds';
@@ -49,7 +49,7 @@ const spec = (
   icon = 'spark',
   free = false,
 ): ActionSpec => ({ id, label, command, steps, icon, free });
-export function unitActions(s: GameState, u: Unit): ActionSpec[] {
+export function unitActions(s: GamePosition, u: Unit): ActionSpec[] {
   if (isLandmark(u) && u.hp <= 0) return [];
   const result: ActionSpec[] = [],
     stats = getStats(s, u),
@@ -275,7 +275,7 @@ export function unitActions(s: GameState, u: Unit): ActionSpec[] {
     }
   return result;
 }
-export function cardActions(s: GameState, c: Card): ActionSpec[] {
+export function cardActions(s: GamePosition, c: Card): ActionSpec[] {
   const d = definition(c.kind),
     base = { cardId: c.id };
   const result: ActionSpec[] = [];
@@ -356,7 +356,7 @@ export function cardActions(s: GameState, c: Card): ActionSpec[] {
   }
   return result;
 }
-export function reactionAction(s: GameState): ActionSpec | null {
+export function reactionAction(s: GamePosition): ActionSpec | null {
   const r = s.pending[0];
   if (!r) return null;
   if (r.kind === 'hit-pull')
@@ -387,9 +387,9 @@ export function reactionAction(s: GameState): ActionSpec | null {
     ],
   );
 }
-export function actionError(s: GameState, a: ActionSpec): string | null {
+export function actionError(s: GamePosition, a: ActionSpec): string | null {
   const id = a.id.split(':')[0];
-  if (!a.steps.length) return commandError(s, a.command);
+  if (!a.steps.length) return queryCommandError(s, a.command);
   if (s.winner) return '对局已经结束。';
   if (a.command.type === 'react') return null;
   if (s.pending.length) return '先处理待结算效果。';

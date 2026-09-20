@@ -1,9 +1,9 @@
-import type { GameState } from './types';
+import type { GamePosition } from './types';
 /** Optional simulation port. It never lives in serialized state and is never used by real play. */
 export type RandomSource = (boundaries: readonly number[]) => number;
-const sources = new WeakMap<GameState, RandomSource>();
+const sources = new WeakMap<GamePosition, RandomSource>();
 export function withRandomSource<T>(
-  state: GameState,
+  state: GamePosition,
   source: RandomSource | undefined,
   run: () => T,
 ): T {
@@ -15,7 +15,7 @@ export function withRandomSource<T>(
   }
 }
 export function simulationRandom(
-  state: GameState,
+  state: GamePosition,
   boundaries: readonly number[],
 ): number | undefined {
   const source = sources.get(state);

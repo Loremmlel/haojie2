@@ -1,6 +1,6 @@
 import type { EffectBatch } from './vfx/plan';
-import type { Command, GameState, Point } from '../../engine';
-import { definition, faction, isStored, canSkipReaction, commandError } from '../../engine';
+import type { Command, GamePosition, Point } from '../../engine';
+import { definition, faction, isStored, canSkipReaction, queryCommandError } from '../../engine';
 import type { Intent } from '../game/selection';
 import { instruction } from '../game/selection';
 import { Icon } from '../shared/visuals';
@@ -21,8 +21,9 @@ export function Battlefield({
   onTargetLayer,
   endError,
   readOnly = false,
+  showHistory = true,
 }: {
-  state: GameState;
+  state: GamePosition;
   intent: Intent;
   activeIntent: Intent;
   selectedId: string | null;
@@ -36,11 +37,12 @@ export function Battlefield({
   onTargetLayer: (layer: 'unit' | 'landmark') => void;
   endError: string | null;
   readOnly?: boolean;
+  showHistory?: boolean;
 }) {
   const reaction = s.pending[0],
     maySkip = canSkipReaction(s),
     pullError =
-      reaction?.kind === 'hit-pull' ? commandError(s, { type: 'react', mode: 'pull' }) : null,
+      reaction?.kind === 'hit-pull' ? queryCommandError(s, { type: 'react', mode: 'pull' }) : null,
     minions = s.hands[s.active].filter((c) => !isStored(definition(c.kind))).length;
   return (
     <section className="battle-column">
@@ -85,7 +87,7 @@ export function Battlefield({
         />
       </div>
       <div className="command-bar">
-        <div className="history-actions">
+        {showHistory && (<div className="history-actions">
           <button aria-label="悔棋" disabled={!canUndo} onClick={() => rewind()}>
             <Icon name="undo" />
             悔棋
@@ -93,7 +95,7 @@ export function Battlefield({
           <button aria-label="重做" disabled={!canRedo} onClick={() => rewind(true)}>
             <Icon name="redo" />
           </button>
-        </div>
+        </div>)}
         {reaction?.kind === 'hit-pull' && (
           <button
             className="primary"
@@ -134,7 +136,7 @@ export function Battlefield({
             ? `${pullError}可放弃此效果。`
             : '效果由所属玩家处理，之后回到原有流程。'
           : s.phase === 'synthesis'
-            ? '合成与部署一次确认；可取消选点或悔棋。'
+            ? showHistory ? '合成与部署一次确认；可取消选点或悔棋。' : '合成与部署一次确认；可取消选点。'
             : s.phase === 'summon'
               ? '在手牌区完成召唤选择，再开始行动。'
               : minions

@@ -1,9 +1,9 @@
-import type { GameState, Unit } from '../../engine';
+import type { GamePosition, Unit } from '../../engine';
 import { getStats, definition, abilityKinds } from '../../engine';
 import { UnitStatus } from './UnitStatus';
 import { Icon, numberLabel } from '../shared/visuals';
 
-export function UnitDetails({ state: s, unit: inspected }: { state: GameState; unit: Unit }) {
+export function UnitDetails({ state: s, unit: inspected }: { state: GamePosition; unit: Unit }) {
   const modeNames: Record<string, string> = {
     none: '尚未选择',
     move: '移动模式',

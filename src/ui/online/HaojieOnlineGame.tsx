@@ -1,4 +1,5 @@
 'use client';
+import './online.css';
 import { GameSurface } from '../GameSurface';
 import { useOnlineController } from './useOnlineController';
 import { updateError, type HaojieOnlineGameProps } from './types';

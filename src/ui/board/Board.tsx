@@ -2,7 +2,7 @@ import { PiecePosition } from './vfx/PiecePosition';
 import { center, type EffectBatch } from './vfx/plan';
 import { PieceFace } from './vfx/PieceFace';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { GameState, Player, Point } from '../../engine';
+import type { GamePosition, Player, Point } from '../../engine';
 import {
   ALL_CELLS,
   allPieces,
@@ -34,7 +34,7 @@ export function Board({
   onCell,
   effects = [],
 }: {
-  state: GameState;
+  state: GamePosition;
   intent: Intent;
   selectedId: string | null;
   onCell: (p: Point) => void;

@@ -95,3 +95,7 @@ AI回合收尾：浏览器、Arena与当前版本的对比工具统一使用`ai/
 炎魔之心共享路径校验/选点/AI方向查询，不强制直线或自动加长路径。每条路径一攻击，保留每个目标的实际入射方向。人机控制层只允许人类使用自己的巨大化中断AI；选点期间取消旧AI计划，完成/取消再继续，不开放敌方单位控制。引擎仍校验一生一次、冻结、成本与落位。保持所有命令原子性及历史回放不变。
 
 新增验收 `tests/core/feedback3.test.ts` 与 `tests/browser/feedback3.mjs`，描述默认可见、状态原生details，复用纸面风格和已有交互，不增加第三方依赖。
+
+## 联机适配边界
+
+HaojieGame保持本地协议；HaojieOnlineGame只消费PlayerView和宿主回执。共享GameSurface/交互/表现，不能给公开视图补seed/rng或启动本地AI/存档。公开预检在需要随机值前停止，只能作为可尝试提示，权威结果仍由applyPlayerCommand裁定。维护嵌套视图、暗选日志与回合外巨大化权限测试。网站负责身份、房间、修订号、请求去重和重连，不能在网站复制技能规则；更改规则同步HAOJIE_RULESET并固定双端代码版本。见docs/ONLINE-ADAPTATION.md。

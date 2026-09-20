@@ -1,4 +1,4 @@
-import type { ActionSpec, Command, GameState, Point } from '../../engine';
+import type { ActionSpec, Command, GamePosition, Point } from '../../engine';
 import {
   actionError,
   expansionAnchors,
@@ -9,7 +9,7 @@ import {
   selectableAttackRoutes,
   targets,
   getStats,
-  isLegal,
+  canAttemptCommand,
   movementPath,
   targetAt,
   landmarkAt,
@@ -31,14 +31,14 @@ export const startIntent = (a: ActionSpec): Intent => ({
   draft: { ...a.command },
   index: 0,
 });
-function selectedTarget(s: GameState, i: Intent, p: Point) {
+function selectedTarget(s: GamePosition, i: Intent, p: Point) {
   if (i.kind === 'select' && i.targetLayer === 'landmark') {
     const land = landmarkAt(s, p);
     return liveLandmark(land) ? asTarget(land) : undefined;
   }
   return targetAt(s, p);
 }
-export function advanceIntent(i: Intent, p: Point, s: GameState): Intent {
+export function advanceIntent(i: Intent, p: Point, s: GamePosition): Intent {
   if (i.kind === 'none') return i;
   const step = i.action.steps[i.index],
     draft = { ...i.draft };
@@ -68,7 +68,7 @@ export function advanceIntent(i: Intent, p: Point, s: GameState): Intent {
   if (step.kind === 'target' && draft.type === 'attack') {
     const u = allPieces(s).find((u) => u.id === draft.unitId),
       t = selectedTarget(s, i, p);
-    if (u && t && isLegal(s, draft) && selectableAttackRoutes(s, u, t).length > 1)
+    if (u && t && canAttemptCommand(s, draft) && selectableAttackRoutes(s, u, t).length > 1)
       return {
         ...i,
         draft,
@@ -84,13 +84,13 @@ export function advanceIntent(i: Intent, p: Point, s: GameState): Intent {
   }
   return { ...i, draft, index: i.index + 1 };
 }
-export function commandFor(s: GameState, i: Intent, p: Point): Command | null {
+export function commandFor(s: GamePosition, i: Intent, p: Point): Command | null {
   if (i.kind === 'none' || !i.action.steps[i.index]) return null;
   const next = advanceIntent(i, p, s);
   if (next.kind === 'select' && next.index >= next.action.steps.length) return next.draft;
   return null;
 }
-export function canChoose(s: GameState, i: Intent, p: Point): boolean {
+export function canChoose(s: GamePosition, i: Intent, p: Point): boolean {
   if (i.kind === 'none' || actionError(s, i.action)) return false;
   const step = i.action.steps[i.index];
   if (!step || step.kind === 'death') return false;
@@ -100,10 +100,10 @@ export function canChoose(s: GameState, i: Intent, p: Point): boolean {
   }
   if (step.kind === 'direction') {
     const c = commandFor(s, i, p);
-    return !!c && isLegal(s, c);
+    return !!c && canAttemptCommand(s, c);
   }
   const complete = commandFor(s, i, p);
-  if (complete) return isLegal(s, complete);
+  if (complete) return canAttemptCommand(s, complete);
   const u = allPieces(s).find((u) => u.id === i.draft.unitId),
     t = selectedTarget(s, i, p);
   if (step.kind === 'point') {
@@ -127,7 +127,7 @@ export function canChoose(s: GameState, i: Intent, p: Point): boolean {
         i.draft.sacrificeIds?.includes(t.id))
     )
       return false;
-    if (i.draft.type === 'attack' && !isLegal(s, { ...i.draft, targetId: t.id })) return false;
+    if (i.draft.type === 'attack' && !canAttemptCommand(s, { ...i.draft, targetId: t.id })) return false;
     if (i.action.id === 'sacrifice' && (t.id === u?.id || t.unit?.kind === 'u25')) return false;
     if (
       i.action.id.split(':')[0] === 'giant' &&
@@ -139,7 +139,7 @@ export function canChoose(s: GameState, i: Intent, p: Point): boolean {
   }
   return false;
 }
-export function instruction(s: GameState, i: Intent): string {
+export function instruction(s: GamePosition, i: Intent): string {
   if (i.kind === 'select') return i.action.steps[i.index]?.label ?? i.action.hint ?? i.action.label;
   if (s.phase === 'shrine-draft')
     return '第0回合：双方各选一个神龛；对手候选可见，双方锁定后才公布。';
@@ -167,7 +167,7 @@ export const directionLabel = {
   right: '向右命中',
 } as const;
 export const directionArrow = { up: '↑', down: '↓', left: '←', right: '→' } as const;
-export function intentRoutes(s: GameState, i: Intent) {
+export function intentRoutes(s: GamePosition, i: Intent) {
   if (i.kind !== 'select' || i.action.steps[i.index]?.kind !== 'direction') return [];
   const u = allPieces(s).find((u) => u.id === i.draft.unitId),
     t = targets(s).find((t) => t.id === i.draft.targetId);

@@ -1,7 +1,7 @@
-import type { GameState, Unit } from '../../engine';
+import type { GamePosition, Unit } from '../../engine';
 import { unitStatus } from './unit-status';
 
-export function UnitStatus({ state, unit }: { state: GameState; unit: Unit }) {
+export function UnitStatus({ state, unit }: { state: GamePosition; unit: Unit }) {
   const rows = unitStatus(state, unit);
   return (
     <details className="unit-status" aria-label="棋子当前状态">

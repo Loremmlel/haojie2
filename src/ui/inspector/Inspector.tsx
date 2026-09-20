@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
-import type { ActionSpec, GameState } from '../../engine';
+import type { ActionSpec, GamePosition } from '../../engine';
 import { definition, faction, getStats, occupants, landmarkAt } from '../../engine';
 import type { Intent } from '../game/selection';
 import { DefinitionStats } from '../shared/DefinitionStats';
@@ -19,7 +19,7 @@ export function Inspector({
   chooseAction,
   onRules,
 }: {
-  state: GameState;
+  state: GamePosition;
   selectedId: string | null;
   cardId: string | null;
   intent: Intent;

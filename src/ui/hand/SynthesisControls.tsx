@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { availableSyntheses, definition, synthesisDestinations } from '../../engine';
-import type { ActionSpec, Command, GameState } from '../../engine';
+import type { ActionSpec, Command, GamePosition } from '../../engine';
 /** Transient selection only; material removal + deployment are one engine command. */
 export function SynthesisControls({
   state: s,
@@ -8,7 +8,7 @@ export function SynthesisControls({
   chooseAction,
   readOnly,
 }: {
-  state: GameState;
+  state: GamePosition;
   run: (c: Command) => void;
   chooseAction: (a: ActionSpec) => void;
   readOnly: boolean;

@@ -12,7 +12,7 @@ import {
   now,
   passive,
 } from '../../engine';
-import type { Effect, GameState, Unit } from '../../engine';
+import type { Effect, GamePosition, Unit } from '../../engine';
 
 export interface StatusEntry {
   key: string;
@@ -32,7 +32,7 @@ const effectNames: Record<Effect['type'], string> = {
   'inner-fire': '心灵之火',
 };
 /** Read-only presentation: expiry, protection sources and range come from the engine. */
-export function unitStatus(s: GameState, u: Unit): StatusEntry[] {
+export function unitStatus(s: GamePosition, u: Unit): StatusEntry[] {
   const rows: StatusEntry[] = [];
   const sourceLabel = (id?: string) => {
     const source = s.units.find((v) => v.id === id);

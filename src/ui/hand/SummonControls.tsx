@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { definition, summonRerolls, type Command, type GameState } from '../../engine';
+import { definition, summonRerolls, type Command, type GamePosition } from '../../engine';
 import { RerollControls } from './RerollControls';
 import { Icon } from '../shared/visuals';
 
@@ -8,7 +8,7 @@ function SummonOffer({
   run,
   readOnly,
 }: {
-  state: GameState;
+  state: GamePosition;
   run: (c: Command) => void;
   readOnly: boolean;
 }) {
@@ -52,7 +52,7 @@ export function SummonControls({
   run,
   readOnly = false,
 }: {
-  state: GameState;
+  state: GamePosition;
   run: (c: Command) => void;
   readOnly?: boolean;
 }) {

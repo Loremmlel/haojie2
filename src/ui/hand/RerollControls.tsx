@@ -1,4 +1,4 @@
-import type { Command, GameState } from '../../engine';
+import type { Command, GamePosition } from '../../engine';
 import { definition, summonRerolls } from '../../engine';
 
 /** The rule-owned options also drive card actions and AI. Opening this disclosure spends nothing. */
@@ -7,7 +7,7 @@ export function RerollControls({
   run,
   readOnly,
 }: {
-  state: GameState;
+  state: GamePosition;
   run: (command: Command) => void;
   readOnly: boolean;
 }) {

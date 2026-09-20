@@ -36,8 +36,8 @@ import {
   point,
   template,
 } from './state';
-import type { Command, GameState, Point, Unit } from './types';
-export function emptyFor(s: GameState, u: Unit, p: Point = u) {
+import type { Command, GamePosition, Point, Unit } from './types';
+export function emptyFor(s: GamePosition, u: Unit, p: Point = u) {
   return (
     canPlace(s, u, p) &&
     cells({ ...u, ...p }).every(
@@ -45,11 +45,11 @@ export function emptyFor(s: GameState, u: Unit, p: Point = u) {
     )
   );
 }
-function canEnter(s: GameState, u: Unit, p: Point) {
+function canEnter(s: GamePosition, u: Unit, p: Point) {
   // Large bodies may never overlap; a single-cell runner may transiently cross ANY layer.
   return u.size > 1 ? canPlace(s, u, p) : inside(p);
 }
-function reachableExit(s: GameState, u: Unit, steps: number) {
+function reachableExit(s: GamePosition, u: Unit, steps: number) {
   const queue = [{ p: { x: u.x, y: u.y }, steps: 0 }],
     seen = new Set([key(u)]);
   for (let i = 0; i < queue.length; i++) {
@@ -64,7 +64,7 @@ function reachableExit(s: GameState, u: Unit, steps: number) {
   }
   return false;
 }
-export function moveUnit(s: GameState, c: Command, ctx: Resolution) {
+export function moveUnit(s: GamePosition, c: Command, ctx: Resolution) {
   const u = findUnit(s, c.unitId);
   return withEventFacts(
     s,
@@ -72,7 +72,7 @@ export function moveUnit(s: GameState, c: Command, ctx: Resolution) {
     () => resolveMove(s, c, ctx),
   );
 }
-function resolveMove(s: GameState, c: Command, ctx: Resolution) {
+function resolveMove(s: GamePosition, c: Command, ctx: Resolution) {
   const u = actor(s, c.unitId),
     to = point(c.x, c.y),
     starting = u.mode === 'none';
@@ -159,7 +159,7 @@ function resolveMove(s: GameState, c: Command, ctx: Resolution) {
   finishOperation(u);
   if (hasWeapon(u, 'u16')) u.bonusAttacks++;
 }
-export function finishMode(s: GameState, c: Command) {
+export function finishMode(s: GamePosition, c: Command) {
   const u = actor(s, c.unitId);
   ensure(
     u.mode === 'attack' || (u.mode === 'move' && (isRunner(u) || u.size > 1)),
@@ -170,7 +170,7 @@ export function finishMode(s: GameState, c: Command) {
   finishOperation(u);
   if (wasMove && hasWeapon(u, 'u16')) u.bonusAttacks++;
 }
-export function react(s: GameState, c: Command, ctx: Resolution) {
+export function react(s: GamePosition, c: Command, ctx: Resolution) {
   const r = s.pending.shift();
   ensure(r, '没有待结算反应。');
   if (r.kind === 'bounce') {

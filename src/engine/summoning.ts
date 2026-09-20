@@ -1,7 +1,7 @@
 import { hasTrait } from './traits';
 import { SUMMON_POOL, ULTIMATE_POOL } from './catalog';
 import { now, passive } from './state';
-import type { Card, Command, GameState, Unit } from './types';
+import type { Card, Command, GamePosition, Unit } from './types';
 
 /** Explicit on new draws; the fallback keeps pre-existing v2 saves usable. */
 export function summonPool(card: Card): 'normal' | 'ultimate' | undefined {
@@ -9,7 +9,7 @@ export function summonPool(card: Card): 'normal' | 'ultimate' | undefined {
   if (SUMMON_POOL.includes(card.kind) || card.kind === '3p' || card.kind === '17p') return 'normal';
   if (ULTIMATE_POOL.includes(card.kind) || card.kind === 'u12p') return 'ultimate';
 }
-export function canRerollWith(s: GameState, mage: Unit) {
+export function canRerollWith(s: GamePosition, mage: Unit) {
   return (
     hasTrait(mage, 'u13') &&
     mage.owner === s.active &&
@@ -20,7 +20,7 @@ export function canRerollWith(s: GameState, mage: Unit) {
   );
 }
 /** One rule-owned option list for engine validation, all AI levels and both UI entry points. */
-export function rerollCommands(s: GameState, card: Card): Command[] {
+export function rerollCommands(s: GamePosition, card: Card): Command[] {
   if (
     ['synthesis', 'shrine-draft', 'shrine-setup'].includes(s.phase) ||
     s.summonOffer ||
@@ -42,7 +42,7 @@ export function rerollCommands(s: GameState, card: Card): Command[] {
     commands.push({ type: 'reroll', cardId: card.id, unitId: mage.id });
   return commands;
 }
-export function summonRerolls(s: GameState) {
+export function summonRerolls(s: GamePosition) {
   const groups = new Set<string>();
   return s.hands[s.active].flatMap((card) => {
     if (card.group && groups.has(card.group)) return [];

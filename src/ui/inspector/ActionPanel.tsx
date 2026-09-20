@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react';
-import type { ActionSpec, GameState } from '../../engine';
-import { actionError, definition, commandError, allPieces, getStats } from '../../engine';
+import type { ActionSpec, GamePosition } from '../../engine';
+import { actionError, definition, queryCommandError, allPieces, getStats } from '../../engine';
 import type { Intent } from '../game/selection';
 import { Icon } from '../shared/visuals';
 
@@ -13,13 +13,13 @@ export function ActionPanel({
   chooseAction,
   deaths,
 }: {
-  state: GameState;
+  state: GamePosition;
   actions: ActionSpec[];
   intent: Intent;
   activeIntent: Intent;
   setIntent: Dispatch<SetStateAction<Intent>>;
   chooseAction: (action: ActionSpec) => void;
-  deaths: GameState['deaths'];
+  deaths: GamePosition['deaths'];
 }) {
   const reaction = s.pending[0];
   const drawing =
@@ -29,7 +29,7 @@ export function ActionPanel({
   const moving =
     activeIntent.kind === 'select' && activeIntent.draft.type === 'move' ? activeIntent : null;
   const mover = moving ? allPieces(s).find((u) => u.id === moving.draft.unitId) : undefined;
-  const pathError = drawing ? commandError(s, drawing.draft) : null;
+  const pathError = drawing ? queryCommandError(s, drawing.draft) : null;
   const archer = drawing ? allPieces(s).find((u) => u.id === drawing.draft.unitId) : undefined;
   return (
     <>
@@ -65,7 +65,7 @@ export function ActionPanel({
             ['→ 向右一格', 1, 0],
           ].map(([label, dx, dy]) => {
             const command = { ...moving.draft, x: mover.x + Number(dx), y: mover.y + Number(dy) };
-            const error = commandError(s, command);
+            const error = queryCommandError(s, command);
             return (
               <button
                 key={label}

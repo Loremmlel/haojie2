@@ -44,8 +44,8 @@ import {
   resetUnit,
   template,
 } from './state';
-import type { GameState, Player, Source, Unit } from './types';
-export function processIceMarks(s: GameState, ctx: Resolution, only?: Unit) {
+import type { GamePosition, Player, Source, Unit } from './types';
+export function processIceMarks(s: GamePosition, ctx: Resolution, only?: Unit) {
   for (const mark of [...s.iceMarks]) {
     if (only && mark.sourceId !== only.id) continue;
     const u = s.units.find((v) => v.id === mark.sourceId);
@@ -62,7 +62,7 @@ export function processIceMarks(s: GameState, ctx: Resolution, only?: Unit) {
         freeze(s, asTarget(victim), { owner: u.owner, unit: u, kind: 'skill' }, ctx, 5);
   }
 }
-export function advanceUnit(s: GameState, u: Unit, ctx: Resolution) {
+export function advanceUnit(s: GamePosition, u: Unit, ctx: Resolution) {
   u.offset += 2;
   resetUnit(s, u);
   processIceMarks(s, ctx, u);
@@ -72,7 +72,7 @@ export function advanceUnit(s: GameState, u: Unit, ctx: Resolution) {
     `${definition(u.kind).name}提前进入自己的下一回合`,
   );
 }
-export function beginTurn(s: GameState, ctx: Resolution) {
+export function beginTurn(s: GamePosition, ctx: Resolution) {
   const owner = s.active;
   s.turns[owner]++;
   rebuildLandmarks(s);
@@ -144,7 +144,7 @@ export function beginTurn(s: GameState, ctx: Resolution) {
     `${faction(owner)}第${s.turns[owner]}回合开始，可召唤${s.summonSlots}次`,
   );
 }
-export function endTurn(s: GameState, ctx: Resolution) {
+export function endTurn(s: GamePosition, ctx: Resolution) {
   ensure(s.phase === 'play', '请先完成召唤并进入行动阶段。');
   for (const u of s.units)
     ensure(
@@ -235,7 +235,7 @@ export function endTurn(s: GameState, ctx: Resolution) {
   if (s.bases[1] <= 0 || s.bases[2] <= 0) return;
   switchTurn(s, ctx);
 }
-export function switchTurn(s: GameState, ctx: Resolution) {
+export function switchTurn(s: GamePosition, ctx: Resolution) {
   s.active = s.active === 1 ? 2 : 1;
   s.ply++;
   beginTurn(s, ctx);

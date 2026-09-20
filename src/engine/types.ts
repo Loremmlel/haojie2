@@ -184,10 +184,8 @@ export interface IceMark extends Point {
   owner: Player;
   due: number;
 }
-export interface GameState {
+export interface GamePosition {
   version: 2;
-  seed: number;
-  rng: number;
   serial: number;
   ply: number;
   active: Player;
@@ -217,6 +215,11 @@ export interface GameState {
   log: string[];
   events: GameEvent[];
   winner?: Player | 'draw';
+}
+/** Full authority. Public positions never manufacture these private random fields. */
+export interface GameState extends GamePosition {
+  seed: number;
+  rng: number;
 }
 /** Typed command payload shared by UI, saved replays and future server adapters. */
 export interface Command {

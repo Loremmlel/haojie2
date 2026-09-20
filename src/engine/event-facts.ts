@@ -1,4 +1,4 @@
-import type { GameEvent, GameState, Kind, Player, Point, Target, Unit } from './types';
+import type { GameEvent, GamePosition, Kind, Player, Point, Target, Unit } from './types';
 
 /** Facts only: never animation durations, renderer objects or extra game serials. */
 export interface EventActor extends Point {
@@ -59,8 +59,8 @@ export function eventActor(p?: Point): EventActor | undefined {
 }
 
 // Synchronous, scoped like simulation randomness; nothing is stored on the game state.
-const contexts = new WeakMap<GameState, EventFacts>();
-export function withEventFacts<T>(s: GameState, facts: EventFacts, run: () => T): T {
+const contexts = new WeakMap<GamePosition, EventFacts>();
+export function withEventFacts<T>(s: GamePosition, facts: EventFacts, run: () => T): T {
   const previous = contexts.get(s);
   contexts.set(s, { ...facts, ...(previous?.causeId ? { parentId: previous.causeId } : {}) });
   try {
@@ -72,7 +72,7 @@ export function withEventFacts<T>(s: GameState, facts: EventFacts, run: () => T)
 }
 
 /** Attach copied identity/geometry before units move, die, grow or switch sides. */
-export function enrichEvent(s: GameState, e: GameEvent): GameEvent {
+export function enrichEvent(s: GamePosition, e: GameEvent): GameEvent {
   const context = contexts.get(s);
   if (context && !context.causeId) context.causeId = e.id;
   const inferred = eventActor(e.to) ?? (e.type === 'move' ? eventActor(e.from) : undefined);

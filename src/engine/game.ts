@@ -4,6 +4,7 @@ import {
   activateAura,
   captureClockFrame,
   chooseShrine,
+  validateShrineChoice,
   chooseSummons,
   clockRestore,
   extraSummon,
@@ -38,7 +39,7 @@ import {
   RuleError,
   template,
 } from './state';
-import type { Command, GameState, Kind, Player } from './types';
+import type { Command, GamePosition, GameState, Kind, Player } from './types';
 export function createGame(seed = 20260907, mode: 'classic' | 'shrine' = 'classic'): GameState {
   ensure(Number.isSafeInteger(seed), '种子须为整数。');
   const normalized = seed >>> 0 || 2654435769;
@@ -71,11 +72,12 @@ export function createGame(seed = 20260907, mode: 'classic' | 'shrine' = 'classi
   else beginTurn(s, resolution());
   return s;
 }
-export function applyCommand(
-  previous: GameState,
+function transition<S extends GamePosition>(
+  previous: S,
   c: Command,
   randomSource?: RandomSource,
-): GameState {
+  preview = false,
+): S {
   ensure(previous.version === 2, '此命令只接受浩劫2.0局面；旧版对局不会被静默迁移。');
   ensure(!previous.winner, '对局已经结束，可悔棋或开新局。');
   ensure(!previous.pending.length || c.type === 'react', '请先处理当前待结算效果。');
@@ -138,6 +140,7 @@ export function applyCommand(
         emit(s, { type: 'turn', owner: s.active, text: '进入召唤阶段' });
         break;
       case 'choose-shrine':
+        if (preview) { validateShrineChoice(s, c); break; }
         chooseShrine(s, c);
         break;
       case 'finish-shrine-setup':
@@ -262,6 +265,34 @@ export function applyCommand(
     return s;
   });
 }
+function hasRandomState(s: GamePosition): s is GameState {
+  return 'seed' in s && typeof s.seed === 'number' && 'rng' in s && typeof s.rng === 'number';
+}
+export function applyCommand(previous: GameState, c: Command, randomSource?: RandomSource): GameState {
+  ensure(hasRandomState(previous), '权威结算需要完整随机状态；玩家视图不能代替GameState。');
+  return transition(previous, c, randomSource);
+}
+const unresolvedRandom = Symbol('preview requires private randomness');
+export type CommandInspection = { status: 'available' | 'uncertain' } | { status: 'invalid'; message: string };
+/** Shared deterministic preflight. Stop BEFORE a random value is requested, never invent one.
+ * No resulting state is returned, and a successful preflight is not an authoritative acceptance. */
+export function inspectCommand(s: GamePosition, c: Command): CommandInspection {
+  try {
+    transition(s, c, () => { throw unresolvedRandom; }, true);
+    return { status: 'available' };
+  } catch (error) {
+    if (error === unresolvedRandom) return { status: 'uncertain' };
+    if (error instanceof RuleError) return { status: 'invalid', message: error.message };
+    throw error;
+  }
+}
+/** Local hints keep the exact existing full-state validation. Public hints never roll randoms. */
+export function queryCommandError(s: GamePosition, c: Command): string | null {
+  if (hasRandomState(s)) return commandError(s, c);
+  const result = inspectCommand(s, c);
+  return result.status === 'invalid' ? result.message : null;
+}
+export const canAttemptCommand = (s: GamePosition, c: Command) => queryCommandError(s, c) === null;
 export function commandError(s: GameState, c: Command): string | null {
   try {
     applyCommand(s, c);

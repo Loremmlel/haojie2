@@ -1,3 +1,4 @@
+import { visibleShrineDraft } from '../engine/player-view';
 import type { GameState, Player } from '../engine/types';
 import type { Observation } from './types';
 export const decisionOwner = (s: Pick<GameState, 'pending' | 'active'>): Player =>
@@ -33,16 +34,7 @@ function fields(s: GameState, viewer: Player = decisionOwner(s)): Observation {
     ...(s.clockFrames ? { clockFrames: s.clockFrames } : {}),
     ...(s.shrineDraft
       ? {
-          shrineDraft: {
-            offers: s.shrineDraft.offers,
-            committed: s.shrineDraft.committed,
-            revealed: s.shrineDraft.revealed,
-            choices: s.shrineDraft.revealed
-              ? s.shrineDraft.choices
-              : s.shrineDraft.choices[viewer]
-                ? { [viewer]: s.shrineDraft.choices[viewer] }
-                : {},
-          },
+          shrineDraft: visibleShrineDraft(s.shrineDraft, viewer),
         }
       : {}),
     ...(s.winner ? { winner: s.winner } : {}),

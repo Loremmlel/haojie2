@@ -2,7 +2,7 @@ import { allPieces, hasTrait, isLandmark } from './traits';
 import { landmarkAt, landmarkSquare, liveLandmark } from './shrines';
 import { definition } from './catalog';
 import { allegiance, getStats, has, passive, piercing, hasWeapon } from './state';
-import type { AttackDirection, GameState, Player, Point, Target, Unit } from './types';
+import type { AttackDirection, GamePosition, Player, Point, Target, Unit } from './types';
 export const WIDTH = 9,
   HEIGHT = 13;
 export const ALL_CELLS: Point[] = Array.from({ length: 117 }, (_, i) => ({
@@ -23,19 +23,19 @@ export function cells(u: { kind: Unit['kind']; x: number; y: number; size?: numb
     y: u.y + Math.floor(i / size),
   }));
 }
-export const occupants = (s: GameState, p: Point) =>
+export const occupants = (s: GamePosition, p: Point) =>
   s.units.filter((u) => cells(u).some((c) => equal(c, p)));
-export const occupant = (s: GameState, p: Point) => occupants(s, p)[0];
-export function targets(s: GameState): Target[] {
+export const occupant = (s: GamePosition, p: Point) => occupants(s, p)[0];
+export function targets(s: GamePosition): Target[] {
   return [
     ...allPieces(s).map((u) => ({ id: u.id, owner: u.owner, x: u.x, y: u.y, unit: u })),
     ...([1, 2] as Player[]).map((p) => ({ id: `base-${p}`, owner: p, ...basePoint(p) })),
   ];
 }
-export function targetAt(s: GameState, p: Point): Target | undefined {
+export function targetAt(s: GamePosition, p: Point): Target | undefined {
   return targets(s).find((t) => (t.unit ? cells(t.unit).some((c) => equal(c, p)) : equal(t, p)));
 }
-export function topTarget(s: GameState, t: Target) {
+export function topTarget(s: GamePosition, t: Target) {
   if (!t.unit) return true;
   if (isLandmark(t.unit)) {
     const over = occupant(s, t);
@@ -55,7 +55,7 @@ export function ring(a: Unit, b: Point | Unit) {
   );
 }
 export function canPlace(
-  s: GameState,
+  s: GamePosition,
   u: Unit,
   at: Point,
   deployment = false,
@@ -127,7 +127,7 @@ export const neighbors = (p: Point): Point[] =>
     { x: p.x - 1, y: p.y },
   ].filter(inside);
 export function movementPath(
-  s: GameState,
+  s: GamePosition,
   u: Unit,
   to: Point,
   limit: number,
@@ -158,7 +158,7 @@ export function movementPath(
   return null;
 }
 export function attackPath(
-  s: GameState,
+  s: GamePosition,
   u: Unit,
   target: Target | Point,
   limit: number,
@@ -209,7 +209,7 @@ export function frontal(path: Point[], owner: Player) {
     b = path.at(-1)!;
   return owner === 1 ? b.y < a.y : b.y > a.y;
 }
-export function refreshDeployment(s: GameState, owner: Player) {
+export function refreshDeployment(s: GamePosition, owner: Player) {
   s.deployRows[owner] = [];
   for (let y = 1; y <= 13; y++) {
     const count = (p: Player) =>
@@ -237,7 +237,7 @@ export interface AttackRoute {
  * Target cells are terminal: a shot cannot pass through its target to hit its back.
  * No RNG, state mutation or user-supplied path coordinates are involved. */
 export function attackRoutes(
-  s: GameState,
+  s: GamePosition,
   u: Unit,
   target: Target | Point,
   limit: number,
@@ -274,7 +274,7 @@ export function attackRoutes(
   return [...result].map(([direction, path]) => ({ direction, path }));
 }
 /** Direction-sensitive abilities use this same bounded choice set in UI and AI. */
-export function selectableAttackRoutes(s: GameState, u: Unit, t: Target): AttackRoute[] {
+export function selectableAttackRoutes(s: GamePosition, u: Unit, t: Target): AttackRoute[] {
   if (piercing(u) && !hasWeapon(u, 'u28')) return [];
   if (
     !(
@@ -288,7 +288,7 @@ export function selectableAttackRoutes(s: GameState, u: Unit, t: Target): Attack
 }
 
 /** Grow around the original square; every final cell must be unoccupied in both layers. */
-export function expansionAnchors(s: GameState, u: Unit): Point[] {
+export function expansionAnchors(s: GamePosition, u: Unit): Point[] {
   if (u.size !== 1 || isLandmark(u)) return [];
   return [
     { x: u.x, y: u.y },
@@ -298,7 +298,7 @@ export function expansionAnchors(s: GameState, u: Unit): Point[] {
   ].filter((p) => canPlace(s, { ...u, size: 2 }, p));
 }
 /** Used by the board preview AND command validation. Enemy bases are terminal. */
-export function validAttackRoute(s: GameState, u: Unit, path: Point[], limit: number): boolean {
+export function validAttackRoute(s: GamePosition, u: Unit, path: Point[], limit: number): boolean {
   if (!Array.isArray(path) || !path.length || path.length > Math.min(117, limit + 1)) return false;
   if (path.some((p) => !p || !inside(p))) return false;
   if (!cells(u).some((p) => equal(p, path[0])) || new Set(path.map(key)).size !== path.length)
@@ -312,7 +312,7 @@ export function validAttackRoute(s: GameState, u: Unit, path: Point[], limit: nu
 }
 /** Snapshot at selection time: each stack top and landmark is hit once per volley, not per cell.
  * AOE is intentionally different. Prefixes preserve each victim's actual incoming direction. */
-export function piercingTargets(s: GameState, u: Unit, path: Point[]) {
+export function piercingTargets(s: GamePosition, u: Unit, path: Point[]) {
   const victims: { target: Target; path: Point[] }[] = [];
   const seen = new Set<string>();
   const available = targets(s).filter(

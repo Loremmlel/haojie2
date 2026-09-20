@@ -1,4 +1,4 @@
-import type { GameState } from '../../engine';
+import type { GamePosition } from '../../engine';
 import { Icon } from '../shared/visuals';
 
 export function BattleLog({
@@ -6,7 +6,7 @@ export function BattleLog({
   saveStatus,
   onOpen,
 }: {
-  state: GameState;
+  state: GamePosition;
   saveStatus: string;
   onOpen: () => void;
 }) {
