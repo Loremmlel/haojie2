@@ -1,17 +1,14 @@
-name: Online adapter branch verification
+name: Finalize online adapter handoff
 on:
   push:
     branches: [feat/online-adapter]
-    paths: ['.dev/**', '.github/workflows/online-dev.yml']
+    paths: ['.github/workflows/online-dev.yml']
 permissions:
   contents: write
-concurrency:
-  group: online-adapter-development
-  cancel-in-progress: true
 jobs:
-  verify:
+  finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,69 +17,35 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Apply reviewed one-time refactor
+      - run: npm ci --no-audit --no-fund
+      - name: Complete user-facing entry points and evidence
         run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const read = (path) => readFileSync(path, 'utf8');
+          const write = (path, text) => writeFileSync(path, text);
+          const section = '## 联机嵌入（宿主接管）';
+          if (!read('README.md').includes(section)) {
+            write('README.md', read('README.md').replace('## 3.0：神龛', section + '\n\n新增受控入口 `HaojieOnlineGame`，与原本地 `HaojieGame` 共用棋盘、交互和表现；本地双人、人机、存档和单HTML入口不变。网站可在服务端调用 `applyPlayerCommand` 并分别下发 `getPlayerView`，处理账号、房间、WS和持久化。**这是联机适配能力，不是已上线的联机服务器。** 接口、错误/重连语义及维护约束见[接入文档](docs/ONLINE-ADAPTATION.md)，双棋盘示例见[TwoPlayerDemo](examples/online/TwoPlayerDemo.tsx)。\n\n## 3.0：神龛'));
+          }
+          const architecture = '\n## 3.0：可受控会话与玩家视图\n\n本地入口继续由useGameController/useGameSession持有Session、历史、存储和AI；HaojieOnlineGame由useOnlineController接收宿主修订快照及明确回执。两者共用GameSurface、useGameInteraction和useGamePresentation，不复制棋盘或技能。GamePosition没有seed/rng，GameState保留完整权威字段；公开预检在需要随机值前停止，不制造假随机状态。服务端applyPlayerCommand负责运行时结构与操作者权限，getPlayerView负责嵌套可见性；房间、账号、WS、持久化与提交去重属于宿主。完整协议见[ONLINE-ADAPTATION.md](ONLINE-ADAPTATION.md)。\n';
+          if (!read('docs/ARCHITECTURE.md').includes('## 3.0：可受控会话与玩家视图')) write('docs/ARCHITECTURE.md', read('docs/ARCHITECTURE.md') + architecture);
+          const evidence = '\n## 本次执行记录\n\n2026-09-20，运行代码与单文件成品提交 `5c1d228d8d3b1a40fd10e9f13f257ea4ebd3c156` 通过[完整分支验收](https://github.com/Loremmlel/haojie2/actions/runs/35485444677)：TypeScript、全部行为测试、构建/发行一致性、本地浏览器、Pages、三档AI、VFX、神龛、反馈3、受控双客户端、神龛CLI冒烟与反馈3命令指纹。此后的交接整理仅改文档/格式和测试配置，收尾流程会检查src、tests、examples、scripts、package及index.html与该通过版本没有差异。历史规则版本的录制另由标准PR CI按固定旧提交验证。\n\n宿主应把每次发布的update/view视为不可变快照，更新时提供新对象，不要原地修改已发布局面。受控组件只缓存已接受的宿主视图，不提供自己的第二份权威结算。\n';
+          if (!read('docs/ONLINE-ADAPTATION.md').includes('## 本次执行记录')) write('docs/ONLINE-ADAPTATION.md', read('docs/ONLINE-ADAPTATION.md') + evidence);
+          NODE
+          npx prettier --write README.md AGENTS.md docs/ONLINE-ADAPTATION.md docs/ARCHITECTURE.md tsconfig.json
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          if [ -f .dev/online-refactor.mjs ]; then
-            node .dev/online-refactor.mjs
-            rm .dev/online-refactor.mjs
-            git add src AGENTS.md .dev/online-refactor.mjs
-            git commit -m 'refactor: separate public positions and adapt shared UI contracts'
-            git push origin HEAD:feat/online-adapter
-          fi
-          if [ -f .dev/patch.mjs ]; then
-            node .dev/patch.mjs
-            rm .dev/patch.mjs
-            git add src tests scripts examples docs package.json AGENTS.md .github/workflows/ci.yml .dev/patch.mjs
-            git commit -m 'fix: apply reviewed online-adapter follow-up'
-            git push origin HEAD:feat/online-adapter
-          fi
-      - run: npm ci --no-audit --no-fund
-      - name: Format authored changes
-        run: |
-          npx prettier --write src tests scripts package.json AGENTS.md docs/ONLINE-ADAPTATION.md
-          if [ -d examples ]; then npx prettier --write examples; fi
-          git add src tests scripts package.json AGENTS.md docs/ONLINE-ADAPTATION.md
-          if [ -d examples ]; then git add examples; fi
+          git add README.md AGENTS.md docs/ONLINE-ADAPTATION.md docs/ARCHITECTURE.md tsconfig.json
           if ! git diff --cached --quiet; then
-            git commit -m 'style: format online-adapter source'
+            git commit -m 'docs: finish online handoff, evidence and embedding entry points'
             git push origin HEAD:feat/online-adapter
           fi
-          git rev-parse HEAD
-      - run: npm run check
-      - run: npm test
-      - name: Build and keep the offline release current
+      - name: Assert the fully tested runtime and browser tests are unchanged
         run: |
-          npm run deploy
+          git diff --exit-code 5c1d228d8d3b1a40fd10e9f13f257ea4ebd3c156 -- src tests examples scripts package.json package-lock.json index.html
+          npx prettier --check src tests scripts examples README.md AGENTS.md docs/ONLINE-ADAPTATION.md docs/ARCHITECTURE.md package.json tsconfig.json .github/workflows/ci.yml
+          npm run check
           npm run deploy:check
-          git add index.html
-          if ! git diff --cached --quiet; then
-            git commit -m 'build: update single HTML with shared session adapters'
-            git push origin HEAD:feat/online-adapter
-          fi
+          git status --short
           git rev-parse HEAD
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
-      - run: npm run test:pages
-      - run: npm run test:browser:ai
-      - run: npm run test:browser:vfx
-      - run: npm run test:browser:shrine
-      - run: npm run test:browser:feedback3
-      - name: Verify controlled host when present
-        run: |
-          if [ -f tests/browser/online.mjs ]; then node tests/browser/online.mjs; fi
-      - run: node --import tsx scripts/ai/shrine-smoke.ts
-      - run: npm run play:cli -- --replay docs/playtests/cli-feedback3-20260920.jsonl
-      - name: Report tested source
-        if: always()
-        run: git rev-parse HEAD && git status --short
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: online-adapter-evidence
-          path: |
-            artifacts/*.png
-            artifacts/*report.json
-          if-no-files-found: ignore
-          retention-days: 7
