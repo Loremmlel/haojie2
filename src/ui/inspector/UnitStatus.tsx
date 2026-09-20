@@ -4,8 +4,8 @@ import { unitStatus } from './unit-status';
 export function UnitStatus({ state, unit }: { state: GameState; unit: Unit }) {
   const rows = unitStatus(state, unit);
   return (
-    <section className="unit-status" aria-label="棋子当前状态">
-      <h4>当前状态</h4>
+    <details className="unit-status" aria-label="棋子当前状态">
+      <summary>当前状态 · {rows.length}项</summary>
       {rows.length ? (
         <ul>
           {rows.map((row) => (
@@ -21,6 +21,6 @@ export function UnitStatus({ state, unit }: { state: GameState; unit: Unit }) {
       ) : (
         <p>暂无持续效果、装备或外部技能影响。</p>
       )}
-    </section>
+    </details>
   );
 }

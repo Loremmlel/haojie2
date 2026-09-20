@@ -266,7 +266,10 @@ function shrineFields(
         !isLandmark(l) ||
         l.size !== 1 ||
         ids.has(l.id) ||
-        !landmarkSquare(l.kind, l) ||
+        !(
+          landmarkSquare(l.kind, l) ||
+          (l.kind === 's8' && l.x === 7 && [8, 9, 10].includes(l.y))
+        ) ||
         squares.has(key(l))
       )
         return false;
@@ -423,8 +426,10 @@ export function validState(s: unknown): s is GameState {
       if (
         (equal(p, basePoint(1)) || equal(p, basePoint(2))) &&
         !(
-          u.kind === 'u12' &&
-          s.pending.some((r: any) => r.kind === 'bounce' && r.source?.id === u.id)
+          u.size === 1 &&
+          ((hasTrait(u, 'u12') &&
+            s.pending.some((r: any) => r.kind === 'bounce' && r.source?.id === u.id)) ||
+            ((hasTrait(u, 'u12p') || hasTrait(u, 'u12')) && u.mode === 'move' && u.moves > 0))
         )
       )
         return false;

@@ -39,3 +39,11 @@
 永久光环由手牌侧栏 `AuraPanel` 展示双方状态；时钟沿用棋盘目标选择、取消、错误提示和悔棋。`SummonControls` 统一承载免费常驻与付人头额外召唤；`OfferChoice` 使用原生checkbox恰选2个，克隆一整批单列。牢千K沿用 `SynthesisControls` 的三材料确认，但光环不需落点；原生select只负责下一次匹配来源池的自选计划，不提前消费次数。
 
 规范所有者：规则数值catalog；操作合法性engine；选择/取消/反馈useGameController与现有Toast；模态shared/Modal；棋盘层选择Inspector/ActionPanel；原生radio/checkbox/select与details接受平台键盘/弹层行为。自选计划只在本地UI暂存，换局/载入/悔棋清除。成功/错误不移动棋盘，手机侧栏继续文档流。`tests/browser/shrine.mjs`覆盖全部新流、双方人机身份、Worker/回退、390px、键盘与零外部网络请求。
+
+## 问题反馈3（2026-09-20）
+
+业务来源 `docs/FEEDBACK-2026-09-20.md`。`Inspector` 的能力和继承技能常显，`UnitStatus` 用原生details/summary折叠持续状态，移动端也不得隐藏能力描述；复用原有字号/边框/间距tokens。未知和禁用操作继续由引擎中文错误解释。
+
+巨大化沿用 `selection.ts` 的“目标→落点”流程，以所选2×2左上格表达扩展方向，`Board`复用范围预览；大体型移动在 `ActionPanel` 增加四向一小格按钮，棋盘合法相邻格也可点击。炎魔之心在同一操作栏新增逐格绘制路径、撤回一格、确认攻击；未确认前不改变局面，Esc取消不花次数。SVG只读预览，选择点使用原生棋盘按钮，支持键盘/触摸，不引入拖拽专用入口。
+
+引擎 `validAttackRoute` / `expansionAnchors` 为真值源；控制权限由 `match/history.ts` 统一，人类只能以自己的巨大化打断AI，选择期间停止旧计算，不能偷用对方技能。UI不另建伤害计算或异步状态机。`tests/browser/feedback3.mjs` 验证四个核心操作、AI中断、默认描述、折叠状态与390px零横向溢出。

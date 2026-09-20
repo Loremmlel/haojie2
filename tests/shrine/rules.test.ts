@@ -94,12 +94,12 @@ test('3.0 free ultimate, separately paid extras, and classic summon fees do not 
 
 test('3.0 landmark coordinates are column-first, own one occupant, and distinguish live/dormant enemy deployment', () => {
   const s = fixture();
-  for (const y of [8, 9, 10])
-    assert.ok(canPlace(s, template('s8', 1, 0, { x: 7, y }), { x: 7, y }, true));
+  for (const x of [4, 5, 6])
+    assert.ok(canPlace(s, template('s8', 1, 0, { x, y: 7 }), { x, y: 7 }, true));
   for (const p of [
     { x: 8, y: 7 },
     { x: 9, y: 7 },
-    { x: 6, y: 7 },
+    { x: 7, y: 9 },
   ])
     assert.equal(canPlace(s, template('s8', 1, 0, p), p, true), false);
   const l = land(s),
@@ -155,11 +155,11 @@ test('3.0 zero-range landmarks can only attack a hostile occupant and rebuild st
   const blocker = unit(s, v.id);
   blocker.owner = 1;
   addEffect(s, blocker, 'freeze', 2, 0, 2);
-  s.ply += 2; // Renew freeze to test neutral occupancy, not already-expired freeze.
+  s.ply += 2; // Frozen allies now remain friendly occupants and permit reconstruction.
   blocker.effects = [];
   addEffect(s, blocker, 'freeze', 2, 0, 2);
   rebuildLandmarks(s);
-  assert.equal(live.hp, 0);
+  assert.equal(live.hp, 20);
   blocker.effects = [];
   s.ply += 2;
   rebuildLandmarks(s);
@@ -391,11 +391,12 @@ test('3.0 strong kill and mana fountain modify correct damage packets and block 
     friend = add(s, 1, 1, 4, 4);
   friend.hp = 5;
   fountain.attackBonus = 99;
+  v.hp = v.maxHp = 200;
   const bomb = card(s, 8);
   let n = applyCommand(s, { type: 'cast', cardId: bomb, x: 3, y: 6 });
-  assert.equal(unit(n, v.id).hp, 71, '20+15+5');
+  assert.equal(unit(n, v.id).hp, 40, '4 × (20+15+5)');
   heal(n, unit(n, v.id), 50, resolution());
-  assert.equal(unit(n, v.id).hp, 71);
+  assert.equal(unit(n, v.id).hp, 40);
   n = applyCommand(n, { type: 'attack', unitId: fountain.id, targetId: friend.id });
   assert.equal(unit(n, friend.id).hp, 25);
   assert.equal(getStats(n, unit(n, fountain.id)).attack, -20);

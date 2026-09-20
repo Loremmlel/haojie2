@@ -14,10 +14,10 @@ import { canShatter } from './shrines';
 import { definition, isStored } from './catalog';
 import { rerollCommands } from './summoning';
 import { commandError } from './game';
-import { age, allegiance, getStats, has, now, passive, healingAttack } from './state';
+import { age, allegiance, getStats, has, now, passive, healingAttack, hasWeapon } from './state';
 import type { Card, Command, GameState, Unit } from './types';
 export interface SelectionStep {
-  kind: 'target' | 'point' | 'row' | 'column' | 'death' | 'direction';
+  kind: 'target' | 'point' | 'row' | 'column' | 'death' | 'direction' | 'path';
   field?: 'targetId' | 'secondId' | 'sacrificeIds';
   label: string;
   relation?: 'friend' | 'enemy' | 'any';
@@ -56,7 +56,7 @@ export function unitActions(s: GameState, u: Unit): ActionSpec[] {
     command = { unitId: u.id };
   if (stats.move > 0)
     result.push(spec('move', '移动', { type: 'move', ...command }, [square()], 'move'));
-  if (stats.actions > 0 && !hasTrait(u, 'firelord')) {
+  if (stats.actions > 0 && (u.silenced || !hasTrait(u, 'firelord'))) {
     if (signedAttack(u)) {
       result.push(
         spec(
@@ -83,6 +83,28 @@ export function unitActions(s: GameState, u: Unit): ActionSpec[] {
           healingAttack(u) ? '攻击 / 治疗' : '攻击',
           { type: 'attack', ...command },
           [target('选择高亮目标', 'any', 'targetId', true, false)],
+          'sword',
+        ),
+      );
+  }
+  if (stats.actions > 0 && (u.silenced || !hasTrait(u, 'firelord'))) {
+    if (healingAttack(u))
+      result.push(
+        spec(
+          'self-heal',
+          '治疗自身',
+          { type: 'attack', ...command, targetId: u.id, mode: 'heal' },
+          [],
+          'spark',
+        ),
+      );
+    if (hasWeapon(u, 'u28'))
+      result.push(
+        spec(
+          'attack-path',
+          '自选穿透路径',
+          { type: 'attack', ...command, mode: 'damage', path: [] },
+          [{ kind: 'path', label: '先选自身出发格，再逐格选择路径；可转弯，选好后确认攻击' }],
           'sword',
         ),
       );
@@ -183,7 +205,10 @@ export function unitActions(s: GameState, u: Unit): ActionSpec[] {
             'giant',
             '巨大化 · 免费',
             skill,
-            [target('选择有空间变为2×2的单格友方', 'friend', 'targetId', false)],
+            [
+              target('巨大化 1/2：选择有扩展空间的棋子（可选敌方）', 'any', 'targetId', false),
+              square('巨大化 2/2：选择新2×2的左上角；预览必须包含原格'),
+            ],
             'spark',
             true,
           ),
@@ -193,14 +218,13 @@ export function unitActions(s: GameState, u: Unit): ActionSpec[] {
         result.push(
           spec(
             'siphon',
-            '虹吸 · 免费',
+            '虹吸 · 每回合一次',
             skill,
             [
               target('虹吸 1/2：选择每回合扣20血的目标', 'any', 'targetId', true, false),
               target('虹吸 2/2：选择每回合回复20血的目标', 'any', 'secondId', true, false),
             ],
             'spark',
-            true,
           ),
         );
         break;
@@ -372,7 +396,8 @@ export function actionError(s: GameState, a: ActionSpec): string | null {
   if (a.command.type === 'synthesize') return s.phase === 'synthesis' ? null : '合成仅限回合开始。';
   if (s.phase === 'shrine-setup' && ['deploy', 'equip', 'activate-aura'].includes(a.command.type))
     return null;
-  if (s.phase !== 'play' && a.command.type !== 'reroll') return '请先完成召唤阶段。';
+  if (s.phase !== 'play' && a.command.type !== 'reroll' && id !== 'giant')
+    return '请先完成召唤阶段。';
   const u = a.command.unitId ? allPieces(s).find((v) => v.id === a.command.unitId) : undefined;
   if (!u) return null;
   const stats = getStats(s, u);
@@ -412,6 +437,11 @@ export function actionError(s: GameState, a: ActionSpec): string | null {
     return '需2层已就绪的技能蓄力，且生命大于10。';
   if (id === 'cross' && (reserve.readyCharge < 1 || onceUsed))
     return '需要就绪的技能蓄力，且未使用过十字浩劫。';
+  if (
+    id === 'siphon' &&
+    (freeUsed === s.ply || s.siphons.filter((l) => l.sourceId === u.id).length >= 3)
+  )
+    return '本回合虹吸已用，或已有3条连接。';
   if (a.free && (freeUsed === now(s, u) || (id === 'giant' && onceUsed)))
     return '免费能力的次数已经用完。';
   if (

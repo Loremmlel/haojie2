@@ -7,7 +7,7 @@ import { cachedDecision } from '../ai/plan-cache';
 import type { Decision, PlanStep, SearchLimits } from '../ai/types';
 import { allocateBudget, emptyBudget } from '../ai/budget';
 import type { MatchSettings } from './settings';
-import { matchSettings, ownsComputerDecision } from './history';
+import { matchSettings, ownsComputerDecision, humanCommandAllowed } from './history';
 
 export interface ArenaEntry {
   actor: 'human' | 'ai';
@@ -33,15 +33,20 @@ export class Arena {
     return ownsComputerDecision(this.session);
   }
   play(command: Command, actor: 'human' | 'ai' = 'human', decision?: Decision): ArenaEntry {
-    if (actor === 'human' && this.computerTurn)
+    if (actor === 'human' && !humanCommandAllowed(this.session, command))
       throw new Error('当前是AI的决策；使用 go 或 step。');
     if (actor === 'ai' && !this.computerTurn) throw new Error('当前决策属于人类，AI不能代选。');
     const before = this.session.present;
     const next = dispatch(this.session, command);
     this.session = next;
+    if (actor === 'human') this.cache = [];
     return {
       actor,
-      owner: decisionOwner(before),
+      owner:
+        command.type === 'skill' &&
+        (command.ability ?? before.units.find((u) => u.id === command.unitId)?.kind) === 'u7'
+          ? before.units.find((u) => u.id === command.unitId)!.owner
+          : decisionOwner(before),
       ply: before.ply,
       command,
       before: fingerprint(before),

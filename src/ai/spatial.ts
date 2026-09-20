@@ -2,7 +2,7 @@ import { allPieces } from '../engine/traits';
 import { attackRoutes, frontal } from '../engine/geometry';
 /** Read-only spatial estimates. Final commands always use the engine's exact path/legality checks. */
 import { cells, basePoint, inside, distance, neighbors } from '../engine/geometry';
-import { allegiance, getStats, resetUnit, piercing } from '../engine/state';
+import { allegiance, getStats, resetUnit, piercing, hasWeapon } from '../engine/state';
 import type { GameState, Player, Point, Stats, Target, Unit } from '../engine/types';
 const index = (p: Point) => (p.y - 1) * 9 + p.x - 1;
 interface Spatial {
@@ -80,7 +80,7 @@ export function actionWindow(s: GameState, side: Player, next = false): GameStat
  * ignoreId removes a prospective defender's OLD footprint while ranking its alternative positions. */
 export function attackField(s: GameState, u: Unit, range: number, ignoreId = ''): Int16Array {
   const data = spatial(s),
-    k = `${u.id}:${u.x},${u.y}:${u.size}:${range}:${ignoreId}`;
+    k = `${u.id}:${u.x},${u.y}:${u.size}:${range}:${ignoreId}:${hasWeapon(u, 'u28')}`;
   const old = data.reaches.get(k);
   if (old) return old;
   const distances = new Int16Array(117).fill(-1);
@@ -101,9 +101,10 @@ export function attackField(s: GameState, u: Unit, range: number, ignoreId = '')
       distances[at] = depth + 1;
       const blocked =
         (p.x === enemyBase.x && p.y === enemyBase.y) ||
-        data.occupants[at].some(
-          (v) => v.id !== u.id && v.id !== ignoreId && allegiance(s, v) !== u.owner,
-        );
+        (!hasWeapon(u, 'u28') &&
+          data.occupants[at].some(
+            (v) => v.id !== u.id && v.id !== ignoreId && allegiance(s, v) !== u.owner,
+          ));
       if (!blocked) queue.push(p);
     }
   }
@@ -113,7 +114,7 @@ export function attackField(s: GameState, u: Unit, range: number, ignoreId = '')
 export function hitDistance(s: GameState, u: Unit, t: Target, ignoreId = ''): number {
   const st = statsFor(s, u),
     ends = t.unit ? cells(t.unit) : [t];
-  if (piercing(u)) {
+  if (piercing(u) && !hasWeapon(u, 'u28')) {
     let shortest = Infinity;
     for (const a of cells(u))
       for (const b of ends)
@@ -127,9 +128,9 @@ export function hitDistance(s: GameState, u: Unit, t: Target, ignoreId = ''): nu
   );
 }
 export function isFrontHit(s: GameState, u: Unit, t: Target, ignoreId = ''): boolean {
-  if (!piercing(u)) {
+  if (!piercing(u) || hasWeapon(u, 'u28')) {
     const view = ignoreId ? { ...s, units: s.units.filter((v) => v.id !== ignoreId) } : s;
-    const routes = attackRoutes(view, u, t, statsFor(s, u).range);
+    const routes = attackRoutes(view, u, t, statsFor(s, u).range, hasWeapon(u, 'u28'));
     return routes.length > 0 && routes.every((r) => frontal(r.path, t.owner));
   }
   const d = hitDistance(s, u, t, ignoreId);

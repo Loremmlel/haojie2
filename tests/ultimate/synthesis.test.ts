@@ -47,7 +47,7 @@ test('2.5 sage aura is live and stackable, heals allies for 25, and on death res
   assert.equal(unit(silenced, friend.id).hp, 1);
   const frozen = structuredClone(s);
   addEffect(frozen, unit(frozen, sage.id), 'freeze', 2, 0, 4);
-  assert.equal(getStats(frozen, unit(frozen, friend.id)).attack, 20);
+  assert.equal(getStats(frozen, unit(frozen, friend.id)).attack, 25);
 });
 
 test('2.5 formless needs an earlier attack charge, consumes one shot and offers optional target-bound front pull', () => {
@@ -199,13 +199,13 @@ test('2.5 citadel observes individual clone deaths and its own spawned runner de
   assert.equal(unit(applyCommand(short, { type: 'react' }), city.id).maxHp, 5);
 });
 
-test('2.5 citadel stale, frozen and completely surrounded reactions can drain safely without paying or duplicating a unit', () => {
-  for (const mode of ['dead', 'frozen', 'blocked'] as const) {
+test('2.5 citadel stale, silenced and completely surrounded reactions can drain safely without paying or duplicating a unit', () => {
+  for (const mode of ['dead', 'silenced', 'blocked'] as const) {
     const s = fixture(),
       city = add(s, 'citadel', 1, 4, 4);
     s.pending = [{ kind: 'hut-spawn', owner: 1, source: structuredClone(city), amount: 0 }];
     if (mode === 'dead') s.units = [];
-    if (mode === 'frozen') addEffect(s, city, 'freeze', 2, 0, 4);
+    if (mode === 'silenced') city.silenced = true;
     if (mode === 'blocked')
       for (const p of [
         { x: 3, y: 4 },
@@ -246,7 +246,7 @@ test('2.5 firelord fires only at its own end, uses square geometry through block
   assert.equal(unit(applyCommand(enemyEnd, { type: 'end' }), main.id).hp, 120);
   const silent = structuredClone(s);
   unit(silent, lord.id).silenced = true;
-  assert.equal(isLegal(silent, { type: 'attack', unitId: lord.id, targetId: main.id }), false);
+  assert.equal(isLegal(silent, { type: 'attack', unitId: lord.id, targetId: main.id }), true);
   assert.equal(firelordStrike(silent, unit(silent, lord.id)), null);
   const corner = fixture(),
     l = add(corner, 'firelord', 1, 1, 1),
@@ -254,7 +254,7 @@ test('2.5 firelord fires only at its own end, uses square geometry through block
   assert.equal(firelordStrike(corner, l)!.target.id, target.id);
 });
 
-test('2.5 firelord excludes frozen neutrals, hits enemy stacks and large footprints once per packet, and never fires after dying to end damage', () => {
+test('2.5 firelord includes frozen enemies in highest-HP selection, not as neutrals, and never fires after dying to end damage', () => {
   const s = fixture(),
     lord = add(s, 'firelord', 1, 3, 4),
     a = add(s, 'u25', 2, 5, 7),
@@ -267,10 +267,10 @@ test('2.5 firelord excludes frozen neutrals, hits enemy stacks and large footpri
   neutral.maxHp = neutral.hp = 500;
   addEffect(s, neutral, 'freeze', 1, 0, 4, 0);
   const n = applyCommand(s, { type: 'end' });
-  assert.equal(unit(n, a.id).hp, 40);
-  assert.equal(unit(n, b.id).hp, 40);
-  assert.equal(unit(n, giant.id).hp, 101);
-  assert.equal(unit(n, neutral.id).hp, 500);
+  assert.equal(unit(n, a.id).hp, 120);
+  assert.equal(unit(n, b.id).hp, 120);
+  assert.equal(unit(n, giant.id).hp, 111);
+  assert.equal(unit(n, neutral.id).hp, 420);
   const dead = structuredClone(s);
   unit(dead, lord.id).hp = 5;
   addEffect(dead, unit(dead, lord.id), 'burn', 2, 0, 8, 5);

@@ -66,7 +66,11 @@ export function Board({
   const previewSize =
     draft?.type === 'deploy' && currentCard
       ? (definition(currentCard.kind).size ?? 1)
-      : currentCard?.kind === 8
+      : currentCard?.kind === 8 ||
+          (intent.kind === 'select' &&
+            intent.action.id.split(':')[0] === 'giant' &&
+            draft?.targetId) ||
+          (draft?.type === 'move' && acting?.size === 2)
         ? 2
         : 0;
   const preview = hover && previewSize && choices.has(`${hover.x},${hover.y}`) ? hover : null;
@@ -146,7 +150,7 @@ export function Board({
                 const routeLabel = route
                   ? `，${directionLabel[route.direction]}，路径${route.path.length - 1}格`
                   : '';
-                const label = `${p.x}列${p.y}行${t ? `，${t.unit && getStats(s, t.unit).frozen ? '冰冻中立' : faction(t.owner)}${t.unit ? definition(t.unit.kind).name + '，' + format(t.unit.hp) + '生命' : '基地，' + s.bases[t.owner] + '生命'}` : '，空格'}${stack.length > 1 ? `，叠放${stack.length}枚` : ''}${valid ? '，可选择' : ''}`;
+                const label = `${p.x}列${p.y}行${t ? `，${faction(t.owner) + (t.unit && getStats(s, t.unit).frozen ? '，冰冻' : '')}${t.unit ? definition(t.unit.kind).name + '，' + format(t.unit.hp) + '生命' : '基地，' + s.bases[t.owner] + '生命'}` : '，空格'}${stack.length > 1 ? `，叠放${stack.length}枚` : ''}${valid ? '，可选择' : ''}`;
                 return (
                   <button
                     role="gridcell"
@@ -183,6 +187,17 @@ export function Board({
               })}
             </div>
           ))}
+          {!!draft?.path?.length && (
+            <svg className="attack-route-preview" viewBox="0 0 9 13" aria-hidden="true">
+              <polyline
+                className="active"
+                points={draft.path.map((p) => `${p.x - 0.5},${p.y - 0.5}`).join(' ')}
+              />
+              {draft.path.map((p, i) => (
+                <circle key={i} cx={p.x - 0.5} cy={p.y - 0.5} r="0.08" fill="currentColor" />
+              ))}
+            </svg>
+          )}
           {!!routes.length && (
             <svg className="attack-route-preview" viewBox="0 0 9 13" aria-hidden="true">
               {routes.map((r) => {
@@ -305,7 +320,7 @@ export function Board({
                   batches={effects}
                   reduced={reduced}
                   key={u.id}
-                  className={`piece-wrap p${u.owner} ${size === 2 ? 'large-piece' : ''} ${selected ? 'piece-selected' : ''} ${d.tier !== 'normal' && typeof u.kind !== 'number' && !['3p', 'grave', 'wall'].includes(String(u.kind)) ? 'ultimate-piece' : ''} ${stats.frozen ? 'neutral-piece' : ''}`}
+                  className={`piece-wrap p${u.owner} ${size === 2 ? 'large-piece' : ''} ${selected ? 'piece-selected' : ''} ${d.tier !== 'normal' && typeof u.kind !== 'number' && !['3p', 'grave', 'wall'].includes(String(u.kind)) ? 'ultimate-piece' : ''} ${stats.frozen ? 'frozen-piece' : ''}`}
                   style={{
                     left: `${((u.x - 1) / 9) * 100}%`,
                     top: `${((u.y - 1) / 13) * 100}%`,
@@ -381,7 +396,7 @@ export function Board({
           <i className="legend-dot attack" />
           目标
         </span>
-        <span>❄ 冰冻中立</span>
+        <span>❄ 冰冻</span>
         <span>▱ 地标 · 同格点击切换</span>
         <span className="hover-coordinate">
           {hover ? `(${hover.x}, ${hover.y})` : '方向键选格'}
