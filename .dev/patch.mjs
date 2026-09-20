@@ -19,9 +19,7 @@ export function canRebasePlayerCommand(s: GamePosition, actor: Player, c: Comman
 write('src/engine/index.ts', read('src/engine/index.ts') + "\nexport { canRebasePlayerCommand } from './authority';\n");
 replace('src/ui/online/types.ts', "if (!update.view.state || 'seed' in update.view.state || 'rng' in update.view.state)", "if (!update.view.state || typeof update.view.state !== 'object' || 'seed' in update.view.state || 'rng' in update.view.state)");
 replace('src/ui/online/useOnlineController.ts', "if (update.kind === 'snapshot') presentation.clear();", "if (update.kind === 'snapshot' || config.current.connection !== 'connected') presentation.clear();");
-const online = 'src/ui/online/useOnlineController.ts';
-replace(online, '  function connectionBlock(): string | null {', `  // A reconnect may deliver an equal-revision snapshot: it can clear presentation, but must
-  // not replace newer state or acknowledge an unrelated pending request.
+replace('src/ui/online/useOnlineController.ts', '  function connectionBlock(): string | null {', `  // An equal-revision reconnect snapshot clears effects, never newer state or a pending ack.
   useEffect(() => {
     if (props.update.kind === 'snapshot' && props.update.revision >= current.current.revision)
       presentation.clear();
@@ -31,7 +29,6 @@ replace(online, '  function connectionBlock(): string | null {', `  // A reconne
 const pkg = JSON.parse(read('package.json'));
 pkg.scripts['test:browser:online'] = 'node tests/browser/online.mjs';
 write('package.json', JSON.stringify(pkg, null, 2) + '\n');
-replace('.github/workflows/ci.yml', '      - run: npm run test:browser:feedback3', '      - run: npm run test:browser:feedback3\n      - run: npm run test:browser:online');
 const tsconfig = JSON.parse(read('tsconfig.json'));
 tsconfig.include = ['src', 'tests/**/*.ts', 'tests/**/*.tsx', 'scripts/**/*.ts', 'examples/**/*.ts', 'examples/**/*.tsx'];
 write('tsconfig.json', JSON.stringify(tsconfig, null, 2) + '\n');
