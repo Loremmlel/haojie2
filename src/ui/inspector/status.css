@@ -206,7 +206,7 @@
   padding-top: 9px;
   min-width: 0;
 }
-.hj-game .unit-status h4 {
+.hj-game .unit-status summary {
   font-size: 12px;
   font-weight: 650;
   margin-bottom: 6px;
@@ -240,4 +240,23 @@
   color: var(--ink);
   font-size: 11px;
   line-height: 1.5;
+}
+
+.hj-game .unit-status summary {
+  cursor: pointer;
+}
+.hj-game .unit-status summary:hover {
+  color: var(--ink);
+}
+.hj-game .unit-status summary:focus-visible {
+  outline: 2px solid var(--side);
+  outline-offset: 3px;
+}
+.hj-game .move-directions,
+.hj-game .path-controls {
+  margin-top: 10px;
+}
+.hj-game .path-controls > p {
+  margin: 8px 0;
+  font-size: 11px;
 }

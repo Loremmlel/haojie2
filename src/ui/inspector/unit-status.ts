@@ -26,7 +26,7 @@ const effectNames: Record<Effect['type'], string> = {
   execute: '死吧！',
   convert: '策反',
   mark: '投石标记',
-  freeze: '冰冻 · 中立',
+  freeze: '冰冻',
   burn: '灼烧',
   stun: '眩晕',
   'inner-fire': '心灵之火',
@@ -65,7 +65,7 @@ export function unitStatus(s: GameState, u: Unit): StatusEntry[] {
                 : e.type === 'immune'
                   ? '免疫敌方伤害和负面效果'
                   : e.type === 'freeze'
-                    ? '暂时中立，不能行动'
+                    ? '保持原阵营，不能行动；常驻光环/被动保留'
                     : e.type === 'stun'
                       ? '不能行动'
                       : '回合结束持续受伤';
@@ -94,7 +94,7 @@ export function unitStatus(s: GameState, u: Unit): StatusEntry[] {
       label: '穿透 · 吸血 · 反伤',
       detail: '四向直线穿透，100%攻击吸血，实际受伤50%反弹；反伤不相互反弹。',
     });
-  if (u.kind === 'firelord')
+  if (u.kind === 'firelord' && !u.silenced)
     rows.push({
       key: 'judgement',
       label: '末日审判 · 己方回合末',

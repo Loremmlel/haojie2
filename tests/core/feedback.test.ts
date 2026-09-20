@@ -111,7 +111,7 @@ test('feedback paths: directional BFS obeys blockers, board edges, friendly trav
   assert.equal(attackPath(s, a, asTarget(b), 4, 'right'), null);
 });
 
-test('feedback paths: mirrored frontal protection, knockback directions and straight piercing remain distinct', () => {
+test('feedback paths: mirrored frontal protection and knockback directions remain available with Heart', () => {
   const s = fixture();
   s.active = 2;
   const a = add(s, 26, 2, 4, 8),
@@ -120,7 +120,7 @@ test('feedback paths: mirrored frontal protection, knockback directions and stra
   assert.equal(unit(applyCommand(s, { ...c, direction: 'up' }), b.id).hp, 40);
   assert.equal(unit(applyCommand(s, { ...c, direction: 'left' }), b.id).hp, 30);
   a.equipment.push('u28');
-  assert.throws(() => applyCommand(s, { ...c, direction: 'left' }));
+  assert.equal(unit(applyCommand(s, { ...c, direction: 'left' }), b.id).hp, 30);
   const n = fixture(),
     mage = add(n, 'u20', 1, 4, 4),
     target = add(n, 'grave', 2, 4, 6);

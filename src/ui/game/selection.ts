@@ -1,6 +1,8 @@
 import type { ActionSpec, Command, GameState, Point } from '../../engine';
 import {
   actionError,
+  expansionAnchors,
+  validAttackRoute,
   allPieces,
   allegiance,
   attackPath,
@@ -41,6 +43,8 @@ export function advanceIntent(i: Intent, p: Point, s: GameState): Intent {
   const step = i.action.steps[i.index],
     draft = { ...i.draft };
   if (!step) return i;
+  if (step.kind === 'path')
+    return { ...i, draft: { ...draft, path: [...(draft.path ?? []), { x: p.x, y: p.y }] } };
   if (step.kind === 'target') {
     const t = selectedTarget(s, i, p);
     if (!t) return i;
@@ -90,6 +94,10 @@ export function canChoose(s: GameState, i: Intent, p: Point): boolean {
   if (i.kind === 'none' || actionError(s, i.action)) return false;
   const step = i.action.steps[i.index];
   if (!step || step.kind === 'death') return false;
+  if (step.kind === 'path') {
+    const u = allPieces(s).find((u) => u.id === i.draft.unitId);
+    return !!u && validAttackRoute(s, u, [...(i.draft.path ?? []), p], getStats(s, u).range);
+  }
   if (step.kind === 'direction') {
     const c = commandFor(s, i, p);
     return !!c && isLegal(s, c);
@@ -121,6 +129,11 @@ export function canChoose(s: GameState, i: Intent, p: Point): boolean {
       return false;
     if (i.draft.type === 'attack' && !isLegal(s, { ...i.draft, targetId: t.id })) return false;
     if (i.action.id === 'sacrifice' && (t.id === u?.id || t.unit?.kind === 'u25')) return false;
+    if (
+      i.action.id.split(':')[0] === 'giant' &&
+      (!t.unit || t.id === u?.id || !expansionAnchors(s, t.unit).length)
+    )
+      return false;
     if (step.range && u && !attackPath(s, u, t, getStats(s, u).range)) return false;
     return true;
   }

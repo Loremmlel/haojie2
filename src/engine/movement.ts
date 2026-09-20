@@ -1,4 +1,5 @@
 import { chargeFor, consumeCharge, moveChargeKind, hasTrait, isLandmark } from './traits';
+import { landmarkAt } from './shrines';
 import { hitPullDestination, hutSpawnPoints } from './reactions';
 import { protectedEffect } from './combat';
 import { eventActor, withEventFacts } from './event-facts';
@@ -37,13 +38,16 @@ import {
 } from './state';
 import type { Command, GameState, Point, Unit } from './types';
 export function emptyFor(s: GameState, u: Unit, p: Point = u) {
-  return canPlace(s, u, p);
+  return (
+    canPlace(s, u, p) &&
+    cells({ ...u, ...p }).every(
+      (c) => !landmarkAt(s, c) && occupants(s, c).every((v) => v.id === u.id),
+    )
+  );
 }
 function canEnter(s: GameState, u: Unit, p: Point) {
-  if (!inside(p) || equal(p, basePoint(u.owner))) return false;
-  if (hasTrait(u, 'u12p') && !hasTrait(u, 'u12') && equal(p, basePoint(u.owner === 1 ? 2 : 1)))
-    return false;
-  return !occupants(s, p).some((v) => v.id !== u.id && allegiance(s, v) === u.owner);
+  // Large bodies may never overlap; a single-cell runner may transiently cross ANY layer.
+  return u.size > 1 ? canPlace(s, u, p) : inside(p);
 }
 function reachableExit(s: GameState, u: Unit, steps: number) {
   const queue = [{ p: { x: u.x, y: u.y }, steps: 0 }],
@@ -87,10 +91,13 @@ function resolveMove(s: GameState, c: Command, ctx: Resolution) {
     }
     ensure(
       u.moves > 0 && distance(u, to) === 1 && canEnter(s, u, to),
-      '每次移动一格，不能进入友方或非法格。',
+      '每次沿四向移动一格，不能越界或使大体型重叠。',
     );
     const t = targets(s).find(
-      (t) => t.id !== u.id && (t.unit ? cells(t.unit) : [t]).some((p) => equal(p, to)),
+      (t) =>
+        t.id !== u.id &&
+        (t.unit ? allegiance(s, t.unit) : t.owner) !== u.owner &&
+        (t.unit ? cells(t.unit) : [t]).some((p) => equal(p, to)),
     );
     emit(s, { type: 'move', from: u, to, unitId: u.id, owner: u.owner, text: '冲撞' });
     Object.assign(u, to);
@@ -99,7 +106,7 @@ function resolveMove(s: GameState, c: Command, ctx: Resolution) {
     if (!alive(s, u)) return;
     if (hasTrait(u, 'u12') && t) {
       s.pending.unshift({ kind: 'bounce', owner: u.owner, source: structuredClone(u), amount: 30 });
-    } else if (hasTrait(u, 'u12p') && !hasTrait(u, 'u12'))
+    } else
       ensure(
         emptyFor(s, u) || (u.moves > 0 && reachableExit(s, u, u.moves)),
         '剩余移动次数无法返回空地，不能进行这次冲撞。',
@@ -111,6 +118,32 @@ function resolveMove(s: GameState, c: Command, ctx: Resolution) {
     return;
   }
   let limit = getStats(s, u).move;
+  if (u.size > 1) {
+    if (starting) {
+      if (charged !== undefined) {
+        ensure(
+          reserve && reserve.readyCharge >= 1 && reserve.chargeType === 'move',
+          '分数移动须先蓄力。',
+        );
+        if (limit % 1) limit *= 2;
+      }
+      u.moves = Math.floor(limit);
+    }
+    ensure(
+      u.moves > 0 && distance(u, to) === 1 && canPlace(s, u, to),
+      '2×2每次整体向一个方向移动一小格，四格均须合法且不能重叠。',
+    );
+    const path = [{ x: u.x, y: u.y }, to];
+    emit(s, { type: 'move', from: u, to, path, unitId: u.id, owner: u.owner });
+    Object.assign(u, to);
+    if (starting && charged !== undefined) consumeCharge(u, charged);
+    u.moves--;
+    if (!u.moves) {
+      finishOperation(u);
+      if (hasWeapon(u, 'u16')) u.bonusAttacks++;
+    }
+    return;
+  }
   if (charged !== undefined) {
     ensure(
       reserve && reserve.readyCharge >= 1 && reserve.chargeType === 'move',
@@ -128,8 +161,11 @@ function resolveMove(s: GameState, c: Command, ctx: Resolution) {
 }
 export function finishMode(s: GameState, c: Command) {
   const u = actor(s, c.unitId);
-  ensure(u.mode === 'attack' || (u.mode === 'move' && isRunner(u)), '没有可提前结束的连续操作。');
-  ensure(emptyFor(s, u), '必须先移到空地，不能结束在另一个棋子或基地内。');
+  ensure(
+    u.mode === 'attack' || (u.mode === 'move' && (isRunner(u) || u.size > 1)),
+    '没有可提前结束的连续操作。',
+  );
+  ensure(!isRunner(u) || emptyFor(s, u), '必须先移到空地，不能结束在另一个棋子、地标或基地内。');
   const wasMove = u.mode === 'move';
   finishOperation(u);
   if (wasMove && hasWeapon(u, 'u16')) u.bonusAttacks++;
@@ -143,22 +179,25 @@ export function react(s: GameState, c: Command, ctx: Resolution) {
     const to = point(c.x, c.y);
     ensure(
       distance(u, to) === 1 && canEnter(s, u, to),
-      '必须向一个合法方向弹出，不能进入友方或越界。',
+      '必须向四向相邻合法格弹出，不能越界或使大体型重叠。',
     );
     const t = targets(s).find(
-      (t) => t.id !== u.id && (t.unit ? cells(t.unit) : [t]).some((p) => equal(p, to)),
+      (t) =>
+        t.id !== u.id &&
+        (t.unit ? allegiance(s, t.unit) : t.owner) !== u.owner &&
+        (t.unit ? cells(t.unit) : [t]).some((p) => equal(p, to)),
     );
     emit(s, { type: 'move', from: u, to, unitId: u.id, owner: u.owner, text: '免费弹出' });
     Object.assign(u, to);
-    if (t) {
-      damage(s, t, 30, { owner: u.owner, unit: u, kind: 'collision' }, ctx);
-      if (alive(s, u))
-        s.pending.unshift({
-          kind: 'bounce',
-          owner: u.owner,
-          source: structuredClone(u),
-          amount: 30,
-        });
+    if (t) damage(s, t, 30, { owner: u.owner, unit: u, kind: 'collision' }, ctx);
+    if (!alive(s, u)) return;
+    if (t || !emptyFor(s, u)) {
+      s.pending.unshift({
+        kind: 'bounce',
+        owner: u.owner,
+        source: structuredClone(u),
+        amount: 30,
+      });
     } else if (u.moves === 0) {
       finishOperation(u);
       if (hasWeapon(u, 'u16')) u.bonusAttacks++;

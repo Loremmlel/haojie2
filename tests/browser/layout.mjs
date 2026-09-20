@@ -114,7 +114,7 @@ export async function verifyWorkbench(page, { renderOnly = false } = {}) {
   }
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator('[data-cell="6,6"]').click();
-  await page.locator('.ability-details summary').click();
+  assert.ok(await page.locator('.ability-copy').isVisible());
   await button('攻击').click();
   await measure('expanded-inspector-and-targeting');
   await page.locator('.hand-scroll').hover();

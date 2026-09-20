@@ -1,3 +1,4 @@
+import { emptyFor } from './movement';
 import { allPieces, hasTrait } from './traits';
 import { captureClockFrame, endShrines, rebuildLandmarks, syncBanners } from './shrines';
 import { availableSyntheses } from './synthesis';
@@ -5,7 +6,17 @@ import { firelordStrike } from './firelord';
 import { COMBAT_RULES } from './catalog';
 import { eventActor, withEventFacts } from './event-facts';
 import { definition, isStored } from './catalog';
-import { alive, damage, findTarget, freeze, heal, kill, pruneSiphons, resolution } from './combat';
+import {
+  alive,
+  damage,
+  areaDamage,
+  findTarget,
+  freeze,
+  heal,
+  kill,
+  pruneSiphons,
+  resolution,
+} from './combat';
 import type { Resolution } from './combat';
 import {
   ALL_CELLS,
@@ -86,7 +97,7 @@ export function beginTurn(s: GameState, ctx: Resolution) {
       const packet: Source = {
         owner: h.owner,
         kind: 'spell',
-        unit: s.units.find((u) => u.id === h.sourceId),
+        base: h.owner,
       };
       const victims = targets(s).filter((t) =>
         (t.unit ? cells(t.unit) : [t]).some((p) =>
@@ -99,11 +110,18 @@ export function beginTurn(s: GameState, ctx: Resolution) {
           action: 'storm',
           stage: 'trigger',
           ability: 'u9',
+          actor: eventActor(targets(s).find((t) => t.id === `base-${h.owner}`)),
           area: ALL_CELLS.filter((p) => (h.axis === 'row' ? p.y === h.line : p.x === h.line)),
         },
         () => {
           emit(s, { type: 'skill', owner: h.owner, text: '烈焰风暴 · 再临' });
-          for (const t of victims) damage(s, t, 20, packet, ctx);
+          areaDamage(
+            s,
+            victims.filter((t) => (t.unit ? allegiance(s, t.unit) : t.owner) !== h.owner),
+            (p) => ((h.axis === 'row' ? p.y === h.line : p.x === h.line) ? 20 : 0),
+            packet,
+            ctx,
+          );
         },
       );
     }
@@ -130,11 +148,8 @@ export function endTurn(s: GameState, ctx: Resolution) {
   ensure(s.phase === 'play', '请先完成召唤并进入行动阶段。');
   for (const u of s.units)
     ensure(
-      !hasTrait(u, 'u12p') ||
-        !s.units.some(
-          (v) => v.id !== u.id && cells(v).some((p) => cells(u).some((c) => equal(c, p))),
-        ),
-      '小BW必须离开敌方占位后才能结束回合。',
+      (!hasTrait(u, 'u12p') && !hasTrait(u, 'u12')) || u.mode !== 'move' || emptyFor(s, u),
+      '冲撞棋子必须离开棋子、地标或基地占位后才能结束回合。',
     );
   for (const c of s.hands[s.active].filter((c) => !isStored(definition(c.kind)))) {
     const ghost = template(c.kind, s.active, s.turns[s.active], { x: 1, y: 1 });
@@ -192,22 +207,21 @@ export function endTurn(s: GameState, ctx: Resolution) {
         text: '末日审判',
         ultimate: true,
       });
-      for (const t of strike.primary)
-        damage(
-          s,
-          t,
-          COMBAT_RULES.firelord.damage,
-          { owner: lord.owner, unit: lord, kind: 'skill' },
-          ctx,
-        );
-      for (const t of strike.splash)
-        damage(
-          s,
-          t,
-          COMBAT_RULES.firelord.splash,
-          { owner: lord.owner, unit: lord, kind: 'skill' },
-          ctx,
-        );
+      const victims = [
+        ...new Map([...strike.primary, ...strike.splash].map((t) => [t.id, t])).values(),
+      ];
+      areaDamage(
+        s,
+        victims,
+        (p) =>
+          equal(p, strike.impact)
+            ? COMBAT_RULES.firelord.damage
+            : strike.area.some((q) => equal(p, q))
+              ? COMBAT_RULES.firelord.splash
+              : 0,
+        { owner: lord.owner, unit: lord, kind: 'skill' },
+        ctx,
+      );
     });
   }
   endShrines(s, ctx);

@@ -148,8 +148,8 @@ test('2.5 material identity, allegiance and destination are validated before rem
   assert.equal(n.siphons.length, 0);
   const frozen = structuredClone(s);
   addEffect(frozen, frozen.units[0], 'freeze', 2, 0, 4);
-  assert.equal(availableSyntheses(frozen).length, 0);
-  assert.equal(isLegal(frozen, fuse('sage', ids)), false);
+  assert.equal(availableSyntheses(frozen).length, 1);
+  assert.equal(isLegal(frozen, fuse('sage', ids)), true);
   const enemy = structuredClone(s);
   enemy.units[0].owner = 2;
   assert.equal(isLegal(enemy, fuse('sage', ids)), false);

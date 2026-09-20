@@ -18,7 +18,7 @@ while (
   seed++;
 for (const difficulty of ['easy', 'medium', 'hard'] as Difficulty[]) {
   const arena = new Arena(createSession(createGame(seed, 'shrine')));
-  const path = 'docs/playtests/cli-shrine-20260918.jsonl';
+  const path = 'docs/playtests/cli-feedback3-20260920.jsonl';
   if (record && difficulty === 'medium') prepareTranscript(path, arena.session, true);
   let commands = 0,
     simulations = 0,
@@ -34,7 +34,7 @@ for (const difficulty of ['easy', 'medium', 'hard'] as Difficulty[]) {
   // Both offers were genuinely drawn; the author-facing corrected flag coordinate is explicit.
   act({ type: 'choose-shrine', player: 1, shrineKind: 's8' });
   act({ type: 'choose-shrine', player: 2, shrineKind: 's13' });
-  act({ type: 'deploy', cardId: arena.session.present.hands[1][0].id, x: 7, y: 9 });
+  act({ type: 'deploy', cardId: arena.session.present.hands[1][0].id, x: 5, y: 7 });
   act({ type: 'finish-shrine-setup' });
   act({ type: 'activate-aura', cardId: arena.session.present.hands[2][0].id });
   act({ type: 'finish-shrine-setup' });

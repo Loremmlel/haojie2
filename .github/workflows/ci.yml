@@ -43,9 +43,20 @@ jobs:
       - run: npm run test:browser:ai
       - run: npm run test:browser:vfx
       - run: npm run test:browser:shrine
+      - run: npm run test:browser:feedback3
       - run: node --import tsx scripts/ai/shrine-smoke.ts
       - name: Verify current rules CLI command fingerprints
-        run: npm run play:cli -- --replay docs/playtests/cli-shrine-20260918.jsonl
+        run: npm run play:cli -- --replay docs/playtests/cli-feedback3-20260920.jsonl
+      - name: Check out the September 18 shrine rules
+        uses: actions/checkout@v4
+        with:
+          ref: ef3c9ad75ecaf99878d2b8f1560b2dc25e907d04
+          path: artifacts/september18-rules
+          persist-credentials: false
+      - name: Verify the unmodified September 18 recording
+        run: |
+          ln -s "$GITHUB_WORKSPACE/node_modules" artifacts/september18-rules/node_modules
+          npm --prefix artifacts/september18-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-shrine-20260918.jsonl"
       - name: Check out the original 2.5 synthesis rules
         uses: actions/checkout@v4
         with:

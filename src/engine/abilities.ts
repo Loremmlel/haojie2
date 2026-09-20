@@ -15,6 +15,7 @@ import { rerollCommands, summonPool } from './summoning';
 import { COMBAT_RULES, definition, isStored } from './catalog';
 import {
   alive,
+  areaDamage,
   damage,
   findTarget,
   freeze,
@@ -29,6 +30,7 @@ import type { Resolution } from './combat';
 import {
   ALL_CELLS,
   attackPath,
+  expansionAnchors,
   canPlace,
   cells,
   equal,
@@ -169,6 +171,7 @@ export function useSkill(s: GameState, c: Command, ctx: Resolution) {
         summary.to = point(c.x, c.y);
         delete summary.subject;
       } else if ((kind === 'u7' || kind === 'u21') && endpointA) {
+        if (kind === 'u7' && endpointA.unit?.size === 1) summary.stage = 'blocked';
         summary.to = { x: endpointA.x, y: endpointA.y };
         summary.subject = eventActor(endpointA);
       }
@@ -178,11 +181,12 @@ export function useSkill(s: GameState, c: Command, ctx: Resolution) {
 function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
   const raw = findUnit(s, c.unitId),
     kind = c.ability ?? raw.kind,
-    free = kind === 'u7' || kind === 'u14';
+    free = kind === 'u7';
   const u = kind === 'u7' ? raw : actor(s, c.unitId);
   ensure(hasTrait(u, kind), '该棋子没有选定的技能。');
   ensure(!u.silenced, '沉默已移除此随从的技能。');
   ensure(!has(s, u, 'freeze') && !has(s, u, 'stun'), '冻结或眩晕中不能施放技能。');
+  if (kind === 'u14') ensure(u.freeUsed !== s.ply, '本回合已经使用虹吸。');
   if (!free) chooseMode(s, u, 'skill');
   else ensure(u.freeUsed !== now(s, u), '本回合免费技能已使用。');
   const range = getStats(s, u).range,
@@ -207,7 +211,7 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
       const victims = targets(s).filter(
         (t) => ring(u, t.unit ?? t) && (t.owner === u.owner || topTarget(s, t)),
       );
-      for (const t of victims) damage(s, t, COMBAT_RULES.giantAreaDamage, source, ctx);
+      areaDamage(s, victims, (p) => (ring(u, p) ? COMBAT_RULES.giantAreaDamage : 0), source, ctx);
       break;
     }
     case 6:
@@ -317,16 +321,21 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
       ensure(inSquare(u, p), '交点必须位于自身11×11区域。');
       const victims = targets(s).filter(
         (t) =>
-          (t.owner === u.owner || topTarget(s, t)) &&
+          (t.unit ? allegiance(s, t.unit) : t.owner) !== u.owner &&
+          topTarget(s, t) &&
           (t.unit ? cells(t.unit) : [t]).some(
             (cell) => inSquare(u, cell) && (cell.x === p.x || cell.y === p.y),
           ),
       );
       emit(s, { type: 'skill', to: p, owner: u.owner, text: '十字浩劫', ultimate: true });
-      for (const t of victims) {
-        const center = (t.unit ? cells(t.unit) : [t]).some((cell) => equal(cell, p));
-        damage(s, t, center ? 40 : 20, source, ctx);
-      }
+      areaDamage(
+        s,
+        victims,
+        (cell) =>
+          inSquare(u, cell) && (cell.x === p.x || cell.y === p.y) ? (equal(cell, p) ? 40 : 20) : 0,
+        source,
+        ctx,
+      );
       u.onceUsed = true;
       u.charge = u.readyCharge = 0;
       break;
@@ -334,24 +343,23 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
     case 'u7': {
       ensure(!u.onceUsed, '巨大化一生只能用一次。');
       const v = findUnit(s, c.targetId);
+      const at = c.x === undefined && c.y === undefined ? { x: v.x, y: v.y } : point(c.x, c.y);
       ensure(
-        v.owner === u.owner &&
-          v.id !== u.id &&
-          v.size === 1 &&
-          !isLandmark(v) &&
-          !has(s, v, 'freeze'),
-        '请选择另一个单格友方随从。',
+        v.id !== u.id && expansionAnchors(s, v).some((p) => equal(p, at)),
+        '请选择有合法扩展方向的单格棋子；2×2必须包含原格，且不能与棋子、地标或基地重合。',
       );
-      ensure(canPlace(s, { ...v, size: 2 }, v), '周围空间不足，无法形成完整2×2占位。');
       ensure(
         u.hp > 10 && u.maxHp > 10 && getStats(s, u).attack >= 10,
         '发动需要支付10攻击和10生命并存活。',
       );
       u.attackBonus -= 10;
       u.hp -= 10;
-      v.size = 2;
-      v.maxHp += 5;
-      v.hp += 5;
+      if (!protectedEffect(s, asTarget(v), source, ctx)) {
+        Object.assign(v, at);
+        v.size = 2;
+        v.maxHp += 5;
+        v.hp += 5;
+      }
       u.onceUsed = true;
       break;
     }
@@ -449,6 +457,7 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
     default:
       ensure(false, '此棋子没有可主动使用的技能；被动能力由引擎自动结算。');
   }
+  if (kind === 'u14') u.freeUsed = s.ply;
   if (free) u.freeUsed = now(s, u);
   else finishOperation(u);
   emit(
@@ -497,7 +506,7 @@ function resolveCast(s: GameState, c: Command, ctx: Resolution) {
   const owner = s.active,
     card = s.hands[owner].find((v) => v.id === c.cardId);
   ensure(card && definition(card.kind).spell !== undefined, '请选择法术牌。');
-  const source: Source = { owner, kind: 'spell' };
+  const source: Source = { owner, base: owner, kind: 'spell' };
   // Validate choices before spending randomness or a card. applyCommand clones the complete state.
   let target = c.targetId ? findTarget(s, c.targetId) : undefined;
   if ([17, 18, 22, 'u17'].includes(card.kind))
@@ -556,7 +565,13 @@ function resolveCast(s: GameState, c: Command, ctx: Resolution) {
         ),
       );
       emit(s, { type: 'skill', to: { x: c.x! + 0.5, y: c.y! + 0.5 }, owner, text: '爆弹' });
-      for (const t of victims) damage(s, t, 20, source, ctx);
+      areaDamage(
+        s,
+        victims.filter((t) => (t.unit ? allegiance(s, t.unit) : t.owner) !== owner),
+        (p) => (p.x >= c.x! && p.x <= c.x! + 1 && p.y >= c.y! && p.y <= c.y! + 1 ? 20 : 0),
+        source,
+        ctx,
+      );
       break;
     }
     case 17:
@@ -594,7 +609,13 @@ function resolveCast(s: GameState, c: Command, ctx: Resolution) {
       const victims = targets(s).filter((t) =>
         (t.unit ? cells(t.unit) : [t]).some((p) => (axis === 'row' ? p.y === line : p.x === line)),
       );
-      for (const t of victims) damage(s, t, 20, source, ctx);
+      areaDamage(
+        s,
+        victims.filter((t) => (t.unit ? allegiance(s, t.unit) : t.owner) !== owner),
+        (p) => ((axis === 'row' ? p.y === line : p.x === line) ? 20 : 0),
+        source,
+        ctx,
+      );
       break;
     }
     case 'u17':

@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { ActionSpec, GameState } from '../../engine';
-import { actionError, definition } from '../../engine';
+import { actionError, definition, commandError, allPieces, getStats } from '../../engine';
 import type { Intent } from '../game/selection';
 import { Icon } from '../shared/visuals';
 
@@ -22,6 +22,15 @@ export function ActionPanel({
   deaths: GameState['deaths'];
 }) {
   const reaction = s.pending[0];
+  const drawing =
+    activeIntent.kind === 'select' && activeIntent.action.steps[activeIntent.index]?.kind === 'path'
+      ? activeIntent
+      : null;
+  const moving =
+    activeIntent.kind === 'select' && activeIntent.draft.type === 'move' ? activeIntent : null;
+  const mover = moving ? allPieces(s).find((u) => u.id === moving.draft.unitId) : undefined;
+  const pathError = drawing ? commandError(s, drawing.draft) : null;
+  const archer = drawing ? allPieces(s).find((u) => u.id === drawing.draft.unitId) : undefined;
   return (
     <>
       {!reaction && actions.length > 0 && (
@@ -45,6 +54,62 @@ export function ActionPanel({
               );
             })}
           </div>
+        </div>
+      )}
+      {moving && mover && mover.size > 1 && (
+        <div className="v2-actions move-directions" aria-label="大体型移动方向">
+          {[
+            ['↑ 向上一格', 0, -1],
+            ['↓ 向下一格', 0, 1],
+            ['← 向左一格', -1, 0],
+            ['→ 向右一格', 1, 0],
+          ].map(([label, dx, dy]) => {
+            const command = { ...moving.draft, x: mover.x + Number(dx), y: mover.y + Number(dy) };
+            const error = commandError(s, command);
+            return (
+              <button
+                key={label}
+                disabled={!!error}
+                title={error ?? String(label)}
+                onClick={() => chooseAction({ ...moving.action, command, steps: [] })}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {drawing && (
+        <div className="path-controls">
+          <p role="status">
+            已选路径 {Math.max(0, (drawing.draft.path?.length ?? 1) - 1)} /{' '}
+            {archer ? getStats(s, archer).range : 0} 格
+          </p>
+          <div className="v2-actions">
+            <button
+              disabled={!drawing.draft.path?.length}
+              onClick={() =>
+                setIntent({
+                  ...drawing,
+                  draft: { ...drawing.draft, path: drawing.draft.path?.slice(0, -1) },
+                })
+              }
+            >
+              撤回一格
+            </button>
+            <button
+              disabled={!!pathError}
+              title={pathError ?? '确认攻击'}
+              onClick={() => chooseAction({ ...drawing.action, command: drawing.draft, steps: [] })}
+            >
+              确认攻击
+            </button>
+          </div>
+          <p className="sequence-hint">
+            {pathError
+              ? '先从自身边缘出发，逐格选出命中敌方的路径。'
+              : '按确认沿所选路径攻击；每名敌人只受一次攻击及灼烧。'}
+          </p>
         </div>
       )}
       {activeIntent.kind === 'select' &&

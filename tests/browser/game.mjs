@@ -27,6 +27,11 @@ let page;
 let lastExportAt = 0;
 const button = (name) => page.getByRole('button', { name, exact: true });
 const cell = (x, y) => page.locator(`[data-cell="${x},${y}"]`);
+async function readStatus() {
+  const status = page.locator('.unit-status');
+  if ((await status.getAttribute('open')) === null) await status.locator('summary').click();
+  return status.innerText();
+}
 async function choose(x, y) {
   await cell(x, y).click();
 }
@@ -146,8 +151,8 @@ try {
   assert.deepEqual(state.units.find((u) => u.kind === 'u6').equipment, ['u5']);
   assert.equal(state.units.find((u) => u.kind === 26).hp, 35);
   assert.ok(state.units.find((u) => u.kind === 26).effects.some((e) => e.type === 'freeze'));
-  assert.match(await cell(4, 6).getAttribute('aria-label'), /中立/);
-  scenario('mage-only weapon equip, on-hit frost and neutral battlefield presentation');
+  assert.match(await cell(4, 6).getAttribute('aria-label'), /赤焰.*冰冻|冰冻.*赤焰/);
+  scenario('mage-only weapon equip, on-hit frost with retained allegiance');
   await load('storm-clones');
   await button('选择烈焰风暴法术').click();
   await button('烈焰风暴 · 横排').click();
@@ -170,7 +175,7 @@ try {
   scenario('revival picker, two-step targeting, pristine revival and maximum-health payment');
   await load('siphon');
   await choose(3, 5);
-  await button('虹吸 · 免费').click();
+  await button('虹吸 · 每回合一次').click();
   await choose(5, 5);
   await choose(2, 5);
   assert.equal(await page.locator('.siphon-thread').count(), 1);
@@ -178,7 +183,7 @@ try {
   state = await readState();
   assert.equal(state.units.find((u) => u.kind === 'grave').hp, 50);
   assert.equal(state.units.find((u) => u.kind === 1).hp, 30);
-  scenario('two-target free siphon, persistent link and end-turn transfer');
+  scenario('two-target operation-consuming siphon, persistent link and end-turn transfer');
   await load('runner');
   await choose(3, 4);
   await button('移动').click();
@@ -201,10 +206,7 @@ try {
   state = await readState();
   assert.equal(state.units.find((u) => u.kind === 5).hp, 101);
   assert.equal(state.units[0].offset, 2);
-  assert.match(
-    await page.getByRole('region', { name: '棋子当前状态' }).innerText(),
-    /待生效.*死吧！/,
-  );
+  assert.match(await readStatus(), /待生效.*死吧！/);
   scenario('haste readies one unit but leaves execution waiting for the actual next own turn');
   await load('counter');
   await button('选择金身法术').click();
@@ -339,7 +341,7 @@ try {
   );
   await load('unit-status');
   await choose(4, 4);
-  const statusText = await page.getByRole('region', { name: '棋子当前状态' }).innerText();
+  const statusText = await readStatus();
   assert.match(statusText, /待生效.*死吧！/);
   assert.match(statusText, /名刀保护.*剩余 1 次/);
   assert.match(statusText, /已消耗.*可用/);
@@ -494,10 +496,7 @@ try {
   scenario('2.5 synthesis is operable with keyboard only at 390px without horizontal overflow');
   await load('unit-status');
   await choose(4, 4);
-  assert.match(
-    await page.getByRole('region', { name: '棋子当前状态' }).innerText(),
-    /名刀保护.*剩余 1 次/,
-  );
+  assert.match(await readStatus(), /名刀保护.*剩余 1 次/);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.screenshot({ path: 'artifacts/feedback-status-mobile.png', fullPage: true });
   await load('reroll');

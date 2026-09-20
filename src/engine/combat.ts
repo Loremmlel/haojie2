@@ -25,7 +25,10 @@ import { definition, COMBAT_RULES } from './catalog';
 import { attackProfile, vampireRate } from './attack-profile';
 import {
   attackPath,
-  pathDirection,
+  piercingTargets,
+  validAttackRoute,
+  distance,
+  inside,
   basePoint,
   canPlace,
   cells,
@@ -430,20 +433,24 @@ export function damage(
   if (u.hp <= u.maxHp) delete u.overMaxFromBanner;
   if (loss > 0 && !u.silenced && hasTrait(u, 'u10')) u.attackBonus += 15;
   const snap = structuredClone(u);
+  const origin = source.base
+    ? targets(s).find((t) => t.id === `base-${source.base}`)
+    : source.unit
+      ? targets(s).find((t) => t.id === source.unit!.id)
+      : undefined;
   if (u.hp <= 0) kill(s, u, source, ctx);
   if (
     loss > 0 &&
     hasTrait(snap, 'slayer') &&
     passive(s, snap) &&
-    source.unit &&
-    source.unit.id !== u.id &&
+    origin &&
+    origin.id !== u.id &&
     source.kind !== 'reflect'
   ) {
-    const attacker = s.units.find((v) => v.id === source.unit!.id);
-    if (attacker)
+    if (origin)
       damage(
         s,
-        asTarget(attacker),
+        origin,
         loss * COMBAT_RULES.slayerReflectRate,
         { owner: snap.owner, unit: snap, kind: 'reflect', retaliated: true },
         ctx,
@@ -463,20 +470,15 @@ export function damage(
     alive(s, u) &&
     !u.silenced &&
     hasTrait(u, 'u18') &&
-    source.unit &&
-    source.unit.id !== u.id &&
+    origin &&
+    origin.id !== u.id &&
     !has(s, u, 'freeze') &&
     !has(s, u, 'stun')
   ) {
-    const attacker = s.units.find((v) => v.id === source.unit!.id),
-      pair = `${u.id}>${source.unit.id}`;
-    if (
-      attacker &&
-      !ctx.retaliations.has(pair) &&
-      attackPath(s, u, asTarget(attacker), getStats(s, u).range)
-    ) {
+    const pair = `${u.id}>${origin.id}`;
+    if (!ctx.retaliations.has(pair) && attackPath(s, u, origin, getStats(s, u).range)) {
       ctx.retaliations.add(pair);
-      performAttack(s, u, asTarget(attacker), ctx, { reactive: true, forceHostile: true });
+      performAttack(s, u, origin, ctx, { reactive: true, forceHostile: true });
     }
   }
   return loss;
@@ -497,7 +499,7 @@ export function freeze(s: GameState, t: Target, source: Source, ctx: Resolution,
     owner: source.owner,
     action: 'freeze',
     stage: 'trigger',
-    text: '冰冻 · 中立',
+    text: '冰冻 · 无法行动',
   });
 }
 export function burn(s: GameState, t: Target, source: Source, ctx: Resolution) {
@@ -576,6 +578,7 @@ function knockback(s: GameState, u: Unit, t: Target, path: Point[], ctx: Resolut
   }
 }
 interface AttackOptions {
+  path?: Point[];
   mode?: string;
   hits?: { id: string; actual: number }[];
   direction?: import('./types').AttackDirection;
@@ -679,13 +682,15 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
   );
   ensure(t.id !== u.id || options.mode === 'heal', '不能通过普通攻击自杀；玉碎使用独立命令。');
   ensure(
-    topTarget(s, t) || (piercing(u) && t.unit && isLandmark(t.unit)),
+    (t.id === u.id && options.mode === 'heal') ||
+      topTarget(s, t) ||
+      (piercing(u) && t.unit && isLandmark(t.unit)),
     '非穿透攻击优先命中地标上的友方棋子或叠放栈顶。',
   );
   const stats = getStats(s, u);
-  ensure(!hasTrait(u, 'firelord'), '炎魔之王不能普通攻击。');
+  ensure(u.silenced || !hasTrait(u, 'firelord'), '炎魔之王不能普通攻击；沉默会移除此限制。');
   const charged = attackChargeKind(u);
-  if (!options.reactive && charged !== undefined)
+  if (!options.reactive && !options.noPierce && charged !== undefined)
     ensure(
       chargeFor(u, charged).readyCharge >= 1 && chargeFor(u, charged).chargeType === 'attack',
       '半速攻击需要在回合开始已有1层攻击蓄力。',
@@ -700,51 +705,59 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
       '射手不能重复攻击本回合的同一目标。',
     );
   }
-  const rays = cells(u)
-    .flatMap((start) =>
-      (t.unit ? cells(t.unit) : [t])
-        .filter((end) => (start.x === end.x || start.y === end.y) && !equal(start, end))
-        .map((end) => {
-          const length = Math.abs(end.x - start.x) + Math.abs(end.y - start.y);
-          return Array.from({ length: length + 1 }, (_, i) => ({
-            x: start.x + Math.sign(end.x - start.x) * i,
-            y: start.y + Math.sign(end.y - start.y) * i,
-          }));
-        }),
-    )
-    .filter((p) => p.length - 1 <= stats.range)
-    .sort((a, b) => a.length - b.length);
-  const path =
-    piercing(u) && !ally
-      ? (rays[0] ??
-        (cells(u).some((p) => (t.unit ? cells(t.unit) : [t]).some((q) => equal(p, q)))
-          ? [{ x: u.x, y: u.y }]
-          : undefined))
-      : attackPath(s, u, t, options.unlimited ? 117 : stats.range, options.direction);
-  ensure(path, '目标不在射程内，或所有路径均被阻挡；炎魔之心必须选同一直线。');
-  if (options.direction && piercing(u) && !ally)
-    ensure(pathDirection(path) === options.direction, '炎魔之心只能沿所选直线攻击。');
-  if (piercing(u) && !options.noPierce && !ally && path.length > 1) {
-    const origin = path[0],
-      dx = path[1].x - origin.x,
-      dy = path[1].y - origin.y,
-      victims: Target[] = [];
-    for (let i = 1; i <= stats.range; i++) {
-      const p = { x: origin.x + dx * i, y: origin.y + dy * i };
-      const rows = targets(s).filter(
-        (v) => (v.unit ? cells(v.unit) : [v]).some((c) => equal(c, p)) && hostile(s, u, v),
-      );
-      for (const v of rows)
-        if (
-          !victims.some((old) => old.id === v.id) &&
-          (topTarget(s, v) || (v.unit && isLandmark(v.unit)))
-        )
-          victims.push(v);
+  const canPierce = piercing(u) && !ally && options.mode !== 'heal';
+  const limit = options.unlimited ? 117 : stats.range;
+  let path: Point[] | null;
+  if (options.path) {
+    ensure(
+      canPierce && validAttackRoute(s, u, options.path, limit),
+      '穿透路径不合法：须从自身边缘逐格延伸，不得回绕、超距或穿过敌方基地。',
+    );
+    ensure(
+      options.noPierce || piercingTargets(s, u, options.path).some((v) => v.target.id === t.id),
+      '路径必须命中选定敌方目标。',
+    );
+    path = options.path;
+  } else if (canPierce && !hasWeapon(u, 'u28')) {
+    // Native Slayer retains its original cardinal-ray mode. Heart adds arbitrary paths;
+    // the equipment must not rewrite unrelated innate targeting contracts.
+    const rays = cells(u)
+      .flatMap((from) =>
+        (t.unit ? cells(t.unit) : [t])
+          .filter(
+            (to) =>
+              (from.x === to.x || from.y === to.y) &&
+              distance(from, to) > 0 &&
+              distance(from, to) <= limit,
+          )
+          .map((to) => ({ from, to, length: distance(from, to) })),
+      )
+      .sort((a, b) => a.length - b.length);
+    const ray = rays[0];
+    path = cells(u).some((p) => (t.unit ? cells(t.unit) : [t]).some((q) => equal(p, q)))
+      ? [{ x: t.x, y: t.y }]
+      : null;
+    if (ray) {
+      const dx = Math.sign(ray.to.x - ray.from.x),
+        dy = Math.sign(ray.to.y - ray.from.y);
+      path = [ray.from];
+      for (let i = 1; i <= limit; i++) {
+        const p = { x: ray.from.x + dx * i, y: ray.from.y + dy * i };
+        if (!inside(p)) break;
+        path.push(p);
+        if (equal(p, basePoint(other(u.owner)))) break;
+      }
     }
-    for (const victim of victims)
+  } else path = attackPath(s, u, t, limit, options.direction, canPierce);
+  ensure(path, '目标不在射程内，或所选攻击路径被阻挡。');
+  if (canPierce && !options.noPierce && path.length > 1) {
+    const victims = piercingTargets(s, u, path);
+    for (const { target: victim, path: prefix } of victims)
       if (alive(s, u) && (!victim.unit || alive(s, victim.unit)))
         performAttack(s, u, victim, ctx, {
           ...options,
+          direction: undefined,
+          path: prefix,
           noPierce: true,
           amount: stats.attack,
           weaponFirst: !u.weaponFirstUsed,
@@ -987,4 +1000,22 @@ export function pruneSiphons(s: GameState) {
       attackPath(s, u, b, getStats(s, u).range)
     );
   });
+}
+
+/** Capture covered cells BEFORE any packet changes occupancy or kills a target.
+ * Each cell is an independent damage packet (immunity rolls, rage, guard and reflection).
+ * Callers select full-stack spells vs top-layer skills and hostile-only vs intentional friendly fire. */
+export function areaDamage(
+  s: GameState,
+  victims: Target[],
+  amountAt: (p: Point) => number,
+  source: Source,
+  ctx: Resolution,
+) {
+  const packets = victims.flatMap((t) =>
+    (t.unit ? cells(t.unit) : [t])
+      .map((p) => ({ t, amount: amountAt(p) }))
+      .filter((p) => p.amount > 0),
+  );
+  for (const { t, amount } of packets) damage(s, t, amount, source, ctx);
 }
