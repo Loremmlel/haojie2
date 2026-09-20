@@ -133,6 +133,9 @@ export function applyPlayerCommand(previous: GameState, actor: Player, input: un
 /** Only the independent, once-per-game secret choices can safely rebase after the other seat
  * committed. The host remains ignorant of individual game modes; all ordinary stale actions fail. */
 export function canRebasePlayerCommand(s: GamePosition, actor: Player, c: Command): boolean {
-  return s.phase === 'shrine-draft' && c.type === 'choose-shrine' &&
-    actorCommandError(s, actor, c) === null;
+  return (
+    s.phase === 'shrine-draft' &&
+    c.type === 'choose-shrine' &&
+    actorCommandError(s, actor, c) === null
+  );
 }

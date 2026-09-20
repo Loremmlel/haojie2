@@ -54,7 +54,8 @@ export function useOnlineController(props: HaojieOnlineGameProps) {
   useEffect(() => {
     if (update.revision > played.current) {
       played.current = update.revision;
-      if (update.kind === 'snapshot' || config.current.connection !== 'connected') presentation.clear();
+      if (update.kind === 'snapshot' || config.current.connection !== 'connected')
+        presentation.clear();
       else presentation.play(update.view.state.events);
     }
     const request = pending.current;
