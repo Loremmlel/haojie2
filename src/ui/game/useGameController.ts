@@ -1,261 +1,74 @@
-import {
-  matchSettings,
-  ownsComputerDecision,
-  rewindMatch,
-  humanCommandAllowed,
-} from '../../match/history';
+import { matchSettings, ownsComputerDecision, rewindMatch, humanCommandAllowed } from '../../match/history';
 import { LOCAL_MATCH, type MatchSettings } from '../../match/settings';
 import { useComputer } from '../opponent/useComputer';
-import { useMemo, useRef, useState } from 'react';
-import type { ActionSpec, Command, Point, Session } from '../../engine';
-import {
-  actionError,
-  applyCommand,
-  cardActions,
-  createDemoGame,
-  createGame,
-  createSession,
-  occupants,
-  allPieces,
-  landmarkAt,
-  canChooseSummon,
-  commandSummonPool,
-  reactionAction,
-  targetAt,
-  unitActions,
-} from '../../engine';
+import { useRef, useState } from 'react';
+import type { Session } from '../../engine';
+import { createDemoGame, createGame, createSession } from '../../engine';
 import { randomSeed, useGameSession } from '../session/useGameSession';
-import type { Intent } from './selection';
-import { advanceIntent, canChoose, commandFor, startIntent } from './selection';
 import type { GameModal, HaojieGameProps } from './types';
 import { useGameHotkeys } from './useGameHotkeys';
+import { useGameInteraction } from './useGameInteraction';
 
-/** UI selections are transient; every rule-changing action crosses the engine command boundary. */
+/** Local adapter: Session/AI/history stay here; target selection and presentation are shared. */
 export function useGameController(props: HaojieGameProps) {
   const game = useGameSession(props);
   const { session, live, setNotice } = game;
-  const scope = useRef<HTMLDivElement>(null);
-  const [intent, setIntent] = useState<Intent>({ kind: 'none' });
-  const [selectedId, setSelectedId] = useState<string | null>(null),
-    [cardId, setCardId] = useState<string | null>(null);
   const [modal, setModal] = useState<GameModal>(null);
-  const [choiceCommand, setChoiceCommand] = useState<Command | null>(null);
-  const s = session.present,
-    controller = s.pending[0]?.owner ?? s.active,
-    hand = s.hands[s.active],
-    unit = [...s.units, ...(s.landmarks ?? [])].find((u) => u.id === selectedId),
-    card = hand.find((c) => c.id === cardId),
-    reaction = s.pending[0];
+  const cancelComputer = useRef<() => void>(() => {});
+  const interaction = useGameInteraction({
+    state: session.present,
+    current: () => live.current.present,
+    submit: (c) => game.execute(c).present,
+    commandBlock: (c) => humanCommandAllowed(live.current, c) ? null :
+      c.type === 'end' ? '当前由AI决策。' : '当前操作不属于你；可查看棋盘或悔棋。',
+    notify: setNotice,
+    ownsReaction: !ownsComputerDecision(session),
+    canChooseHand: !ownsComputerDecision(session),
+    canChooseCustomSummon: !ownsComputerDecision(session),
+    beforeSelection: () => { if (ownsComputerDecision(live.current)) cancelComputer.current(); },
+  });
   const computer = useComputer({
-    session,
-    live,
+    session, live,
     apply: (c) => {
-      game.execute(c);
-      cancel();
-      setSelectedId(c.unitId ?? null);
+      game.execute(c); interaction.cancel(); interaction.setSelectedId(c.unitId ?? null);
     },
-    modal:
-      choiceCommand ||
-      (intent.kind === 'select' &&
-        ownsComputerDecision(session) &&
-        humanCommandAllowed(session, intent.draft))
-        ? 'new'
-        : modal,
+    modal: interaction.choiceCommand ||
+      (interaction.intent.kind === 'select' && ownsComputerDecision(session) &&
+        humanCommandAllowed(session, interaction.intent.draft)) ? 'new' : modal,
     notice: setNotice,
   });
-  const activeIntent =
-    reaction && !ownsComputerDecision(session) ? startIntent(reactionAction(s)!) : intent;
-  const actions = useMemo(
-    () =>
-      (card ? cardActions(s, card) : unit ? unitActions(s, unit) : []).filter((a) =>
-        humanCommandAllowed(session, a.command),
-      ),
-    [s, card, unit],
-  );
-  const endError = useMemo(() => {
-    if (ownsComputerDecision(session)) return '当前由AI决策。';
-    try {
-      applyCommand(s, { type: 'end' });
-      return null;
-    } catch (e) {
-      return e instanceof Error ? e.message : '不能结束回合';
-    }
-  }, [s]);
-
-  function cancel() {
-    setIntent({ kind: 'none' });
-    setCardId(null);
-  }
+  cancelComputer.current = computer.cancel;
   function replace(next: Session, explicit = false) {
-    computer.cancel();
-    setChoiceCommand(null);
-    game.replace(next, explicit);
-    cancel();
+    computer.cancel(); game.replace(next, explicit); interaction.reset();
   }
   function rewind(forward = false) {
     const next = rewindMatch(live.current, forward);
     if (next === live.current) return;
     replace(next);
     if (ownsComputerDecision(next)) computer.pause();
-    setNotice(
-      forward ? '已重做，随机结果保持不变。' : '已悔棋，人头、武器、效果计时与随机数全部恢复。',
-    );
+    setNotice(forward ? '已重做，随机结果保持不变。' : '已悔棋，人头、武器、效果计时与随机数全部恢复。');
   }
-  useGameHotkeys(scope, !!modal, rewind, cancel);
-  function run(c: Command) {
-    if (
-      !ownsComputerDecision(live.current) &&
-      commandSummonPool(live.current.present, c) &&
-      canChooseSummon(live.current.present)
-    ) {
-      setChoiceCommand(c);
-      return;
-    }
-    executeRun(c);
-  }
-  function executeRun(c: Command) {
-    if (!humanCommandAllowed(live.current, c)) {
-      setNotice('当前操作不属于你；可查看棋盘或悔棋。');
-      return;
-    }
-    try {
-      const before = live.current,
-        next = game.execute(c);
-      setNotice('');
-      setCardId(null);
-      setIntent({ kind: 'none' });
-      if (c.type === 'end' || c.type === 'begin') setSelectedId(null);
-      if (c.type === 'deploy' || c.type === 'synthesize')
-        setSelectedId(next.present.events.find((e) => e.type === 'spawn')?.unitId ?? null);
-      const id =
-          c.unitId ?? (c.type === 'react' ? before.present.pending[0]?.source.id : undefined),
-        u = allPieces(next.present).find((u) => u.id === id);
-      if (u && !next.present.pending.length && (u.mode === 'attack' || u.mode === 'move')) {
-        const a = unitActions(next.present, u).find((a) => a.id === u.mode);
-        if (a && !actionError(next.present, a)) setIntent(startIntent(a));
-      }
-    } catch (e) {
-      setNotice(e instanceof Error ? e.message : '操作失败，当前局面没有改变。');
-    }
-  }
-  function chooseAction(a: ActionSpec) {
-    if (!humanCommandAllowed(live.current, a.command)) return;
-    const error = actionError(s, a);
-    if (error) {
-      setNotice(error);
-      return;
-    }
-    if (!a.steps.length) run(a.command);
-    else {
-      if (ownsComputerDecision(live.current)) computer.cancel();
-      setIntent(startIntent(a));
-    }
-  }
-  function chooseCard(id: string) {
-    if (reaction || ownsComputerDecision(live.current)) return;
-    const c = hand.find((c) => c.id === id);
-    if (!c) return;
-    setCardId(id);
-    setSelectedId(null);
-    setIntent({ kind: 'none' });
-    const candidates = cardActions(s, c);
-    if (candidates.length === 1 && candidates[0].steps.length && !actionError(s, candidates[0]))
-      setIntent(startIntent(candidates[0]));
-  }
-  function onCell(p: Point) {
-    if (activeIntent.kind === 'none') {
-      const land = landmarkAt(s, p);
-      const stack = [...occupants(s, p), ...(land ? [land] : [])];
-      if (stack.length > 1) {
-        const idx = stack.findIndex((u) => u.id === selectedId);
-        setSelectedId(stack[(idx + 1) % stack.length].id);
-      } else setSelectedId(stack[0]?.id ?? targetAt(s, p)?.id ?? null);
-      setCardId(null);
-      return;
-    }
-    if (!canChoose(s, activeIntent, p)) {
-      const c = commandFor(s, activeIntent, p);
-      if (c)
-        try {
-          applyCommand(s, c);
-        } catch (e) {
-          setNotice(e instanceof Error ? e.message : '请选择高亮目标');
-          return;
-        }
-      setNotice('请选择高亮目标；技能的选点顺序显示在棋盘上方。');
-      return;
-    }
-    const c = commandFor(s, activeIntent, p);
-    if (c) run(c);
-    else setIntent(advanceIntent(activeIntent, p, s));
-  }
-
+  useGameHotkeys(interaction.scope, !!modal, rewind, interaction.cancel);
   function importSession(next: Session) {
-    replace(next, true);
-    setSelectedId(null);
-    computer.resume();
+    replace(next, true); interaction.setSelectedId(null); computer.resume();
     setNotice('浩劫存档已载入，包含完整悔棋历史。');
   }
   function newGame(seedText: string, demo: boolean, match: MatchSettings = LOCAL_MATCH) {
     try {
-      replace(
-        createSession(
-          demo
-            ? createDemoGame()
-            : createGame(
-                seedText.trim() ? Number(seedText) : randomSeed(),
-                match.rules ?? 'classic',
-              ),
-          match,
-        ),
-        true,
-      );
-      computer.resume();
-      setSelectedId(null);
-      setModal(null);
-      setNotice(
-        demo
-          ? '已载入演示局，包含法师、装备、叠放军团和6人头。'
-          : '浩劫新局开始。先召唤，再部署与行动。',
-      );
-    } catch (e) {
-      setNotice(e instanceof Error ? e.message : '无法开始对局。');
-    }
+      replace(createSession(demo ? createDemoGame() : createGame(
+        seedText.trim() ? Number(seedText) : randomSeed(), match.rules ?? 'classic',
+      ), match), true);
+      computer.resume(); interaction.setSelectedId(null); setModal(null);
+      setNotice(demo ? '已载入演示局，包含法师、装备、叠放军团和6人头。' : '浩劫新局开始。先召唤，再部署与行动。');
+    } catch (e) { setNotice(e instanceof Error ? e.message : '无法开始对局。'); }
   }
   return {
-    ...game,
-    computer,
-    match: matchSettings(session),
+    ...game, ...interaction, computer, match: matchSettings(session),
+    controller: session.present.pending[0]?.owner ?? session.present.active,
+    modal, setModal, rewind, importSession, newGame,
     resumeComputer: () => {
       if (live.current.future.length) replace({ ...live.current, future: [] });
       computer.resume();
-    },
-    scope,
-    state: s,
-    controller,
-    intent,
-    activeIntent,
-    selectedId,
-    cardId,
-    modal,
-    setModal,
-    actions,
-    endError,
-    setSelectedId,
-    setIntent,
-    cancel,
-    rewind,
-    run,
-    chooseAction,
-    chooseCard,
-    onCell,
-    newGame,
-    importSession,
-    choiceCommand,
-    cancelChoice: () => setChoiceCommand(null),
-    confirmChoice: (c: Command) => {
-      setChoiceCommand(null);
-      executeRun(c);
     },
   };
 }
