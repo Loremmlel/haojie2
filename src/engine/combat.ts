@@ -89,7 +89,12 @@ function removeEffect(s: GamePosition, t: Target, e: Effect) {
   else s.baseEffects[t.owner] = s.baseEffects[t.owner].filter((v) => v !== e);
 }
 /** One shield decision per target/effect packet; pure UI previews execute on a cloned state. */
-export function protectedEffect(s: GamePosition, t: Target, source: Source, ctx: Resolution): boolean {
+export function protectedEffect(
+  s: GamePosition,
+  t: Target,
+  source: Source,
+  ctx: Resolution,
+): boolean {
   if (!t.unit || source.owner === undefined || source.owner === t.owner) return false;
   if (has(s, t.unit, 'immune')) {
     emit(s, {
@@ -672,7 +677,13 @@ export function performAttack(
   }
   return result;
 }
-function resolveAttack(s: GamePosition, u: Unit, t: Target, ctx: Resolution, options: AttackOptions) {
+function resolveAttack(
+  s: GamePosition,
+  u: Unit,
+  t: Target,
+  ctx: Resolution,
+  options: AttackOptions,
+) {
   const ally = t.unit ? allegiance(s, t.unit) === u.owner : t.owner === u.owner;
   ensure(
     !ally ||

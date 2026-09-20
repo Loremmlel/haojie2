@@ -20,12 +20,24 @@ export function useGamePresentation(initialNotice = '') {
     const timer = setTimeout(() => setNotice(''), 6500);
     return () => clearTimeout(timer);
   }, [notice]);
-  useEffect(() => () => { audio.current?.dispose(); audio.current = null; }, []);
-  function clear() { setEvents([]); playback.clear(); }
+  useEffect(
+    () => () => {
+      audio.current?.dispose();
+      audio.current = null;
+    },
+    [],
+  );
+  function clear() {
+    setEvents([]);
+    playback.clear();
+  }
   function play(batch: GameEvent[]) {
     setEvents(batch.slice(-90));
     playback.play(batch);
-    if (sound) { audio.current ??= new Soundscape(); audio.current.play(batch, true); }
+    if (sound) {
+      audio.current ??= new Soundscape();
+      audio.current.play(batch, true);
+    }
   }
   return { notice, setNotice, events, effects: playback.batches, sound, setSound, clear, play };
 }

@@ -12,6 +12,11 @@ function OnlineMatch(props: HaojieOnlineGameProps) {
 /** Updates do not remount the board. Only changing the actual match or authenticated seat resets it. */
 export function HaojieOnlineGame(props: HaojieOnlineGameProps) {
   const error = updateError(props.update);
-  if (error) return <div className="hj-game" role="alert">{error}</div>;
+  if (error)
+    return (
+      <div className="hj-game" role="alert">
+        {error}
+      </div>
+    );
   return <OnlineMatch key={`${props.update.matchId}:${props.update.view.viewer}`} {...props} />;
 }

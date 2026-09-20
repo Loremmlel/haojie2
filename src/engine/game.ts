@@ -140,7 +140,10 @@ function transition<S extends GamePosition>(
         emit(s, { type: 'turn', owner: s.active, text: '进入召唤阶段' });
         break;
       case 'choose-shrine':
-        if (preview) { validateShrineChoice(s, c); break; }
+        if (preview) {
+          validateShrineChoice(s, c);
+          break;
+        }
         chooseShrine(s, c);
         break;
       case 'finish-shrine-setup':
@@ -268,17 +271,30 @@ function transition<S extends GamePosition>(
 function hasRandomState(s: GamePosition): s is GameState {
   return 'seed' in s && typeof s.seed === 'number' && 'rng' in s && typeof s.rng === 'number';
 }
-export function applyCommand(previous: GameState, c: Command, randomSource?: RandomSource): GameState {
+export function applyCommand(
+  previous: GameState,
+  c: Command,
+  randomSource?: RandomSource,
+): GameState {
   ensure(hasRandomState(previous), '权威结算需要完整随机状态；玩家视图不能代替GameState。');
   return transition(previous, c, randomSource);
 }
 const unresolvedRandom = Symbol('preview requires private randomness');
-export type CommandInspection = { status: 'available' | 'uncertain' } | { status: 'invalid'; message: string };
+export type CommandInspection =
+  | { status: 'available' | 'uncertain' }
+  | { status: 'invalid'; message: string };
 /** Shared deterministic preflight. Stop BEFORE a random value is requested, never invent one.
  * No resulting state is returned, and a successful preflight is not an authoritative acceptance. */
 export function inspectCommand(s: GamePosition, c: Command): CommandInspection {
   try {
-    transition(s, c, () => { throw unresolvedRandom; }, true);
+    transition(
+      s,
+      c,
+      () => {
+        throw unresolvedRandom;
+      },
+      true,
+    );
     return { status: 'available' };
   } catch (error) {
     if (error === unresolvedRandom) return { status: 'uncertain' };

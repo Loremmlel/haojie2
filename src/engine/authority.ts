@@ -5,10 +5,29 @@ import { allPieces, hasTrait } from './traits';
 import type { Command, GamePosition, GameState, Kind, Player } from './types';
 
 const commandTypes = new Set<Command['type']>([
-  'end', 'summon', 'begin', 'reroll', 'deploy', 'move', 'attack', 'charge', 'skill',
-  'cast', 'equip', 'craft', 'synthesize', 'skip-synthesis', 'react', 'finish-mode',
-  'choose-shrine', 'finish-shrine-setup', 'activate-aura', 'extra-summon',
-  'choose-summons', 'clock', 'shatter',
+  'end',
+  'summon',
+  'begin',
+  'reroll',
+  'deploy',
+  'move',
+  'attack',
+  'charge',
+  'skill',
+  'cast',
+  'equip',
+  'craft',
+  'synthesize',
+  'skip-synthesis',
+  'react',
+  'finish-mode',
+  'choose-shrine',
+  'finish-shrine-setup',
+  'activate-aura',
+  'extra-summon',
+  'choose-summons',
+  'clock',
+  'shatter',
 ]);
 const idFields = new Set(['unitId', 'cardId', 'targetId', 'secondId', 'deathId', 'recipeId']);
 const kindFields = new Set(['shrineKind', 'chosenKind', 'ability']);
@@ -19,17 +38,26 @@ const id = (v: unknown): v is string => typeof v === 'string' && v.length > 0 &&
 const integer = (v: unknown, min: number, max: number): v is number =>
   typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max;
 const record = (v: unknown): v is Record<string, unknown> =>
-  !!v && typeof v === 'object' && !Array.isArray(v) &&
+  !!v &&
+  typeof v === 'object' &&
+  !Array.isArray(v) &&
   (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
 function validKind(v: unknown): boolean {
   if (!(typeof v === 'string' && v.length <= 32) && !integer(v, 1, 26)) return false;
-  try { return definition(v as Kind).id === v; } catch { return false; }
+  try {
+    return definition(v as Kind).id === v;
+  } catch {
+    return false;
+  }
 }
 
 /** Parse an untrusted JSON value, not a TypeScript assertion. The host also bounds wire bytes. */
 export function parseCommand(input: unknown): Command {
   ensure(record(input), '命令必须是普通JSON对象。');
-  ensure(typeof input.type === 'string' && commandTypes.has(input.type as Command['type']), '无法识别的游戏命令。');
+  ensure(
+    typeof input.type === 'string' && commandTypes.has(input.type as Command['type']),
+    '无法识别的游戏命令。',
+  );
   const output: Record<string, unknown> = { type: input.type };
   for (const [key, value] of Object.entries(input)) {
     if (key === 'type') continue;
@@ -37,18 +65,32 @@ export function parseCommand(input: unknown): Command {
     if (idFields.has(key)) valid = id(value);
     else if (kindFields.has(key)) valid = validKind(value);
     else if (idsFields.has(key))
-      valid = Array.isArray(value) && value.length <= 128 && value.every(id) && new Set(value).size === value.length;
+      valid =
+        Array.isArray(value) &&
+        value.length <= 128 &&
+        value.every(id) &&
+        new Set(value).size === value.length;
     else if (booleanFields.has(key)) valid = typeof value === 'boolean';
     else if (Object.hasOwn(coordinateFields, key)) valid = integer(value, 1, coordinateFields[key]);
     else if (key === 'player') valid = value === 1 || value === 2;
     else if (key === 'parity') valid = value === 'odd' || value === 'even';
     else if (key === 'direction') valid = ['up', 'down', 'left', 'right'].includes(value as string);
-    else if (key === 'mode') valid = typeof value === 'string' && value.length > 0 && value.length <= 32;
+    else if (key === 'mode')
+      valid = typeof value === 'string' && value.length > 0 && value.length <= 32;
     else if (key === 'offerIndices')
-      valid = Array.isArray(value) && value.length <= 16 && value.every((v) => integer(v, 0, 15)) && new Set(value).size === value.length;
+      valid =
+        Array.isArray(value) &&
+        value.length <= 16 &&
+        value.every((v) => integer(v, 0, 15)) &&
+        new Set(value).size === value.length;
     else if (key === 'path') {
-      valid = Array.isArray(value) && value.length <= 256 && value.every((p) =>
-        record(p) && Object.keys(p).length === 2 && integer(p.x, 1, 9) && integer(p.y, 1, 13));
+      valid =
+        Array.isArray(value) &&
+        value.length <= 256 &&
+        value.every(
+          (p) =>
+            record(p) && Object.keys(p).length === 2 && integer(p.x, 1, 9) && integer(p.y, 1, 13),
+        );
     }
     ensure(valid, `命令参数 ${key} 的类型、范围或结构不合法。`);
     output[key] = structuredClone(value);
@@ -63,7 +105,9 @@ export function actorCommandError(s: GamePosition, actor: Player, c: Command): s
   if (c.player !== undefined && c.player !== actor) return '命令阵营与已认证席位不一致。';
   if (s.winner) return '对局已经结束。';
   if (s.pending.length)
-    return c.type === 'react' && s.pending[0].owner === actor ? null : '请由效果所属玩家处理当前反应。';
+    return c.type === 'react' && s.pending[0].owner === actor
+      ? null
+      : '请由效果所属玩家处理当前反应。';
   if (s.phase === 'shrine-draft') {
     if (c.type !== 'choose-shrine') return '请先秘密选择神龛。';
     return s.shrineDraft?.committed[actor] ? '本方已经锁定神龛。' : null;
@@ -73,7 +117,8 @@ export function actorCommandError(s: GamePosition, actor: Player, c: Command): s
   if (actor === s.active) return null;
   // Free giant expansion is the current rule's sole out-of-turn unit command. Do not use active
   // or decisionOwner as a global network lock: the rule engine checks silence/freeze/cost/placement.
-  if (c.type === 'skill' && unit && (c.ability ?? unit.kind) === 'u7' && hasTrait(unit, 'u7')) return null;
+  if (c.type === 'skill' && unit && (c.ability ?? unit.kind) === 'u7' && hasTrait(unit, 'u7'))
+    return null;
   return '当前操作不属于你的席位。';
 }
 

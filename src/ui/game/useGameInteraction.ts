@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActionSpec, Command, GamePosition, Player, Point } from '../../engine';
 import {
-  actionError, allPieces, cardActions, canChooseSummon, commandSummonPool, landmarkAt,
-  occupants, queryCommandError, reactionAction, targetAt, unitActions,
+  actionError,
+  allPieces,
+  cardActions,
+  canChooseSummon,
+  commandSummonPool,
+  landmarkAt,
+  occupants,
+  queryCommandError,
+  reactionAction,
+  targetAt,
+  unitActions,
 } from '../../engine';
 import type { Intent } from './selection';
 import { advanceIntent, canChoose, commandFor, startIntent } from './selection';
@@ -40,8 +49,10 @@ export function useGameInteraction(source: InteractionSource) {
   const reaction = s.pending[0];
   const activeIntent = reaction && source.ownsReaction ? startIntent(reactionAction(s)!) : intent;
   const actions = useMemo(
-    () => (card ? cardActions(s, card) : unit ? unitActions(s, unit) : [])
-      .filter((a) => !source.commandBlock(a.command)),
+    () =>
+      (card ? cardActions(s, card) : unit ? unitActions(s, unit) : []).filter(
+        (a) => !source.commandBlock(a.command),
+      ),
     [s, card, unit, source.commandBlock],
   );
   const endError = source.commandBlock({ type: 'end' }) ?? queryCommandError(s, { type: 'end' });
@@ -51,15 +62,24 @@ export function useGameInteraction(source: InteractionSource) {
     setIntent({ kind: 'none' });
     setCardId(null);
     setChoiceCommand(null);
-    setSelectedId((id) => allPieces(source.state).some((u) => u.id === id) ? id : null);
+    setSelectedId((id) => (allPieces(source.state).some((u) => u.id === id) ? id : null));
   }, [source.revision, source.state]);
 
-  function cancel() { setIntent({ kind: 'none' }); setCardId(null); }
-  function reset() { cancel(); setChoiceCommand(null); }
+  function cancel() {
+    setIntent({ kind: 'none' });
+    setCardId(null);
+  }
+  function reset() {
+    cancel();
+    setChoiceCommand(null);
+  }
   function executeRun(c: Command) {
     const api = latest.current;
     const blocked = api.commandBlock(c);
-    if (blocked) { api.notify(blocked); return; }
+    if (blocked) {
+      api.notify(blocked);
+      return;
+    }
     try {
       const before = api.current();
       const next = api.submit(c);
@@ -84,7 +104,10 @@ export function useGameInteraction(source: InteractionSource) {
   function run(c: Command) {
     const api = latest.current;
     const blocked = api.commandBlock(c);
-    if (blocked) { api.notify(blocked); return; }
+    if (blocked) {
+      api.notify(blocked);
+      return;
+    }
     const state = api.current();
     if (api.canChooseCustomSummon && commandSummonPool(state, c) && canChooseSummon(state)) {
       setChoiceCommand(c);
@@ -96,23 +119,37 @@ export function useGameInteraction(source: InteractionSource) {
     const api = latest.current;
     if (api.commandBlock(a.command)) return;
     const error = actionError(api.current(), a);
-    if (error) { api.notify(error); return; }
+    if (error) {
+      api.notify(error);
+      return;
+    }
     if (!a.steps.length) run(a.command);
-    else { api.beforeSelection?.(); setIntent(startIntent(a)); }
+    else {
+      api.beforeSelection?.();
+      setIntent(startIntent(a));
+    }
   }
   function chooseCard(id: string) {
-    const api = latest.current, state = api.current();
+    const api = latest.current,
+      state = api.current();
     if (state.pending.length || !api.canChooseHand) return;
     const c = state.hands[api.handPlayer ?? state.active].find((v) => v.id === id);
     if (!c) return;
-    setCardId(id); setSelectedId(null); setIntent({ kind: 'none' });
+    setCardId(id);
+    setSelectedId(null);
+    setIntent({ kind: 'none' });
     const candidates = cardActions(state, c);
-    if (candidates.length === 1 && candidates[0].steps.length &&
-      !api.commandBlock(candidates[0].command) && !actionError(state, candidates[0]))
+    if (
+      candidates.length === 1 &&
+      candidates[0].steps.length &&
+      !api.commandBlock(candidates[0].command) &&
+      !actionError(state, candidates[0])
+    )
       setIntent(startIntent(candidates[0]));
   }
   function onCell(p: Point) {
-    const api = latest.current, state = api.current();
+    const api = latest.current,
+      state = api.current();
     if (activeIntent.kind === 'none') {
       const land = landmarkAt(state, p);
       const stack = [...occupants(state, p), ...(land ? [land] : [])];
@@ -124,7 +161,10 @@ export function useGameInteraction(source: InteractionSource) {
       return;
     }
     const blocked = api.commandBlock(activeIntent.draft);
-    if (blocked) { api.notify(blocked); return; }
+    if (blocked) {
+      api.notify(blocked);
+      return;
+    }
     if (!canChoose(state, activeIntent, p)) {
       const c = commandFor(state, activeIntent, p);
       const error = c ? queryCommandError(state, c) : null;
@@ -132,13 +172,32 @@ export function useGameInteraction(source: InteractionSource) {
       return;
     }
     const c = commandFor(state, activeIntent, p);
-    if (c) run(c); else setIntent(advanceIntent(activeIntent, p, state));
+    if (c) run(c);
+    else setIntent(advanceIntent(activeIntent, p, state));
   }
   return {
-    scope, state: s, intent, activeIntent, selectedId, cardId, actions, endError,
-    choiceCommand, setSelectedId, setIntent, cancel, reset, run, chooseAction, chooseCard, onCell,
+    scope,
+    state: s,
+    intent,
+    activeIntent,
+    selectedId,
+    cardId,
+    actions,
+    endError,
+    choiceCommand,
+    setSelectedId,
+    setIntent,
+    cancel,
+    reset,
+    run,
+    chooseAction,
+    chooseCard,
+    onCell,
     cancelChoice: () => setChoiceCommand(null),
-    confirmChoice: (c: Command) => { setChoiceCommand(null); executeRun(c); },
+    confirmChoice: (c: Command) => {
+      setChoiceCommand(null);
+      executeRun(c);
+    },
   };
 }
 export type GameInteraction = ReturnType<typeof useGameInteraction>;

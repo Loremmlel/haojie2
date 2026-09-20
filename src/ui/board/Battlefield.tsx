@@ -87,15 +87,17 @@ export function Battlefield({
         />
       </div>
       <div className="command-bar">
-        {showHistory && (<div className="history-actions">
-          <button aria-label="悔棋" disabled={!canUndo} onClick={() => rewind()}>
-            <Icon name="undo" />
-            悔棋
-          </button>
-          <button aria-label="重做" disabled={!canRedo} onClick={() => rewind(true)}>
-            <Icon name="redo" />
-          </button>
-        </div>)}
+        {showHistory && (
+          <div className="history-actions">
+            <button aria-label="悔棋" disabled={!canUndo} onClick={() => rewind()}>
+              <Icon name="undo" />
+              悔棋
+            </button>
+            <button aria-label="重做" disabled={!canRedo} onClick={() => rewind(true)}>
+              <Icon name="redo" />
+            </button>
+          </div>
+        )}
         {reaction?.kind === 'hit-pull' && (
           <button
             className="primary"
@@ -136,7 +138,9 @@ export function Battlefield({
             ? `${pullError}可放弃此效果。`
             : '效果由所属玩家处理，之后回到原有流程。'
           : s.phase === 'synthesis'
-            ? showHistory ? '合成与部署一次确认；可取消选点或悔棋。' : '合成与部署一次确认；可取消选点。'
+            ? showHistory
+              ? '合成与部署一次确认；可取消选点或悔棋。'
+              : '合成与部署一次确认；可取消选点。'
             : s.phase === 'summon'
               ? '在手牌区完成召唤选择，再开始行动。'
               : minions

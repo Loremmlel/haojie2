@@ -42,10 +42,15 @@ export function GameHeader({
         >
           <Icon name={sound ? 'volume' : 'mute'} />
         </button>
-        {allowNew && <><span className="nav-divider" />
-        <button className="new-game-button" onClick={() => onOpen('new')}>
-          <Icon name="plus" />新对局
-        </button></>}
+        {allowNew && (
+          <>
+            <span className="nav-divider" />
+            <button className="new-game-button" onClick={() => onOpen('new')}>
+              <Icon name="plus" />
+              新对局
+            </button>
+          </>
+        )}
       </nav>
     </header>
   );

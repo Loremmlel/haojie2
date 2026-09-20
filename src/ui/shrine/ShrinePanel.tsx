@@ -39,9 +39,11 @@ export function ShrinePanel({
       <div className="shrine-draft">
         <p className="shrine-status">第0回合 · {faction(viewer)}选神龛。双方锁定后同时揭示。</p>
         <p className="fine-print">
-          {seat !== undefined ? '对手的最终选择会在双方锁定后同时揭示。' : match.mode === 'ai'
-            ? 'AI只能看到双方候选，不会读取你已锁定的选择。'
-            : '同屏双人无法防止旁观选择过程；请轮流操作。'}
+          {seat !== undefined
+            ? '对手的最终选择会在双方锁定后同时揭示。'
+            : match.mode === 'ai'
+              ? 'AI只能看到双方候选，不会读取你已锁定的选择。'
+              : '同屏双人无法防止旁观选择过程；请轮流操作。'}
         </p>
         <div className="shrine-offers" aria-label="本方神龛候选">
           {draft.offers[viewer].map((kind) => {
@@ -51,7 +53,9 @@ export function ShrinePanel({
                 className="shrine-choice"
                 key={kind}
                 aria-pressed={selected === kind}
-                disabled={readOnly || draft.committed[viewer] || (seat === undefined && s.active !== viewer)}
+                disabled={
+                  readOnly || draft.committed[viewer] || (seat === undefined && s.active !== viewer)
+                }
                 onClick={() => setSelected(kind)}
               >
                 <span className="shrine-choice-heading">

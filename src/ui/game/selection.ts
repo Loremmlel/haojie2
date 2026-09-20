@@ -127,7 +127,8 @@ export function canChoose(s: GamePosition, i: Intent, p: Point): boolean {
         i.draft.sacrificeIds?.includes(t.id))
     )
       return false;
-    if (i.draft.type === 'attack' && !canAttemptCommand(s, { ...i.draft, targetId: t.id })) return false;
+    if (i.draft.type === 'attack' && !canAttemptCommand(s, { ...i.draft, targetId: t.id }))
+      return false;
     if (i.action.id === 'sacrifice' && (t.id === u?.id || t.unit?.kind === 'u25')) return false;
     if (
       i.action.id.split(':')[0] === 'giant' &&

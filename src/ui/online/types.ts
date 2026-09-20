@@ -8,9 +8,7 @@ export interface OnlineUpdate {
   kind: 'update' | 'snapshot';
   view: PlayerView;
 }
-export type CommandReceipt =
-  | { ok: true; revision: number }
-  | { ok: false; message: string };
+export type CommandReceipt = { ok: true; revision: number } | { ok: false; message: string };
 export interface CommandContext {
   baseRevision: number;
   /** Cancellation stops UI waiting; it does not roll back an already committed server command. */
@@ -26,9 +24,15 @@ export interface HaojieOnlineGameProps {
   onCommand: (command: Command, context: CommandContext) => Promise<CommandReceipt>;
 }
 export function updateError(update: OnlineUpdate): string | null {
-  if (!update || typeof update.matchId !== 'string' || !update.matchId ||
-    !Number.isSafeInteger(update.revision) || update.revision < 0 ||
-    !['update', 'snapshot'].includes(update.kind)) return '宿主局面更新格式不正确。';
+  if (
+    !update ||
+    typeof update.matchId !== 'string' ||
+    !update.matchId ||
+    !Number.isSafeInteger(update.revision) ||
+    update.revision < 0 ||
+    !['update', 'snapshot'].includes(update.kind)
+  )
+    return '宿主局面更新格式不正确。';
   if (update.view?.viewVersion !== PLAYER_VIEW_VERSION || update.view.ruleset !== HAOJIE_RULESET)
     return '游戏规则或视图版本不一致，请刷新页面并让宿主同步版本。';
   if (update.view.viewer !== 1 && update.view.viewer !== 2) return '宿主没有提供有效的玩家席位。';
