@@ -1,0 +1,22 @@
+name: Feedback 3 workbench
+on:
+  push:
+    branches: [fix/feedback-3-20260920]
+permissions:
+  contents: read
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - run: tar -czf /tmp/feedback-dependencies.tar.gz node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: feedback-dependencies
+          path: /tmp/feedback-dependencies.tar.gz
+          retention-days: 1
