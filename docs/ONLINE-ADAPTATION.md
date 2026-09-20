@@ -73,9 +73,7 @@ interface OnlineUpdate {
   view: PlayerView;
 }
 
-type CommandReceipt =
-  | { ok: true; revision: number }
-  | { ok: false; message: string };
+type CommandReceipt = { ok: true; revision: number } | { ok: false; message: string };
 ```
 
 组件属性是 `update`、`connection`（`connecting/connected/disconnected`）、可选 `disabled`、可选 `error: { id, message }`，以及 `onCommand(command, { baseRevision, signal }) => Promise<CommandReceipt>`。
@@ -127,3 +125,9 @@ npm run test:browser:online
 服务端必须生成并保存建局种子，不能无参调用 `createGame()` 而使用公开固定默认值。示例固定种子仅用于复现。此轮保留已有确定性PRNG以兼容本地存档/回放，没有声称它具备密码学安全性或实现完整反作弊。
 
 网站自行选择房间协调及持久化设施，例如一个房间一个Durable Object；不得把普通进程内存当作可恢复存储，也不应在两处独立修改同一权威局面。本轮不包含真实WS、Cloudflare绑定、账户、生产房间、联网悔棋协商、观战、掉线超时判负或上线部署。Next.js实际构建及网站集成仍需宿主验收，不能由这里的React浏览器测试代替。
+
+## 本次执行记录
+
+2026-09-20，运行代码与单文件成品提交 `5c1d228d8d3b1a40fd10e9f13f257ea4ebd3c156` 通过[完整分支验收](https://github.com/Loremmlel/haojie2/actions/runs/35485444677)：TypeScript、全部行为测试、构建/发行一致性、本地浏览器、Pages、三档AI、VFX、神龛、反馈3、受控双客户端、神龛CLI冒烟与反馈3命令指纹。此后的交接整理仅改文档/格式和测试配置，收尾流程会检查src、tests、examples、scripts、package及index.html与该通过版本没有差异。历史规则版本的录制另由标准PR CI按固定旧提交验证。
+
+宿主应把每次发布的update/view视为不可变快照，更新时提供新对象，不要原地修改已发布局面。受控组件只缓存已接受的宿主视图，不提供自己的第二份权威结算。

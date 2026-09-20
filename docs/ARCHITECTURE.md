@@ -101,3 +101,7 @@ AI接收显式白名单Observation，不接收真seed/rng或Session；小随机�
 `Session.match`可选，缺省同屏双人；`humanAnchor`保存超长AI回合之前的人类决策。旧schema和storageKey不变。对外Props新增initialMatch只影响初次挂载/新实例，与initialState一致；不改变原onStateChange只传GameState的契约。
 
 标准单文件构建先打包独立Worker，把它内联进主包并以Blob启动。宿主未注入内联常量或Worker不支持时，以相同搜索Generator分片运行；没有偷偷请求worker.js。每次任务都检查取消编号和状态引用。完整搜索与预算边界见AI.md。
+
+## 3.0：可受控会话与玩家视图
+
+本地入口继续由useGameController/useGameSession持有Session、历史、存储和AI；HaojieOnlineGame由useOnlineController接收宿主修订快照及明确回执。两者共用GameSurface、useGameInteraction和useGamePresentation，不复制棋盘或技能。GamePosition没有seed/rng，GameState保留完整权威字段；公开预检在需要随机值前停止，不制造假随机状态。服务端applyPlayerCommand负责运行时结构与操作者权限，getPlayerView负责嵌套可见性；房间、账号、WS、持久化与提交去重属于宿主。完整协议见[ONLINE-ADAPTATION.md](ONLINE-ADAPTATION.md)。
