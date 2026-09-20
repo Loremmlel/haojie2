@@ -1,7 +1,7 @@
 import type { MatchSettings } from '../../match/settings';
 import { MatchOptions } from '../opponent/MatchOptions';
 import { useState } from 'react';
-import type { GameState } from '../../engine';
+import type { GamePosition } from '../../engine';
 import type { GameModal } from '../game/types';
 import { Codex } from '../library/Codex';
 import { Rules } from '../library/Rules';
@@ -16,10 +16,10 @@ export function GameDialogs({
   match,
 }: {
   modal: GameModal;
-  state: GameState;
+  state: GamePosition;
   onClose: () => void;
   match: MatchSettings;
-  startGame: (seedText: string, demo: boolean, match: MatchSettings) => void;
+  startGame?: (seedText: string, demo: boolean, match: MatchSettings) => void;
 }) {
   const [seedText, setSeedText] = useState('');
   const [settings, setSettings] = useState(match);
@@ -30,7 +30,7 @@ export function GameDialogs({
       {modal === 'log' && (
         <Modal
           title="战场纪事"
-          subtitle="最近180条事件；悔棋时一并恢复。"
+          subtitle={startGame ? '最近180条事件；悔棋时一并恢复。' : '最近180条公开事件。'}
           onClose={() => onClose()}
         >
           <ol className="full-log">
@@ -40,7 +40,7 @@ export function GameDialogs({
           </ol>
         </Modal>
       )}
-      {modal === 'new' && (
+      {modal === 'new' && startGame && (
         <Modal
           title="浩劫，再起"
           subtitle="当前局面会被替换。重要对局请先导出存档。"

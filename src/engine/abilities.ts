@@ -66,8 +66,8 @@ import {
   template,
 } from './state';
 import { advanceUnit } from './lifecycle';
-import type { Card, Command, GameState, Kind, Player, Source, Unit } from './types';
-export function chargeAction(s: GameState, c: Command) {
+import type { Card, Command, GamePosition, Kind, Player, Source, Unit } from './types';
+export function chargeAction(s: GamePosition, c: Command) {
   return withEventFacts(s, { action: 'charge', actor: eventActor(findUnit(s, c.unitId)) }, () => {
     const u = findUnit(s, c.unitId),
       kind = c.ability ?? u.kind;
@@ -75,7 +75,7 @@ export function chargeAction(s: GameState, c: Command) {
     return withAbilityCharge(u, kind, () => resolveCharge(s, c));
   });
 }
-function resolveCharge(s: GameState, c: Command) {
+function resolveCharge(s: GamePosition, c: Command) {
   const u = actor(s, c.unitId),
     kind = c.ability ?? u.kind,
     d = definition(kind);
@@ -109,7 +109,7 @@ function resolveCharge(s: GameState, c: Command) {
   finishOperation(u);
   emit(s, { type: 'skill', to: u, owner: u.owner, text: `蓄力 ${u.charge}/${max}` });
 }
-export function useSkill(s: GameState, c: Command, ctx: Resolution) {
+export function useSkill(s: GamePosition, c: Command, ctx: Resolution) {
   const u = findUnit(s, c.unitId),
     kind = c.ability ?? u.kind;
   ensure(hasTrait(u, kind), '该棋子没有选定的技能。');
@@ -178,7 +178,7 @@ export function useSkill(s: GameState, c: Command, ctx: Resolution) {
     },
   );
 }
-function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
+function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
   const raw = findUnit(s, c.unitId),
     kind = c.ability ?? raw.kind,
     free = kind === 'u7';
@@ -473,7 +473,7 @@ function resolveSkill(s: GameState, c: Command, ctx: Resolution) {
   );
   pruneSiphons(s);
 }
-export function cast(s: GameState, c: Command, ctx: Resolution) {
+export function cast(s: GamePosition, c: Command, ctx: Resolution) {
   const kind = s.hands[s.active].find((v) => v.id === c.cardId)?.kind;
   const actions: Partial<Record<Kind, EventAction>> = {
     8: 'bomb',
@@ -502,7 +502,7 @@ export function cast(s: GameState, c: Command, ctx: Resolution) {
     () => resolveCast(s, c, ctx),
   );
 }
-function resolveCast(s: GameState, c: Command, ctx: Resolution) {
+function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
   const owner = s.active,
     card = s.hands[owner].find((v) => v.id === c.cardId);
   ensure(card && definition(card.kind).spell !== undefined, '请选择法术牌。');
@@ -649,14 +649,14 @@ function resolveCast(s: GameState, c: Command, ctx: Resolution) {
     `施放${definition(card.kind).name}`,
   );
 }
-export function equip(s: GameState, c: Command) {
+export function equip(s: GamePosition, c: Command) {
   return withEventFacts(
     s,
     { action: 'equip', ability: s.hands[s.active].find((v) => v.id === c.cardId)?.kind },
     () => resolveEquip(s, c),
   );
 }
-function resolveEquip(s: GameState, c: Command) {
+function resolveEquip(s: GamePosition, c: Command) {
   const card = s.hands[s.active].find((v) => v.id === c.cardId);
   ensure(card && definition(card.kind).weapon !== undefined, '请选择武器牌。');
   const u = findUnit(s, c.targetId);
@@ -683,10 +683,10 @@ function resolveEquip(s: GameState, c: Command) {
     ultimate: true,
   });
 }
-export function craft(s: GameState, c: Command) {
+export function craft(s: GamePosition, c: Command) {
   synthesize(s, { ...c, type: 'synthesize', recipeId: 'firelord', materialIds: c.cardIds });
 }
-export function reroll(s: GameState, c: Command) {
+export function reroll(s: GamePosition, c: Command) {
   const card = s.hands[s.active].find((v) => v.id === c.cardId);
   ensure(card && card.summonedPly === s.ply, '改判仅限本回合刚召唤的牌。');
   if (card.group)

@@ -1,6 +1,6 @@
 import { ShrinePanel } from '../shrine/ShrinePanel';
 import type { MatchSettings } from '../../match/settings';
-import type { ActionSpec, Command, GameState } from '../../engine';
+import type { ActionSpec, Command, GamePosition, Player } from '../../engine';
 import { faction } from '../../engine';
 import { Icon } from '../shared/visuals';
 import { HandCard } from './HandCard';
@@ -15,14 +15,16 @@ export function HandPanel({
   chooseAction,
   run,
   readOnly = false,
+  viewer,
 }: {
-  state: GameState;
+  state: GamePosition;
   match: MatchSettings;
   cardId: string | null;
   chooseCard: (id: string) => void;
   chooseAction: (a: ActionSpec) => void;
   run: (command: Command) => void;
   readOnly?: boolean;
+  viewer?: Player;
 }) {
   const hand = s.hands[s.active],
     reaction = s.pending[0];
@@ -53,6 +55,7 @@ export function HandPanel({
         />
       )}
       <ShrinePanel
+        viewer={viewer}
         state={s}
         match={match}
         run={run}

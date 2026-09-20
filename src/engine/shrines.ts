@@ -52,7 +52,7 @@ import type {
   Card,
   ClockFrame,
   Command,
-  GameState,
+  GamePosition,
   Kind,
   Landmark,
   Player,
@@ -60,7 +60,7 @@ import type {
   Unit,
 } from './types';
 
-export const landmarkAt = (s: GameState, p: { x: number; y: number }) =>
+export const landmarkAt = (s: GamePosition, p: { x: number; y: number }) =>
   s.landmarks?.find((l) => equal(l, p));
 export const liveLandmark = (l?: Landmark): l is Landmark & { dormantSince: undefined } =>
   !!l && l.hp > 0 && l.dormantSince === undefined;
@@ -74,7 +74,7 @@ export function landmarkSquare(kind: Kind, p: { x: number; y: number }): boolean
 }
 
 /** Permanent tile effects have their own layer: they never become corpses or free heads. */
-export function demolish(s: GameState, l: Landmark) {
+export function demolish(s: GamePosition, l: Landmark) {
   l.hp = 0;
   l.dormantSince = s.ply;
   l.rebuildTicks = 0;
@@ -86,7 +86,7 @@ export function demolish(s: GameState, l: Landmark) {
   );
   syncBanners(s);
 }
-export function rebuildLandmarks(s: GameState) {
+export function rebuildLandmarks(s: GamePosition) {
   for (const l of s.landmarks ?? []) {
     if (l.owner !== s.active) continue;
     if (l.dormantSince !== undefined && s.ply > l.dormantSince) {
@@ -111,13 +111,13 @@ export function rebuildLandmarks(s: GameState) {
   }
   syncBanners(s);
 }
-export function bannerCount(s: GameState, owner: Player): number {
+export function bannerCount(s: GamePosition, owner: Player): number {
   return (s.landmarks ?? []).filter(
     (l) => liveLandmark(l) && l.owner === owner && passive(s, l) && hasTrait(l, 's8'),
   ).length;
 }
 /** Store only the applied max-HP delta. Attack remains a derived stat. */
-export function syncBanners(s: GameState) {
+export function syncBanners(s: GamePosition) {
   const counts = { 1: bannerCount(s, 1), 2: bannerCount(s, 2) };
   for (const u of [...s.units, ...(s.landmarks ?? [])]) {
     const eligible = !isLandmark(u) || liveLandmark(u as Landmark);
@@ -132,7 +132,7 @@ export function syncBanners(s: GameState) {
     if (u.hp <= u.maxHp) delete u.overMaxFromBanner;
   }
 }
-export function onLandmarkDeployment(s: GameState, u: Unit) {
+export function onLandmarkDeployment(s: GamePosition, u: Unit) {
   if (isLandmark(u)) return;
   const l = cells(u)
     .map((p) => landmarkAt(s, p))
@@ -153,7 +153,7 @@ export function onLandmarkDeployment(s: GameState, u: Unit) {
     text: wasCharge ? '金晔 · 冲锋与双操作' : '金晔 · 冲锋号令',
   });
 }
-export function damageBonus(s: GameState, source: Source): number {
+export function damageBonus(s: GamePosition, source: Source): number {
   if (source.owner === undefined || ['sacrifice', 'expire'].includes(source.kind)) return 0;
   let bonus = hasAura(s, source.owner, 's11') ? 5 : 0;
   if (
@@ -166,8 +166,8 @@ export function damageBonus(s: GameState, source: Source): number {
         .length;
   return bonus;
 }
-export const healingBlocked = (s: GameState, owner: Player) => hasAura(s, other(owner), 's11');
-export function endShrines(s: GameState, ctx: Resolution) {
+export const healingBlocked = (s: GamePosition, owner: Player) => hasAura(s, other(owner), 's11');
+export function endShrines(s: GamePosition, ctx: Resolution) {
   for (const source of [...s.units])
     if (
       source.owner === s.active &&
@@ -183,7 +183,7 @@ export function endShrines(s: GameState, ctx: Resolution) {
           heal(s, friend, friend.maxHp - friend.hp, ctx);
 }
 
-export function initializeShrines(s: GameState) {
+export function initializeShrines(s: GamePosition) {
   s.mode = 'shrine';
   s.phase = 'shrine-draft';
   s.ply = 0;
@@ -212,7 +212,7 @@ export function initializeShrines(s: GameState) {
     '双方各抽3个神龛；双方锁定后同时公布选择',
   );
 }
-export function chooseShrine(s: GameState, c: Command) {
+export function validateShrineChoice(s: GamePosition, c: Command) {
   const d = s.shrineDraft,
     p = c.player;
   ensure(s.phase === 'shrine-draft' && d && !d.revealed, '当前不是神龛选择阶段。');
@@ -226,7 +226,11 @@ export function chooseShrine(s: GameState, c: Command) {
     c.shrineKind !== 's9' || ['odd', 'even'].includes(c.parity ?? ''),
     '玉碎需要同时选择奇数或偶数。',
   );
-  d.choices[p] = { kind: c.shrineKind, ...(c.shrineKind === 's9' ? { parity: c.parity } : {}) };
+  return { draft: d, player: p, kind: c.shrineKind };
+}
+export function chooseShrine(s: GamePosition, c: Command) {
+  const { draft: d, player: p, kind } = validateShrineChoice(s, c);
+  d.choices[p] = { kind, ...(c.shrineKind === 's9' ? { parity: c.parity } : {}) };
   d.committed[p] = true;
   emit(s, { type: 'turn', owner: p, text: '神龛已锁定' }, '一方已锁定神龛，等待另一方');
   if (!d.committed[other(p)]) {
@@ -254,7 +258,7 @@ export function chooseShrine(s: GameState, c: Command) {
     );
   }
 }
-export function activateAura(s: GameState, c: Command) {
+export function activateAura(s: GamePosition, c: Command) {
   const card = s.hands[s.active].find((v) => v.id === c.cardId);
   ensure(card && definition(card.kind).aura, '请选择光环牌。');
   ensure(!hasAura(s, s.active, card.kind), '这个永久光环已经启用。');
@@ -265,7 +269,7 @@ export function activateAura(s: GameState, c: Command) {
   s.hands[s.active] = s.hands[s.active].filter((v) => v.id !== card.id);
   emit(s, { type: 'skill', owner: s.active, text: `永久光环 · ${definition(card.kind).name}` });
 }
-export function grantLaoqian(s: GameState) {
+export function grantLaoqian(s: GamePosition) {
   s.auras ??= { 1: [], 2: [] };
   ensure(!hasAura(s, s.active, 'laoqian'), '牢千K光环已经存在，不能重复消耗材料。');
   s.auras[s.active].push({ kind: 'laoqian' });
@@ -278,16 +282,16 @@ export function grantLaoqian(s: GameState) {
 export function selectableSummons(ultimate: boolean): Kind[] {
   return ultimate ? [...ULTIMATE_POOL] : [...SUMMON_POOL];
 }
-export const canChooseSummon = (s: GameState, p: Player = s.active) => {
+export const canChooseSummon = (s: GamePosition, p: Player = s.active) => {
   const a = aura(s, p, 'laoqian');
   return !!a && a.usedPly !== s.ply;
 };
-export function consumeChosenSummon(s: GameState, owner: Player, kind: Kind, ultimate: boolean) {
+export function consumeChosenSummon(s: GamePosition, owner: Player, kind: Kind, ultimate: boolean) {
   ensure(canChooseSummon(s, owner), '本回合牢千K自选召唤已使用，或尚未获得光环。');
   ensure(selectableSummons(ultimate).includes(kind), '自选结果必须属于本次召唤的来源池。');
   aura(s, owner, 'laoqian')!.usedPly = s.ply;
 }
-export function summon(s: GameState, c: Command) {
+export function summon(s: GamePosition, c: Command) {
   ensure(!s.summonOffer, '先从候选召唤中选出两个结果。');
   ensure(s.summonSlots > 0, '本回合召唤次数已用完。');
   const shrine = s.mode === 'shrine';
@@ -317,7 +321,7 @@ export function summon(s: GameState, c: Command) {
   s.summonSlots--;
   if (shrine && (s.regularSummons ?? 0) > 0) s.regularSummons!--;
 }
-export function chooseSummons(s: GameState, c: Command) {
+export function chooseSummons(s: GamePosition, c: Command) {
   const offer = s.summonOffer,
     indices = c.offerIndices ?? [];
   ensure(offer && offer.owner === s.active, '当前没有待选的召唤结果。');
@@ -331,7 +335,7 @@ export function chooseSummons(s: GameState, c: Command) {
   delete s.summonOffer;
   emit(s, { type: 'summon', owner: s.active, text: '老千K · 选定两个结果' });
 }
-export function extraSummon(s: GameState, c: Command) {
+export function extraSummon(s: GamePosition, c: Command) {
   ensure(
     s.mode === 'shrine' && s.phase === 'summon' && !s.summonOffer,
     '人头额外召唤仅限神龛模式回合开始。',
@@ -344,7 +348,7 @@ export function extraSummon(s: GameState, c: Command) {
 }
 
 /** Clock snapshots are bounded (two per side) and contain no PRNG/history. */
-export function captureClockFrame(s: GameState) {
+export function captureClockFrame(s: GamePosition) {
   if (
     !hasAura(s, 1, 's10') &&
     !hasAura(s, 2, 's10') &&
@@ -357,7 +361,7 @@ export function captureClockFrame(s: GameState) {
   else delete f.previous;
   f.current = { ply: s.ply, turns: { ...s.turns }, units: structuredClone(s.units) };
 }
-function restoredUnit(s: GameState, u: Unit): Unit {
+function restoredUnit(s: GamePosition, u: Unit): Unit {
   const frame = s.clockFrames?.[s.active].previous;
   const old = frame?.units.find((v) => v.id === u.id);
   if (old && frame) {
@@ -399,7 +403,7 @@ function restoredUnit(s: GameState, u: Unit): Unit {
   if (u.group) restored.group = u.group;
   return restored;
 }
-export function canRestoreClock(s: GameState, u: Unit): boolean {
+export function canRestoreClock(s: GamePosition, u: Unit): boolean {
   if (
     s.phase !== 'play' ||
     s.pending.length ||
@@ -424,7 +428,7 @@ export function canRestoreClock(s: GameState, u: Unit): boolean {
     return false;
   }
 }
-export function clockRestore(s: GameState, c: Command, ctx: Resolution) {
+export function clockRestore(s: GamePosition, c: Command, ctx: Resolution) {
   const a = aura(s, s.active, 's10');
   ensure(s.phase === 'play' && a && a.usedPly !== s.ply, '时钟每个实际己方回合只能使用一次。');
   const u = findUnit(s, c.targetId);
@@ -456,12 +460,12 @@ export function clockRestore(s: GameState, c: Command, ctx: Resolution) {
     });
   }
 }
-export function canShatter(s: GameState, u: Unit): boolean {
+export function canShatter(s: GamePosition, u: Unit): boolean {
   const a = aura(s, u.owner, 's9'),
     n = ordinal(u.kind);
   return !!a && isFollower(u.kind) && n !== null && (n % 2 === 1 ? 'odd' : 'even') === a.parity;
 }
-export function shatter(s: GameState, c: Command, ctx: Resolution) {
+export function shatter(s: GamePosition, c: Command, ctx: Resolution) {
   const u = actor(s, c.unitId);
   ensure(canShatter(s, u), '玉碎只对所选奇偶编号的友方随从开放。');
   chooseMode(s, u, 'skill');
@@ -491,7 +495,7 @@ export function installEquipment(u: Unit, kind: Kind, id?: string) {
   if (kind === 'u28') u.effects = u.effects.filter((e) => e.type !== 'freeze');
   delete u.overMaxFromBanner;
 }
-export function stealOnKill(s: GameState, killer: Unit, victim: Unit) {
+export function stealOnKill(s: GamePosition, killer: Unit, victim: Unit) {
   if (killer.silenced || !hasTrait(killer, 's5') || killer.id === victim.id) return;
   killer.traits = [
     ...new Set([
@@ -526,7 +530,7 @@ export function stealOnKill(s: GameState, killer: Unit, victim: Unit) {
     text: 'ZF·强夺 · 获得技能与武器',
   });
 }
-export function returnDeathWeapons(s: GameState, u: Unit) {
+export function returnDeathWeapons(s: GamePosition, u: Unit) {
   for (const k of u.equipment)
     if (k === 's2' || (k === 's15' && u.bladeQualified)) {
       s.hands[u.owner].push({
@@ -540,7 +544,7 @@ export function returnDeathWeapons(s: GameState, u: Unit) {
 }
 
 /** Returns undefined for commands that do not draw from a random summon pool. */
-export function commandSummonPool(s: GameState, c: Command): 'normal' | 'ultimate' | undefined {
+export function commandSummonPool(s: GamePosition, c: Command): 'normal' | 'ultimate' | undefined {
   if (c.type === 'summon') return s.mode === 'shrine' || c.ultimate ? 'ultimate' : 'normal';
   if (c.type === 'extra-summon') return c.ultimate === false ? 'normal' : 'ultimate';
   const card = s.hands[s.active].find((v) => v.id === c.cardId);

@@ -19,7 +19,7 @@ import type {
   Command,
   Effect,
   GameEvent,
-  GameState,
+  GamePosition,
   Kind,
   Mode,
   Player,
@@ -38,19 +38,19 @@ export function ensure(value: unknown, message: string): asserts value {
   if (!value) throw new RuleError(message);
 }
 export const faction = (p: Player) => (p === 1 ? '苍穹方' : '赤焰方');
-export const now = (s: GameState, u: Unit) => s.ply + u.offset;
-export const effectClock = (s: GameState, e: Effect, u?: Unit) =>
+export const now = (s: GamePosition, u: Unit) => s.ply + u.offset;
+export const effectClock = (s: GamePosition, e: Effect, u?: Unit) =>
   e.global || !u ? s.ply : now(s, u);
-export const activeEffect = (s: GameState, e: Effect, u?: Unit) =>
+export const activeEffect = (s: GamePosition, e: Effect, u?: Unit) =>
   e.from <= effectClock(s, e, u) && e.until > effectClock(s, e, u);
-export const has = (s: GameState, u: Unit, type: Effect['type']) =>
+export const has = (s: GamePosition, u: Unit, type: Effect['type']) =>
   u.effects.some((e) => e.type === type && activeEffect(s, e, u));
-export const allegiance = (_s: GameState, u: Unit): Player | 0 => u.owner;
-export const passive = (_s: GameState, u: Unit) => !u.silenced;
+export const allegiance = (_s: GamePosition, u: Unit): Player | 0 => u.owner;
+export const passive = (_s: GamePosition, u: Unit) => !u.silenced;
 export const hasWeapon = (u: Unit, k: Kind) => u.equipment.includes(k);
-export const age = (s: GameState, u: Unit) => s.turns[u.owner] + u.offset / 2 - u.born;
+export const age = (s: GamePosition, u: Unit) => s.turns[u.owner] + u.offset / 2 - u.born;
 export const isRunner = (u: Unit) => !u.silenced && anyTrait(u, ['u12', 'u12p']);
-export function emit(s: GameState, event: Omit<GameEvent, 'id'>, message?: string) {
+export function emit(s: GamePosition, event: Omit<GameEvent, 'id'>, message?: string) {
   const snap = enrichEvent(s, { ...event, id: `e${s.serial++}` });
   if (event.from) snap.from = { x: event.from.x, y: event.from.y };
   if (event.to) snap.to = { x: event.to.x, y: event.to.y };
@@ -61,15 +61,17 @@ export function emit(s: GameState, event: Omit<GameEvent, 'id'>, message?: strin
     if (s.log.length > 180) s.log.shift();
   }
 }
-export function random(s: GameState, boundaries: readonly number[] = [0, 1]) {
+export function random(s: GamePosition, boundaries: readonly number[] = [0, 1]) {
   const supplied = simulationRandom(s, boundaries);
   if (supplied !== undefined) return supplied;
+  ensure('rng' in s && typeof s.rng === 'number', '随机结算需要完整权威状态。');
   let x = s.rng;
   x ^= x << 13;
   x ^= x >>> 17;
   x ^= x << 5;
-  s.rng = x >>> 0;
-  return s.rng / 4294967296;
+  const next = x >>> 0;
+  s.rng = next;
+  return next / 4294967296;
 }
 export function template(kind: Kind, owner: Player, born: number, at: Point, id = 'preview'): Unit {
   const d = definition(kind);
@@ -111,7 +113,7 @@ export function template(kind: Kind, owner: Player, born: number, at: Point, id 
   };
 }
 export function addUnit(
-  s: GameState,
+  s: GamePosition,
   kind: Kind,
   owner: Player,
   at: Point,
@@ -140,7 +142,7 @@ export function addUnit(
   return u;
 }
 export function draw(
-  s: GameState,
+  s: GamePosition,
   owner: Player,
   count: number,
   ultimate = false,
@@ -202,7 +204,7 @@ export const healingAttack = (u: Unit) =>
 export const counterChance = (u: Unit) =>
   hasTrait(u, 'archmage') ? COMBAT_RULES.archmageCounterChance : hasTrait(u, 'u3') ? 1 / 3 : 0;
 /** Range cannot depend on an aura's attack bonus. Avoid getStats recursion between sages. */
-export function attackAuraSources(s: GameState, target: Unit): Unit[] {
+export function attackAuraSources(s: GamePosition, target: Unit): Unit[] {
   if (allegiance(s, target) !== target.owner || refusesFriendlyAttackBuff(target)) return [];
   return s.units.filter(
     (u) =>
@@ -219,7 +221,7 @@ export function attackAuraSources(s: GameState, target: Unit): Unit[] {
       ),
   );
 }
-export function getStats(s: GameState, u: Unit): Stats {
+export function getStats(s: GamePosition, u: Unit): Stats {
   const d = definition(u.kind),
     enabled = !u.silenced;
   let attack = d.attack + u.attackBonus,
@@ -312,7 +314,7 @@ export function getStats(s: GameState, u: Unit): Stats {
     sleeping,
   };
 }
-export function findUnit(s: GameState, id?: string): Unit {
+export function findUnit(s: GamePosition, id?: string): Unit {
   const u = allPieces(s).find((u) => u.id === id);
   ensure(u, '请选择仍在场上的随从。');
   return u;
@@ -324,7 +326,7 @@ export const asTarget = (u: Unit): Target => ({
   y: u.y,
   unit: u,
 });
-export function actor(s: GameState, id?: string) {
+export function actor(s: GamePosition, id?: string) {
   const u = findUnit(s, id),
     stats = getStats(s, u);
   ensure(s.phase === 'play', '请先完成回合开始阶段。');
@@ -335,7 +337,7 @@ export function actor(s: GameState, id?: string) {
   );
   return u;
 }
-export function chooseMode(s: GameState, u: Unit, mode: Mode) {
+export function chooseMode(s: GamePosition, u: Unit, mode: Mode) {
   const stats = getStats(s, u);
   ensure(
     u.mode === 'none' || u.mode === mode,
@@ -363,7 +365,7 @@ export function point(x?: number, y?: number): Point {
   ensure(Number.isInteger(x) && Number.isInteger(y), '请选择棋盘格。');
   return { x: x!, y: y! };
 }
-export function resetUnit(s: GameState, u: Unit) {
+export function resetUnit(s: GamePosition, u: Unit) {
   u.operations = 0;
   u.mode = 'none';
   u.shots = 0;
@@ -379,7 +381,7 @@ export function resetUnit(s: GameState, u: Unit) {
   u.effects = u.effects.filter((e) => e.until > (e.global ? s.ply : now(s, u)));
 }
 export function addEffect(
-  s: GameState,
+  s: GamePosition,
   u: Unit,
   type: Effect['type'],
   owner: Player,
@@ -400,6 +402,6 @@ export function addEffect(
     ...(global ? { global: true } : {}),
   });
 }
-export function storageRemaining(s: GameState, c: Card) {
+export function storageRemaining(s: GamePosition, c: Card) {
   return c.expiresAt === undefined ? null : c.expiresAt - s.turns[s.active];
 }

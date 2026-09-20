@@ -1,6 +1,6 @@
 /** Shared identity and per-ability resources. No UI policy or mutable global state. */
 import { definition } from './catalog';
-import type { AbilityCharge, GameState, Kind, Player, Unit } from './types';
+import type { AbilityCharge, GamePosition, Kind, Player, Unit } from './types';
 
 export const abilityKinds = (u: Unit): Kind[] => [...new Set([u.kind, ...(u.traits ?? [])])];
 export const hasTrait = (u: Unit, kind: Kind): boolean =>
@@ -16,13 +16,13 @@ export const canDeployKind = (kind: Kind): boolean => {
 };
 export const isFollower = (kind: Kind): boolean =>
   canDeployKind(kind) && !definition(kind).landmark && !['grave', 'wall'].includes(String(kind));
-export const allPieces = (s: GameState): Unit[] => [
+export const allPieces = (s: GamePosition): Unit[] => [
   ...s.units,
   ...(s.landmarks ?? []).filter((l) => l.hp > 0 && l.dormantSince === undefined),
 ];
-export const aura = (s: GameState, p: Player, kind: Kind) =>
+export const aura = (s: GamePosition, p: Player, kind: Kind) =>
   s.auras?.[p].find((a) => a.kind === kind);
-export const hasAura = (s: GameState, p: Player, kind: Kind): boolean => !!aura(s, p, kind);
+export const hasAura = (s: GamePosition, p: Player, kind: Kind): boolean => !!aura(s, p, kind);
 export const ordinal = (kind: Kind): number | null => {
   if (typeof kind === 'number') return kind;
   if (kind === '3p') return 3;

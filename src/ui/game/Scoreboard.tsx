@@ -1,8 +1,8 @@
-import type { GameState, Player } from '../../engine';
+import type { GamePosition, Player } from '../../engine';
 import { faction } from '../../engine';
 import { Icon, playerStyle } from '../shared/visuals';
 
-export function Scoreboard({ state: s, human }: { state: GameState; human?: Player }) {
+export function Scoreboard({ state: s, human }: { state: GamePosition; human?: Player }) {
   const reaction = s.pending[0],
     controller = reaction?.owner ?? s.active;
   return (

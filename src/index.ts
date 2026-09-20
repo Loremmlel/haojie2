@@ -4,3 +4,11 @@ export { HaojieGame } from './ui/Game';
 export type { HaojieGameProps } from './ui/Game';
 
 export type { MatchSettings } from './match/settings';
+
+export { HaojieOnlineGame } from './ui/online/HaojieOnlineGame';
+export type {
+  HaojieOnlineGameProps,
+  OnlineUpdate,
+  CommandReceipt,
+  CommandContext,
+} from './ui/online/types';

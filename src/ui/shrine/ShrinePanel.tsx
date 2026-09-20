@@ -6,7 +6,7 @@ import {
   hasAura,
   type ActionSpec,
   type Command,
-  type GameState,
+  type GamePosition,
   type Kind,
   type Player,
 } from '../../engine';
@@ -20,26 +20,30 @@ export function ShrinePanel({
   run,
   chooseAction,
   readOnly,
+  viewer: seat,
 }: {
-  state: GameState;
+  state: GamePosition;
   match: MatchSettings;
   run: (c: Command) => void;
   chooseAction: (a: ActionSpec) => void;
   readOnly: boolean;
+  viewer?: Player;
 }) {
   const [parity, setParity] = useState<'odd' | 'even'>('odd');
   const [selected, setSelected] = useState<Kind | null>(null);
   const draft = s.shrineDraft;
-  const viewer: Player = match.mode === 'ai' ? match.human : s.active;
+  const viewer: Player = seat ?? (match.mode === 'ai' ? match.human : s.active);
   const opponent: Player = viewer === 1 ? 2 : 1;
   if (s.phase === 'shrine-draft' && draft)
     return (
       <div className="shrine-draft">
         <p className="shrine-status">第0回合 · {faction(viewer)}选神龛。双方锁定后同时揭示。</p>
         <p className="fine-print">
-          {match.mode === 'ai'
-            ? 'AI只能看到双方候选，不会读取你已锁定的选择。'
-            : '同屏双人无法防止旁观选择过程；请轮流操作。'}
+          {seat !== undefined
+            ? '对手的最终选择会在双方锁定后同时揭示。'
+            : match.mode === 'ai'
+              ? 'AI只能看到双方候选，不会读取你已锁定的选择。'
+              : '同屏双人无法防止旁观选择过程；请轮流操作。'}
         </p>
         <div className="shrine-offers" aria-label="本方神龛候选">
           {draft.offers[viewer].map((kind) => {
@@ -49,7 +53,9 @@ export function ShrinePanel({
                 className="shrine-choice"
                 key={kind}
                 aria-pressed={selected === kind}
-                disabled={readOnly || draft.committed[viewer] || s.active !== viewer}
+                disabled={
+                  readOnly || draft.committed[viewer] || (seat === undefined && s.active !== viewer)
+                }
                 onClick={() => setSelected(kind)}
               >
                 <span className="shrine-choice-heading">
@@ -78,7 +84,7 @@ export function ShrinePanel({
             !selected ||
             !draft.offers[viewer].includes(selected) ||
             draft.committed[viewer] ||
-            s.active !== viewer
+            (seat === undefined && s.active !== viewer)
           }
           onClick={() => {
             run({ type: 'choose-shrine', player: viewer, shrineKind: selected!, parity });

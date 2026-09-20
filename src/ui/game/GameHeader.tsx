@@ -5,7 +5,9 @@ export function GameHeader({
   sound,
   onToggleSound,
   onOpen,
+  allowNew = true,
 }: {
+  allowNew?: boolean;
   sound: boolean;
   onToggleSound: () => void;
   onOpen: (modal: GameModal) => void;
@@ -40,11 +42,15 @@ export function GameHeader({
         >
           <Icon name={sound ? 'volume' : 'mute'} />
         </button>
-        <span className="nav-divider" />
-        <button className="new-game-button" onClick={() => onOpen('new')}>
-          <Icon name="plus" />
-          新对局
-        </button>
+        {allowNew && (
+          <>
+            <span className="nav-divider" />
+            <button className="new-game-button" onClick={() => onOpen('new')}>
+              <Icon name="plus" />
+              新对局
+            </button>
+          </>
+        )}
       </nav>
     </header>
   );

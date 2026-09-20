@@ -2,9 +2,9 @@ import { hasTrait } from './traits';
 import { COMBAT_RULES } from './catalog';
 import { cells, equal, inside, neighbors, other, targets } from './geometry';
 import { allegiance, passive, has } from './state';
-import type { GameState, Unit } from './types';
+import type { GamePosition, Unit } from './types';
 /** Exact target/impact snapshot. 13×13 geometry is not ordinary path-based attack range. */
-export function firelordStrike(s: GameState, lord: Unit) {
+export function firelordStrike(s: GamePosition, lord: Unit) {
   if (!hasTrait(lord, 'firelord') || !passive(s, lord) || has(s, lord, 'freeze')) return null;
   const inArea = (p: { x: number; y: number }) =>
     inside(p) &&

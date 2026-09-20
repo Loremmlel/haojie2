@@ -4,7 +4,7 @@ import {
   definition,
   selectableSummons,
   type Command,
-  type GameState,
+  type GamePosition,
   type Kind,
 } from '../../engine';
 import { Modal } from '../shared/Modal';
@@ -17,7 +17,7 @@ export function SummonChoiceDialog({
   onClose,
   onConfirm,
 }: {
-  state: GameState;
+  state: GamePosition;
   command: Command;
   onClose: () => void;
   onConfirm: (c: Command) => void;

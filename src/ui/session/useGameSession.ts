@@ -1,11 +1,10 @@
-import { useEffectPlayback } from '../board/vfx/useEffectPlayback';
 import { useEffect, useRef, useState } from 'react';
-import type { Command, GameEvent, Session } from '../../engine';
+import type { Command, Session } from '../../engine';
 import { createGame, createSession, dispatch } from '../../engine';
-import { Soundscape } from '../audio/Soundscape';
 import type { HaojieGameProps } from '../game/types';
 import type { SaveStatus } from './storage';
 import { DEFAULT_STORAGE_KEY, readStoredSession, SAVE_LABELS, writeStoredSession } from './storage';
+import { useGamePresentation } from './useGamePresentation';
 
 export function randomSeed(): number {
   return typeof crypto !== 'undefined' && crypto.getRandomValues
@@ -26,22 +25,19 @@ function boot(props: HaojieGameProps, key: string | null) {
     return { session: fallback(), notice: '浏览器禁止本机保存，请导出对局。', writable: false };
   }
 }
-/** Owns the authoritative snapshot, persistence and disposable audiovisual effects only. */
+/** Local authority only: the controlled entry never mounts this hook or its persistence/AI. */
 export function useGameSession(props: HaojieGameProps) {
-  const playback = useEffectPlayback();
   const storageKey = props.storageKey === undefined ? DEFAULT_STORAGE_KEY : props.storageKey;
   const [initial] = useState(() => boot(props, storageKey));
+  const presentation = useGamePresentation(initial.notice);
+  const { setNotice } = presentation;
   const [session, setSession] = useState(initial.session),
     live = useRef(session);
   const [writable, setWritable] = useState(initial.writable);
   const [status, setStatus] = useState<SaveStatus>(
     !storageKey ? 'disabled' : initial.writable ? 'saved' : 'blocked',
   );
-  const [notice, setNotice] = useState(initial.notice);
-  const [events, setEvents] = useState<GameEvent[]>([]),
-    [sound, setSound] = useState(false);
-  const audio = useRef<Soundscape | null>(null),
-    callback = useRef(props.onStateChange);
+  const callback = useRef(props.onStateChange);
   callback.current = props.onStateChange;
   useEffect(() => {
     if (!storageKey) {
@@ -65,28 +61,10 @@ export function useGameSession(props: HaojieGameProps) {
   useEffect(() => {
     callback.current?.(session.present);
   }, [session]);
-  useEffect(() => {
-    if (!events.length) return;
-    const timer = setTimeout(() => setEvents([]), 1700);
-    return () => clearTimeout(timer);
-  }, [events]);
-  useEffect(() => {
-    if (!notice) return;
-    const timer = setTimeout(() => setNotice(''), 6500);
-    return () => clearTimeout(timer);
-  }, [notice]);
-  useEffect(
-    () => () => {
-      audio.current?.dispose();
-      audio.current = null;
-    },
-    [],
-  );
   function replace(next: Session, explicit = false) {
     live.current = next;
     setSession(next);
-    setEvents([]);
-    playback.clear();
+    presentation.clear();
     if (explicit) setWritable(true);
   }
   function execute(command: Command) {
@@ -94,25 +72,8 @@ export function useGameSession(props: HaojieGameProps) {
     live.current = next;
     setSession(next);
     setNotice('');
-    setEvents(next.present.events.slice(-90));
-    playback.play(next.present.events);
-    if (sound) {
-      audio.current ??= new Soundscape();
-      audio.current.play(next.present.events, true);
-    }
+    presentation.play(next.present.events);
     return next;
   }
-  return {
-    session,
-    live,
-    replace,
-    execute,
-    notice,
-    setNotice,
-    events,
-    effects: playback.batches,
-    sound,
-    setSound,
-    saveStatus: SAVE_LABELS[status],
-  };
+  return { ...presentation, session, live, replace, execute, saveStatus: SAVE_LABELS[status] };
 }

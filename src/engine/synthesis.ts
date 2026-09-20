@@ -4,7 +4,7 @@ import { hasAura } from './traits';
 import { definition } from './catalog';
 import { ALL_CELLS, canPlace } from './geometry';
 import { addUnit, allegiance, emit, ensure, point, template } from './state';
-import type { Command, GameState, Kind, Point } from './types';
+import type { Command, GamePosition, Kind, Point } from './types';
 export interface SynthesisRecipe {
   id: string;
   material: Kind;
@@ -21,7 +21,7 @@ export const SYNTHESIS_RECIPES: readonly SynthesisRecipe[] = [
   { id: 'firelord', material: 'u28', result: 'firelord', source: 'hand' },
   { id: 'archmage', material: 'u3', result: 'archmage', source: 'board' },
 ];
-export function synthesisMaterials(s: GameState, recipe: SynthesisRecipe): string[] {
+export function synthesisMaterials(s: GamePosition, recipe: SynthesisRecipe): string[] {
   if (recipe.result === 'laoqian' && hasAura(s, s.active, 'laoqian')) return [];
   return recipe.source === 'board'
     ? s.units
@@ -35,13 +35,13 @@ export function synthesisMaterials(s: GameState, recipe: SynthesisRecipe): strin
         )
         .map((c) => c.id);
 }
-export function availableSyntheses(s: GameState) {
+export function availableSyntheses(s: GamePosition) {
   return SYNTHESIS_RECIPES.map((recipe) => ({ recipe, ids: synthesisMaterials(s, recipe) })).filter(
     (v) => v.ids.length >= 3,
   );
 }
 export function synthesisPlacement(
-  s: GameState,
+  s: GamePosition,
   recipe: SynthesisRecipe,
   ids: string[],
   to: Point,
@@ -58,11 +58,11 @@ export function synthesisPlacement(
   const ghost = template(recipe.result, s.active, s.turns[s.active], to);
   return canPlace(view, ghost, to, true);
 }
-export function synthesisDestinations(s: GameState, recipe: SynthesisRecipe, ids: string[]) {
+export function synthesisDestinations(s: GamePosition, recipe: SynthesisRecipe, ids: string[]) {
   if (definition(recipe.result).aura) return [];
   return ALL_CELLS.filter((p) => synthesisPlacement(s, recipe, ids, p));
 }
-export function synthesize(s: GameState, c: Command) {
+export function synthesize(s: GamePosition, c: Command) {
   ensure(s.phase === 'synthesis' && !s.pending.length, '合成仅限己方回合开始的合成窗口。');
   const recipe = SYNTHESIS_RECIPES.find((r) => r.id === c.recipeId);
   ensure(recipe, '请选择有效的合成配方。');

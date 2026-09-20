@@ -61,7 +61,7 @@ import {
   random,
   resetUnit,
 } from './state';
-import type { Effect, GameState, Player, Point, Source, Target, Unit } from './types';
+import type { Effect, GamePosition, Player, Point, Source, Target, Unit } from './types';
 export interface Resolution {
   retaliations: Set<string>;
   protection: Map<string, boolean>;
@@ -72,24 +72,29 @@ export const resolution = (): Resolution => ({
   protection: new Map(),
   token: 0,
 });
-export const alive = (s: GameState, u: Unit) =>
+export const alive = (s: GamePosition, u: Unit) =>
   s.units.some((v) => v.id === u.id) ||
   !!s.landmarks?.some((v) => v.id === u.id && v.dormantSince === undefined);
-export function findTarget(s: GameState, id?: string): Target {
+export function findTarget(s: GamePosition, id?: string): Target {
   const t = targets(s).find((t) => t.id === id);
   ensure(t, '请选择有效的目标。');
   return t;
 }
-export const hostile = (s: GameState, u: Unit, t: Target) =>
+export const hostile = (s: GamePosition, u: Unit, t: Target) =>
   t.unit ? allegiance(s, t.unit) !== u.owner : t.owner !== u.owner;
-const targetEffects = (s: GameState, t: Target) =>
+const targetEffects = (s: GamePosition, t: Target) =>
   t.unit ? t.unit.effects : s.baseEffects[t.owner];
-function removeEffect(s: GameState, t: Target, e: Effect) {
+function removeEffect(s: GamePosition, t: Target, e: Effect) {
   if (t.unit) t.unit.effects = t.unit.effects.filter((v) => v !== e);
   else s.baseEffects[t.owner] = s.baseEffects[t.owner].filter((v) => v !== e);
 }
 /** One shield decision per target/effect packet; pure UI previews execute on a cloned state. */
-export function protectedEffect(s: GameState, t: Target, source: Source, ctx: Resolution): boolean {
+export function protectedEffect(
+  s: GamePosition,
+  t: Target,
+  source: Source,
+  ctx: Resolution,
+): boolean {
   if (!t.unit || source.owner === undefined || source.owner === t.owner) return false;
   if (has(s, t.unit, 'immune')) {
     emit(s, {
@@ -128,13 +133,13 @@ export function protectedEffect(s: GameState, t: Target, source: Source, ctx: Re
   }
   return false;
 }
-export function lowerMax(s: GameState, u: Unit, amount: number, ctx: Resolution) {
+export function lowerMax(s: GamePosition, u: Unit, amount: number, ctx: Resolution) {
   if (!alive(s, u)) return;
   u.maxHp = Math.max(0, u.maxHp - amount);
   u.hp = Math.min(u.hp, u.maxHp);
   if (u.hp <= 0) kill(s, u, { owner: u.owner, kind: 'sacrifice' }, ctx);
 }
-export function heal(s: GameState, t: Unit | Target, amount: number, ctx = resolution()) {
+export function heal(s: GamePosition, t: Unit | Target, amount: number, ctx = resolution()) {
   const target = 'kind' in t ? asTarget(t) : t,
     u = target.unit;
   if (u && !alive(s, u)) return;
@@ -162,7 +167,7 @@ export function heal(s: GameState, t: Unit | Target, amount: number, ctx = resol
       }
 }
 export function kill(
-  s: GameState,
+  s: GamePosition,
   u: Unit,
   source: Source = { kind: 'expire' },
   ctx = resolution(),
@@ -325,7 +330,7 @@ export function kill(
 }
 /** Damage returns actual HP removed. Source ownership is retained for spell/DOT head credit. */
 export function damage(
-  s: GameState,
+  s: GamePosition,
   t: Target,
   amount: number,
   source: Source,
@@ -483,7 +488,7 @@ export function damage(
   }
   return loss;
 }
-export function freeze(s: GameState, t: Target, source: Source, ctx: Resolution, extra = 0) {
+export function freeze(s: GamePosition, t: Target, source: Source, ctx: Resolution, extra = 0) {
   if (
     !t.unit ||
     !alive(s, t.unit) ||
@@ -502,7 +507,7 @@ export function freeze(s: GameState, t: Target, source: Source, ctx: Resolution,
     text: '冰冻 · 无法行动',
   });
 }
-export function burn(s: GameState, t: Target, source: Source, ctx: Resolution) {
+export function burn(s: GamePosition, t: Target, source: Source, ctx: Resolution) {
   if (!t.unit || !alive(s, t.unit) || protectedEffect(s, t, source, ctx)) return;
   t.unit.effects = t.unit.effects.filter((e) => e.type !== 'burn');
   addEffect(s, t.unit, 'burn', source.owner!, 0, 12, 5, source.unit?.id);
@@ -515,7 +520,7 @@ export function burn(s: GameState, t: Target, source: Source, ctx: Resolution) {
     text: '灼烧',
   });
 }
-function knockback(s: GameState, u: Unit, t: Target, path: Point[], ctx: Resolution) {
+function knockback(s: GamePosition, u: Unit, t: Target, path: Point[], ctx: Resolution) {
   if (!t.unit || !alive(s, t.unit) || path.length < 2) return;
   if (protectedEffect(s, t, { owner: u.owner, unit: u, kind: 'skill' }, ctx)) return;
   const victim = t.unit,
@@ -591,7 +596,7 @@ interface AttackOptions {
 }
 /** Resolve a hit without spending mode resources. Command layer owns operation counters. */
 export function performAttack(
-  s: GameState,
+  s: GamePosition,
   u: Unit,
   t: Target,
   ctx = resolution(),
@@ -672,7 +677,13 @@ export function performAttack(
   }
   return result;
 }
-function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, options: AttackOptions) {
+function resolveAttack(
+  s: GamePosition,
+  u: Unit,
+  t: Target,
+  ctx: Resolution,
+  options: AttackOptions,
+) {
   const ally = t.unit ? allegiance(s, t.unit) === u.owner : t.owner === u.owner;
   ensure(
     !ally ||
@@ -986,7 +997,7 @@ function resolveAttack(s: GameState, u: Unit, t: Target, ctx: Resolution, option
   } else if (victim && !ally && attackLoss > 0)
     u.effects = u.effects.filter((e) => !(e.type === 'convert' && activeEffect(s, e, u)));
 }
-export function pruneSiphons(s: GameState) {
+export function pruneSiphons(s: GamePosition) {
   s.siphons = s.siphons.filter((l) => {
     const u = s.units.find((v) => v.id === l.sourceId),
       a = targets(s).find((t) => t.id === l.fromId),
@@ -1006,7 +1017,7 @@ export function pruneSiphons(s: GameState) {
  * Each cell is an independent damage packet (immunity rolls, rage, guard and reflection).
  * Callers select full-stack spells vs top-layer skills and hostile-only vs intentional friendly fire. */
 export function areaDamage(
-  s: GameState,
+  s: GamePosition,
   victims: Target[],
   amountAt: (p: Point) => number,
   source: Source,
