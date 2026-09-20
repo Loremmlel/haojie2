@@ -1,4 +1,9 @@
-import { matchSettings, ownsComputerDecision, rewindMatch } from '../../match/history';
+import {
+  matchSettings,
+  ownsComputerDecision,
+  rewindMatch,
+  humanCommandAllowed,
+} from '../../match/history';
 import { LOCAL_MATCH, type MatchSettings } from '../../match/settings';
 import { useComputer } from '../opponent/useComputer';
 import { useMemo, useRef, useState } from 'react';
@@ -49,20 +54,22 @@ export function useGameController(props: HaojieGameProps) {
       cancel();
       setSelectedId(c.unitId ?? null);
     },
-    modal: choiceCommand ? 'new' : modal,
+    modal:
+      choiceCommand ||
+      (intent.kind === 'select' &&
+        ownsComputerDecision(session) &&
+        humanCommandAllowed(session, intent.draft))
+        ? 'new'
+        : modal,
     notice: setNotice,
   });
   const activeIntent =
     reaction && !ownsComputerDecision(session) ? startIntent(reactionAction(s)!) : intent;
   const actions = useMemo(
     () =>
-      ownsComputerDecision(session)
-        ? []
-        : card
-          ? cardActions(s, card)
-          : unit
-            ? unitActions(s, unit)
-            : [],
+      (card ? cardActions(s, card) : unit ? unitActions(s, unit) : []).filter((a) =>
+        humanCommandAllowed(session, a.command),
+      ),
     [s, card, unit],
   );
   const endError = useMemo(() => {
@@ -107,8 +114,8 @@ export function useGameController(props: HaojieGameProps) {
     executeRun(c);
   }
   function executeRun(c: Command) {
-    if (ownsComputerDecision(live.current)) {
-      setNotice('当前由AI决策，可查看棋盘或悔棋。');
+    if (!humanCommandAllowed(live.current, c)) {
+      setNotice('当前操作不属于你；可查看棋盘或悔棋。');
       return;
     }
     try {
@@ -132,14 +139,17 @@ export function useGameController(props: HaojieGameProps) {
     }
   }
   function chooseAction(a: ActionSpec) {
-    if (ownsComputerDecision(live.current)) return;
+    if (!humanCommandAllowed(live.current, a.command)) return;
     const error = actionError(s, a);
     if (error) {
       setNotice(error);
       return;
     }
     if (!a.steps.length) run(a.command);
-    else setIntent(startIntent(a));
+    else {
+      if (ownsComputerDecision(live.current)) computer.cancel();
+      setIntent(startIntent(a));
+    }
   }
   function chooseCard(id: string) {
     if (reaction || ownsComputerDecision(live.current)) return;

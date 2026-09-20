@@ -1,6 +1,6 @@
 import { redo, undo } from '../engine/history';
 import type { Session } from '../engine/history';
-import type { GameState } from '../engine/types';
+import type { Command, GameState } from '../engine/types';
 import { LOCAL_MATCH } from './settings';
 export const matchSettings = (s: Session) => s.match ?? LOCAL_MATCH;
 export const ownsComputerDecision = (s: Session) =>
@@ -36,4 +36,20 @@ export function rewindMatch(s: Session, forward = false): Session {
         ? s.present
         : [...next.past].reverse().find((state) => humanNode(state, human)),
   };
+}
+
+/** Only the human's own free BW ability can interrupt an AI turn; engine still validates its cost/targets. */
+export function humanCommandAllowed(s: Session, c: Command): boolean {
+  const match = matchSettings(s);
+  if (match.mode === 'local') return true;
+  const u = s.present.units.find((u) => u.id === c.unitId);
+  if (c.unitId && u?.owner !== match.human) return false;
+  if (!ownsComputerDecision(s)) return true;
+  return (
+    !s.present.pending.length &&
+    c.type === 'skill' &&
+    !!u &&
+    u.owner === match.human &&
+    (c.ability ?? u.kind) === 'u7'
+  );
 }

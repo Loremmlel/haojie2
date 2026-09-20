@@ -101,7 +101,7 @@ test('U05 only explicitly listed mages can equip a frost staff', () => {
   assert.equal(getStats(n, unit(n, mage.id)).attack, 10);
   assert.equal(getStats(n, unit(n, mage.id)).range, 6);
 });
-test('frozen units are neutral blockers, attackable by both sides and cannot act', () => {
+test('frozen units retain allegiance and passives, permit friendly paths but cannot act', () => {
   let s = fixture();
   const mage = add(s, 'u6', 1, 2, 4),
     v = add(s, 1, 2, 3, 4),
@@ -109,12 +109,12 @@ test('frozen units are neutral blockers, attackable by both sides and cannot act
     id = card(s, 'u5');
   s = applyCommand(s, { type: 'equip', cardId: id, targetId: mage.id });
   s = strike(s, unit(s, mage.id), unit(s, v.id));
-  assert.equal(allegiance(s, unit(s, v.id)), 0);
+  assert.equal(allegiance(s, unit(s, v.id)), 2);
   assert.equal(getStats(s, unit(s, v.id)).operationsLeft, 0);
-  assert.equal(attackPath(s, unit(s, friend.id), asTarget(unit(s, mage.id)), 2), null);
+  assert.ok(attackPath(s, unit(s, friend.id), asTarget(unit(s, mage.id)), 2));
   s.active = 2;
-  s = strike(s, unit(s, friend.id), unit(s, v.id));
-  assert.equal(unit(s, v.id).hp, 20);
+  assert.ok(commandError(s, { type: 'attack', unitId: friend.id, targetId: v.id }));
+  assert.equal(unit(s, v.id).hp, 40);
 });
 test('U06 unarmed hit applies6-turn burn, staff replaces it with freeze and base10', () => {
   let s = fixture();
@@ -126,7 +126,7 @@ test('U06 unarmed hit applies6-turn burn, staff replaces it with freeze and base
   s = pass(s);
   assert.equal(unit(s, v.id).hp, 106);
 });
-test('U06 charged cross hits center40 and arms20 exactly once per target', () => {
+test('U06 charged cross hits each center/arm cell and spares caster', () => {
   const s = fixture(),
     u = add(s, 'u6', 1, 4, 4),
     center = add(s, 5, 2, 4, 6),
@@ -134,9 +134,9 @@ test('U06 charged cross hits center40 and arms20 exactly once per target', () =>
   u.charge = u.readyCharge = 1;
   u.chargeType = 'skill';
   const n = applyCommand(s, { type: 'skill', unitId: u.id, x: 4, y: 6 });
-  assert.equal(unit(n, center.id).hp, 71);
+  assert.equal(unit(n, center.id).hp, 31);
   assert.equal(unit(n, arm.id).hp, 30);
-  assert.equal(unit(n, u.id).hp, 25);
+  assert.equal(unit(n, u.id).hp, 45);
   assert.ok(unit(n, u.id).onceUsed);
 });
 test('U07 giant transformation is free, permanent 2x2, costs the source and requires space', () => {
@@ -180,9 +180,9 @@ test('U09 flame storm hits now and again next own start at then-current position
   const u = add(s, 5, 2, 3, 7),
     id = card(s, 'u9');
   s = applyCommand(s, { type: 'cast', cardId: id, mode: 'row', row: 7 });
-  assert.equal(unit(s, u.id).hp, 91);
-  s = round(s);
   assert.equal(unit(s, u.id).hp, 71);
+  s = round(s);
+  assert.equal(unit(s, u.id).hp, 31);
   assert.equal(s.hazards.length, 0);
 });
 test('U10 rage increments only for actual positive damage, including DOT', () => {
@@ -268,13 +268,13 @@ test('U13 first-five-turn self-reroll is optional and cannot endlessly reroll it
   s.turns[1] = 6;
   assert.ok(commandError(s, { type: 'reroll', cardId: id }));
 });
-test('U14 siphon allows base healing, is free and disconnects immediately out of range', () => {
+test('U14 siphon allows base healing, consumes a skill operation and disconnects out of range', () => {
   let s = fixture();
   const u = add(s, 'u14', 1, 5, 4),
     victim = add(s, 5, 2, 5, 7);
   s.bases[1] = 250;
   s = applyCommand(s, { type: 'skill', unitId: u.id, targetId: victim.id, secondId: 'base-1' });
-  assert.equal(unit(s, u.id).operations, 0);
+  assert.equal(unit(s, u.id).operations, 1);
   assert.equal(s.siphons.length, 1);
   s = pass(s);
   assert.equal(unit(s, victim.id).hp, 91);

@@ -1,3 +1,5 @@
+import { emptyFor } from './movement';
+import { attackPath, piercingTargets, validAttackRoute } from './geometry';
 import {
   activateAura,
   captureClockFrame,
@@ -10,7 +12,7 @@ import {
   summon,
   syncBanners,
 } from './shrines';
-import { canDeployKind, hasTrait } from './traits';
+import { allPieces, canDeployKind, hasTrait } from './traits';
 import { withRandomSource, type RandomSource } from './random';
 import { synthesize } from './synthesis';
 import { normalizeLegacyGuards } from './protection';
@@ -22,6 +24,8 @@ import { beginTurn, endTurn, switchTurn } from './lifecycle';
 import { finishMode, moveUnit, react } from './movement';
 import {
   actor,
+  hasWeapon,
+  piercing,
   addUnit,
   chooseMode,
   draw,
@@ -78,21 +82,20 @@ export function applyCommand(
   ensure(previous.summonSlots !== -1 || c.type === 'react', '当前正在结算回合结束效果。');
   const transit = previous.units.find(
     (u) =>
-      hasTrait(u, 'u12p') &&
-      u.mode === 'move' &&
-      previous.units.some(
-        (v) => v.id !== u.id && cells(v).some((p) => cells(u).some((q) => equal(p, q))),
-      ),
+      (hasTrait(u, 'u12p') || hasTrait(u, 'u12')) && u.mode === 'move' && !emptyFor(previous, u),
   );
   ensure(
     !transit || c.type === 'react' || (c.type === 'move' && c.unitId === transit.id),
-    '小BW正在冲撞经过敌方，必须先用剩余移动次数回到空地。',
+    '冲撞移动正在经过其他占位，必须先完成弹出或回到空地。',
   );
   const s = structuredClone(previous);
   normalizeLegacyGuards(s);
   s.events = [];
   return withRandomSource(s, randomSource, () => {
     const ctx = resolution();
+    const giant =
+      c.type === 'skill' &&
+      (c.ability ?? allPieces(s).find((u) => u.id === c.unitId)?.kind) === 'u7';
     if (s.phase === 'shrine-draft') ensure(c.type === 'choose-shrine', '请先秘密选择神龛。');
     if (s.phase === 'shrine-setup')
       ensure(
@@ -102,7 +105,7 @@ export function applyCommand(
     if (s.summonOffer) ensure(c.type === 'choose-summons', '请先从候选召唤中选出两个结果。');
     if (s.phase === 'synthesis')
       ensure(
-        ['synthesize', 'skip-synthesis', 'craft', 'react'].includes(c.type),
+        giant || ['synthesize', 'skip-synthesis', 'craft', 'react'].includes(c.type),
         '请先选择合成，或跳过合成进入召唤。',
       );
     if (
@@ -122,7 +125,7 @@ export function applyCommand(
       ].includes(c.type)
     )
       ensure(
-        s.phase === 'play' || s.phase === 'shrine-setup',
+        s.phase === 'play' || s.phase === 'shrine-setup' || giant,
         '先完成回合开始的召唤选择，再进入行动阶段。',
       );
     switch (c.type) {
@@ -201,9 +204,25 @@ export function applyCommand(
       case 'attack': {
         const u = actor(s, c.unitId);
         chooseMode(s, u, 'attack');
-        const t = findTarget(s, c.targetId);
-        performAttack(s, u, t, ctx, { direction: c.direction, mode: c.mode });
-        u.attacked.push(t.id);
+        if (c.path)
+          ensure(
+            hasWeapon(u, 'u28') && validAttackRoute(s, u, c.path, getStats(s, u).range),
+            '所选穿透路径不合法。',
+          );
+        const t = findTarget(
+          s,
+          c.targetId ?? (c.path ? piercingTargets(s, u, c.path).at(-1)?.target.id : undefined),
+        );
+        const hitIds =
+          piercing(u) && c.mode !== 'heal'
+            ? piercingTargets(
+                s,
+                u,
+                c.path ?? attackPath(s, u, t, getStats(s, u).range, c.direction, true) ?? [],
+              ).map((v) => v.target.id)
+            : [];
+        performAttack(s, u, t, ctx, { direction: c.direction, mode: c.mode, path: c.path });
+        u.attacked.push(...new Set([t.id, ...hitIds]));
         u.shots++;
         if (u.shots >= getStats(s, u).actions) finishOperation(u);
         break;

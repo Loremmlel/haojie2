@@ -265,6 +265,8 @@ export interface Command {
   ultimate?: boolean;
   /** Direction of the final attack-path step; the engine constructs and validates the route. */
   direction?: AttackDirection;
+  /** A player-selected route. Combat validates every point before any mutation. */
+  path?: Point[];
   charge?: boolean;
   cardIds?: string[];
   sacrificeIds?: string[];
@@ -288,6 +290,7 @@ export interface Target extends Point {
   unit?: Unit;
 }
 export interface Source {
+  base?: Player;
   owner?: Player;
   unit?: Unit;
   kind: 'attack' | 'spell' | 'skill' | 'status' | 'collision' | 'reflect' | 'sacrifice' | 'expire';

@@ -154,14 +154,14 @@ test('04 at five charge cannon gains exactly one attack range', () => {
   u.charge = u.readyCharge = 5;
   assert.equal(commandError(s, { type: 'attack', unitId: u.id, targetId: v.id }), null);
 });
-test('05 shock ring includes four corners, hits large units once and can hurt allies', () => {
+test('05 shock ring includes four corners, hits each covered large-unit cell and can hurt allies', () => {
   let s = fixture();
   const u = add(s, 5, 1, 4, 5),
     friend = add(s, 1, 1, 3, 4),
     enemy = add(s, 5, 2, 6, 6);
   s = applyCommand(s, { type: 'skill', unitId: u.id });
   assert.equal(unit(s, friend.id).hp, 35);
-  assert.equal(unit(s, enemy.id).hp, 96);
+  assert.equal(unit(s, enemy.id).hp, 81);
   assert.equal(unit(s, u.id).hp, 111);
   assert.ok(commandError(s, { type: 'move', unitId: u.id, x: 4, y: 6 }));
 });
@@ -188,14 +188,14 @@ test('07 hook has separate target and in-range landing, blocked by gold body', (
   n = applyCommand(s, { type: 'skill', unitId: u.id, targetId: v.id, x: 4, y: 4 });
   assert.equal(unit(n, v.id).x, 3);
 });
-test('08 blast damages 2x2 minions once and friendly bases', () => {
+test('08 blast spares friendly 2x2 minions and friendly bases', () => {
   const s = fixture(),
     u = add(s, 5, 1, 2, 3),
     id = card(s, 8);
-  assert.equal(unit(applyCommand(s, { type: 'cast', cardId: id, x: 2, y: 3 }), u.id).hp, 91);
+  assert.equal(unit(applyCommand(s, { type: 'cast', cardId: id, x: 2, y: 3 }), u.id).hp, 111);
   const t = fixture(),
     id2 = card(t, 8);
-  assert.equal(applyCommand(t, { type: 'cast', cardId: id2, x: 4, y: 1 }).bases[1], 280);
+  assert.equal(applyCommand(t, { type: 'cast', cardId: id2, x: 4, y: 1 }).bases[1], 300);
 });
 test('09 attack mode has two different targets; it cannot become move mode', () => {
   let s = fixture();

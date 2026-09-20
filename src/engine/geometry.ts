@@ -1,7 +1,7 @@
 import { allPieces, hasTrait, isLandmark } from './traits';
 import { landmarkAt, landmarkSquare, liveLandmark } from './shrines';
 import { definition } from './catalog';
-import { allegiance, getStats, has, passive, piercing } from './state';
+import { allegiance, getStats, has, passive, piercing, hasWeapon } from './state';
 import type { AttackDirection, GameState, Player, Point, Target, Unit } from './types';
 export const WIDTH = 9,
   HEIGHT = 13;
@@ -86,6 +86,7 @@ export function canPlace(
   for (const p of footprint) {
     const land = landmarkAt(s, p);
     if (!land) continue;
+    if (u.size > 1) return false;
     if (deployment && liveLandmark(land) && allegiance(s, land) !== u.owner) return false;
     // Landmarks support one unit, never a clone stack, even while dormant.
     if (occupants(s, p).some((v) => v.id !== u.id && !ignore.includes(v.id))) return false;
@@ -100,8 +101,7 @@ export function canPlace(
           v.kind === 'u25' &&
           u.owner === v.owner &&
           u.size === 1 &&
-          v.size === 1 &&
-          !has(s, v, 'freeze')
+          v.size === 1
         ),
     )
   )
@@ -163,14 +163,17 @@ export function attackPath(
   target: Target | Point,
   limit: number,
   direction?: AttackDirection,
+  pierce = false,
 ): Point[] | null {
   if (direction !== undefined)
-    return attackRoutes(s, u, target, limit).find((r) => r.direction === direction)?.path ?? null;
+    return (
+      attackRoutes(s, u, target, limit, pierce).find((r) => r.direction === direction)?.path ?? null
+    );
   const t = 'id' in target ? target : undefined,
     ends = t?.unit ? cells(t.unit) : [target],
     blocked = new Set<string>();
   for (const v of allPieces(s))
-    if (v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
+    if (!pierce && v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
       for (const p of cells(v)) blocked.add(key(p));
   // When attacking a stack, other members on its target square are not intervening blockers.
   for (const end of ends) blocked.delete(key(end));
@@ -238,12 +241,13 @@ export function attackRoutes(
   u: Unit,
   target: Target | Point,
   limit: number,
+  pierce = false,
 ): AttackRoute[] {
   const t = 'id' in target ? target : undefined,
     ends = new Set((t?.unit ? cells(t.unit) : [target]).map(key)),
     blocked = new Set<string>();
   for (const v of allPieces(s))
-    if (v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
+    if (!pierce && v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
       for (const p of cells(v)) blocked.add(key(p));
   for (const end of ends) blocked.delete(end);
   if (t?.id !== `base-${other(u.owner)}`) blocked.add(key(basePoint(other(u.owner))));
@@ -271,10 +275,57 @@ export function attackRoutes(
 }
 /** Direction-sensitive abilities use this same bounded choice set in UI and AI. */
 export function selectableAttackRoutes(s: GameState, u: Unit, t: Target): AttackRoute[] {
+  if (piercing(u) && !hasWeapon(u, 'u28')) return [];
   if (
-    piercing(u) ||
-    !((hasTrait(u, 'u20') && !u.silenced) || (t.unit && hasTrait(t.unit, 24) && !t.unit.silenced))
+    !(
+      piercing(u) ||
+      (hasTrait(u, 'u20') && !u.silenced) ||
+      (t.unit && hasTrait(t.unit, 24) && !t.unit.silenced)
+    )
   )
     return [];
-  return attackRoutes(s, u, t, getStats(s, u).range);
+  return attackRoutes(s, u, t, getStats(s, u).range, piercing(u));
+}
+
+/** Grow around the original square; every final cell must be unoccupied in both layers. */
+export function expansionAnchors(s: GameState, u: Unit): Point[] {
+  if (u.size !== 1 || isLandmark(u)) return [];
+  return [
+    { x: u.x, y: u.y },
+    { x: u.x - 1, y: u.y },
+    { x: u.x, y: u.y - 1 },
+    { x: u.x - 1, y: u.y - 1 },
+  ].filter((p) => canPlace(s, { ...u, size: 2 }, p));
+}
+/** Used by the board preview AND command validation. Enemy bases are terminal. */
+export function validAttackRoute(s: GameState, u: Unit, path: Point[], limit: number): boolean {
+  if (!Array.isArray(path) || !path.length || path.length > Math.min(117, limit + 1)) return false;
+  if (path.some((p) => !p || !inside(p))) return false;
+  if (!cells(u).some((p) => equal(p, path[0])) || new Set(path.map(key)).size !== path.length)
+    return false;
+  for (let i = 1; i < path.length; i++) {
+    if (distance(path[i - 1], path[i]) !== 1 || cells(u).some((p) => equal(p, path[i])))
+      return false;
+    if (i < path.length - 1 && equal(path[i], basePoint(other(u.owner)))) return false;
+  }
+  return true;
+}
+/** Snapshot at selection time: each stack top and landmark is hit once per volley, not per cell.
+ * AOE is intentionally different. Prefixes preserve each victim's actual incoming direction. */
+export function piercingTargets(s: GameState, u: Unit, path: Point[]) {
+  const victims: { target: Target; path: Point[] }[] = [];
+  const seen = new Set<string>();
+  const available = targets(s).filter(
+    (t) =>
+      t.id !== u.id &&
+      (t.unit ? allegiance(s, t.unit) : t.owner) !== u.owner &&
+      (topTarget(s, t) || (t.unit && isLandmark(t.unit))),
+  );
+  for (let i = 1; i < path.length; i++)
+    for (const t of available)
+      if (!seen.has(t.id) && (t.unit ? cells(t.unit) : [t]).some((p) => equal(p, path[i]))) {
+        seen.add(t.id);
+        victims.push({ target: t, path: path.slice(0, i + 1) });
+      }
+  return victims;
 }

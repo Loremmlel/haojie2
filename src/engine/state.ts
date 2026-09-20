@@ -45,9 +45,8 @@ export const activeEffect = (s: GameState, e: Effect, u?: Unit) =>
   e.from <= effectClock(s, e, u) && e.until > effectClock(s, e, u);
 export const has = (s: GameState, u: Unit, type: Effect['type']) =>
   u.effects.some((e) => e.type === type && activeEffect(s, e, u));
-export const allegiance = (s: GameState, u: Unit): Player | 0 =>
-  has(s, u, 'freeze') ? 0 : u.owner;
-export const passive = (s: GameState, u: Unit) => !u.silenced && !has(s, u, 'freeze');
+export const allegiance = (_s: GameState, u: Unit): Player | 0 => u.owner;
+export const passive = (_s: GameState, u: Unit) => !u.silenced;
 export const hasWeapon = (u: Unit, k: Kind) => u.equipment.includes(k);
 export const age = (s: GameState, u: Unit) => s.turns[u.owner] + u.offset / 2 - u.born;
 export const isRunner = (u: Unit) => !u.silenced && anyTrait(u, ['u12', 'u12p']);
@@ -289,7 +288,7 @@ export function getStats(s: GameState, u: Unit): Stats {
   const halfAttackLocked =
     !!reserve && !(reserve.chargeType === 'attack' && reserve.readyCharge >= 1);
   const availableAttack =
-    locked || halfAttackLocked || hasTrait(u, 'firelord')
+    locked || halfAttackLocked || (enabled && hasTrait(u, 'firelord'))
       ? 0
       : u.mode === 'attack'
         ? Math.max(0, actions - u.shots)

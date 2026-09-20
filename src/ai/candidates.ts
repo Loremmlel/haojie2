@@ -1,3 +1,4 @@
+import { expansionAnchors } from '../engine/geometry';
 import { canRestoreClock, commandSummonPool, damageBonus, healingBlocked } from '../engine/shrines';
 import {
   hasTrait,
@@ -221,19 +222,29 @@ function pointRank(s: GameState, a: ActionSpec, c: Command, p: Point, u?: Unit):
   if (a.id === 'blast' || a.id === 'cross' || a.id === 'ice-mark') {
     let value = 0;
     for (const t of targets(s)) {
-      const hit = (t.unit ? cells(t.unit) : [t]).some((q) =>
-        a.id === 'blast'
-          ? q.x >= p.x && q.x <= p.x + 1 && q.y >= p.y && q.y <= p.y + 1
-          : a.id === 'cross'
-            ? (q.x === p.x || q.y === p.y) &&
-              !!u &&
-              Math.abs(q.x - u.x) <= 5 &&
-              Math.abs(q.y - u.y) <= 5
-            : equal(q, p),
+      if ((t.unit ? allegiance(s, t.unit) : t.owner) === decisionOwner(s)) continue;
+      const amount = (t.unit ? cells(t.unit) : [t]).reduce(
+        (n, q) =>
+          n +
+          (a.id === 'blast'
+            ? q.x >= p.x && q.x <= p.x + 1 && q.y >= p.y && q.y <= p.y + 1
+              ? 20
+              : 0
+            : a.id === 'cross'
+              ? (q.x === p.x || q.y === p.y) &&
+                u &&
+                Math.abs(q.x - u.x) <= 5 &&
+                Math.abs(q.y - u.y) <= 5
+                ? equal(q, p)
+                  ? 40
+                  : 20
+                : 0
+              : equal(q, p)
+                ? 20
+                : 0),
+        0,
       );
-      if (hit)
-        value +=
-          (t.owner === decisionOwner(s) ? -1 : 1) * (t.unit ? Math.min(t.unit.hp, 20) + 15 : 40);
+      if (amount) value += t.unit ? Math.min(t.unit.hp, amount) + 15 : amount * 2;
     }
     return value;
   }
@@ -243,7 +254,12 @@ function points(s: GameState, a: ActionSpec, c: Command): Point[] {
   const u =
     allPieces(s).find((v) => v.id === c.unitId) ??
     (c.type === 'react' ? s.pending[0]?.source : undefined);
-  if ((c.type === 'move' && u && isRunner(u)) || a.id === 'bounce') return u ? neighbors(u) : [];
+  if ((c.type === 'move' && u && (isRunner(u) || u.size > 1)) || a.id === 'bounce')
+    return u ? neighbors(u) : [];
+  if (a.id === 'giant') {
+    const v = allPieces(s).find((v) => v.id === c.targetId);
+    return v ? expansionAnchors(s, v) : [];
+  }
   if (a.id === 'hut-spawn')
     return hutSpawnPoints(s, s.pending[0]).sort(
       (aPoint, bPoint) => pointRank(s, a, c, bPoint, u) - pointRank(s, a, c, aPoint, u),
@@ -286,6 +302,7 @@ function points(s: GameState, a: ActionSpec, c: Command): Point[] {
   return ranked.sort((a, b) => b.score - a.score).map((v) => v.p);
 }
 function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): Command[] {
+  if (step.kind === 'path') return []; // The AI uses bounded engine-generated directional routes instead of freehand path enumeration.
   if (step.kind === 'target') {
     const u =
       allPieces(s).find((v) => v.id === c.unitId) ??
@@ -304,11 +321,20 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
           (!t.unit || t.unit.kind === 'u25' || t.unit.hp * 2 < t.unit.maxHp)
         )
           return false;
+        if (a.id === 'giant' && (!t.unit || t.id === u?.id || !expansionAnchors(s, t.unit).length))
+          return false;
         if (a.id === 'sacrifice-summon' && (t.id === u?.id || t.unit?.kind !== 14)) return false;
         if (a.id === 'sacrifice' && (t.id === u?.id || t.unit?.kind === 'u25')) return false;
         // Friendly spells can target a particular clone, attacks still obey top-of-stack rules.
         if (c.type === 'attack' || c.type === 'react') {
-          if (!topTarget(s, t) && !(view && piercing(view) && t.unit && isLandmark(t.unit)))
+          if (
+            !topTarget(s, t) &&
+            !(
+              view &&
+              ((healingAttack(view) && t.id === view.id && c.mode !== 'damage') ||
+                (piercing(view) && t.unit && isLandmark(t.unit)))
+            )
+          )
             return false;
           if (
             view &&
@@ -364,7 +390,15 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
             !markFollowUp(s, t, owner, s.ply + 2)
           )
             return false;
-          if (side === owner && !(view && t.unit && canAttackFriend(view, t.unit))) return false;
+          if (
+            side === owner &&
+            !(
+              view &&
+              t.unit &&
+              (canAttackFriend(view, t.unit) || (c.mode === 'heal' && healingAttack(view)))
+            )
+          )
+            return false;
         }
         if (
           step.range &&
@@ -396,14 +430,16 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
   }));
   const lineValue = (command: Command) =>
     targets(s).reduce((score, t) => {
-      const hit = (t.unit ? cells(t.unit) : [t]).some((p) =>
+      const hit = (t.unit ? cells(t.unit) : [t]).filter((p) =>
         step.kind === 'row' ? p.y === command.row : p.x === command.column,
-      );
-      if (!hit) return score;
+      ).length;
+      if (!hit || (t.owner === decisionOwner(s) && c.type === 'cast')) return score;
       return (
         score +
         (t.owner === decisionOwner(s) ? -1 : 1) *
-          (t.unit ? Math.min(20, t.unit.hp) + (t.unit.hp <= 20 ? materialValue(s, t.unit) : 0) : 25)
+          (t.unit
+            ? Math.min(20 * hit, t.unit.hp) + (t.unit.hp <= 20 * hit ? materialValue(s, t.unit) : 0)
+            : 25)
       );
     }, 0);
   return lines.sort((a, b) => lineValue(b) - lineValue(a));

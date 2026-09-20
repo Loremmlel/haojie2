@@ -60,7 +60,7 @@ export function Inspector({
                 {d.role}
                 {card
                   ? ' · 手牌'
-                  : ` · ${inspected && stats?.frozen ? '冰冻中立' : faction(inspected!.owner)}`}
+                  : ` · ${faction(inspected!.owner)}${stats?.frozen ? ' · 冰冻' : ''}`}
               </span>
               <h3>{d.name}</h3>
             </div>
@@ -69,12 +69,12 @@ export function Inspector({
             ) : (
               <DefinitionStats d={d} />
             )}
-            <details className="ability-details">
-              <summary>
+            <section className="ability-details" aria-label="能力与规则">
+              <h4>
                 能力与规则 <Icon name="book" size={12} />
-              </summary>
+              </h4>
               <p className="ability-copy">{d.description}</p>
-            </details>
+            </section>
             {unit && occupants(s, unit).length + (landmarkAt(s, unit) ? 1 : 0) > 1 && (
               <div className="stack-selector">
                 <span>同格棋子 · 点击切换</span>

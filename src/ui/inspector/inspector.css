@@ -141,7 +141,6 @@
     letter-spacing: 1px;
     order: 1;
   }
-  .hj-game .inspector .ability-copy,
   .hj-game .inspector .status-tags,
   .hj-game .inspector .charge-meter {
     display: none;
@@ -187,13 +186,12 @@
   border-top: 1px solid var(--line);
   padding-top: 9px;
 }
-.hj-game .ability-details summary {
+.hj-game .ability-details h4 {
   display: flex;
   justify-content: space-between;
   font-size: 10px;
   color: #77866e;
   align-items: center;
-  cursor: pointer;
 }
 .hj-game .ability-details .ability-copy {
   margin: 9px 0 0;
@@ -203,10 +201,10 @@
     margin-top: 6px;
     padding-top: 5px;
   }
-  .hj-game .ability-details summary {
+  .hj-game .ability-details h4 {
     font-size: 9px;
   }
-  .hj-game .ability-details[open] .ability-copy {
+  .hj-game .ability-details .ability-copy {
     display: block;
     max-height: 110px;
     overflow: auto;

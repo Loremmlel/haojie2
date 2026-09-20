@@ -23,8 +23,8 @@ export function UnitDetails({ state: s, unit: inspected }: { state: GameState; u
         </p>
       )}
       {abilityKinds(inspected).length > 1 && (
-        <details className="ability-details">
-          <summary>强夺获得的能力 · {abilityKinds(inspected).length - 1}</summary>
+        <section className="ability-details">
+          <h4>强夺获得的能力 · {abilityKinds(inspected).length - 1}</h4>
           {abilityKinds(inspected)
             .filter((k) => k !== inspected.kind)
             .map((k) => (
@@ -32,7 +32,7 @@ export function UnitDetails({ state: s, unit: inspected }: { state: GameState; u
                 <b>{definition(k).name}</b>：{definition(k).description}
               </p>
             ))}
-        </details>
+        </section>
       )}
       <>
         <div className="live-stats">
@@ -69,7 +69,10 @@ export function UnitDetails({ state: s, unit: inspected }: { state: GameState; u
           <p className="sequence-hint">本次攻击还剩 {stats.remaining} 次，不能切换移动或技能。</p>
         )}
         {inspected.mode === 'move' && inspected.moves > 0 && (
-          <p className="sequence-hint">冲撞还剩 {inspected.moves} 步；必须最终回到空地。</p>
+          <p className="sequence-hint">
+            {inspected.size > 1 ? '整体移动' : '冲撞'}还剩 {inspected.moves}{' '}
+            步；每次一小格，最终不得重叠。
+          </p>
         )}
       </>
       <>
