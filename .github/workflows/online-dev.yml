@@ -1,0 +1,88 @@
+name: Online adapter branch verification
+on:
+  push:
+    branches: [feat/online-adapter]
+    paths: ['.dev/**', '.github/workflows/online-dev.yml']
+permissions:
+  contents: write
+concurrency:
+  group: online-adapter-development
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/online-adapter
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply reviewed one-time refactor
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if [ -f .dev/online-refactor.mjs ]; then
+            node .dev/online-refactor.mjs
+            rm .dev/online-refactor.mjs
+            git add src AGENTS.md .dev/online-refactor.mjs
+            git commit -m 'refactor: separate public positions and adapt shared UI contracts'
+            git push origin HEAD:feat/online-adapter
+          fi
+          if [ -f .dev/patch.mjs ]; then
+            node .dev/patch.mjs
+            rm .dev/patch.mjs
+            git add src tests scripts examples docs package.json AGENTS.md .github/workflows/ci.yml .dev/patch.mjs
+            git commit -m 'fix: apply reviewed online-adapter follow-up'
+            git push origin HEAD:feat/online-adapter
+          fi
+      - run: npm ci --no-audit --no-fund
+      - name: Format authored changes
+        run: |
+          npx prettier --write src tests scripts package.json AGENTS.md docs/ONLINE-ADAPTATION.md
+          if [ -d examples ]; then npx prettier --write examples; fi
+          git add src tests scripts package.json AGENTS.md docs/ONLINE-ADAPTATION.md
+          if [ -d examples ]; then git add examples; fi
+          if ! git diff --cached --quiet; then
+            git commit -m 'style: format online-adapter source'
+            git push origin HEAD:feat/online-adapter
+          fi
+          git rev-parse HEAD
+      - run: npm run check
+      - run: npm test
+      - name: Build and keep the offline release current
+        run: |
+          npm run deploy
+          npm run deploy:check
+          git add index.html
+          if ! git diff --cached --quiet; then
+            git commit -m 'build: update single HTML with shared session adapters'
+            git push origin HEAD:feat/online-adapter
+          fi
+          git rev-parse HEAD
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - run: npm run test:pages
+      - run: npm run test:browser:ai
+      - run: npm run test:browser:vfx
+      - run: npm run test:browser:shrine
+      - run: npm run test:browser:feedback3
+      - name: Verify controlled host when present
+        run: |
+          if [ -f tests/browser/online.mjs ]; then node tests/browser/online.mjs; fi
+      - run: node --import tsx scripts/ai/shrine-smoke.ts
+      - run: npm run play:cli -- --replay docs/playtests/cli-feedback3-20260920.jsonl
+      - name: Report tested source
+        if: always()
+        run: git rev-parse HEAD && git status --short
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: online-adapter-evidence
+          path: |
+            artifacts/*.png
+            artifacts/*report.json
+          if-no-files-found: ignore
+          retention-days: 7
