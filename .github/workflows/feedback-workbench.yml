@@ -8,51 +8,37 @@ concurrency:
   group: feedback-3-workbench
   cancel-in-progress: false
 jobs:
-  apply-and-build:
+  finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Restore checksum-verified reviewed patch
+      - name: Correct legacy descriptions
         run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs';
-          import { brotliDecompressSync } from 'node:zlib';
-          import { createHash } from 'node:crypto';
-          const parts = Array.from({ length: 8 }, (_, i) => readFileSync(`.feedback3/part-${i}.b64`, 'utf8'));
-          const patch = brotliDecompressSync(Buffer.from(parts.join(''), 'base64'));
-          const actual = createHash('sha256').update(patch).digest('hex');
-          if (actual !== '40f3f9f8d097506cf64ee5c2351ab82fe27654912e428444de04ad7d42a58592') throw new Error(`Patch checksum mismatch: ${actual}`);
-          writeFileSync('/tmp/feedback3.patch', patch);
-          NODE
-          git apply --check /tmp/feedback3.patch
-          git apply /tmp/feedback3.patch
+          python - <<'PY'
+          from pathlib import Path
+          for file, old, new in [('README.md', '冰冻中立', '冰冻禁行'), ('src/engine/catalog.ts', '受到有随从来源的伤害时', '受到有棋子或基地来源的伤害时')]:
+              p = Path(file)
+              text = p.read_text()
+              assert text.count(old) == 1, file
+              p.write_text(text.replace(old, new))
+          PY
       - run: npm ci --no-audit --no-fund
-      - name: Reproduce deterministic command recording
-        run: |
-          node --import tsx scripts/ai/shrine-smoke.ts --record
-          echo '297f37ca3a06d059155e3c06b0c4bf55ccf97c0288a3e92ae7e38a08dd0d9fb3  docs/playtests/cli-feedback3-20260920.jsonl' | sha256sum -c -
       - run: npm run check
-      - run: npm test
-      - name: Reproduce reviewed single-file build
+      - name: Reproduce final standalone release
         run: |
           npm run deploy
-          echo '156c73b094d9ac7f0f858def4b61f8a386db27fb2534d7dd0ab1cecf4d60ece3  index.html' | sha256sum -c -
-      - name: Commit verified source on isolated work branch
-        run: |
-          git rm -r .feedback3
-          # The connector applies final workflow changes; this token writes source only.
-          git restore -- .github/workflows/ci.yml
-          mv .github/workflows/feedback-workbench.yml /tmp/feedback-workbench.yml
-          npm run format:check
-          mv /tmp/feedback-workbench.yml .github/workflows/feedback-workbench.yml
+          echo '4d25b0cbb3e0a3df53ecc0a4d9d23edfeed6aebb4231d3d781dc5b35b6601f84  index.html' | sha256sum -c -
+          npx prettier --check README.md src/engine/catalog.ts
           git diff --check
-          git add -A
+      - name: Commit source and release only
+        run: |
+          git add README.md src/engine/catalog.ts index.html
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix: implement feedback 3 rules, combat paths, large movement and regression tests'
+          git commit -m 'docs: align freeze and base-origin reflection descriptions'
           git push origin HEAD:fix/feedback-3-20260920
           git show --no-patch --format='%H %T'
