@@ -141,7 +141,7 @@ test('public preflight stops before randomness instead of inventing random field
 
 test('public secret-choice preflight can validate the second seat without reading the first choice', () => {
   let s = createGame(90, 'shrine');
-  s = applyPlayerCommand(s, 2, { type: 'choose-shrine', shrineKind: s.shrineDraft!.offers[2][0] });
+  s = applyPlayerCommand(s, 2, { type: 'choose-shrine', shrineKind: s.shrineDraft!.offers[2][0], parity: 'odd' });
   const view = getPlayerView(s, 1);
   assert.equal(view.state.shrineDraft!.choices[2], undefined);
   assert.equal(inspectCommand(view.state, { type: 'choose-shrine', player: 1, shrineKind: view.state.shrineDraft!.offers[1][0], parity: 'odd' }).status, 'available');

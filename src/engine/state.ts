@@ -69,8 +69,9 @@ export function random(s: GamePosition, boundaries: readonly number[] = [0, 1]) 
   x ^= x << 13;
   x ^= x >>> 17;
   x ^= x << 5;
-  s.rng = x >>> 0;
-  return s.rng / 4294967296;
+  const next = x >>> 0;
+  s.rng = next;
+  return next / 4294967296;
 }
 export function template(kind: Kind, owner: Player, born: number, at: Point, id = 'preview'): Unit {
   const d = definition(kind);

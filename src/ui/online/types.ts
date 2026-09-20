@@ -36,7 +36,7 @@ export function updateError(update: OnlineUpdate): string | null {
   if (update.view?.viewVersion !== PLAYER_VIEW_VERSION || update.view.ruleset !== HAOJIE_RULESET)
     return '游戏规则或视图版本不一致，请刷新页面并让宿主同步版本。';
   if (update.view.viewer !== 1 && update.view.viewer !== 2) return '宿主没有提供有效的玩家席位。';
-  if (!update.view.state || 'seed' in update.view.state || 'rng' in update.view.state)
+  if (!update.view.state || typeof update.view.state !== 'object' || 'seed' in update.view.state || 'rng' in update.view.state)
     return '受控棋盘只接受玩家视图，不能传入完整权威状态。';
   return null;
 }

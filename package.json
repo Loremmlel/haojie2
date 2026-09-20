@@ -22,7 +22,8 @@
     "preview:vfx": "node scripts/vfx/build-preview.mjs",
     "test:browser:vfx": "node tests/browser/vfx.mjs",
     "test:browser:shrine": "node tests/browser/shrine.mjs",
-    "test:browser:feedback3": "node tests/browser/feedback3.mjs"
+    "test:browser:feedback3": "node tests/browser/feedback3.mjs",
+    "test:browser:online": "node tests/browser/online.mjs"
   },
   "dependencies": {
     "react": "19.2.0",

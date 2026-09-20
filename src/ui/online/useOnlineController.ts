@@ -54,13 +54,19 @@ export function useOnlineController(props: HaojieOnlineGameProps) {
   useEffect(() => {
     if (update.revision > played.current) {
       played.current = update.revision;
-      if (update.kind === 'snapshot') presentation.clear();
+      if (update.kind === 'snapshot' || config.current.connection !== 'connected') presentation.clear();
       else presentation.play(update.view.state.events);
     }
     const request = pending.current;
     if (request?.acceptedRevision !== undefined && update.revision >= request.acceptedRevision)
       release(request);
   }, [update]);
+
+  // An equal-revision reconnect snapshot clears effects, never newer state or a pending ack.
+  useEffect(() => {
+    if (props.update.kind === 'snapshot' && props.update.revision >= current.current.revision)
+      presentation.clear();
+  }, [props.update]);
 
   function connectionBlock(): string | null {
     if (config.current.connection !== 'connected')
