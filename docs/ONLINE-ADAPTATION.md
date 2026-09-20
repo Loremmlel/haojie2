@@ -4,30 +4,126 @@
 
 ## 范围与不变量
 
-做有边界的会话/交互重构，不复制棋盘、不复制规则、不维护本地和在线两套技能。保留现有HaojieGame的initialState、initialMatch、storageKey、onStateChange语义、v2存档、单HTML、人机Worker和旧回放。新增受控入口由宿主提供持续更新的玩家视图，客户端只能提交意图，不结算权威状态。
+这是有边界的会话/交互重构，不复制棋盘，不复制规则，不维护本地和在线两套技能。现有 `HaojieGame` 保留 `initialState`、`initialMatch`、`storageKey`、`onStateChange` 的语义，v2存档、单HTML、人机Worker和历史回放不变。新增 `HaojieOnlineGame` 只接受持续更新的玩家视图，客户端提出命令，最终结果由宿主裁定。
 
-游戏仓库维护：规则、运行时命令校验、游戏内操作者权限、玩家视图及事件可见性、受控交互、表现生命周期。网站维护：认证席位、房间协调、WS、持久化、提交编号/幂等、修订号、重连、部署版本匹配。网站不包含棋子技能特判。
+游戏仓库维护：规则、运行时命令校验、游戏内操作者权限、玩家视图及事件可见性、受控交互、表现生命周期。网站维护：认证席位、房间协调、WS、持久化、提交编号/幂等、修订号、重连、部署版本匹配。网站不包含棋子技能特判，也不必固定使用D1。
 
-## 实施拆分
+## 已落实的抽象
 
-1. 区分不含seed/rng的局面数据与完整权威GameState；共享只读查询和规则代码。公开视图不能伪装完整状态，不能补假seed/rng。必要的客户端规则预检只检查公开信息能确定的部分，不能猜测随机结果或返回假想局面；最终服务端结算才算成功。本地预检仍沿用完整状态的现有行为。
-2. 运行时解析外来Command，并以宿主认证后的Player执行：普通回合、反应、双方独立神龛暗选、超级BW回合外巨大化分别处理。命令自带player不得冒名；引擎继续校验成本、冻结、目标、路径等规则。失败原状态与PRNG不变。
-3. 提取共享交互/展示层。本地会话继续持有Session、AI、撤销/重做和持久化；受控会话只持有瞬时选择、表现与提交状态。在线不挂载本地会话、AI或存档工具，不注册悔棋快捷键。非当前回合不等于全部禁用。
-4. 玩家视图显式过滤顶层及嵌套记录，不含历史和随机状态；暗选未共同揭示前保护对手选择与玉碎奇偶，也检查日志与事件。现行公开手牌与双方神龛候选不变。
-5. 宿主更新以matchId/revision标识；忽略重复和旧更新，快照不重播。提交回执与局面广播分开，不用对手更新解除本人的未决提交。断线/拒绝/恢复后可继续，过期移动攻击不盲目重放。
-6. 最小模拟宿主使用同一权威引擎驱动两个受控棋盘，JSON边界传输视图，覆盖并发暗选、提交失败/延迟、断线、重复及旧更新。真实房间服务留给网站。
+```text
+HaojieGame：本地Session、历史、存档和AI调度
+        │
+        ├── useGameInteraction：操作菜单、选点、选路、完整Command
+        ├── GameSurface：同一棋盘、面板、规则、图鉴
+        └── useGamePresentation：事件、动画、音效
+        │
+HaojieOnlineGame：宿主快照、连接状态、明确提交回执
+```
 
-## 维护要求
+本地仍通过 `dispatch/applyCommand` 执行，并同步得到结果；在线提交只返回等待状态，不能直接推进游戏或随机抽卡。在线入口不挂载本地会话、AI和存档工具，不注册撤销/重做快捷键，不提供本地新局、换边或AI接管。规则、图鉴、查看棋盘和音效仍可用。
 
-前端组件、服务端引擎引用同一固定提交或发行版本；存档schema不是规则版本，也不是房间revision。活动对局不得默默切换规则。服务端生成并保存建局种子，不使用createGame的公开固定默认值。
+`GamePosition` 不含 `seed/rng`，供共享展示与查询使用；完整 `GameState extends GamePosition` 才能用于权威结算。没有把公开视图强制转换为GameState，也没有补假随机数。
 
-网站可选一个房间一个Durable Object，或使用其他可靠协调设施；不锁定D1，不让两处存储同时独立修改权威棋局。神龛双方基于同一revision提交时，宿主需明确刷新/重试或独立选择接收策略，不套用自动重放所有过期命令的规则。
+## 公共入口
 
-## 验收计划
+服务端直接导入 `src/engine/index.ts`，不从React根入口导入：
 
-- 引擎无React/DOM/网络依赖；JSON视图无秘密；普通、反应、暗选、回合外技能、越权与恶意参数测试。
-- 两组件连续召唤、部署、移动/攻击、回合切换；不按revision重挂载；更新使失效选择安全清除。
-- 重复/旧更新、快照、延迟回执、明确拒绝、断线恢复及取消；未决提交不会被无关更新错误解除。
-- 原行为测试、TypeScript、格式、单HTML和Pages成品、离线浏览器、人机三档、VFX、神龛、反馈3及历史CLI回放。
+```ts
+import {
+  createGame,
+  applyPlayerCommand,
+  getPlayerView,
+  parseCommand,
+  actorCommandError,
+  canRebasePlayerCommand,
+  HAOJIE_RULESET,
+  PLAYER_VIEW_VERSION,
+} from './haojie/src/engine';
+```
 
-实施完成后在此补充公共接口、例子路径、运行结果与已知限制。
+`applyPlayerCommand(state, authenticatedPlayer, unknownCommand)` 先验证外来JSON字段、参数类型/范围和操作者，再调用原规则结算。操作者必须来自网站认证后的席位；命令中的 `player` 不可冒名。普通行动、反应、双方独立暗选与超级BW回合外技能均由游戏模块判断。非法命令抛出 `RuleError`，原状态和随机数不变。
+
+`actorCommandError` 只做操作者权限判断，可接受尚未选完目标的UI意图，不代替完整规则校验。`parseCommand` 接受普通JSON对象、拒绝未知字段，并限制ID、数组、路径长度及坐标；宿主仍需限制消息总字节数、提交频率和账号权限。
+
+`getPlayerView(state, viewer)` 返回 `PlayerView`，包含 `viewVersion`、`ruleset`、`viewer` 和 `state`。顶层、反应源、时钟快照、棋子效果、事件身份/坐标均显式投影；不含Session、撤销历史、随机状态。双方手牌和神龛候选保持公开。共同揭示前仅保留查看者自己的最终选择/玉碎奇偶，暗选日志与动画使用封闭的公开描述。
+
+React入口可以从 `src/index.ts` 导入，也可以直接导入受控文件：
+
+```tsx
+'use client';
+import {
+  HaojieOnlineGame,
+  type HaojieOnlineGameProps,
+} from './haojie/src/ui/online/HaojieOnlineGame';
+
+export function Match(props: HaojieOnlineGameProps) {
+  return <HaojieOnlineGame {...props} />;
+}
+```
+
+入口自带作用域样式，不需要复制棋盘或从站点重写样式。无需发布npm包；按固定Git提交引用/同步即可。
+
+## 宿主输入与提交契约
+
+```ts
+interface OnlineUpdate {
+  matchId: string;
+  revision: number;
+  kind: 'update' | 'snapshot';
+  view: PlayerView;
+}
+
+type CommandReceipt =
+  | { ok: true; revision: number }
+  | { ok: false; message: string };
+```
+
+组件属性是 `update`、`connection`（`connecting/connected/disconnected`）、可选 `disabled`、可选 `error: { id, message }`，以及 `onCommand(command, { baseRevision, signal }) => Promise<CommandReceipt>`。
+
+宿主每次传入完整玩家视图。`revision` 是房间单调递增修订号，不是 `ply`、`serial` 或存档 `version`。同一对局的重复/较旧更新不覆盖新局面，也不重复播放动画。`kind: 'snapshot'` 用于首次载入与重连，恢复局面而不回放历史。普通修订更新不会重挂载棋盘；只有真正更换 `matchId` 或认证席位才重建会话。不要重复使用同一 `matchId` 表示新的对局。
+
+提交时组件立即上锁。广播与回执独立：只有收到成功回执，并已收到至少该回执修订号的局面，才解除本次提交锁，二者先后顺序不限。对手广播不能充当本次回执。显式拒绝显示错误并恢复操作；宿主异常抛出也会显示错误。`error.id` 用于区分宿主主动推送的新错误。
+
+请求编号由网站生成并维护。连接重试须沿用同一个请求编号，服务端去重，不能再次执行已经提交的攻击。成功回执必须对应已持久化的状态、修订号及请求结果；不要在持久化前确认成功。
+
+断线或组件销毁会触发 `AbortSignal`，但这只取消客户端等待，不能撤销已经提交的服务端命令。对于超时、丢回执等“结果不确定”情况，网站应将连接标为 `connecting/disconnected` 并同步快照/查询原请求结果，确认后再恢复 `connected`；不能当作明确失败直接盲重放。宿主负责超时策略，组件不创建传输重试循环。
+
+`disabled` 表示网站的维护、同步等外部锁，不应简单设为 `active !== viewer`。回合外免费技能和对手反应仍可能属于本人；游戏模块决定哪些操作可用。
+
+## 并发暗选与过期命令
+
+`canRebasePlayerCommand(state, actor, command)` 是游戏侧的狭窄策略入口：目前只允许仍处于首次暗选窗口、尚未提交的玩家完成独立选择。两人可以基于同一旧修订提交神龛，先到的一方不应使另一方永远卡住。网站调用此接口，无需自行判断神龛技能或模式。
+
+其他过期移动、攻击等一律重新同步，由玩家重新选择，不自动重放。宿主仍须确保房间命令串行/原子提交；这个查询不是并发锁，不提供身份认证或持久化。未来若新增可重复进入的秘密选择窗口，应同时引入并校验对应窗口标识，而不能扩大旧命令重放范围。
+
+## 公开查询的准确含义
+
+`inspectCommand(position, command)` 返回 `available/uncertain/invalid`。公开预检共享原规则代码，但在首次需要私有随机值时停止，不猜测结果，也不返回假想的新状态。`queryCommandError` 和 `canAttemptCommand` 支持现有操作菜单、目标和路径选择；“可尝试”不等于服务端保证执行成功。
+
+公开信息能确定的冻结、回合、射程、占位等仍可正常提示。依赖随机结算之后才能确定的情况，可能最终由服务端拒绝，必须走上述失败恢复路径。完整本地GameState的预检继续执行原 `commandError`，不改变本地提示、随机序列或正式结算行为。
+
+## 例子与验证
+
+可运行的最小示例：`examples/online/TwoPlayerDemo.tsx`。它用 `examples/online/room.ts` 的 `DemoRoom` 驱动两个受控棋盘，视图和命令经过JSON边界，展示明确回执、修订号、请求去重和独立选择接收方式。
+
+**DemoRoom只是内存演示宿主，不是生产房间服务。** 为了演示，示例把它放在同一浏览器中；真实网站必须将权威状态、引擎调用和去重记录移到服务器。测试专用 `inspect()` 和 `window.onlineDemo` 不能进入生产客户端。
+
+自动测试位于 `tests/session/online.test.ts` 及 `tests/browser/online.mjs`（故障注入宿主在 `tests/browser/online-host.tsx`）。后者在离线浏览器中挂载两个真实组件，覆盖连续对局、JSON视图、权限、路径、重复/旧更新、回执先后顺序、明确拒绝、断线、延迟回执、神龛并发暗选、无本机存储/AI及窄屏布局。执行：
+
+```sh
+npm run check
+npm test
+npm run deploy
+npm run deploy:check
+npm run test:browser:online
+```
+
+标准CI还保留本地双人、存档导入导出/撤销、人机三档、Pages嵌入、VFX、神龛、反馈3和各历史规则版本CLI回放。测试截图与报告输出到 `artifacts/online-*.png`、`artifacts/online-browser-report.json`；报告记录实际完成的场景，不用模拟宿主测试替代真实WS验收。
+
+## 维护与已知边界
+
+前端组件与服务端引擎必须固定到同一提交/发行版本，并检查 `HAOJIE_RULESET` 与 `PLAYER_VIEW_VERSION`。前者标识规则，后者标识公开视图协议，均不同于v2存档格式和房间修订号。规则或视图变化时维护对应版本；活动对局不得默默切换规则。常量检查不能代替双端锁定同一份代码。
+
+服务端必须生成并保存建局种子，不能无参调用 `createGame()` 而使用公开固定默认值。示例固定种子仅用于复现。此轮保留已有确定性PRNG以兼容本地存档/回放，没有声称它具备密码学安全性或实现完整反作弊。
+
+网站自行选择房间协调及持久化设施，例如一个房间一个Durable Object；不得把普通进程内存当作可恢复存储，也不应在两处独立修改同一权威局面。本轮不包含真实WS、Cloudflare绑定、账户、生产房间、联网悔棋协商、观战、掉线超时判负或上线部署。Next.js实际构建及网站集成仍需宿主验收，不能由这里的React浏览器测试代替。
