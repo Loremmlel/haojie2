@@ -72,18 +72,32 @@ export async function verifyPacing({ page, load, exported, waitForState, scenari
     report.cancellation.push('dialog and new match during ready-to-act wait');
 
     await load('pacing');
-    const logReference = page.locator('.battle-log').getByRole('link').first();
+    const logReference = page
+      .locator('.battle-log')
+      .getByRole('link', { name: '墓地', exact: true })
+      .first();
     await logReference.waitFor();
     await ready();
     const referenceSnapshot = await exported();
     await logReference.click();
+    await page
+      .getByRole('dialog', { name: '墓地', exact: true })
+      .getByRole('link', { name: '策反', exact: true })
+      .click();
+    await page
+      .getByRole('dialog', { name: '策反', exact: true })
+      .getByRole('link', { name: '金身', exact: true })
+      .click();
+    const keyword = page.getByRole('dialog', { name: '金身 · 状态与特性', exact: true });
+    await keyword.waitFor();
     await page.waitForTimeout(1800);
+    await keyword.getByRole('button', { name: '返回上一介绍' }).click();
     await button('关闭弹窗').click();
     assert.deepEqual(await exported(), referenceSnapshot);
     await waitForState(
       (s) => JSON.stringify(s.present) !== JSON.stringify(referenceSnapshot.present),
     );
-    report.cancellation.push('unit introduction cancels ready actions and closing resumes AI');
+    report.cancellation.push('单位与词条介绍及嵌套返回保持AI暂停，关闭后恢复');
 
     await load('pacing');
     await ready();

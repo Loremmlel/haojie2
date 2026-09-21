@@ -147,6 +147,28 @@ try {
     'two JSON-view clients summon, deploy and switch turns without remount or local history controls',
   );
 
+  for (const name of ['攻击强化', '攻击削弱']) {
+    await reset('keywords');
+    await cell(1, 3, 4).click();
+    const statuses = client(1).getByLabel('棋子当前状态');
+    await statuses.locator('summary').click();
+    await statuses.getByRole('link', { name, exact: true }).click();
+    const detail = client(1).getByRole('dialog', { name: `${name} · 状态与特性`, exact: true });
+    const instance = detail.getByRole('region', { name: '本次状态' });
+    assert.equal(await page.evaluate(() => window.onlineDemo.revision()), 0);
+    await page.evaluate(() => window.onlineDemo.server(1, { type: 'end' }));
+    if (name === '攻击强化') {
+      await instance.getByText(/余 1 次实际回合切换/).waitFor();
+      assert.match(await instance.innerText(), /攻击 \+10/);
+    } else {
+      await instance.getByText(/该状态已结束/).waitFor();
+      assert.doesNotMatch(await instance.innerText(), /攻击 \+10/);
+    }
+    await page.keyboard.press('Escape');
+    assert.equal(await page.evaluate(() => window.onlineDemo.revision()), 1);
+  }
+  check('词条读取最新公开状态，回合更新刷新计时，已结束效果不串到后续状态');
+
   await reset('combat');
   await page.evaluate(() => window.onlineDemo.configure({ rejectNext: true }));
   await cell(1, 3, 4).click();

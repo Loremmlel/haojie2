@@ -1,4 +1,6 @@
 export * from './types';
+export { KEYWORDS, KEYWORD_IDS, keywordDefinition, effectKeyword } from './library/keywords';
+export type { KeywordId, KeywordDefinition, RuleReference } from './library/keywords';
 export {
   CATALOG,
   LIBRARY,

@@ -20,6 +20,7 @@
 @import '../feedback/feedback.css';
 @import '../shared/modal.css';
 @import '../library/codex.css';
+@import '../library/keyword.css';
 @import '../library/rules.css';
 @import '../shrine/shrine.css';
 @import './motion.css';

@@ -43,7 +43,7 @@ export function GameSurface({
   const busy = local ? local.computer.busy : !!online?.blocked;
   return (
     <div ref={game.scope} className="hj-game v2-game" style={playerStyle(game.controller)}>
-      <UnitReferenceProvider onOpenChange={local?.setReferenceOpen}>
+      <UnitReferenceProvider state={state} onOpenChange={local?.setReferenceOpen}>
         <GameHeader
           sound={game.sound}
           onToggleSound={() => game.setSound((v) => !v)}

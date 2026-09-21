@@ -47,6 +47,10 @@ scripts/
 
 ## 样式维护
 
+状态与特性作为独立规则知识目录维护在 `src/engine/library/keywords.ts`，与 catalog 的单位/装备定义以稳定身份互相引用。`RuleReference` 用带类型的引用区分同名法术和状态；catalog 的 `keywordReferences` 仅是语义提示，不包含 HTML。UI 的 `library/references.ts` 按最长名称识别文字，默认单位优先，明确上下文可以覆盖为词条。词条定义不承载运行时效果、层数或计时，也不替换现有结算分支。
+
+`KeywordCard` 共用于图鉴和介绍弹窗；来自状态栏的入口携带棋子ID与状态键，在最新 `GamePosition` 中重新查询，不保留历史棋子对象。效果键由已有不可变字段和同值序号派生，移除前面的另一效果不会导致介绍错位；完全相同的多层效果没有额外规则身份，移除后只能区分剩余同值记录。联机仍只读取公开视图，不依赖真实随机数。相关行为在 `tests/session/keywords.test.ts`、图鉴离线浏览器验收和联机宿主验收中维护。
+
 每个功能目录里的CSS放该功能的基础样式、状态和响应式规则。styles/index.css只列构建时import顺序：变量与原生元素 → 共享控件 → 各功能 → 最后的减少动态效果规则。媒体查询不再集中进一个巨大的responsive.css。
 
 已删除旧styles.css/v2.css/refinements.css，旧版不再使用的action-buttons/skill-buttons/reforge-choices样式也移除。保留当前DOM类名和`.hj-game`作用域，避免把宿主页面按钮和标题全局重置。颜色等跨功能值优先在tokens.css维护。状态样式可保留现有v2-game选择器，但不要新建按版本追加的CSS文件。

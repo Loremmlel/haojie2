@@ -99,11 +99,25 @@ try {
   assert.match(
     await statuses
       .locator('li')
-      .filter({ has: page.getByText('万法反制', { exact: true }) })
+      .filter({ has: page.locator('b').getByRole('link', { name: '万法反制', exact: true }) })
       .innerText(),
     /冰冻中，不参与反制/,
   );
   await page.screenshot({ path: 'artifacts/counter-freeze-status.png' });
+  const beforeReference = await state();
+  await weakened.getByRole('link', { name: '攻击削弱', exact: true }).click();
+  const keyword = page.getByRole('dialog', { name: '攻击削弱 · 状态与特性', exact: true });
+  const instance = keyword.getByRole('region', { name: '本次状态' });
+  assert.match(await instance.innerText(), /攻击 -15/);
+  assert.match(await instance.innerText(), /记录未保存来源/);
+  await keyword.getByRole('link', { name: '万法真君', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: '万法真君', exact: true })
+    .getByRole('button', { name: '返回上一介绍' })
+    .click();
+  await instance.waitFor();
+  await page.keyboard.press('Escape');
+  assert.deepEqual(await state(), beforeReference);
   checks.push('减攻与加攻分开命名，冰冻万法真君的状态明确显示反制停用');
   assert.deepEqual(errors, []);
   assert.deepEqual(network, []);

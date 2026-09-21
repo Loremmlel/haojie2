@@ -1,5 +1,11 @@
-import { UnitText } from './UnitReference';
-import { RULE_NOTES, SYNTHESIS_RECIPES, definition } from '../../engine';
+import { RuleText as UnitText, KeywordLink } from './UnitReference';
+import {
+  KEYWORD_IDS,
+  keywordDefinition,
+  RULE_NOTES,
+  SYNTHESIS_RECIPES,
+  definition,
+} from '../../engine';
 import { Modal } from '../shared/Modal';
 import { Icon } from '../shared/visuals';
 export function Rules({ onClose }: { onClose: () => void }) {
@@ -104,8 +110,12 @@ export function Rules({ onClose }: { onClose: () => void }) {
         </p>
         <p>
           <UnitText>
+            {'抽取金身时1/5获得金身、4/5获得小金耶。小金耶每份伤害独立50%免疫，沉默后失效。'}
+          </UnitText>
+          <KeywordLink id="immune" />
+          <UnitText>
             {
-              '抽取金身时1/5获得金身、4/5获得小金耶。小金耶每份伤害独立50%免疫，沉默后失效。金身仍免疫伤害及所有敌方技能、法术，包括死吧！与策反。己方献祭不是敌方效果。投石机对满血目标立即引爆一次，此后不满血标记须被另一友方非投石机的攻击命中才引爆。'
+              '仍免疫伤害及所有敌方技能、法术，包括死吧！与策反。己方献祭不是敌方效果。投石机对满血目标立即引爆一次，此后不满血标记须被另一友方非投石机的攻击命中才引爆。'
             }
           </UnitText>
         </p>
@@ -116,6 +126,22 @@ export function Rules({ onClose }: { onClose: () => void }) {
             }
           </UnitText>
         </p>
+      </section>
+      <section className="rules-key keyword-index" aria-label="状态与特性词典">
+        <h3>状态与特性 · {KEYWORD_IDS.length}个词条</h3>
+        <p>点击词条查看规则和相关单位；从棋子当前状态打开时，还可查看本次来源、数值与生效时间。</p>
+        {['持续状态', '行动特性', '战斗与保护'].map((category) => (
+          <div key={category}>
+            <h4>{category}</h4>
+            <ul>
+              {KEYWORD_IDS.filter((id) => keywordDefinition(id).category === category).map((id) => (
+                <li key={id}>
+                  <KeywordLink id={id} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </section>
       <section className="rules-key">
         <h3>3.0 · 独立神龛模式</h3>
@@ -203,7 +229,7 @@ export function Rules({ onClose }: { onClose: () => void }) {
         <ol>
           {RULE_NOTES.map((n) => (
             <li key={n}>
-              <UnitText>{n}</UnitText>
+              <UnitText references={{ 金身: 'immune' }}>{n}</UnitText>
             </li>
           ))}
         </ol>

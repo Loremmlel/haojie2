@@ -1,4 +1,5 @@
 import type { EventFacts } from './core/event-facts';
+import type { KeywordId } from './library/keywords';
 /** 游戏状态完全由数据表示，不依赖渲染器、网络或墙钟。 */
 export type Player = 1 | 2;
 export type Kind =
@@ -35,6 +36,8 @@ export interface Definition {
   actions: number;
   move: number;
   description: string;
+  /** 同名规则词在本段说明中的明确含义；不往纯文本描述中嵌入 HTML。 */
+  keywordReferences?: Readonly<Record<string, KeywordId>>;
   skill?: string;
   spell?: number;
   weapon?: number;

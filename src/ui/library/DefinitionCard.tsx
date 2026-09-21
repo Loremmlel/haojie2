@@ -1,7 +1,7 @@
 import type { Definition } from '../../engine';
 import { DefinitionStats } from '../shared/DefinitionStats';
 import { Icon, Rune } from '../shared/visuals';
-import { UnitText } from './UnitReference';
+import { RuleText } from './UnitReference';
 
 /** 图鉴列表和名称弹窗共用同一张卡片，所有属性与能力均来自 catalog。 */
 export function DefinitionCard({ d }: { d: Definition }) {
@@ -31,12 +31,12 @@ export function DefinitionCard({ d }: { d: Definition }) {
       </div>
       <DefinitionStats d={d} />
       <p>
-        <UnitText>{d.description}</UnitText>
+        <RuleText references={d.keywordReferences}>{d.description}</RuleText>
       </p>
       {d.skill && (
         <div className="skill-label">
           <Icon name="spark" size={14} />
-          <UnitText>{d.skill}</UnitText>
+          <RuleText>{d.skill}</RuleText>
         </div>
       )}
     </article>

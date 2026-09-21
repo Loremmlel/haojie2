@@ -1,12 +1,20 @@
 import { useState } from 'react';
-import { CATALOG } from '../../engine';
+import { CATALOG, KEYWORD_IDS, keywordDefinition, definition } from '../../engine';
 import { DefinitionCard } from './DefinitionCard';
 import { UnitText } from './UnitReference';
 import { Modal } from '../shared/Modal';
 import { Icon } from '../shared/visuals';
+import { KeywordCard } from './KeywordCard';
 export function Codex({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState(''),
-    [filter, setFilter] = useState('全部');
+    [filter, setFilter] = useState('全部'),
+    [section, setSection] = useState<'units' | 'keywords'>('units');
+  const keywords = KEYWORD_IDS.filter((id) => {
+    const d = keywordDefinition(id);
+    return `${d.name}${d.category}${d.description}${d.aliases?.join('') ?? ''}${d.sources.map((kind) => definition(kind).name).join('')}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase());
+  });
   const entries = CATALOG.filter((d) => {
     const match =
       filter === '全部' ||
@@ -30,6 +38,22 @@ export function Codex({ onClose }: { onClose: () => void }) {
       wide
       onClose={onClose}
     >
+      <div className="filter-tabs library-sections" aria-label="图鉴分类">
+        <button
+          aria-pressed={section === 'units'}
+          className={section === 'units' ? 'active' : ''}
+          onClick={() => setSection('units')}
+        >
+          单位与装备
+        </button>
+        <button
+          aria-pressed={section === 'keywords'}
+          className={section === 'keywords' ? 'active' : ''}
+          onClick={() => setSection('keywords')}
+        >
+          状态与特性
+        </button>
+      </div>
       <div className="codex-tools">
         <label className="search-field">
           <Icon name="target" />
@@ -52,27 +76,29 @@ export function Codex({ onClose }: { onClose: () => void }) {
               <Icon name="x" />
             </button>
           )}
-          <span>{entries.length}</span>
+          <span>{section === 'units' ? entries.length : keywords.length}</span>
         </label>
-        <div className="filter-tabs">
-          {['全部', '普通', '终极', '神龛', '地标', '光环', '法术', '武器', '变体'].map((f) => (
-            <button
-              key={f}
-              aria-pressed={f === filter}
-              className={f === filter ? 'active' : ''}
-              onClick={() => setFilter(f)}
-            >
-              {f}
-            </button>
-          ))}
-        </div>
+        {section === 'units' && (
+          <div className="filter-tabs">
+            {['全部', '普通', '终极', '神龛', '地标', '光环', '法术', '武器', '变体'].map((f) => (
+              <button
+                key={f}
+                aria-pressed={f === filter}
+                className={f === filter ? 'active' : ''}
+                onClick={() => setFilter(f)}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="codex-grid">
-        {entries.map((d) => (
-          <DefinitionCard key={d.id} d={d} />
-        ))}
+        {section === 'keywords'
+          ? keywords.map((id) => <KeywordCard key={id} id={id} />)
+          : entries.map((d) => <DefinitionCard key={d.id} d={d} />)}
       </div>
-      {entries.length === 0 && (
+      {(section === 'units' ? entries.length : keywords.length) === 0 && (
         <p className="empty-state">没有匹配条目。可以搜索“冰冻”“人头”“复活”或“法师”。</p>
       )}
       <p className="fine-print">

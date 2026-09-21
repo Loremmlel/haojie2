@@ -1,30 +1,39 @@
 import { useState, type ReactNode } from 'react';
-import { definition, type Kind } from '../../engine';
+import { definition, keywordDefinition, type GamePosition } from '../../engine';
 import { Modal } from '../shared/Modal';
 import { DefinitionCard } from './DefinitionCard';
-import { UnitReferenceContext } from './UnitReference';
+import { UnitReferenceContext, type ReferenceRequest } from './UnitReference';
+import { KeywordCard } from './KeywordCard';
 
 /** 每个游戏实例独立持有介绍弹窗；在规则/图鉴上方打开，关闭后回到原入口。 */
 export function UnitReferenceProvider({
   children,
   onOpenChange,
+  state,
 }: {
   children: ReactNode;
   onOpenChange?: (open: boolean) => void;
+  state?: GamePosition;
 }) {
-  const [history, setHistory] = useState<Kind[]>([]);
-  const kind = history.at(-1);
+  const [history, setHistory] = useState<ReferenceRequest[]>([]);
+  const reference = history.at(-1);
   return (
     <UnitReferenceContext.Provider
       value={(next) => {
         onOpenChange?.(true);
-        setHistory((old) => (old.at(-1) === next ? old : [...old, next]));
+        setHistory((old) =>
+          JSON.stringify(old.at(-1)) === JSON.stringify(next) ? old : [...old, next],
+        );
       }}
     >
       {children}
-      {kind !== undefined && (
+      {reference && (
         <Modal
-          title={definition(kind).name}
+          title={
+            reference.type === 'unit'
+              ? definition(reference.kind).name
+              : `${keywordDefinition(reference.id).name} · 状态与特性`
+          }
           onClose={() => {
             setHistory([]);
             onOpenChange?.(false);
@@ -35,7 +44,11 @@ export function UnitReferenceProvider({
               返回上一介绍
             </button>
           )}
-          <DefinitionCard d={definition(kind)} />
+          {reference.type === 'unit' ? (
+            <DefinitionCard d={definition(reference.kind)} />
+          ) : (
+            <KeywordCard id={reference.id} state={state} context={reference.context} />
+          )}
         </Modal>
       )}
     </UnitReferenceContext.Provider>

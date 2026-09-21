@@ -19,7 +19,7 @@ import { DemoRoom } from '../../../examples/online/room';
 // 同时编译文档中的组件，但不将其挂载到带检测逻辑的宿主。
 export { TwoPlayerDemo } from '../../../examples/online/TwoPlayerDemo';
 
-type Scenario = 'classic' | 'combat' | 'shrine' | 'reaction' | 'giant' | 'path';
+type Scenario = 'classic' | 'combat' | 'shrine' | 'reaction' | 'giant' | 'path' | 'keywords';
 type Connection = 'connecting' | 'connected' | 'disconnected';
 const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 function scenario(name: Scenario): GameState {
@@ -38,7 +38,13 @@ function scenario(name: Scenario): GameState {
     s.units.push(u);
     return u;
   };
-  if (name === 'reaction') {
+  if (name === 'keywords') {
+    const u = add(9, 1, 3, 4);
+    u.effects.push(
+      { type: 'attack', owner: 2, from: 5, until: 6, global: true, amount: -15 },
+      { type: 'attack', owner: 1, from: 5, until: 7, global: true, amount: 10 },
+    );
+  } else if (name === 'reaction') {
     s.pending = [
       {
         kind: 'death-shot',

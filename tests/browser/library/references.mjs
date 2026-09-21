@@ -82,11 +82,62 @@ try {
     await codex.getByRole('button', { name: '清空图鉴搜索' }).click();
     assert.equal(await codex.locator('.codex-card').count(), 82);
     assert.equal(await codex.locator('.codex-card h3 a').count(), 0);
+    const librarySave = renderOnly ? null : await page.evaluate(() => JSON.stringify(localStorage));
+    await codex.getByRole('textbox').fill('冲锋怪');
+    const chargeLink = codex.getByRole('link', { name: '冲锋', exact: true }).first();
+    await chargeLink.focus();
+    await page.keyboard.press('Enter');
+    const charge = page.getByRole('dialog', { name: '冲锋 · 状态与特性', exact: true });
+    await charge.waitFor();
+    assert.equal(await charge.locator('h3 a').count(), 0);
+    assert.match(await charge.innerText(), /免除部署当回合/);
+    await charge.getByRole('link', { name: '冲锋怪', exact: true }).click();
+    const fighter = page.getByRole('dialog', { name: '冲锋怪', exact: true });
+    await fighter.getByRole('button', { name: '返回上一介绍' }).click();
+    await charge.waitFor();
+    await page.keyboard.press('Escape');
+    assert.equal(await chargeLink.evaluate((link) => link === document.activeElement), true);
+    await codex.getByRole('button', { name: '清空图鉴搜索' }).click();
+    await codex.getByRole('button', { name: '状态与特性', exact: true }).click();
+    assert.equal(await codex.locator('.keyword-card').count(), 30);
+    assert.equal(await codex.locator('h3 a').count(), 0);
+    await codex.getByRole('textbox').fill('重击');
+    assert.equal(await codex.locator('.keyword-card').count(), 1);
+    assert.equal(await codex.locator('.keyword-card h3').innerText(), '暴击');
+    await codex.getByRole('textbox').fill('胡桃');
+    assert.equal(await codex.locator('.keyword-card h3').innerText(), '攻击削弱');
+    await codex.getByRole('textbox').fill('金身');
+    const immune = codex
+      .locator('.keyword-card')
+      .filter({ has: page.getByRole('heading', { name: '金身', exact: true }) });
+    await immune.getByRole('link', { name: '金身', exact: true }).click();
+    const spell = page.getByRole('dialog', { name: '金身', exact: true });
+    await spell.getByRole('link', { name: '免疫所有伤害', exact: true }).click();
+    const immunity = page.getByRole('dialog', { name: '金身 · 状态与特性', exact: true });
+    await immunity.waitFor();
+    for (let n = 0; n < 8; n++) {
+      await page.keyboard.press('Tab');
+      assert.equal(
+        await immunity.evaluate((dialog) => dialog.contains(document.activeElement)),
+        true,
+      );
+    }
+    await page.screenshot({ path: `artifacts/keyword-reference-${width}.png`, fullPage: true });
+    await page.keyboard.press('Escape');
+    assert.equal(await codex.getByRole('textbox').inputValue(), '金身');
+    assert.equal(new URL(page.url()).hash, '');
+    if (!renderOnly)
+      assert.equal(await page.evaluate(() => JSON.stringify(localStorage)), librarySave);
     await codex.getByRole('textbox').fill('不存在的单位名称');
     assert.match(await codex.innerText(), /没有匹配条目/);
     await codex.getByRole('button', { name: '关闭弹窗' }).click();
     await button('规则').click();
     const rules = page.getByRole('dialog', { name: '浩劫 · 规则手册' });
+    const glossary = rules.getByRole('region', { name: '状态与特性词典' });
+    assert.equal(await glossary.getByRole('link').count(), 30);
+    await glossary.getByRole('link', { name: '冰冻', exact: true }).click();
+    await page.getByRole('dialog', { name: '冰冻 · 状态与特性', exact: true }).waitFor();
+    await page.keyboard.press('Escape');
     assert.doesNotMatch(await rules.innerText(), /(?:普通|终极)\s*\d|抽到17/);
     await rules.getByRole('link', { name: '改判小法师', exact: true }).first().click();
     await page.getByRole('dialog', { name: '改判小法师', exact: true }).waitFor();
@@ -111,7 +162,7 @@ try {
     );
     await page.screenshot({ path: `artifacts/unit-selection-${width}.png`, fullPage: true });
     checks.push(
-      `${width}px：无下划线链接、图鉴标题不可点击、描述名称跳转、嵌套介绍、键盘焦点、返回、搜索空态、规则入口、手牌名称选牌、详情无链接`,
+      `${width}px：30词条、别名/来源搜索、同名单位与状态消歧、规则词典、嵌套返回与键盘焦点；无下划线、标题及常显详情无链接、存档不变`,
     );
     await context.close();
   }
