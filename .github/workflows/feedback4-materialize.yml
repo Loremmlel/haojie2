@@ -66,9 +66,13 @@ jobs:
         run: |
           test "$(git branch --show-current)" = 'fix/feedback4-20260921'
           git diff --check
+          mkdir -p artifacts
+          cp .github/workflows/ci.yml artifacts/feedback4-ci.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
+          # The workflow token can write source, not workflow files. Apply CI separately through the authorized connector.
+          git restore --source=HEAD --staged --worktree .github/workflows
           git commit -m 'fix: correct giant rules and verify cannon, deployment snapshots and resume'
           git push origin HEAD:refs/heads/fix/feedback4-20260921
       - name: Package source and evidence for review
@@ -82,6 +86,7 @@ jobs:
           name: feedback4-source-and-evidence
           path: |
             artifacts/feedback4-source.tar.gz
+            artifacts/feedback4-ci.yml
             artifacts/feedback4-engine-report.txt
             artifacts/feedback4-browser-report.json
             artifacts/feedback4-*.png
