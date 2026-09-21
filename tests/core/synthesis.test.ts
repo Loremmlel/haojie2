@@ -18,7 +18,7 @@ import {
   type GameState,
   type Command,
 } from '../../src/engine';
-import { addEffect } from '../../src/engine/state';
+import { addEffect } from '../../src/engine/core/state';
 import { add, card, fixture } from '../helpers';
 
 export function fusionFixture(recipeId: string) {
@@ -112,7 +112,7 @@ test('2.5 fusion window opens only at an actual own start after expiry, and skip
   );
   const expired = structuredClone(s);
   expired.units[0].expiresAt = 5;
-  // Expiry can trigger the original U21 heal but cannot leave three synthesis materials.
+  // 到期可触发纪耶原有治疗，但不能留下三份合成材料。
   assert.equal(applyCommand(expired, { type: 'end' }).phase, 'summon');
   s = fixture();
   for (let i = 0; i < 3; i++) card(s, 'u28');

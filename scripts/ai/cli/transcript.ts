@@ -6,7 +6,7 @@ import type { Session } from '../../../src/engine';
 import type { ArenaEntry } from '../../../src/match/arena';
 import { fingerprint } from '../../../src/ai/observation';
 
-/** Full state is stored for deterministic local replay, never sent to the planner. */
+/** 完整局面仅用于确定性本地回放，绝不发送给规划器。 */
 export function replayTranscript(text: string) {
   const rows = text
     .trim()

@@ -20,9 +20,14 @@ import {
   type Kind,
   type GameState,
 } from '../../src/engine';
-import { addEffect, addUnit } from '../../src/engine/state';
-import { installEquipment } from '../../src/engine/shrines';
-import { startIntent, canChoose, advanceIntent, commandFor } from '../../src/ui/game/selection';
+import { addEffect, addUnit } from '../../src/engine/core/state';
+import { installEquipment } from '../../src/engine/setup/shrines';
+import {
+  startIntent,
+  canChoose,
+  advanceIntent,
+  commandFor,
+} from '../../src/ui/game/interaction/selection';
 import { add, card, fixture, pass, round, seedFor, unit } from '../helpers';
 
 function rejected(s: GameState, c: Command) {

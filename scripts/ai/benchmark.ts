@@ -1,9 +1,9 @@
-/** Small reproducible qualification tournament, not a rating claim. */
+/** 小规模可复现资格赛，不作为棋力评级结论。 */
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { createGame, applyCommand } from '../../src/engine';
 import { observe, decisionOwner } from '../../src/ai/observation';
-import { decide } from '../../src/ai/search';
-import { cachedDecision } from '../../src/ai/plan-cache';
+import { decide } from '../../src/ai/planning/search';
+import { cachedDecision } from '../../src/ai/planning/plan-cache';
 import type { Difficulty, PlanStep } from '../../src/ai/types';
 const pair = (process.argv[2] ?? 'medium,easy').split(',') as [Difficulty, Difficulty];
 if (pair.length !== 2 || pair.some((d) => !['easy', 'medium', 'hard'].includes(d)))

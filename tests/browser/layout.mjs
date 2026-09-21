@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 
-/** Test the user's contract, not a minimum width that forces a portrait board to overflow. */
+/** 验证用户的布局契约，不设置会迫使竖长棋盘溢出的最小宽度。 */
 export async function verifyWorkbench(page, { renderOnly = false } = {}) {
   const measurements = [];
   async function measure(label) {
-    await page.waitForTimeout(100); // Let import/persistence feedback settle before measuring.
+    await page.waitForTimeout(100); // 测量前等待导入及持久化反馈稳定。
     const dismiss = page.getByRole('button', { name: '关闭提示', exact: true });
     if (await dismiss.count()) await dismiss.click();
     await page.evaluate(
@@ -27,7 +27,7 @@ export async function verifyWorkbench(page, { renderOnly = false } = {}) {
       const board = document.querySelector('.board');
       const cells = [...board.querySelectorAll('[data-cell]')].map((el) => {
         const r = el.getBoundingClientRect();
-        // Exclude the possibility of a clipped board disguised as "no scrollbar".
+        // 排除通过裁切棋盘伪装“无滚动条”的情况。
         const center = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
         return {
           visible: r.x >= 0 && r.y >= 0 && r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1,
@@ -125,7 +125,7 @@ export async function verifyWorkbench(page, { renderOnly = false } = {}) {
   assert.ok(scrollTop > 0, 'Long hand and log should scroll locally');
   await page.locator('.hand-scroll').evaluate((el) => (el.scrollTop = 0));
   await page.screenshot({ path: 'artifacts/workbench-desktop.png', fullPage: false });
-  // A real saved terminal state must not grow the page or cover the board.
+  // 真实结束局面的存档不能撑高页面或遮挡棋盘。
   const victory = JSON.parse(await readFile('artifacts/ai-fixtures/response.json', 'utf8'));
   victory.match.mode = 'local';
   victory.present.winner = 1;
@@ -155,7 +155,7 @@ export async function verifyWorkbench(page, { renderOnly = false } = {}) {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.locator('[data-cell="6,6"]').click();
   await page.screenshot({ path: 'artifacts/workbench-laptop.png', fullPage: false });
-  // Compact widths still use natural document flow; no application/global overflow locks.
+  // 紧凑宽度继续使用自然文档流，不锁住应用或全局溢出。
   for (const width of [1099, 900, 820, 390]) {
     await page.setViewportSize({ width, height: 844 });
     assert.ok(
@@ -165,7 +165,7 @@ export async function verifyWorkbench(page, { renderOnly = false } = {}) {
     await button('新对局').click();
     await button('关闭弹窗').click();
   }
-  // The public component responds to its own width, not a wide host's viewport.
+  // 公开组件响应自身容器宽度，而非宽屏宿主的视口宽度。
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator('.hj-game').evaluate((el) => (el.style.width = '780px'));
   await page.waitForTimeout(100);

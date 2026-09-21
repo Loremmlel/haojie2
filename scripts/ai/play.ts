@@ -1,4 +1,4 @@
-/** Interactive or single-command headless play. JSON commands cover every engine capability. */
+/** 交互式或单命令无界面对局；JSON 命令覆盖全部引擎能力。 */
 import { gunzipSync } from 'node:zlib';
 import { createInterface } from 'node:readline';
 import { stdin, stdout } from 'node:process';
@@ -8,8 +8,8 @@ import { Arena } from '../../src/match/arena';
 import type { ArenaEntry } from '../../src/match/arena';
 import { parseSession, applyCommand } from '../../src/engine';
 import { fingerprint } from '../../src/ai/observation';
-import { candidateGroups } from '../../src/ai/candidates';
-import { commandError } from '../../src/engine/game';
+import { candidateGroups } from '../../src/ai/planning/candidates';
+import { commandError } from '../../src/engine/commands/game';
 import type { Command } from '../../src/engine/types';
 import { validMatch } from '../../src/match/settings';
 import { render, describe, actions } from './cli/render';

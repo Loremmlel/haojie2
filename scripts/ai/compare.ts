@@ -1,11 +1,10 @@
-/** Paired fixed-seed baseline comparison. The old planner is an explicit frozen ESM bundle.
- * Never adjudicate an unfinished match by health/material. Transcript includes actual commands. */
+/** 固定种子的成对基线比较，旧规划器来自显式冻结的 ESM 构建。未完成对局不能按生命或子力判胜；记录保留实际命令。 */
 import { pathToFileURL } from 'node:url';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createGame, createSession, applyCommand, commandError } from '../../src/engine';
-import { decide } from '../../src/ai/search';
-import { cachedDecision } from '../../src/ai/plan-cache';
+import { decide } from '../../src/ai/planning/search';
+import { cachedDecision } from '../../src/ai/planning/plan-cache';
 import { allocateBudget, emptyBudget } from '../../src/ai/budget';
 import { observe, fingerprint, decisionOwner } from '../../src/ai/observation';
 import type { Decision, Difficulty, PlanStep } from '../../src/ai/types';
@@ -81,8 +80,8 @@ for (const seed of seeds)
         predicted = cache[owner][0];
       let result: Decision;
       try {
-        // Legacy bundles predate END revalidation. Do not silently give the old
-        // side the new policy; newer frozen bundles may export their own cache port.
+        // 旧构建早于结束回合复查策略，不能悄悄给旧版本套用新策略；
+        // 较新的冻结构建可自行导出所属版本的缓存接口。
         const cached = isNew
           ? cachedDecision(observe(s), cache[owner])
           : baseline.cachedDecision

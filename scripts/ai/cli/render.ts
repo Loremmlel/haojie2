@@ -1,9 +1,9 @@
-import { allPieces } from '../../../src/engine/traits';
+import { allPieces } from '../../../src/engine/core/traits';
 import { definition } from '../../../src/engine/catalog';
-import { cells } from '../../../src/engine/geometry';
-import { getStats } from '../../../src/engine/state';
+import { cells } from '../../../src/engine/core/geometry';
+import { getStats } from '../../../src/engine/core/state';
 import { decisionOwner } from '../../../src/ai/observation';
-import { unitActions, cardActions } from '../../../src/engine/options';
+import { unitActions, cardActions } from '../../../src/engine/commands/options';
 import type { GameState, Command } from '../../../src/engine/types';
 export function render(s: GameState): string {
   const out = [

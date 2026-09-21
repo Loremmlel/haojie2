@@ -12,13 +12,13 @@ import {
   createSession,
   firelordStrike,
 } from '../../src/engine';
-import { addEffect } from '../../src/engine/state';
-import { damage, kill, resolution } from '../../src/engine/combat';
+import { addEffect } from '../../src/engine/core/state';
+import { damage, kill, resolution } from '../../src/engine/commands/combat';
 import { add, card, fixture, round, strike, unit } from '../helpers';
-import { distribution } from '../../src/ai/simulate';
+import { distribution } from '../../src/ai/simulation/simulate';
 
-// These contracts exercise rules through real commands where a player has a choice.
-// Direct damage/kill calls isolate passive damage packets and causal death chains.
+// 玩家可选择的行为通过真实命令验证。
+// 直接伤害和击杀调用用于隔离被动伤害包及因果死亡链。
 test('2.5 sage aura is live and stackable, heals allies for 25, and on death restores all allied pieces but not bases', () => {
   const s = fixture(),
     sage = add(s, 'sage', 1, 3, 4),
@@ -115,7 +115,7 @@ test('2.5 formless pull handles occupied fronts, immunity, lethal hits and large
   mirror.active = 2;
   const mh = add(mirror, 'formless', 2, 6, 8),
     big = add(mirror, 'u4', 1, 3, 3);
-  big.size = 2; // A BW-expanded non-giant still uses full 2x2 pull geometry.
+  big.size = 2; // 由 BW 巨大化的非大肉比单位仍按完整2×2占位处理牵引。
   mh.charge = mh.readyCharge = 1;
   mh.chargeType = 'attack';
   const moved = applyCommand(strike(mirror, mh, big), { type: 'react', mode: 'pull' });
@@ -234,7 +234,7 @@ test('2.5 firelord fires only at its own end, uses square geometry through block
   const ortho = add(s, 'grave', 2, 6, 7),
     diagonal = add(s, 'grave', 2, 6, 8),
     friend = add(s, 26, 1, 5, 6);
-  add(s, 'grave', 2, 3, 5); // direct path blockers do not affect the square trigger
+  add(s, 'grave', 2, 3, 5); // 直线路径阻挡不影响方形区域触发。
   assert.equal(firelordStrike(s, lord)!.target.id, main.id);
   assert.equal(isLegal(s, { type: 'attack', unitId: lord.id, targetId: main.id }), false);
   const n = applyCommand(s, { type: 'end' });

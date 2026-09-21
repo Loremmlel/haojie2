@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyCommand, asTarget, createGame, isLegal } from '../../src/engine';
-import { candidateGroups, commandPriority } from '../../src/ai/candidates';
-import { analyzePayload, attackPressure, hitPackets } from '../../src/ai/threats';
-import { distribution } from '../../src/ai/simulate';
+import { candidateGroups, commandPriority } from '../../src/ai/planning/candidates';
+import { analyzePayload, attackPressure, hitPackets } from '../../src/ai/evaluation/threats';
+import { distribution } from '../../src/ai/simulation/simulate';
 import { imagined, observe } from '../../src/ai/observation';
 import { add, card, fixture } from '../helpers';
 import type { Difficulty } from '../../src/ai/types';
@@ -55,7 +55,7 @@ test('feedback AI: charged damage is one shot, uncharged follow-up needs its own
     a = add(s, 15, 1, 3, 4),
     b = add(s, 'grave', 2, 3, 6);
   a.charge = a.readyCharge = 4;
-  assert.equal(attackPressure(s, a, asTarget(b)), 50); // 35 + 15, not 35 * 2.
+  assert.equal(attackPressure(s, a, asTarget(b)), 50); // 应为35加15，而非35乘2。
   const far = structuredClone(s);
   far.units[1].y = 9;
   assert.equal(attackPressure(far, far.units[0], asTarget(far.units[1])), 35);
@@ -118,7 +118,7 @@ test('September17 AI: global delayed payloads wait through horn offsets and guar
   victim.guardUsed = true;
   victim.guardSourceIds = [older.id];
   victim.hp = 5;
-  // Use fresh state objects: spatial estimates intentionally cache immutable positions.
+  // 使用新的局面对象；空间估算有意缓存不可变局面。
   const analyze = (hp: number, spent: string[]) => {
     const view = structuredClone(s),
       target = view.units.find((u) => u.id === victim.id)!;

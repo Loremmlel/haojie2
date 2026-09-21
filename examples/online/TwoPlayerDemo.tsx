@@ -4,7 +4,7 @@ import { createGame, type Player } from '../../src/engine';
 import { HaojieOnlineGame, type HaojieOnlineGameProps } from '../../src/ui/online/HaojieOnlineGame';
 import { DemoRoom } from './room';
 
-/** Mock only: real authority must run on the website server, never inside its browser bundle. */
+/** 仅为模拟示例：真实权威引擎必须运行在网站服务器，不能放在浏览器构建中。 */
 export function TwoPlayerDemo() {
   const [room] = useState(() => new DemoRoom('two-player-example', createGame(20260920)));
   const [updates, setUpdates] = useState(() => ({
@@ -21,7 +21,7 @@ export function TwoPlayerDemo() {
         baseRevision: context.baseRevision,
         command: JSON.parse(JSON.stringify(command)),
       });
-      // A real transport may deliver this update before or after the Promise's receipt.
+      // 真实传输可能在 Promise 回执之前或之后交付该更新。
       const kind = receipt.ok ? 'update' : 'snapshot';
       setUpdates({ 1: room.update(1, kind), 2: room.update(2, kind) });
       return receipt;

@@ -31,7 +31,7 @@ const effectNames: Record<Effect['type'], string> = {
   stun: '眩晕',
   'inner-fire': '心灵之火',
 };
-/** Read-only presentation: expiry, protection sources and range come from the engine. */
+/** 只读展示；到期时间、保护来源与射程均来自引擎。 */
 export function unitStatus(s: GamePosition, u: Unit): StatusEntry[] {
   const rows: StatusEntry[] = [];
   const sourceLabel = (id?: string) => {

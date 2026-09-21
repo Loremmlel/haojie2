@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 const renderOnly = process.env.HAOJIE_RENDER_ONLY === '1';
-execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/feedback3-fixtures.ts']);
+execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/fixtures/feedback3-fixtures.ts']);
 const browser = await chromium.launch({
   executablePath:
     process.env.BROWSER_PATH || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined),

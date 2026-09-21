@@ -18,15 +18,15 @@ import {
   type Landmark,
   type Player,
 } from '../../src/engine';
-import { addUnit, addEffect, resetUnit } from '../../src/engine/state';
-import { damage, heal, kill, resolution } from '../../src/engine/combat';
+import { addUnit, addEffect, resetUnit } from '../../src/engine/core/state';
+import { damage, heal, kill, resolution } from '../../src/engine/commands/combat';
 import {
   captureClockFrame,
   demolish,
   rebuildLandmarks,
   syncBanners,
   installEquipment,
-} from '../../src/engine/shrines';
+} from '../../src/engine/setup/shrines';
 import { add, card, fixture, pass, round, strike, unit } from '../helpers';
 function land(s: GameState, kind: Kind = 's1', p: Player = 1, x = 3, y = 6) {
   return addUnit(s, kind, p, { x, y }) as Landmark;
@@ -155,7 +155,7 @@ test('3.0 zero-range landmarks can only attack a hostile occupant and rebuild st
   const blocker = unit(s, v.id);
   blocker.owner = 1;
   addEffect(s, blocker, 'freeze', 2, 0, 2);
-  s.ply += 2; // Frozen allies now remain friendly occupants and permit reconstruction.
+  s.ply += 2; // 冰冻友方保留友方占位身份，允许地标重建。
   blocker.effects = [];
   addEffect(s, blocker, 'freeze', 2, 0, 2);
   rebuildLandmarks(s);

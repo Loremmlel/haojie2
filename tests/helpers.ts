@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createGame, applyCommand, definition, isStored } from '../src/engine';
-import { template, random } from '../src/engine/state';
+import { template, random } from '../src/engine/core/state';
 import type { Card, GameState, Kind, Player, Unit } from '../src/engine';
 export function fixture(): GameState {
   const s = createGame(19);

@@ -15,19 +15,19 @@ React 展示/交互 → ActionSpec / 分步Intent → Command
 
 ## 模块职责
 
-| 模块           | 职责                                                                     |
-| -------------- | ------------------------------------------------------------------------ |
-| `types.ts`     | 版本2可序列化状态、操作、来源与事件协议                                  |
-| `catalog.ts`   | 59条棋子/法术/武器定义，两个抽取池和公开规则说明；图鉴与引擎共享唯一数据 |
-| `state.ts`     | 状态内PRNG、实时属性、模式操作预算、蓄力快照、个体效果时钟               |
-| `geometry.ts`  | 占位、叠放、路径、攻击阻挡、行控制；不导入页面                           |
-| `combat.ts`    | 伤害、保护、死亡、人头、反击、命中效果；区别普通伤害与消灭               |
-| `abilities.ts` | 主动蓄力、技能、施法、装备、合成和改判                                   |
-| `movement.ts`  | 普通移动、SZF/小BW连续冲撞、反应队列选点                                 |
-| `lifecycle.ts` | 全局回合开始/结束、持续区域、虹吸、DOT和个体推进                         |
-| `game.ts`      | 唯一命令边界、阶段约束、胜负和明确标注的演示局                           |
-| `history.ts`   | v2存档验证、60步撤销/重做，不接触任何存储API                             |
-| `options.ts`   | 提供可展示的操作描述与选点步骤；不含React类型                            |
+| 模块                    | 职责                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| `types.ts`              | 版本2可序列化状态、操作、来源与事件协议                                      |
+| `catalog.ts`            | 棋子、法术、武器和神龛定义，两个抽取池和公开规则说明；图鉴与引擎共享唯一数据 |
+| `core/state.ts`         | 状态内PRNG、实时属性、模式操作预算、蓄力快照、个体效果时钟                   |
+| `core/geometry.ts`      | 占位、叠放、路径、攻击阻挡、行控制；不导入页面                               |
+| `commands/combat.ts`    | 伤害、保护、死亡、人头、反击、命中效果；区别普通伤害与消灭                   |
+| `commands/abilities.ts` | 主动蓄力、技能、施法、装备、合成和改判                                       |
+| `commands/movement.ts`  | 普通移动、SZF/小BW连续冲撞、反应队列选点                                     |
+| `commands/lifecycle.ts` | 全局回合开始/结束、持续区域、虹吸、DOT和个体推进                             |
+| `commands/game.ts`      | 唯一命令边界、阶段约束、胜负和明确标注的演示局                               |
+| `session/history.ts`    | v2存档验证、60步撤销/重做，不接触任何存储API                                 |
+| `commands/options.ts`   | 提供可展示的操作描述与选点步骤；不含React类型                                |
 
 复杂技能不在React里直接扣血。UI仅暂存还没选完的参数（目标、落点、行列或阵亡记录），完整指令仍由引擎验证。一个动作不合法时，输入状态、手牌和随机数都不变。金身、免疫塔等不能只在UI禁用按钮，必须在效果结算层生效。
 
@@ -37,13 +37,13 @@ React 展示/交互 → ActionSpec / 分步Intent → Command
 
 单位`operations`是已经消耗的完整操作；`mode`锁定当前连续操作，`shots`记录本次攻击次数，`moves`记录冲撞剩余步数。`bonusAttacks`单独表示靴子的额外攻击操作，不能当通用行动点。`charge`存层数，`readyCharge`是回合开始可用层数。
 
-位置不是简单的一格一ID：`occupants`返回全部叠放者，`targetAt`选择栈顶，2×2单位用整个footprint判定。克隆`group`关联一批8枚，并与尚未部署的同批牌联合决定是否发生最后死亡。冰冻保留所有权字段，但`allegiance`在敌我判断中返回中立。
+位置不是简单的一格一ID：`occupants`返回全部叠放者，`targetAt`选择栈顶，2×2单位用整个footprint判定。克隆`group`关联一批8枚，并与尚未部署的同批牌联合决定是否发生最后死亡。冰冻保留阵营，只封锁动作；常驻光环和被动继续生效。
 
 ## 可恢复的结算
 
 所有等待玩家的反应都在`pending`中，不放进React回调或定时器。回合末仍有反应时，显式等待队列完成再切换，存档和悔棋能停在这一步。固定顺序与状态内RNG保证同命令重放结果相同。
 
-`GameEvent`保存坐标/路径及可选的来源、目标身份/尺寸快照，没有对随后可变棋子的引用。`event-facts.ts`提供同步事实与因果作用域，不增加事件ID或消耗PRNG。表现层`board/vfx`负责纯映射、命中时序、有上限批次与可取消的棋子运动；持续状态仍由Board读取当前局面。视觉与生命周期契约见[VFX.md](VFX.md)。动画和音效是状态结果的观察者，动画结束不影响规则结果；减少动态效果或关闭声音不会改变对局。
+`GameEvent`保存坐标/路径及可选的来源、目标身份/尺寸快照，没有对随后可变棋子的引用。`core/event-facts.ts`提供同步事实与因果作用域，不增加事件ID或消耗PRNG。表现层`board/vfx`负责纯映射、命中时序、有上限批次与可取消的棋子运动；持续状态仍由Board读取当前局面。视觉与生命周期契约见[VFX.md](VFX.md)。动画和音效是状态结果的观察者，动画结束不影响规则结果；减少动态效果或关闭声音不会改变对局。
 
 ## 接入React / Next.js
 
@@ -105,3 +105,11 @@ AI接收显式白名单Observation，不接收真seed/rng或Session；小随机�
 ## 3.0：可受控会话与玩家视图
 
 本地入口继续由useGameController/useGameSession持有Session、历史、存储和AI；HaojieOnlineGame由useOnlineController接收宿主修订快照及明确回执。两者共用GameSurface、useGameInteraction和useGamePresentation，不复制棋盘或技能。GamePosition没有seed/rng，GameState保留完整权威字段；公开预检在需要随机值前停止，不制造假随机状态。服务端applyPlayerCommand负责运行时结构与操作者权限，getPlayerView负责嵌套可见性；房间、账号、WS、持久化与提交去重属于宿主。完整协议见[ONLINE-ADAPTATION.md](ONLINE-ADAPTATION.md)。
+
+## 按职责分组（2026-09-21）
+
+公开入口维持 `src/index.ts`、`src/engine/index.ts` 和 `src/ai/index.ts`。引擎根目录仅保留入口、类型与 catalog；`core/` 提供状态、几何、概率和身份查询，`commands/` 负责规则命令与结算，`setup/` 负责召唤、合成及神龛，`session/` 负责存档历史与兼容，`online/` 负责公开投影及操作者边界。
+
+AI 将规划及缓存放在 `planning/`，策略估值放在 `evaluation/`，概率展开放在 `simulation/`；公开观察、预算、客户端及 Worker 保留在 AI 根目录。UI 的 `game/interaction/` 持有控制器及选点逻辑，展示组件和 CSS 仍就近维护。`library/` 共用图鉴卡片和名称链接，不能向引擎引入展示依赖。
+
+浏览器夹具和测试宿主集中在 `tests/browser/fixtures/`，名称浏览流程在 `tests/browser/library/`。文档按 `docs/ai/`、`docs/changes/`、`docs/feedback/` 归档；作者材料和历史回放内容不改写。工具配置放在 `config/`，格式命令显式引用配置。目录检查排除依赖及生成产物，其余每个目录直属文件不超过10个。

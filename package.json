@@ -9,8 +9,8 @@
     "check": "tsc --noEmit",
     "test": "tsx --test tests/*/*.test.ts",
     "test:browser": "node tests/browser/game.mjs",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format": "prettier --config config/prettier.json --ignore-path config/prettierignore --write .",
+    "format:check": "prettier --config config/prettier.json --ignore-path config/prettierignore --check .",
     "deploy": "node scripts/pages.mjs",
     "deploy:check": "node scripts/pages.mjs --check",
     "test:pages": "node tests/browser/pages.mjs",
@@ -24,7 +24,9 @@
     "test:browser:shrine": "node tests/browser/shrine.mjs",
     "test:browser:feedback3": "node tests/browser/feedback3.mjs",
     "test:browser:feedback4": "node tests/browser/feedback4.mjs",
-    "test:browser:online": "node tests/browser/online.mjs"
+    "test:browser:online": "node tests/browser/online.mjs",
+    "test:browser:library": "node tests/browser/library/references.mjs",
+    "check:structure": "node scripts/check-structure.mjs"
   },
   "dependencies": {
     "react": "19.2.0",

@@ -1,0 +1,6 @@
+{
+  "sourceRoots": ["src"],
+  "locale": "zh-CN",
+  "canonicalMap": "DESIGN.md",
+  "ownership": { "Select/Listbox": "native" }
+}

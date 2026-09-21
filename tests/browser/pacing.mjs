@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 
-/** Observe public cell labels and exported sessions, not React timers or planner internals. */
+/** 观察公开格标签及导出存档，不依赖 React 计时器或规划器内部状态。 */
 export async function verifyPacing({ page, load, exported, waitForState, scenario }) {
   const button = (name) => page.getByRole('button', { name, exact: true });
   const report = { firstActionMs: 0, attackIntervalsMs: [], cancellation: [] };
@@ -28,7 +28,7 @@ export async function verifyPacing({ page, load, exported, waitForState, scenari
   });
   try {
     await load('pacing');
-    // Even a ready/cached decision cannot execute immediately.
+    // 即使决策已经算好或来自缓存，也不能立刻执行。
     await ready();
     assert.deepEqual((await exported()).present, initial.present);
     await page.waitForFunction(() => window.pacingHits.length >= 3, null, { timeout: 15000 });
@@ -44,7 +44,7 @@ export async function verifyPacing({ page, load, exported, waitForState, scenari
       'Repeated/cached attacks must leave hit effects readable instead of flashing through',
     );
 
-    // Stop an already planned move, not only an in-flight Worker calculation.
+    // 验证取消已计划的落子，不仅取消进行中的 Worker 计算。
     await ready();
     await button('暂停AI').click();
     const paused = await exported();
@@ -70,6 +70,19 @@ export async function verifyPacing({ page, load, exported, waitForState, scenari
     await page.waitForTimeout(1800);
     assert.deepEqual(await exported(), replaced);
     report.cancellation.push('dialog and new match during ready-to-act wait');
+
+    await load('pacing');
+    await ready();
+    await page.locator('[data-cell="4,7"]').click();
+    const referenceSnapshot = await exported();
+    await page.locator('.inspector-profile').getByRole('link').click();
+    await page.waitForTimeout(1800);
+    await button('关闭弹窗').click();
+    assert.deepEqual(await exported(), referenceSnapshot);
+    await waitForState(
+      (s) => JSON.stringify(s.present) !== JSON.stringify(referenceSnapshot.present),
+    );
+    report.cancellation.push('unit introduction cancels ready actions and closing resumes AI');
 
     await load('pacing');
     await ready();

@@ -19,8 +19,13 @@ import {
   type Command,
   type GameState,
 } from '../../src/engine';
-import { refreshDeployment } from '../../src/engine/geometry';
-import { startIntent, advanceIntent, canChoose, commandFor } from '../../src/ui/game/selection';
+import { refreshDeployment } from '../../src/engine/core/geometry';
+import {
+  startIntent,
+  advanceIntent,
+  canChoose,
+  commandFor,
+} from '../../src/ui/game/interaction/selection';
 import { add, card, fixture, pass, round, unit } from '../helpers';
 
 function assertAtomic(s: GameState, c: Command, reason: RegExp) {
@@ -31,7 +36,7 @@ function assertAtomic(s: GameState, c: Command, reason: RegExp) {
   assert.deepEqual(s, before);
 }
 
-// Exercise local and public UI selection as well as the authoritative command, not just a helper.
+// 同时覆盖本地和公开界面选点及权威命令，不只验证辅助函数。
 function deployable(s: GameState, row: number, expected: boolean) {
   const id = card(s, 9);
   for (const position of [s, getPlayerView(s, s.active).state]) {
@@ -135,7 +140,7 @@ test('feedback4 row permissions survive movement, save/load and public projectio
   const second = add(s, 9, 1, 3, 9);
   refreshDeployment(s, 1);
   const moved = applyCommand(s, { type: 'move', unitId: second.id, x: 3, y: 8 });
-  add(moved, 9, 2, 7, 9); // now 1:1, but this turn started with 2:0
+  add(moved, 9, 2, 7, 9); // 当前为一比一，但回合开始时为二比零。
   assert.ok(moved.deployRows[1].includes(9));
   const restored = parseSession(JSON.stringify(createSession(moved))).present;
   deployable(restored, 9, true);
@@ -161,7 +166,7 @@ test('feedback4 deployment counts each giant once per touched row and stacked pi
   const counter = add(s, 9, 2, 7, 9);
   refreshDeployment(s, 1);
   assert.ok(!s.deployRows[1].includes(9));
-  add(s, 9, 1, ally.x, ally.y); // independent pieces, not unique occupied squares
+  add(s, 9, 1, ally.x, ally.y); // 统计独立棋子数量，不统计去重后的占格数。
   refreshDeployment(s, 1);
   assert.ok(s.deployRows[1].includes(9));
   assert.equal(big.size, 2);
@@ -175,7 +180,7 @@ test('feedback4 giant cannot receive spell22 or execute conversion, including si
       const big = add(s, inherited ? 9 : 5, 1, 3, 4);
       if (inherited) big.traits = [5];
       big.silenced = silenced;
-      add(s, 'archmage', 2, 8, 11); // illegal casting must not roll counterspell randomness
+      add(s, 'archmage', 2, 8, 11); // 非法施法不能消耗反制随机数。
       const id = card(s, 22);
       assertAtomic(s, { type: 'cast', cardId: id, targetId: big.id }, /不能使用策反/);
       for (const position of [s, getPlayerView(s, 1).state]) {
@@ -225,7 +230,7 @@ test('feedback4 all hooks reject giants atomically, including inherited/silenced
   hook.chargeType = 'attack';
   const n = applyCommand(s, { type: 'attack', unitId: hook.id, targetId: big.id });
   assert.equal(unit(n, big.id).hp, big.hp - getStats(s, hook).attack);
-  assert.equal(n.pending.length, 0); // attack still deals damage, but no impossible pull prompt
+  assert.equal(n.pending.length, 0); // 攻击仍造成伤害，但不能出现无法完成的牵引提示。
   s.pending.push({
     kind: 'hit-pull',
     owner: 1,
@@ -252,6 +257,6 @@ test('feedback4 CX can convert an enemy giant but a carrier inheriting giant can
     });
     assert.equal(unit(n, big.id).owner, inherited ? 2 : 1);
     assert.ok(unit(n, big.id).hp < big.hp);
-    assert.equal(rolls, 2); // restriction does not rewrite the existing CX PRNG consumption
+    assert.equal(rolls, 2); // 该限制不改变已有 CX 随机消耗顺序。
   }
 });

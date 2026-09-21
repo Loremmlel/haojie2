@@ -1,6 +1,6 @@
 import type { Definition, Kind, Point } from './types';
 export const RULESET_ID = '3.0-feedback4-2026-09-21';
-/** Numeric combat parameters shared by resolution and read-only AI estimates. */
+/** 结算与 AI 只读估算共用的战斗数值。 */
 export const COMBAT_RULES = {
   sacrificeMaxHpCost: 20,
   sageAuraAttack: 5,
@@ -20,7 +20,7 @@ export const COMBAT_RULES = {
   goldSpellChance: 1 / 5,
   littleGoldImmunity: 1 / 2,
 } as const;
-/** Single source for both rule stats and the UI codex. Fractional attributes retain their exact numeric value. */
+/** 规则属性与界面图鉴的唯一来源；分数属性保留精确数值。 */
 export const CATALOG: Definition[] = [
   {
     id: 1,
@@ -276,7 +276,7 @@ export const CATALOG: Definition[] = [
     actions: 0,
     move: 0,
     description:
-      '抽到17时只有1/5概率获得金身，否则变为小金耶。使一个友方直到其下回合开始免疫所有伤害与所有敌方技能、法术，包括死吧！和策反。己方献祭等非伤害效果不受阻止。',
+      '抽取金身时只有1/5概率获得金身，否则变为小金耶。使一个友方直到其下回合开始免疫所有伤害与所有敌方技能、法术，包括死吧！和策反。己方献祭等非伤害效果不受阻止。',
     spell: 100,
   },
   {
@@ -291,7 +291,7 @@ export const CATALOG: Definition[] = [
     actions: 1,
     move: 1,
     description:
-      '抽到17时4/5概率变为小金耶。每次将受到正数伤害时独立判定，50%概率免疫该次伤害；沉默后失效。不会免疫非伤害的处决、献祭或策反。',
+      '抽取金身时4/5概率变为小金耶。每次将受到正数伤害时独立判定，50%概率免疫该次伤害；沉默后失效。不会免疫非伤害的处决、献祭或策反。',
   },
   {
     id: 18,
@@ -517,7 +517,7 @@ export const CATALOG: Definition[] = [
     actions: 0,
     move: 0,
     description:
-      '法师专用，装备后射程+1。攻击命中敌方随从后冰冻两回合：不能行动，每回合结束扣5血；仍属原阵营，友方攻击可穿过，常驻光环和被动依然生效。法师名单：普通19，终极6、13、14、19、20。',
+      '法师专用，装备后射程+1。攻击命中敌方随从后冰冻两回合：不能行动，每回合结束扣5血；仍属原阵营，友方攻击可穿过，常驻光环和被动依然生效。法师名单：路障小法师、大法师、改判小法师、灵魂法师、溟界小法师、击退法师、万法真君、法力之泉。',
     weapon: 15,
   },
   {
@@ -786,7 +786,7 @@ export const CATALOG: Definition[] = [
     actions: 1,
     move: 0.5,
     description:
-      '范围内友方死亡时，可在范围内合法空地召唤一只普通20，并扣自身10生命上限。每次死亡分别处理；无处放置或被沉默则不触发；冰冻不关闭光环。',
+      '范围内友方死亡时，可在范围内合法空地召唤一只超级跑得快，并扣自身10生命上限。每次死亡分别处理；无处放置或被沉默则不触发；冰冻不关闭光环。',
     skill: '死亡召唤',
   },
   {
@@ -892,7 +892,7 @@ export const CATALOG: Definition[] = [
       '3张未装备炎魔之心在己方回合开始合成。不能主动攻击；沉默移除此限制，之后可正常攻击。每个己方回合结束，对以自身为中心13×13内当前生命最高的敌方造成80技能伤害，不受路径阻挡；命中格的敌方叠放者均受击，上下左右四格只对敌方溅射10，大体型按各覆盖格分别受伤。半速移动需蓄力。',
   },
 ];
-// Synthesis results never enter either random summon pool.
+// 合成结果不进入任何随机召唤池。
 CATALOG.push(
   {
     id: 'sage',
@@ -948,7 +948,7 @@ CATALOG.push(
     actions: 1,
     move: 1,
     description:
-      '3座跑得快小屋合成。范围内每个友方棋子死亡时，必须扣10生命上限并在范围内选择合法位置召唤一只普通20超级跑得快；包括自己召唤的单位。每次死亡分别处理，不按克隆批次合并。无合法位置或上限不足10时不召唤、不扣费；恰好10时先召唤再离场。',
+      '3座跑得快小屋合成。范围内每个友方棋子死亡时，必须扣10生命上限并在范围内选择合法位置召唤一只超级跑得快；包括自己召唤的单位。每次死亡分别处理，不按克隆批次合并。无合法位置或上限不足10时不召唤、不扣费；恰好10时先召唤再离场。',
   },
   {
     id: 'archmage',
@@ -966,7 +966,7 @@ CATALOG.push(
       '3名法术反制小法师合成。法师单位。敌方释放法术时有2/3概率反制，法术消耗但无效；成功时自身生命上限和当前生命各+15。多个反制来源按入场顺序独立尝试，首个成功后停止，只有成功来源成长。沉默或冰冻时不反制。',
   },
 );
-// 3.0: shrine identities stay outside both random summon pools.
+// 神龛身份独立于普通和终极随机召唤池。
 export const SHRINE_POOL: Kind[] = Array.from({ length: 16 }, (_, i) => `s${i + 1}` as Kind);
 export const FLAG_CELLS: Point[] = [
   { x: 4, y: 7 },
@@ -1078,7 +1078,7 @@ CATALOG.push(
     100,
     2,
     1,
-    '无限攻击射程，仍遵守路径阻挡。不能装备任何武器，也不能接受友方单位提供的攻击力增益。该限制同样适用于所有模式的普通10投石机。',
+    '无限攻击射程，仍遵守路径阻挡。不能装备任何武器，也不能接受友方单位提供的攻击力增益。该限制同样适用于所有模式的投石机。',
   ),
   shrine(
     's8',
@@ -1196,7 +1196,7 @@ CATALOG.push(
     0,
     0,
     0,
-    '特殊合成光环：3名终极13改判小法师合成。永久存在，每个实际己方回合最多一次，把一次召唤改为从该来源池自选一个结果。适用于经典和神龛模式，不进入16神龛抽选池。',
+    '特殊合成光环：3名改判小法师合成。永久存在，每个实际己方回合最多一次，把一次召唤改为从该来源池自选一个结果。适用于经典和神龛模式，不进入16神龛抽选池。',
     { role: '合成光环', aura: true },
   ),
 );

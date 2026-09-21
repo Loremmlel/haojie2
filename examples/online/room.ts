@@ -13,8 +13,8 @@ export interface DemoRequest {
   baseRevision: number;
   command: unknown;
 }
-/** An executable teaching host, NOT persistence, authentication or a production room service.
- * In production actor comes from the authenticated connection and this object lives server-side. */
+/** 可运行的教学宿主，不提供持久化、认证或生产房间服务。
+ * 正式环境从已认证连接取得操作者身份，且该对象必须仅存在于服务器。 */
 export class DemoRoom {
   private state: GameState;
   private receipts = new Map<string, { input: string; receipt: CommandReceipt }>();
@@ -25,7 +25,7 @@ export class DemoRoom {
   ) {
     this.state = structuredClone(initialState);
   }
-  /** Test/debug access to authority; never send this snapshot to a browser in the real host. */
+  /** 仅测试和调试可读取权威局面；真实宿主不能将此快照发送至浏览器。 */
   inspect(): GameState {
     return structuredClone(this.state);
   }
@@ -65,7 +65,7 @@ export class DemoRoom {
         receipt = { ok: false, message: '局面已更新，请同步后重新选择操作。' };
       else {
         const next = applyPlayerCommand(this.state, actor, command);
-        // A real host must durably commit next + revision + request receipt atomically BEFORE ack.
+        // 真实宿主必须在回执前将新局面、修订号和请求记录原子持久化。
         this.state = next;
         this.revision++;
         receipt = { ok: true, revision: this.revision };

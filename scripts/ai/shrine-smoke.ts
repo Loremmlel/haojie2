@@ -1,10 +1,10 @@
-/** Headless 3.0 acceptance. Real engine RNG; AI sees only public observation. */
+/** 神龛无界面验收使用真实引擎 RNG，AI 只读取公开观察。 */
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { createGame, createSession, validState, type Kind, type Command } from '../../src/engine';
 import { Arena } from '../../src/match/arena';
 import { observe, decisionOwner } from '../../src/ai/observation';
-import { decide } from '../../src/ai/search';
+import { decide } from '../../src/ai/planning/search';
 import { prepareTranscript, appendEntry } from './cli/transcript';
 import type { Difficulty } from '../../src/ai/types';
 const record = process.argv.includes('--record');
@@ -31,7 +31,7 @@ for (const difficulty of ['easy', 'medium', 'hard'] as Difficulty[]) {
     if (record && difficulty === 'medium')
       appendEntry(path, { ...entry, actor: ai ? 'ai' : 'human' });
   };
-  // Both offers were genuinely drawn; the author-facing corrected flag coordinate is explicit.
+  // 双方候选均由真实抽取得到；明确使用作者更正后的举旗坐标。
   act({ type: 'choose-shrine', player: 1, shrineKind: 's8' });
   act({ type: 'choose-shrine', player: 2, shrineKind: 's13' });
   act({ type: 'deploy', cardId: arena.session.present.hands[1][0].id, x: 5, y: 7 });

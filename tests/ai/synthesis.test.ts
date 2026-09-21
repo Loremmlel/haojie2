@@ -9,11 +9,11 @@ import {
   firelordStrike,
   type GameState,
 } from '../../src/engine';
-import { candidateGroups } from '../../src/ai/candidates';
+import { candidateGroups } from '../../src/ai/planning/candidates';
 import { observe, imagined, fingerprint } from '../../src/ai/observation';
-import { decide } from '../../src/ai/search';
-import { attackPressure } from '../../src/ai/threats';
-import { hitDistance } from '../../src/ai/spatial';
+import { decide } from '../../src/ai/planning/search';
+import { attackPressure } from '../../src/ai/evaluation/threats';
+import { hitDistance } from '../../src/ai/evaluation/spatial';
 import { add, card, fixture } from '../helpers';
 import type { Difficulty } from '../../src/ai/types';
 const levels: Difficulty[] = ['easy', 'medium', 'hard'];

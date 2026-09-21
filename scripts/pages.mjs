@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { buildGame } from './build.mjs';
 
-// Branch publishing serves main/(root). This prepares files; git commit/push publishes them.
+// Pages 从 main 根目录发布；这里只生成文件，提交并推送后才进入发布流程。
 const check = process.argv.includes('--check');
 const html = await buildGame();
 if (check) {

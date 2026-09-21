@@ -1,4 +1,4 @@
-/** Production-path telemetry. Replays and cache executions are not fresh depth-zero searches. */
+/** 生产路径遥测；回放和缓存执行不能算作新的零深度搜索。 */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -6,13 +6,13 @@ import { replayTranscript } from './cli/transcript';
 import { gunzipSync } from 'node:zlib';
 import { createGame, applyCommand } from '../../src/engine';
 import type { GameState } from '../../src/engine';
-import { decide as currentDecide } from '../../src/ai/search';
-import { cachedDecision } from '../../src/ai/plan-cache';
+import { decide as currentDecide } from '../../src/ai/planning/search';
+import { cachedDecision } from '../../src/ai/planning/plan-cache';
 import { observe, decisionOwner, fingerprint } from '../../src/ai/observation';
 import { allocateBudget as currentBudget, emptyBudget } from '../../src/ai/budget';
 import type { Difficulty, PlanStep } from '../../src/ai/types';
 const output = process.argv[2] ?? 'artifacts/production-audit.json';
-// Optional trusted frozen bundle must export BOTH the planner and its original production allocator.
+// 可选的可信冻结构建必须同时导出规划器和该版本的原始生产预算分配器。
 const baseline = process.argv[3]
   ? ((await import(pathToFileURL(resolve(process.argv[3])).href)) as {
       decide: typeof currentDecide;

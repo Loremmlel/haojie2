@@ -15,7 +15,7 @@ import { add, fixture } from '../helpers';
 const wire = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 function resume(s: GameState, actor: Player, command: Command) {
-  // The server owns this envelope. Neither seed/rng nor the authoritative save goes to a browser.
+  // 完整信封归服务器所有，不向浏览器发送种子、RNG 或权威存档。
   const saved = wire({ ruleset: HAOJIE_RULESET, revision: 42, state: s });
   assert.ok(validState(saved.state));
   const next = applyPlayerCommand(saved.state, actor, wire(command));

@@ -9,7 +9,7 @@ import { verifyWorkbench } from './layout.mjs';
 import { verifyPacing } from './pacing.mjs';
 const renderOnly = process.env.HAOJIE_RENDER_ONLY === '1';
 await mkdir('artifacts', { recursive: true });
-execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/ai-fixtures.ts']);
+execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/fixtures/ai-fixtures.ts']);
 const html = await readFile('dist/index.html', 'utf8');
 const browser = await chromium.launch({
   executablePath:

@@ -9,7 +9,7 @@ import { chromium } from 'playwright';
 const renderOnly = process.env.HAOJIE_RENDER_ONLY === '1';
 await mkdir('artifacts', { recursive: true });
 execFileSync(process.execPath, ['scripts/vfx/build-preview.mjs']);
-execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/fixtures.ts']);
+execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/fixtures/fixtures.ts']);
 const browser = await chromium.launch({
   executablePath:
     process.env.BROWSER_PATH || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined),
@@ -58,7 +58,7 @@ try {
     Math.hypot(p1.x - p0.x, p1.y - p0.y) > 5,
     'projectile must actually move, not finish before insertion',
   );
-  // Freezing is only for review screenshots, never an assertion about exact pixels.
+  // 冻结动画仅用于人工审查截图，不断言精确像素。
   await page.evaluate(() => {
     document.querySelector('.effects-layer').pauseAnimations();
     for (const a of document.getAnimations()) a.pause();
@@ -108,7 +108,7 @@ try {
   check(
     'representative real-rule actions distinguish range, shape, pending seals, successful triggers and blocks',
   );
-  // Click bursts programmatically to avoid Playwright actionability waiting on the animation itself.
+  // 以程序方式连续点击，避免 Playwright 为动画可操作性等待而改变时序。
   await button('近身斩击').click();
   await button('播放动作').evaluate((b) => {
     b.click();

@@ -15,8 +15,8 @@ import {
   type Kind,
 } from '../../src/engine';
 import { observe } from '../../src/ai/observation';
-import { decide } from '../../src/ai/search';
-import { chargeFor } from '../../src/engine/traits';
+import { decide } from '../../src/ai/planning/search';
+import { chargeFor } from '../../src/engine/core/traits';
 import { add, card, fixture, round, unit } from '../helpers';
 
 test('3.0 hidden commitment and Jade parity do not alter opponent observation, fingerprint input or AI choice', () => {

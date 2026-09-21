@@ -3,7 +3,7 @@ import { mkdir, writeFile, readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-/** Bundle both JavaScript and CSS into one HTML. No CDN, chunks or runtime fetches. */
+/** 将 JavaScript 与 CSS 打包为单个 HTML，无 CDN、分包或运行时请求。 */
 export async function buildGame() {
   const worker = await build({
     entryPoints: ['src/ai/worker.ts'],
@@ -49,7 +49,7 @@ export async function buildGame() {
 <meta name="theme-color" content="#f5f4ef">
 <meta name="description" content="浩劫3.0：经典与神龛模式、16神龛、26种普通召唤、28种终极召唤、117格战场，双人/三档本地AI回合制战棋。离线可玩，支持悔棋与存档。">
 <title>浩劫 3.0 · 经典 / 神龛 · 双人 / AI对战</title>
-<!-- Bundled third-party notices\n${notices.join('\n\n').replace(/-->/g, '-- >')} -->
+<!-- 内联第三方许可声明\n${notices.join('\n\n').replace(/-->/g, '-- >')} -->
 <style>html,body{margin:0;min-height:100%;background:#f5f4ef}#root{min-height:100vh}${styles.replace(/<\/style/gi, '<\\/style')}</style>
 </head><body><div id="root"></div><noscript>浩劫需要启用JavaScript，但不需要联网。</noscript>
 <script>${script.replace(/<\/script/gi, '<\\/script')}</script>

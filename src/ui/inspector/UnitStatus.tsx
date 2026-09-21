@@ -1,3 +1,4 @@
+import { UnitText } from '../library/UnitReference';
 import type { GamePosition, Unit } from '../../engine';
 import { unitStatus } from './unit-status';
 
@@ -12,9 +13,11 @@ export function UnitStatus({ state, unit }: { state: GamePosition; unit: Unit })
             <li key={row.key} className={row.pending ? 'upcoming' : undefined}>
               <b>
                 {row.pending ? '待生效 · ' : ''}
-                {row.label}
+                <UnitText>{row.label}</UnitText>
               </b>
-              <span>{row.detail}</span>
+              <span>
+                <UnitText>{row.detail}</UnitText>
+              </span>
             </li>
           ))}
         </ul>

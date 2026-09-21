@@ -212,7 +212,7 @@ test('public preflight stops before randomness instead of inventing random field
   assert.equal(queryCommandError(view.state, { type: 'summon' }), null);
   assert.equal(view.state.hands[1].length, 0);
   assert.deepEqual(view, before);
-  // @ts-expect-error a public position cannot be supplied as authoritative GameState.
+  // @ts-expect-error 公开局面不能用作权威 GameState。
   const misuse = () => applyCommand(view.state, { type: 'summon' });
   assert.throws(misuse, /完整随机状态/);
   const p = fixture(),

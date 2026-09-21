@@ -33,7 +33,7 @@ test('presentation waiting is abortable, both before and after scheduling', asyn
 });
 test('an elapsed presentation minimum does not add another think-time wait', async () => {
   const abort = new AbortController();
-  // A negative remainder means the real search already occupied the presentation interval.
+  // 剩余时间为负表示真实搜索已经覆盖展示间隔。
   await waitForPresentation(-1000, abort.signal);
-  abort.abort(); // A completed wait has no lingering abort handler that can reject again.
+  abort.abort(); // 已完成等待不保留能再次拒绝 Promise 的取消监听器。
 });

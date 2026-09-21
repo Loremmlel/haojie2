@@ -1,15 +1,15 @@
-/** Synthetic diagnostic positions, not a reconstruction of the author's missing match replay. */
+/** 人工诊断局面，不冒充作者缺失实战回放的还原。 */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createGame, applyCommand, definition } from '../../src/engine';
 import type { GameState } from '../../src/engine';
-import { template } from '../../src/engine/state';
+import { template } from '../../src/engine/core/state';
 import { observe, decide } from '../../src/ai';
 import type { Difficulty } from '../../src/ai';
 import { allocateBudget, emptyBudget } from '../../src/ai/budget';
-import { cardValue, explainEvaluation, materialValue } from '../../src/ai/evaluate';
-import { analyzePayload, baseThreat } from '../../src/ai/threats';
-import { actionWindow } from '../../src/ai/spatial';
+import { cardValue, explainEvaluation, materialValue } from '../../src/ai/evaluation/evaluate';
+import { analyzePayload, baseThreat } from '../../src/ai/evaluation/threats';
+import { actionWindow } from '../../src/ai/evaluation/spatial';
 
 function position(): GameState {
   const s = createGame(19);
@@ -66,7 +66,7 @@ immediate.units.push(template(11, 2, 0, { x: 5, y: 4 }, 'invader'));
 const approaching = structuredClone(immediate);
 approaching.hands[1] = [];
 approaching.units[0].y = 6;
-// Check the estimator's horizon. Moving spends the operation; it does NOT also attack now.
+// 检查估算时域；移动消耗完整操作，不能假设本次还能攻击。
 const move = { type: 'move' as const, unitId: 'invader', x: 5, y: 5 };
 const moved = applyCommand(actionWindow(approaching, 2), move);
 const afterAdvance = applyCommand(moved, { type: 'end' });

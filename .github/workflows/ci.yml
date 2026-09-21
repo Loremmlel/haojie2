@@ -32,6 +32,7 @@ jobs:
           retention-days: 7
       - run: npm run format:check
       - run: npm run check
+      - run: npm run check:structure
       - run: |
           set -o pipefail
           npm test | tee artifacts/engine-report.txt
@@ -39,6 +40,7 @@ jobs:
       - name: Install browser for acceptance testing
         run: npx playwright install --with-deps chromium
       - run: npm run test:browser
+      - run: npm run test:browser:library
       - run: npm run test:pages
       - run: npm run test:browser:ai
       - run: npm run test:browser:vfx

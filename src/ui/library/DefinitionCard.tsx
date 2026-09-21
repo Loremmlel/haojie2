@@ -1,0 +1,46 @@
+import type { Definition } from '../../engine';
+import { DefinitionStats } from '../shared/DefinitionStats';
+import { Icon, Rune } from '../shared/visuals';
+import { UnitLink, UnitText } from './UnitReference';
+
+/** 图鉴列表和名称弹窗共用同一张卡片，所有属性与能力均来自 catalog。 */
+export function DefinitionCard({ d }: { d: Definition }) {
+  return (
+    <article
+      className={`codex-card ${d.spell !== undefined ? 'is-spell' : ''} ${d.tier === 'ultimate' ? 'ultimate-codex' : ''} ${d.weapon !== undefined ? 'is-weapon' : ''}`}
+    >
+      <div className="codex-card-heading">
+        <Rune kind={d.id} large />
+        <div>
+          <span className="piece-index">
+            {d.tier === 'normal'
+              ? '普通'
+              : d.tier === 'ultimate'
+                ? '终极'
+                : d.tier === 'shrine'
+                  ? '神龛'
+                  : '变体 / 合成'}
+          </span>
+          <h3>
+            <UnitLink kind={d.id}>{d.name}</UnitLink>
+          </h3>
+          <span className="role-chip">
+            {d.role}
+            {d.mage ? ' · 法师' : ''}
+            {d.size ? ' · 2×2' : ''}
+          </span>
+        </div>
+      </div>
+      <DefinitionStats d={d} />
+      <p>
+        <UnitText>{d.description}</UnitText>
+      </p>
+      {d.skill && (
+        <div className="skill-label">
+          <Icon name="spark" size={14} />
+          <UnitText>{d.skill}</UnitText>
+        </div>
+      )}
+    </article>
+  );
+}

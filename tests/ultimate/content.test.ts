@@ -15,8 +15,8 @@ import {
   template,
   allegiance,
 } from '../../src/engine';
-import { addEffect, draw, resetUnit } from '../../src/engine/state';
-import { kill, damage, resolution } from '../../src/engine/combat';
+import { addEffect, draw, resetUnit } from '../../src/engine/core/state';
+import { kill, damage, resolution } from '../../src/engine/commands/combat';
 import { add, card, fixture, pass, round, seedFor, strike, unit } from '../helpers';
 
 test('head spending replaces an unrevealed summon, never pays after seeing its result', () => {

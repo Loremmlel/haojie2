@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 const renderOnly = process.env.HAOJIE_RENDER_ONLY === '1';
-execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/shrine-fixtures.ts'], {
+execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/fixtures/shrine-fixtures.ts'], {
   stdio: 'inherit',
 });
 const html = await readFile('dist/index.html', 'utf8');
@@ -185,7 +185,7 @@ try {
   check('dormant landmarks remain inspectable with visible rebuild countdown');
   await page.setViewportSize({ width: 390, height: 844 });
   await load('flag-card');
-  await page.locator('.hand-card').filter({ hasText: '举旗' }).focus();
+  await page.getByRole('button', { name: '选择举旗随从', exact: true }).focus();
   await page.keyboard.press('Enter');
   await cell(6, 7).focus();
   await page.keyboard.press('Enter');

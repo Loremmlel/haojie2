@@ -11,10 +11,10 @@ import {
   parseSession,
   validState,
 } from '../../src/engine';
-import { decide } from '../../src/ai/search';
+import { decide } from '../../src/ai/planning/search';
 import { observe, imagined, decisionOwner } from '../../src/ai/observation';
-import { distribution } from '../../src/ai/simulate';
-import { candidateGroups } from '../../src/ai/candidates';
+import { distribution } from '../../src/ai/simulation/simulate';
+import { candidateGroups } from '../../src/ai/planning/candidates';
 import { rewindMatch, matchSettings } from '../../src/match/history';
 import { writeStoredSession } from '../../src/ui/session/storage';
 import type { Difficulty } from '../../src/ai/types';

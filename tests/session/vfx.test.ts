@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyCommand, createSession, parseSession } from '../../src/engine';
-import { addEffect, emit } from '../../src/engine/state';
-import { eventActor, withEventFacts } from '../../src/engine/event-facts';
+import { addEffect, emit } from '../../src/engine/core/state';
+import { eventActor, withEventFacts } from '../../src/engine/core/event-facts';
 import {
   planEffects,
   center,
@@ -176,7 +176,7 @@ test('effect batches coexist, expire independently and bound both batches and cu
     amount: 1,
   }));
   assert.ok(planEffects(storm).length <= MAX_CUES);
-  // The playback boundary stays bounded even when called without planEffects.
+  // 即使绕过 planEffects 直接调用，播放边界也必须遵守数量上限。
   const oversized = make(99, 0, 1000);
   const [decoration, damage] = effects('近身斩击');
   oversized.cues = [

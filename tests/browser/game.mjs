@@ -8,7 +8,7 @@ import { chromium } from 'playwright';
 
 const renderOnly = process.env.HAOJIE_RENDER_ONLY === '1';
 await mkdir('artifacts', { recursive: true });
-execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/fixtures.ts'], {
+execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/fixtures/fixtures.ts'], {
   stdio: 'inherit',
 });
 assert.deepEqual(await readdir('dist'), ['index.html']);
@@ -50,7 +50,7 @@ async function load(name) {
   }
 }
 async function readState() {
-  // Real downloads are rate-limited by Chromium; test inspection must not spam them.
+  // Chromium 会限制真实下载频率，测试读取不能连续轰炸下载入口。
   await new Promise((r) => setTimeout(r, Math.max(0, 180 - (Date.now() - lastExportAt))));
   lastExportAt = Date.now();
   const waiting = page.waitForEvent('download');
@@ -271,7 +271,7 @@ try {
   await choose(3, 10);
   const awaitingPull = await readState();
   assert.equal(awaitingPull.pending[0].kind, 'hit-pull');
-  // A fixed-target choice must not turn a board click into an implicit confirmation.
+  // 固定目标的反应不能将棋盘点击当作隐式确认。
   await choose(9, 9);
   assert.deepEqual(await readState(), awaitingPull);
   await button('放弃此效果').click();

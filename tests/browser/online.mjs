@@ -7,7 +7,7 @@ import { build } from 'esbuild';
 import { chromium } from 'playwright';
 await mkdir('artifacts', { recursive: true });
 const bundle = await build({
-  entryPoints: ['tests/browser/online-host.tsx'],
+  entryPoints: ['tests/browser/fixtures/online-host.tsx'],
   bundle: true,
   format: 'iife',
   platform: 'browser',

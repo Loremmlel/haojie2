@@ -7,12 +7,12 @@ import { chromium } from 'playwright';
 import { build } from 'esbuild';
 
 await mkdir('artifacts', { recursive: true });
-execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/fixtures.ts']);
+execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/fixtures/fixtures.ts']);
 const html = await readFile('index.html', 'utf8');
 assert.equal(html, await readFile('dist/index.html', 'utf8'));
 assert.ok(existsSync('.nojekyll'));
 const harness = await build({
-  entryPoints: ['tests/browser/host.tsx'],
+  entryPoints: ['tests/browser/fixtures/host.tsx'],
   bundle: true,
   write: false,
   outdir: 'artifacts/host',

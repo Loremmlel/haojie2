@@ -9,7 +9,7 @@ import {
   undo,
   unitActions,
 } from '../../src/engine';
-import { kill } from '../../src/engine/combat';
+import { kill } from '../../src/engine/commands/combat';
 import { add, fixture, round, unit } from '../helpers';
 
 test('U19 can spend its last five max HP to complete a second revival without giving the enemy a head', () => {

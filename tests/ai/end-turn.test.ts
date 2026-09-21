@@ -3,17 +3,17 @@ import assert from 'node:assert/strict';
 import position from '../fixtures/ai/end-turn-20260915.json';
 import { add, fixture } from '../helpers';
 import { applyCommand, commandError, createSession } from '../../src/engine';
-import { getStats } from '../../src/engine/state';
+import { getStats } from '../../src/engine/core/state';
 import { Arena } from '../../src/match/arena';
-import { decide } from '../../src/ai/search';
-import { cachedDecision } from '../../src/ai/plan-cache';
+import { decide } from '../../src/ai/planning/search';
+import { cachedDecision } from '../../src/ai/planning/plan-cache';
 import { fingerprint, imagined, observe } from '../../src/ai/observation';
-import { evaluate } from '../../src/ai/evaluate';
+import { evaluate } from '../../src/ai/evaluation/evaluate';
 import type { Command, GameState } from '../../src/engine';
 import type { Observation } from '../../src/ai/types';
 
-// Public observation before command 229 of the 315-command September 15 CLI match.
-// No real seed/RNG, history, oracle move or future draw is part of the fixture.
+// 九月十五日315步 CLI 对局中，第229条命令之前的公开观察。
+// 夹具不含真实种子、RNG、历史、预知动作或未来抽牌。
 const beforeDeploy = () => imagined(position as Observation);
 const beforeEnd = () =>
   applyCommand(beforeDeploy(), {

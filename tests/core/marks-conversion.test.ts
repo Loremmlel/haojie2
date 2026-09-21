@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { applyCommand, createSession, dispatch, parseSession, redo, undo } from '../../src/engine';
 import { add, fixture, round, strike, unit } from '../helpers';
 
-// Exercise public commands; the state already stores independent effect records.
+// 通过公开命令验证；局面已保存独立效果记录。
 test('catapult marks stack from one or several catapults and all detonate on an allied follow-up', () => {
   for (const separate of [false, true]) {
     let s = fixture();
@@ -21,7 +21,7 @@ test('catapult marks stack from one or several catapults and all detonate on an 
       unitId: ally.id,
       targetId: target.id,
     });
-    assert.equal(unit(played.present, target.id).hp, 35); // 5 attack + 5 + 5 marks.
+    assert.equal(unit(played.present, target.id).hp, 35); // 五点攻击加两层各五点标记。
     assert.equal(
       unit(played.present, target.id).effects.filter((e) => e.type === 'mark').length,
       0,
@@ -86,7 +86,7 @@ test('stacked marks remain separate damage packets and full healing detonates ev
   s = strike(strike(s, catapult, victim), catapult, victim);
   s.active = 2;
   s = strike(s, healer, victim);
-  assert.equal(unit(s, victim.id).hp, 40); // Heal to 50, then both 5-point marks.
+  assert.equal(unit(s, victim.id).hp, 40); // 先治疗至50，再分别结算两层五点标记。
   assert.equal(unit(s, victim.id).effects.filter((e) => e.type === 'mark').length, 0);
 });
 
@@ -102,7 +102,7 @@ test('conversion requires positive direct attack damage, never catapult detonati
     s = strike(s, a, target);
     assert.equal(unit(s, target.id).owner, 2);
     assert.ok(unit(s, a.id).effects.some((e) => e.type === 'convert'));
-    if (full) s = strike(s, a, target); // Now wounded, so leave a mark for the zero-attack ally.
+    if (full) s = strike(s, a, target); // 当前已经受伤，为零攻击友方留下标记。
     const before = unit(s, target.id).hp;
     s = strike(s, zero, target);
     assert.equal(unit(s, target.id).hp, before - 5);

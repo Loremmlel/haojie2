@@ -16,8 +16,8 @@ import {
   isStored,
 } from '../../src/engine';
 import { add, card, fixture, round, seedFor, strike, unit } from '../helpers';
-import { draw, addEffect } from '../../src/engine/state';
-import { damage, resolution, kill } from '../../src/engine/combat';
+import { draw, addEffect } from '../../src/engine/core/state';
+import { damage, resolution, kill } from '../../src/engine/commands/combat';
 import type { Command, GameState } from '../../src/engine';
 const roundtrip = (s: GameState) =>
   assert.deepEqual(parseSession(JSON.stringify(createSession(s))).present, s);
@@ -139,7 +139,7 @@ test('old saves and malformed numeric, graph and event fields fail without mutat
 });
 test('history retains the most recent 60 commands with reversible random state', () => {
   let session = createSession(createGame(7));
-  // Setting up currency is test-only; summon/begin are still real engine commands.
+  // 人头设置仅为测试准备，召唤和开始行动仍通过真实引擎命令。
   for (let n = 0; n < 24; n++) {
     for (let i = 0; i < 2; i++) session = dispatch(session, { type: 'summon' });
     session = dispatch(session, { type: 'begin' });

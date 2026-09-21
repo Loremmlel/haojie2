@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { CATALOG } from '../../engine';
-import { DefinitionStats } from '../shared/DefinitionStats';
+import { DefinitionCard } from './DefinitionCard';
+import { UnitText } from './UnitReference';
 import { Modal } from '../shared/Modal';
-import { Icon, Rune } from '../shared/visuals';
+import { Icon } from '../shared/visuals';
 export function Codex({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState(''),
     [filter, setFilter] = useState('全部');
@@ -39,6 +40,18 @@ export function Codex({ onClose }: { onClose: () => void }) {
             placeholder="搜索名称、能力或编号…"
             aria-label="搜索图鉴"
           />
+          {query && (
+            <button
+              className="icon-button"
+              aria-label="清空图鉴搜索"
+              onClick={(event) => {
+                setQuery('');
+                event.currentTarget.parentElement?.querySelector('input')?.focus();
+              }}
+            >
+              <Icon name="x" />
+            </button>
+          )}
           <span>{entries.length}</span>
         </label>
         <div className="filter-tabs">
@@ -56,46 +69,18 @@ export function Codex({ onClose }: { onClose: () => void }) {
       </div>
       <div className="codex-grid">
         {entries.map((d) => (
-          <article
-            key={d.id}
-            className={`codex-card ${d.spell !== undefined ? 'is-spell' : ''} ${d.tier === 'ultimate' ? 'ultimate-codex' : ''} ${d.weapon !== undefined ? 'is-weapon' : ''}`}
-          >
-            <div className="codex-card-heading">
-              <Rune kind={d.id} large />
-              <div>
-                <span className="piece-index">
-                  {d.tier === 'normal'
-                    ? `普通 ${String(d.id).padStart(2, '0')}`
-                    : d.tier === 'ultimate'
-                      ? `终极 ${String(d.id).slice(1).padStart(2, '0')}`
-                      : d.tier === 'shrine'
-                        ? `神龛 ${String(d.id).slice(1)}`
-                        : '变体 / 合成'}
-                </span>
-                <h3>{d.name}</h3>
-                <span className="role-chip">
-                  {d.role}
-                  {d.mage ? ' · 法师' : ''}
-                  {d.size ? ' · 2×2' : ''}
-                </span>
-              </div>
-            </div>
-            <DefinitionStats d={d} />
-            <p>{d.description}</p>
-            {d.skill && (
-              <div className="skill-label">
-                <Icon name="spark" size={14} />
-                {d.skill}
-              </div>
-            )}
-          </article>
+          <DefinitionCard key={d.id} d={d} />
         ))}
       </div>
       {entries.length === 0 && (
         <p className="empty-state">没有匹配条目。可以搜索“冰冻”“人头”“复活”或“法师”。</p>
       )}
       <p className="fine-print">
-        图鉴与引擎共用定义。神龛只在独立神龛模式开局抽取；牢千K由3名终极13合成，两个模式均可使用。
+        <UnitText>
+          {
+            '图鉴与引擎共用定义。神龛只在独立神龛模式开局抽取；牢千K由3名改判小法师合成，两个模式均可使用。'
+          }
+        </UnitText>
       </p>
     </Modal>
   );

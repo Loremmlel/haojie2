@@ -21,15 +21,15 @@ import {
   unitActions,
 } from '../../src/engine';
 import type { AttackDirection, Command, Source } from '../../src/engine';
-import { damage, resolution } from '../../src/engine/combat';
-import { withRandomSource } from '../../src/engine/random';
+import { damage, resolution } from '../../src/engine/commands/combat';
+import { withRandomSource } from '../../src/engine/core/random';
 import {
   advanceIntent,
   canChoose,
   commandFor,
   intentRoutes,
   startIntent,
-} from '../../src/ui/game/selection';
+} from '../../src/ui/game/interaction/selection';
 import { add, card, fixture, round, unit } from '../helpers';
 
 test('feedback 01: charge and normal deployment are explicit alternatives before a board selection', () => {
@@ -74,7 +74,7 @@ test('feedback paths: a longer in-range flank is legal, and the target cannot be
   assert.equal(
     routes.some((r) => r.direction === 'up'),
     false,
-  ); // Behind is six steps, not a walk through the target.
+  ); // 绕到背面需要六步，不能穿过目标。
   for (const r of routes) {
     assert.equal(pathDirection(r.path), r.direction);
     assert.ok(r.path.slice(0, -1).every((p) => p.x !== b.x || p.y !== b.y));
@@ -211,7 +211,7 @@ test('feedback 14: sacrificing another cannon grants a same-turn summon even wit
   assert.equal(drawn.summonSlots, 0);
   assert.equal(drawn.hands[1][0].kind, 'u1');
   assert.equal(drawn.phase, 'play');
-  assert.equal(round(original).summonSlots, 0); // helper finishes normal summons too
+  assert.equal(round(original).summonSlots, 0); // 辅助函数也会完成普通召唤阶段。
   const ended = applyCommand(original, { type: 'end' });
   assert.equal(ended.summonSlots, 2);
   assert.equal(ended.bonus[1], 0);
@@ -376,7 +376,7 @@ test('feedback 17p: reroll remains in the normal pool; zero-damage attacks do no
   assert.equal(n.hands[1][0].kind, 1);
   const a = add(s, 14, 1, 3, 5),
     b = add(s, '17p', 2, 3, 6);
-  a.attackBonus = -5; // This test needs a real zero-damage attack after cannon's base buff.
+  a.attackBonus = -5; // 定炮基础攻击增强后，该测试仍需要一次真实零伤害攻击。
   applyCommand(s, { type: 'attack', unitId: a.id, targetId: b.id }, () => {
     throw new Error('zero damage must not roll');
   });

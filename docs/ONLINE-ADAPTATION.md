@@ -106,7 +106,7 @@ type CommandReceipt = { ok: true; revision: number } | { ok: false; message: str
 
 **DemoRoom只是内存演示宿主，不是生产房间服务。** 为了演示，示例把它放在同一浏览器中；真实网站必须将权威状态、引擎调用和去重记录移到服务器。测试专用 `inspect()` 和 `window.onlineDemo` 不能进入生产客户端。
 
-自动测试位于 `tests/session/online.test.ts` 及 `tests/browser/online.mjs`（故障注入宿主在 `tests/browser/online-host.tsx`）。后者在离线浏览器中挂载两个真实组件，覆盖连续对局、JSON视图、权限、路径、重复/旧更新、回执先后顺序、明确拒绝、断线、延迟回执、神龛并发暗选、无本机存储/AI及窄屏布局。执行：
+自动测试位于 `tests/session/online.test.ts` 及 `tests/browser/online.mjs`（故障注入宿主在 `tests/browser/fixtures/online-host.tsx`）。后者在离线浏览器中挂载两个真实组件，覆盖连续对局、JSON视图、权限、路径、重复/旧更新、回执先后顺序、明确拒绝、断线、延迟回执、神龛并发暗选、无本机存储/AI及窄屏布局。执行：
 
 ```sh
 npm run check

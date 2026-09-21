@@ -103,7 +103,7 @@ export { allocateBudget } from './src/ai/budget';
 AI_BUDGET=production AI_SEEDS=7,42 AI_PLIES=24 AI_REPORT=artifacts/production-pairs npm run bench:ai:compare -- /absolute/path/old-audit.mjs
 ```
 
-production模式忽略`AI_NODES`，每边各用原版/新版自己的分配器。fixed模式用同节点数与很大安全超时，只适合另列的固定工作量实验。当前比较摘要仍保留nodes字段作为fixed参数，阅读时必须结合budgetMode。本次冻结生产结果及逐局面证据见`docs/AI-BUDGET-AUDIT-2026-09-08.md`。
+production模式忽略`AI_NODES`，每边各用原版/新版自己的分配器。fixed模式用同节点数与很大安全超时，只适合另列的固定工作量实验。当前比较摘要仍保留nodes字段作为fixed参数，阅读时必须结合budgetMode。本次冻结生产结果及逐局面证据见`docs/ai/AI-BUDGET-AUDIT-2026-09-08.md`。
 
 ## 2026-09-15：结束前重新判断
 

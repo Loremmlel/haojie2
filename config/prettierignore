@@ -1,0 +1,8 @@
+node_modules/
+dist/
+artifacts/
+package-lock.json
+index.html
+
+# 保留作者提供的实战观察原文作为证据。
+docs/ai/AI-HARD-PLAYTEST-2026-09-07.md

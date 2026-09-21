@@ -18,7 +18,7 @@ import {
   undo,
   validState,
 } from '../../src/engine';
-import { damage, kill, resolution } from '../../src/engine/combat';
+import { damage, kill, resolution } from '../../src/engine/commands/combat';
 import { unitStatus } from '../../src/ui/inspector/unit-status';
 import { add, card, fixture, pass, round, strike, unit } from '../helpers';
 

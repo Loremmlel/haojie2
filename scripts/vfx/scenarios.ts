@@ -1,8 +1,8 @@
-/** Developer-only scenarios execute real commands; not imported by the production bundle. */
+/** 仅开发使用的真实命令场景，不进入生产构建。 */
 import { applyCommand, createSession, type Command, type GameState } from '../../src/engine';
-import { addEffect } from '../../src/engine/state';
+import { addEffect } from '../../src/engine/core/state';
 import { createGame, definition, type Kind, type Player } from '../../src/engine';
-import { template, random } from '../../src/engine/state';
+import { template, random } from '../../src/engine/core/state';
 function fixture(): GameState {
   const s = createGame(19);
   s.phase = 'play';

@@ -1,5 +1,5 @@
-/* Stable cascade: foundation → features → reduced-motion overrides. All imports inline at build time. */
-@import 'tokens.css';
+/* 固定层叠顺序：基础、功能、减少动态效果覆盖；构建时内联全部导入。 */
+@import './tokens.css';
 @import '../shared/controls.css';
 @import '../shared/runes.css';
 @import '../game/layout.css';
@@ -22,6 +22,6 @@
 @import '../library/codex.css';
 @import '../library/rules.css';
 @import '../shrine/shrine.css';
-@import 'motion.css';
+@import './motion.css';
 
 @import '../opponent/opponent.css';

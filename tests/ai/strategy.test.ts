@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { add, card, fixture, round } from '../helpers';
 import { createGame, applyCommand, createSession } from '../../src/engine';
-import { asTarget, resetUnit } from '../../src/engine/state';
-import { attackPath, basePoint, distance, targets } from '../../src/engine/geometry';
-import { hitDistance, actionWindow } from '../../src/ai/spatial';
-import { incoming } from '../../src/ai/threats';
-import { evaluate, explainEvaluation } from '../../src/ai/evaluate';
-import { decide } from '../../src/ai/search';
+import { asTarget, resetUnit } from '../../src/engine/core/state';
+import { attackPath, basePoint, distance, targets } from '../../src/engine/core/geometry';
+import { hitDistance, actionWindow } from '../../src/ai/evaluation/spatial';
+import { incoming } from '../../src/ai/evaluation/threats';
+import { evaluate, explainEvaluation } from '../../src/ai/evaluation/evaluate';
+import { decide } from '../../src/ai/planning/search';
 import { observe } from '../../src/ai/observation';
-import { distribution } from '../../src/ai/simulate';
+import { distribution } from '../../src/ai/simulation/simulate';
 import { Arena } from '../../src/match/arena';
 import type { Difficulty } from '../../src/ai/types';
 const levels: Difficulty[] = ['easy', 'medium', 'hard'];
@@ -25,7 +25,7 @@ test('incoming danger uses the opponent response window: uncharged cannon zero, 
   cannon.charge = 2;
   const ready = structuredClone(s);
   assert.equal(incoming(ready, ready.units[0]), 100);
-  // Newly deployed ordinary enemies wake next turn; filtering sleeping NOW would also be wrong.
+  // 新部署的普通敌方下回合即可行动，不能按当前休眠状态直接过滤。
   const fresh = fixture(),
     v = add(fresh, 7, 1, 4, 5),
     a = add(fresh, 26, 2, 4, 7);
@@ -64,7 +64,7 @@ test('cached hit fields agree with engine pathfinding around normal, large, froz
     const view = actionWindow(s, 1, true);
     for (const u of view.units)
       for (const t of targets(view)) {
-        // Test each unit at its native range via a shared state, without mutating cached objects.
+        // 在共用局面下按各单位原生射程测试，不修改已缓存对象。
         const range =
           u.kind === 9 ? 5 : u.kind === 'grave' ? 0 : u.kind === 7 ? 3 : u.kind === 5 ? 2 : 4;
         assert.equal(
@@ -166,7 +166,7 @@ test('conversion preparation prefers a surviving victim and reachable carrier ov
   strong.charge = strong.readyCharge = 2;
   const id = card(s, 22);
   const result = choose(s, 'medium');
-  // Killing now can correctly beat preparation. Whenever conversion is chosen it must not go on the overkill cannon.
+  // 立即击杀可以优于准备；若选择伤害转化，不应施加于已经伤害溢出的定炮。
   for (const step of result.plan)
     if (step.command.type === 'cast' && step.command.cardId === id)
       assert.equal(step.command.targetId, weak.id);
@@ -251,7 +251,7 @@ test('complete firing operations clear a screen and unlock a loaded ally instead
     assert.ok(result.command);
     let next = s;
     for (const step of result.plan) next = applyCommand(next, step.command);
-    // It may choose the cannon for another legal immediate win; actual end state is the contract.
+    // 也可能为另一种合法即时胜利选择定炮；契约是最终局面结果。
     for (let i = 0; i < 8 && !next.winner; i++) {
       const r = decide(observe(next), 1, difficulty, { simulations: 500, milliseconds: 100000 });
       if (!r.command) break;
