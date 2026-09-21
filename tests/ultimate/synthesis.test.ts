@@ -114,7 +114,8 @@ test('2.5 formless pull handles occupied fronts, immunity, lethal hits and large
   const mirror = fixture();
   mirror.active = 2;
   const mh = add(mirror, 'formless', 2, 6, 8),
-    big = add(mirror, 5, 1, 3, 3);
+    big = add(mirror, 'u4', 1, 3, 3);
+  big.size = 2; // A BW-expanded non-giant still uses full 2x2 pull geometry.
   mh.charge = mh.readyCharge = 1;
   mh.chargeType = 'attack';
   const moved = applyCommand(strike(mirror, mh, big), { type: 'react', mode: 'pull' });

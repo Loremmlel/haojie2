@@ -8,15 +8,25 @@ import { chromium } from 'playwright';
 execFileSync(process.execPath, ['--import', 'tsx', 'tests/browser/feedback4-fixtures.ts']);
 const renderOnly = process.env.HAOJIE_RENDER_ONLY === '1';
 const browser = await chromium.launch({
-  executablePath: process.env.BROWSER_PATH || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined),
+  executablePath:
+    process.env.BROWSER_PATH || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined),
   args: ['--no-sandbox', '--disable-dev-shm-usage'],
 });
-const context = await browser.newContext({ viewport: { width: 1440, height: 1080 }, acceptDownloads: true, reducedMotion: 'reduce' });
+const context = await browser.newContext({
+  viewport: { width: 1440, height: 1080 },
+  acceptDownloads: true,
+  reducedMotion: 'reduce',
+});
 await context.setOffline(true);
-const page = await context.newPage(); page.setDefaultTimeout(10000);
-const errors = [], network = [], checks = [];
+const page = await context.newPage();
+page.setDefaultTimeout(10000);
+const errors = [],
+  network = [],
+  checks = [];
 page.on('pageerror', (e) => errors.push(e.message));
-page.on('request', (r) => { if (/^https?:/.test(r.url())) network.push(r.url()); });
+page.on('request', (r) => {
+  if (/^https?:/.test(r.url())) network.push(r.url());
+});
 const button = (name) => page.getByRole('button', { name, exact: true });
 const cell = (x, y) => page.locator(`[data-cell="${x},${y}"]`);
 async function state() {
@@ -37,14 +47,16 @@ try {
   await page.evaluate(() => {
     const original = URL.createObjectURL.bind(URL);
     URL.createObjectURL = (blob) => {
-      if (blob instanceof Blob && blob.type === 'application/json') blob.text().then((t) => (window.feedbackExport = t));
+      if (blob instanceof Blob && blob.type === 'application/json')
+        blob.text().then((t) => (window.feedbackExport = t));
       return original(blob);
     };
   });
   for (const owner of [1, 2]) {
     await load(`cannon-${owner}`);
     const y = owner === 1 ? 10 : 4;
-    await cell(5, y).click(); await button('献祭射击').click();
+    await cell(5, y).click();
+    await button('献祭射击').click();
     await cell(4, y).click();
     assert.match(await cell(5, owner === 1 ? 13 : 1).getAttribute('aria-label'), /可选择/);
     await cell(5, owner === 1 ? 13 : 1).click();
@@ -53,8 +65,13 @@ try {
     assert.equal((await state()).present.bases[owner === 1 ? 2 : 1], 300);
     checks.push(`player ${owner}: sacrifice then base-only lane, damage and undo`);
   }
-  for (const [name, expected] of [['row-one-one', false], ['row-two-zero', true]]) {
-    await load(name); await page.locator('.hand-card').click(); await button('部署随从').click();
+  for (const [name, expected] of [
+    ['row-one-one', false],
+    ['row-two-zero', true],
+  ]) {
+    await load(name);
+    await page.locator('.hand-card').click();
+    await button('部署随从').click();
     assert.equal((await cell(8, 9).getAttribute('aria-label')).includes('可选择'), expected);
     if (expected) {
       await cell(8, 9).click();
@@ -62,13 +79,23 @@ try {
     }
     checks.push(`${name}: deployment highlighter and accepted placement`);
   }
-  await load('hook'); await cell(3, 4).click(); await button('牵引').click();
+  await load('hook');
+  await cell(3, 4).click();
+  await button('牵引').click();
   assert.ok(!(await cell(3, 6).getAttribute('aria-label')).includes('可选择'));
   checks.push('giant is not offered as an intermediate hook target');
   await page.screenshot({ path: 'artifacts/feedback4-hook.png' });
-  assert.deepEqual(errors, []); assert.deepEqual(network, []);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(network, []);
   for (const check of checks) console.log('✓ ' + check);
 } finally {
-  await writeFile('artifacts/feedback4-browser-report.json', JSON.stringify({ mode: renderOnly ? 'memory-render' : 'offline-file', checks, errors, network }, null, 2));
+  await writeFile(
+    'artifacts/feedback4-browser-report.json',
+    JSON.stringify(
+      { mode: renderOnly ? 'memory-render' : 'offline-file', checks, errors, network },
+      null,
+      2,
+    ),
+  );
   await browser.close();
 }

@@ -271,7 +271,7 @@ test('feedback 15: only the first shot receives charge; moves preserve it, attac
   );
 });
 
-test('feedback 05: attack ten, skill fifteen, charged movement unchanged and conversion never changes its side', () => {
+test('feedback 05: attack ten, skill fifteen, charged movement unchanged and conversion can change its side', () => {
   const s = fixture(),
     a = add(s, 9, 1, 3, 4),
     big = add(s, 5, 2, 3, 6);
@@ -280,7 +280,7 @@ test('feedback 05: attack ten, skill fifteen, charged movement unchanged and con
   for (const silenced of [false, true]) {
     big.silenced = silenced;
     const n = applyCommand(s, { type: 'attack', unitId: a.id, targetId: big.id });
-    assert.equal(unit(n, big.id).owner, 2);
+    assert.equal(unit(n, big.id).owner, 1);
     assert.equal(unit(n, big.id).hp, 101);
     assert.equal(
       unit(n, a.id).effects.some((e) => e.type === 'convert'),

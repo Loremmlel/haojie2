@@ -154,13 +154,13 @@ test('04 at five charge cannon gains exactly one attack range', () => {
   u.charge = u.readyCharge = 5;
   assert.equal(commandError(s, { type: 'attack', unitId: u.id, targetId: v.id }), null);
 });
-test('05 shock ring includes four corners, hits each covered large-unit cell and can hurt allies', () => {
+test('05 shock ring includes four corners, hits each covered large-unit cell and spares allies', () => {
   let s = fixture();
   const u = add(s, 5, 1, 4, 5),
     friend = add(s, 1, 1, 3, 4),
     enemy = add(s, 5, 2, 6, 6);
   s = applyCommand(s, { type: 'skill', unitId: u.id });
-  assert.equal(unit(s, friend.id).hp, 35);
+  assert.equal(unit(s, friend.id).hp, 50);
   assert.equal(unit(s, enemy.id).hp, 81);
   assert.equal(unit(s, u.id).hp, 111);
   assert.ok(commandError(s, { type: 'move', unitId: u.id, x: 4, y: 6 }));
