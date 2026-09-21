@@ -19,7 +19,16 @@ jobs:
           ref: fix/feedback4-20260921
           fetch-depth: 0
       - name: Apply reviewed edits only on the isolated branch
-        run: python3 scripts/feedback4-materialize.py
+        run: |
+          python3 scripts/feedback4-materialize.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/session/arena.test.ts')
+          text = p.read_text()
+          old = 'docs/playtests/cli-feedback3-20260920.jsonl'
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, 'docs/playtests/cli-feedback4-20260921.jsonl'))
+          PY
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
