@@ -1,7 +1,7 @@
 import type { Definition } from '../../engine';
 import { DefinitionStats } from '../shared/DefinitionStats';
 import { Icon, Rune } from '../shared/visuals';
-import { UnitLink, UnitText } from './UnitReference';
+import { UnitText } from './UnitReference';
 
 /** 图鉴列表和名称弹窗共用同一张卡片，所有属性与能力均来自 catalog。 */
 export function DefinitionCard({ d }: { d: Definition }) {
@@ -21,9 +21,7 @@ export function DefinitionCard({ d }: { d: Definition }) {
                   ? '神龛'
                   : '变体 / 合成'}
           </span>
-          <h3>
-            <UnitLink kind={d.id}>{d.name}</UnitLink>
-          </h3>
+          <h3>{d.name}</h3>
           <span className="role-chip">
             {d.role}
             {d.mage ? ' · 法师' : ''}
