@@ -1,4 +1,3 @@
-import { UnitLink } from '../library/UnitReference';
 import type { Card, Player } from '../../engine';
 import { definition, isStored } from '../../engine';
 import { Icon, Rune } from '../shared/visuals';
@@ -21,23 +20,18 @@ export function HandCard({
   const cd = definition(c.kind),
     limit = c.expiresAt === undefined ? null : c.expiresAt - turn;
   return (
-    <div
+    <button
       key={c.id}
       className={`hand-card ${cd.spell !== undefined ? 'spell-card' : ''} ${cd.weapon !== undefined ? 'weapon-card' : ''} ${cd.tier === 'ultimate' || c.kind === 'firelord' || c.kind === 'u12p' ? 'ultimate-card' : ''} ${selected ? 'chosen' : ''}`}
+      aria-label={`选择${cd.name}${cd.weapon !== undefined ? '武器' : cd.spell !== undefined ? '法术' : '随从'}`}
+      aria-pressed={selected}
+      disabled={disabled}
+      onClick={() => onChoose(c.id)}
     >
-      <button
-        className="hand-card-select"
-        aria-label={`选择${cd.name}${cd.weapon !== undefined ? '武器' : cd.spell !== undefined ? '法术' : '随从'}`}
-        aria-pressed={selected}
-        disabled={disabled}
-        onClick={() => onChoose(c.id)}
-      />
       <Rune kind={c.kind} owner={owner} />
       <div className="hand-card-main">
         <div>
-          <h3>
-            <UnitLink kind={c.kind}>{cd.name}</UnitLink>
-          </h3>
+          <h3>{cd.name}</h3>
         </div>
         {isStored(cd) ? (
           <p className={limit === 1 ? 'expires-soon' : ''}>
@@ -66,6 +60,6 @@ export function HandCard({
         )}
       </div>
       {!isStored(cd) && <span className="deploy-label">{c.group ? '同批克隆 · ' : ''}待部署</span>}
-    </div>
+    </button>
   );
 }

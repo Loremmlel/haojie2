@@ -1,4 +1,3 @@
-import { UnitText } from '../library/UnitReference';
 import type { Dispatch, SetStateAction } from 'react';
 import type { ActionSpec, GamePosition } from '../../engine';
 import { definition, faction, getStats, occupants, landmarkAt } from '../../engine';
@@ -63,9 +62,7 @@ export function Inspector({
                   ? ' · 手牌'
                   : ` · ${faction(inspected!.owner)}${stats?.frozen ? ' · 冰冻' : ''}`}
               </span>
-              <h3>
-                <UnitText>{d.name}</UnitText>
-              </h3>
+              <h3>{d.name}</h3>
             </div>
             {inspected && !card ? (
               <UnitDetails state={s} unit={inspected} />
@@ -76,9 +73,7 @@ export function Inspector({
               <h4>
                 能力与规则 <Icon name="book" size={12} />
               </h4>
-              <p className="ability-copy">
-                <UnitText>{d.description}</UnitText>
-              </p>
+              <p className="ability-copy">{d.description}</p>
             </section>
             {unit && occupants(s, unit).length + (landmarkAt(s, unit) ? 1 : 0) > 1 && (
               <div className="stack-selector">

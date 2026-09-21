@@ -106,7 +106,7 @@ HaojieGame保持本地协议；HaojieOnlineGame只消费PlayerView和宿主回�
 
 ## 名称、目录与维护注释
 
-玩家可见描述使用 catalog 正式名称，说明中的名称通过共享 UnitText/UnitLink 打开 DefinitionCard；操作控件与介绍链接必须分开，不嵌套按钮或误触规则命令。保持引擎纯文本协议，不能为名称链接引入 React 或 HTML。
+玩家可见描述使用 catalog 正式名称，图鉴、折叠状态、规则和战报中的名称通过共享 UnitText/UnitLink 打开 DefinitionCard；右侧可切换手牌、左侧详情标题和默认展开的能力描述使用普通文本。链接仅用文字颜色区分，不加下划线；操作控件与介绍链接必须分开，不嵌套按钮或误触规则命令。保持引擎纯文本协议，不能为名称链接引入 React 或 HTML。
 
 项目维护目录超过10个直属文件时按职责分组；依赖、版本库及生成产物除外。移动文件同步修正导入、脚本入口、CI 和维护文档，公开入口保持稳定；运行 `npm run check:structure`。不以数字分组或无意义拆文件凑数量。
 

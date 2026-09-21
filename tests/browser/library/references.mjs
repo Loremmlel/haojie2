@@ -39,6 +39,15 @@ try {
     assert.equal(await hut.count(), 1);
     assert.doesNotMatch(await codex.innerText(), /(?:普通|终极)\s*\d/);
     const runner = hut.getByRole('link', { name: '超级跑得快', exact: true });
+    assert.equal(
+      await runner.evaluate((link) => getComputedStyle(link).textDecorationLine),
+      'none',
+    );
+    await runner.hover();
+    assert.equal(
+      await runner.evaluate((link) => getComputedStyle(link).textDecorationLine),
+      'none',
+    );
     await runner.focus();
     await page.keyboard.press('Enter');
     const detail = page.getByRole('dialog', { name: '超级跑得快', exact: true });
@@ -80,23 +89,24 @@ try {
     await rules.getByRole('button', { name: '关闭弹窗' }).click();
     await button('普通召唤').click();
     const card = page.locator('.hand-card').first();
-    const before = await page.locator('.instruction-bar').innerText();
-    const name = await card.getByRole('link').innerText();
+    const name = await card.getByRole('heading').innerText();
     const saved = renderOnly ? null : await page.evaluate(() => JSON.stringify(localStorage));
-    await card.getByRole('link').click();
-    await page
-      .getByRole('dialog', { name, exact: true })
-      .getByRole('button', { name: '关闭弹窗' })
-      .click();
-    assert.equal(await page.locator('.instruction-bar').innerText(), before);
+    assert.equal(await card.getByRole('link').count(), 0);
+    await card.getByRole('heading').click();
+    assert.equal(await card.getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('dialog[open]').count(), 0);
+    assert.equal(await page.locator('.inspector-profile h3').innerText(), name);
+    assert.equal(await page.locator('.inspector-profile a, .ability-details a').count(), 0);
+    assert.equal(await page.locator('.ability-copy').isVisible(), true);
     if (!renderOnly) assert.equal(await page.evaluate(() => JSON.stringify(localStorage)), saved);
     assert.equal(await page.locator('button a, a a').count(), 0);
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
       true,
     );
+    await page.screenshot({ path: `artifacts/unit-selection-${width}.png`, fullPage: true });
     checks.push(
-      `${width}px：名称跳转、嵌套介绍、键盘焦点、返回、搜索空态、规则入口、手牌只读、无嵌套控件`,
+      `${width}px：无下划线链接、名称跳转、嵌套介绍、键盘焦点、返回、搜索空态、规则入口、手牌名称选牌、详情无链接`,
     );
     await context.close();
   }

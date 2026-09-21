@@ -201,13 +201,11 @@
 /* 名称链接沿用纸面色板；不改变行高，触摸和键盘均可打开介绍。 */
 .hj-game .unit-link {
   color: var(--teal);
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
+  text-decoration: none;
   cursor: pointer;
 }
 .hj-game .unit-link:hover {
-  background: var(--side-soft);
+  color: var(--ink);
 }
 .hj-game .unit-link:active {
   color: var(--ink);

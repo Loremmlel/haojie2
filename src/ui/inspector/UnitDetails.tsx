@@ -1,4 +1,3 @@
-import { UnitText } from '../library/UnitReference';
 import type { GamePosition, Unit } from '../../engine';
 import { getStats, definition, abilityKinds } from '../../engine';
 import { UnitStatus } from './UnitStatus';
@@ -30,10 +29,7 @@ export function UnitDetails({ state: s, unit: inspected }: { state: GamePosition
             .filter((k) => k !== inspected.kind)
             .map((k) => (
               <p key={k}>
-                <b>
-                  <UnitText>{definition(k).name}</UnitText>
-                </b>
-                ：<UnitText>{definition(k).description}</UnitText>
+                <b>{definition(k).name}</b>：{definition(k).description}
               </p>
             ))}
         </section>

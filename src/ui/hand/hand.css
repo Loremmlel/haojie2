@@ -37,28 +37,6 @@
   min-height: 78px;
   text-align: left;
 }
-/* 整张卡片用于选牌，名称链接独立置于其上，避免嵌套交互控件。 */
-.hj-game .hand-card-select {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
-}
-.hj-game .hand-card > :not(button) {
-  pointer-events: none;
-  position: relative;
-}
-.hj-game .hand-card .unit-link {
-  position: relative;
-  pointer-events: auto;
-}
-.hj-game .hand-card:has(.hand-card-select:disabled) .hand-card-main > p {
-  opacity: 0.5;
-}
-.hj-game .hand-card > .deploy-label {
-  position: absolute;
-}
 .hj-game .hand-card:before {
   position: absolute;
   top: 0;

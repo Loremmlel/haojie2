@@ -72,10 +72,11 @@ export async function verifyPacing({ page, load, exported, waitForState, scenari
     report.cancellation.push('dialog and new match during ready-to-act wait');
 
     await load('pacing');
+    const logReference = page.locator('.battle-log').getByRole('link').first();
+    await logReference.waitFor();
     await ready();
-    await page.locator('[data-cell="4,7"]').click();
     const referenceSnapshot = await exported();
-    await page.locator('.inspector-profile').getByRole('link').click();
+    await logReference.click();
     await page.waitForTimeout(1800);
     await button('关闭弹窗').click();
     assert.deepEqual(await exported(), referenceSnapshot);
