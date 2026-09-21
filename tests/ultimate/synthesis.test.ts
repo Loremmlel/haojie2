@@ -16,6 +16,7 @@ import { addEffect } from '../../src/engine/core/state';
 import { damage, kill, resolution } from '../../src/engine/commands/combat';
 import { add, card, fixture, round, strike, unit } from '../helpers';
 import { distribution } from '../../src/ai/simulation/simulate';
+import { unitStatus } from '../../src/ui/inspector/unit-status';
 
 // 玩家可选择的行为通过真实命令验证。
 // 直接伤害和击杀调用用于隔离被动伤害包及因果死亡链。
@@ -308,6 +309,36 @@ test('2.5 archmage exposes exact two-thirds counter branches, rewards only the s
   );
 });
 
+test('万法真君冰冻时不判定反制或成长，解冻后恢复；继承能力遵守相同限制', () => {
+  for (const inherited of [false, true]) {
+    const s = fixture(),
+      receiver = add(s, 26, 1, 3, 4),
+      arch = add(s, inherited ? 's5' : 'archmage', 2, 8, 10),
+      id = card(s, 17);
+    if (inherited) arch.traits = ['archmage'];
+    addEffect(s, arch, 'freeze', 1, 0, 2);
+    const command = { type: 'cast' as const, cardId: id, targetId: receiver.id };
+    const frozen = distribution(s, command, 20);
+    assert.equal(frozen.sampled, false);
+    assert.equal(frozen.outcomes.length, 1);
+    assert.ok(unit(frozen.outcomes[0].state, receiver.id).effects.some((e) => e.type === 'immune'));
+    const actual = applyCommand(s, command);
+    assert.equal(actual.rng, s.rng, '冰冻来源不消耗反制随机数');
+    assert.equal(unit(actual, arch.id).maxHp, arch.maxHp);
+    assert.equal(unit(actual, arch.id).hp, arch.hp);
+    if (!inherited)
+      assert.match(unitStatus(s, arch).find((row) => row.key === 'counter')!.detail, /不参与反制/);
+    // 到期后仍保留旧效果记录，资格查询必须判断生效窗口，而非只检查类型存在。
+    arch.effects[0].until = s.ply;
+    const thawed = distribution(s, command, 20);
+    assert.equal(thawed.outcomes.length, 2);
+    const countered = thawed.outcomes.find((o) => !unit(o.state, receiver.id).effects.length)!;
+    assert.ok(Math.abs(countered.weight - 2 / 3) < 1e-12);
+    if (!inherited)
+      assert.match(unitStatus(s, arch).find((row) => row.key === 'counter')!.detail, /2\/3/);
+  }
+});
+
 test('2.5 ordinary and synthesized counter mages resolve independently in actual entry order, stopping on first success', () => {
   const s = fixture(),
     receiver = add(s, 26, 1, 3, 4),
@@ -329,4 +360,11 @@ test('2.5 ordinary and synthesized counter mages resolve independently in actual
         4 / 9,
     ) < 1e-12,
   );
+  addEffect(s, old, 'freeze', 1, 0, 4);
+  addEffect(s, arch, 'freeze', 1, 0, 4);
+  const frozen = distribution(s, { type: 'cast', cardId: id, targetId: receiver.id }, 20);
+  assert.equal(frozen.outcomes.length, 2);
+  const blocked = frozen.outcomes.find((o) => !unit(o.state, receiver.id).effects.length)!;
+  assert.ok(Math.abs(blocked.weight - 1 / 3) < 1e-12, '普通反制小法师冰冻时仍可反制');
+  assert.ok(frozen.outcomes.every((o) => unit(o.state, arch.id).maxHp === arch.maxHp));
 });

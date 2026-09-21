@@ -50,7 +50,17 @@ jobs:
       - run: npm run test:browser:online
       - run: node --import tsx scripts/ai/shrine-smoke.ts
       - name: Verify current rules CLI command fingerprints
-        run: npm run play:cli -- --replay docs/playtests/cli-feedback4-20260921.jsonl
+        run: npm run play:cli -- --replay docs/playtests/cli-counter-freeze-20260921.jsonl
+      - name: Check out the original September 21 feedback4 rules
+        uses: actions/checkout@v4
+        with:
+          ref: 4cdea28c22b599ed09ca8be67e30d3393cf109f1
+          path: artifacts/september21-feedback4-rules
+          persist-credentials: false
+      - name: Verify the unmodified September 21 feedback4 recording
+        run: |
+          ln -s "$GITHUB_WORKSPACE/node_modules" artifacts/september21-feedback4-rules/node_modules
+          npm --prefix artifacts/september21-feedback4-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-feedback4-20260921.jsonl"
       - name: Check out the September 20 feedback3 rules
         uses: actions/checkout@v4
         with:

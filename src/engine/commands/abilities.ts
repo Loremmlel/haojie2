@@ -53,6 +53,7 @@ import {
   asTarget,
   chooseMode,
   counterChance,
+  canCounterSpell,
   draw,
   emit,
   ensure,
@@ -543,7 +544,7 @@ function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
     );
   }
   for (const mage of s.units
-    .filter((u) => u.owner !== owner && counterChance(u) > 0 && passive(s, u))
+    .filter((u) => u.owner !== owner && canCounterSpell(s, u))
     .sort((a, b) => a.deployedAt - b.deployedAt))
     if (random(s, [0, counterChance(mage), 1]) < counterChance(mage)) {
       if (hasTrait(mage, 'archmage')) {

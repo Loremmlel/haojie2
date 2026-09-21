@@ -61,7 +61,13 @@ export {
 export type { SynthesisRecipe } from './setup/synthesis';
 export { COMBAT_RULES } from './catalog';
 export { firelordStrike } from './commands/firelord';
-export { attackAuraSources, piercing, healingAttack, counterChance } from './core/state';
+export {
+  attackAuraSources,
+  piercing,
+  healingAttack,
+  counterChance,
+  canCounterSpell,
+} from './core/state';
 export { hitPullDestination, hutSpawnPoints, canSkipReaction } from './commands/reactions';
 export { availableGuardians, guardProtections } from './core/protection';
 export { canRerollWith, rerollCommands, summonRerolls, summonPool } from './setup/summoning';

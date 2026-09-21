@@ -278,6 +278,7 @@ test('status lists pending/active effects, sources and equipment while ignoring 
   mage.effects.push(
     { type: 'execute', owner: 1, from: 7, until: 9, global: true },
     { type: 'attack', owner: 1, from: 5, until: 9, amount: 10 },
+    { type: 'attack', owner: 2, from: 5, until: 9, amount: -15 },
     { type: 'stun', owner: 1, from: 3, until: 4 },
   );
   add(s, 3, 1, 3, 4);
@@ -288,6 +289,8 @@ test('status lists pending/active effects, sources and equipment while ignoring 
   assert.ok(rows.some((r) => r.label.includes('剩余 1 次')));
   assert.ok(rows.some((r) => r.label === '免疫塔保护'));
   assert.ok(rows.some((r) => r.label === '装备 · 寒冰法杖'));
+  assert.match(rows.find((r) => r.label === '攻击强化')!.detail, /攻击 \+10/);
+  assert.match(rows.find((r) => r.label === '攻击削弱')!.detail, /攻击 -15/);
   assert.ok(!rows.some((r) => r.label === '眩晕'));
   assert.deepEqual(s, original);
 });

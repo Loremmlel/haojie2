@@ -85,6 +85,26 @@ try {
   assert.ok(!(await cell(3, 6).getAttribute('aria-label')).includes('可选择'));
   checks.push('giant is not offered as an intermediate hook target');
   await page.screenshot({ path: 'artifacts/feedback4-hook.png' });
+  await load('counter-status');
+  await cell(3, 4).click();
+  const statuses = page.getByLabel('棋子当前状态');
+  await statuses.locator('summary').click();
+  const weakened = statuses.locator('li').filter({ hasText: '攻击削弱' });
+  assert.match(await weakened.innerText(), /攻击 -15/);
+  assert.doesNotMatch(await weakened.innerText(), /\+-/);
+  assert.match(
+    await statuses.locator('li').filter({ hasText: '攻击强化' }).innerText(),
+    /攻击 \+10/,
+  );
+  assert.match(
+    await statuses
+      .locator('li')
+      .filter({ has: page.getByText('万法反制', { exact: true }) })
+      .innerText(),
+    /冰冻中，不参与反制/,
+  );
+  await page.screenshot({ path: 'artifacts/counter-freeze-status.png' });
+  checks.push('减攻与加攻分开命名，冰冻万法真君的状态明确显示反制停用');
   assert.deepEqual(errors, []);
   assert.deepEqual(network, []);
   for (const check of checks) console.log('✓ ' + check);

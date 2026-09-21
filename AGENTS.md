@@ -106,6 +106,8 @@ HaojieGame保持本地协议；HaojieOnlineGame只消费PlayerView和宿主回�
 
 ## 名称、目录与维护注释
 
+9月21日同日补充：万法真君的反制按现有图鉴，在沉默或冰冻时停用，继承能力同样处理；普通法术反制小法师冰冻时仍可反制。资格使用共享 `canCounterSpell`，失效来源不消耗反制随机数。当前规则为 `3.0-feedback4-counter-freeze`，CLI回放 `cli-counter-freeze-20260921.jsonl`；旧反馈4回放固定 `4cdea28`，不得改写历史指纹。详情见 `docs/feedback/FEEDBACK-2026-09-21.md`。
+
 玩家可见描述使用 catalog 正式名称，图鉴描述、折叠状态、规则和战报中的名称通过共享 UnitText/UnitLink 打开 DefinitionCard；图鉴卡片标题、右侧可切换手牌、左侧详情标题和默认展开的能力描述使用普通文本。链接仅用文字颜色区分，不加下划线；操作控件与介绍链接必须分开，不嵌套按钮或误触规则命令。保持引擎纯文本协议，不能为名称链接引入 React 或 HTML。
 
 项目维护目录超过10个直属文件时按职责分组；依赖、版本库及生成产物除外。移动文件同步修正导入、脚本入口、CI 和维护文档，公开入口保持稳定；运行 `npm run check:structure`。不以数字分组或无意义拆文件凑数量。

@@ -208,6 +208,9 @@ export const healingAttack = (u: Unit) =>
   (!u.silenced && anyTrait(u, [2, 'u21', 's14']));
 export const counterChance = (u: Unit) =>
   hasTrait(u, 'archmage') ? COMBAT_RULES.archmageCounterChance : hasTrait(u, 'u3') ? 1 / 3 : 0;
+/** 反制资格由结算和展示共用；万法真君及其继承能力在冰冻期间停用，普通反制不受影响。 */
+export const canCounterSpell = (s: GamePosition, u: Unit): boolean =>
+  counterChance(u) > 0 && passive(s, u) && !(hasTrait(u, 'archmage') && has(s, u, 'freeze'));
 /** 射程不能依赖光环攻击加成，避免贤者之间递归调用 getStats。 */
 export function attackAuraSources(s: GamePosition, target: Unit): Unit[] {
   if (allegiance(s, target) !== target.owner || refusesFriendlyAttackBuff(target)) return [];

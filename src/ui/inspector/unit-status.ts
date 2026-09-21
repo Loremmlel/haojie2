@@ -1,5 +1,6 @@
 import {
   activeEffect,
+  canCounterSpell,
   attackAuraSources,
   COMBAT_RULES,
   asTarget,
@@ -57,7 +58,7 @@ export function unitStatus(s: GamePosition, u: Unit): StatusEntry[] {
         : e.type === 'convert'
           ? '攻击实际扣血才触发；目标需存活且可策反'
           : e.type === 'attack'
-            ? `攻击 +${e.amount ?? 0}`
+            ? `攻击 ${(e.amount ?? 0) >= 0 ? '+' : ''}${e.amount ?? 0}`
             : e.type === 'inner-fire'
               ? '攻击力等于当前生命'
               : e.type === 'mark'
@@ -65,13 +66,13 @@ export function unitStatus(s: GamePosition, u: Unit): StatusEntry[] {
                 : e.type === 'immune'
                   ? '免疫敌方伤害和负面效果'
                   : e.type === 'freeze'
-                    ? '保持原阵营，不能行动；常驻光环/被动保留'
+                    ? '保持原阵营，不能行动；常驻光环/被动通常保留，万法反制暂停'
                     : e.type === 'stun'
                       ? '不能行动'
                       : '回合结束持续受伤';
     rows.push({
       key: `effect-${i}`,
-      label: effectNames[e.type],
+      label: e.type === 'attack' && (e.amount ?? 0) < 0 ? '攻击削弱' : effectNames[e.type],
       pending,
       detail: [timing, rule, sourceLabel(e.sourceId)].filter(Boolean).join(' · '),
     });
@@ -104,9 +105,9 @@ export function unitStatus(s: GamePosition, u: Unit): StatusEntry[] {
     rows.push({
       key: 'counter',
       label: '万法反制',
-      detail: passive(s, u)
+      detail: canCounterSpell(s, u)
         ? '2/3概率反制敌方法术；成功生命上限与当前生命+15。'
-        : '能力失效中，不参与反制。',
+        : '沉默或冰冻中，不参与反制。',
     });
   if (u.kind === 'citadel')
     rows.push({

@@ -17,7 +17,7 @@ import { definition } from '../catalog';
 import { ensure } from '../core/state';
 
 /** 规则变化时更新版本；宿主还必须让两端构建固定在同一源码提交。 */
-export const HAOJIE_RULESET = '3.0-feedback4' as const;
+export const HAOJIE_RULESET = '3.0-feedback4-counter-freeze' as const;
 export const PLAYER_VIEW_VERSION = 1 as const;
 export interface PlayerView {
   viewVersion: typeof PLAYER_VIEW_VERSION;
