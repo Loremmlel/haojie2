@@ -17,6 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: fix/feedback4-20260921
+          fetch-depth: 0
       - name: Apply reviewed edits only on the isolated branch
         run: python3 scripts/feedback4-materialize.py
       - uses: actions/setup-node@v4
