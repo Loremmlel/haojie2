@@ -50,7 +50,7 @@ test('feedback AI: same-kind sacrifice and immediately spendable bonus summons a
   }
 });
 
-test('feedback AI: charged damage is one shot, uncharged follow-up needs its own range, and conversion excludes giant', () => {
+test('feedback AI: charged damage is one shot, uncharged follow-up needs its own range, and conversion includes enemy giant', () => {
   const s = fixture(),
     a = add(s, 15, 1, 3, 4),
     b = add(s, 'grave', 2, 3, 6);
@@ -69,7 +69,7 @@ test('feedback AI: charged damage is one shot, uncharged follow-up needs its own
   const giant = add(s, 5, 2, 5, 4);
   a.effects.push({ type: 'convert', owner: 1, from: s.ply, until: s.ply + 2 });
   const analysis = analyzePayload(s, a, 'convert', () => 100);
-  assert.equal(analysis.targets.find((t) => t.id === giant.id)?.probability, 0);
+  assert.ok(analysis.targets.find((t) => t.id === giant.id)!.probability > 0);
 });
 
 test('feedback AI: gold lottery is exactly 20/80 conditional on normal slot 17; damage immunity is an independent 50/50 branch', () => {
