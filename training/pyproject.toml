@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "haojie-training"
+version = "0.1.0"
+description = "浩劫策略价值网络、训练闭环与设备基准"
+requires-python = ">=3.12,<3.13"
+dependencies = ["torch==2.14.0", "numpy>=2.1,<3"]
+
+[project.optional-dependencies]
+dev = ["ruff==0.15.6"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["haojie_training*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

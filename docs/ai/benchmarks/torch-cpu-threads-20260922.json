@@ -1,0 +1,192 @@
+{
+  "format": "haojie-torch-benchmark-v1",
+  "created_utc": "2026-09-22T03:01:36.076745+00:00",
+  "hardware": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.9 (tags/v3.12.9:fdb8142, Feb  4 2025, 15:27:58) [MSC v.1942 64 bit (AMD64)]",
+    "logical_cpus": 14,
+    "gpu": [
+      {
+        "Name": "Intel(R) Arc(TM) 130T GPU (16GB)",
+        "DriverVersion": "32.0.101.8243"
+      }
+    ],
+    "cpu": "Intel(R) Core(TM) Ultra 5 225H",
+    "memory_bytes": 33820106752
+  },
+  "torch": "2.14.0+xpu",
+  "source_sha256": "a43b9f97ab99e91b2a8f03738a75a6dd7225e4dbd3ec90ba80f51d434e2a463d",
+  "commit": "c0d5cd36e4c061f79288ce767253b0af8aad12e4",
+  "config": {
+    "devices": ["cpu"],
+    "precisions": ["fp32"],
+    "batches": [32],
+    "cpu_threads": [4, 8, 14],
+    "xpu_threads": 4,
+    "entities": 64,
+    "actions": 64,
+    "warmup": 2,
+    "steps": 3,
+    "rounds": 2,
+    "timeout": 180
+  },
+  "method": "eager; AdamW foreach; FP32 parameters/states; AMP for bf16/fp16; resident synthetic batches; synchronized complete optimization steps; 1 inter-op thread",
+  "results": [
+    {
+      "device": "cpu",
+      "precision": "fp32",
+      "batch": 32,
+      "entities": 64,
+      "actions": 64,
+      "threads": 4,
+      "warmup": 2,
+      "steps": 3,
+      "rounds": 2,
+      "seed": 20260922,
+      "status": "ok",
+      "config": {
+        "width": 384,
+        "layers": 6,
+        "heads": 6,
+        "ffn": 1536,
+        "entity_features": 64,
+        "global_features": 32,
+        "action_features": 64,
+        "kind_count": 256
+      },
+      "parameters": 11547266,
+      "model_sha256": "e1c20235d2f03296b11601dccded183035fc5374c4ee56a1bbb65712189df647",
+      "input_sha256": "50ee39e595c8875923b393df05114e5d74dedf26740f4ed3c6c98c005630e93e",
+      "torch": "2.14.0+xpu",
+      "device_name": "Intel64 Family 6 Model 197 Stepping 2, GenuineIntel",
+      "matmul_output_dtype": "torch.float32",
+      "parameter_dtype": "torch.float32",
+      "samples_ms_per_step": [593.6225666664541, 644.4341333117336],
+      "median_ms_per_step": 619.0283499890938,
+      "samples_per_second": 51.69391676578913,
+      "warmup_seconds": 1.2060985999414697,
+      "warmup_skipped": 0,
+      "timed_updates": 6,
+      "timed_skipped": 0,
+      "first_loss": 4.69951057434082,
+      "final_loss": 1.8779882192611694,
+      "weight_max_change": 0.0024059489369392395,
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1
+      },
+      "initial_fp32_agreement": {
+        "policy_rms_relative_error": 0,
+        "value_max_absolute_error": 0,
+        "top1_agreement": 1
+      },
+      "peak_memory": null,
+      "input_transfer_ms": 0
+    },
+    {
+      "device": "cpu",
+      "precision": "fp32",
+      "batch": 32,
+      "entities": 64,
+      "actions": 64,
+      "threads": 8,
+      "warmup": 2,
+      "steps": 3,
+      "rounds": 2,
+      "seed": 20260922,
+      "status": "ok",
+      "config": {
+        "width": 384,
+        "layers": 6,
+        "heads": 6,
+        "ffn": 1536,
+        "entity_features": 64,
+        "global_features": 32,
+        "action_features": 64,
+        "kind_count": 256
+      },
+      "parameters": 11547266,
+      "model_sha256": "e1c20235d2f03296b11601dccded183035fc5374c4ee56a1bbb65712189df647",
+      "input_sha256": "50ee39e595c8875923b393df05114e5d74dedf26740f4ed3c6c98c005630e93e",
+      "torch": "2.14.0+xpu",
+      "device_name": "Intel64 Family 6 Model 197 Stepping 2, GenuineIntel",
+      "matmul_output_dtype": "torch.float32",
+      "parameter_dtype": "torch.float32",
+      "samples_ms_per_step": [375.80896669533104, 371.1581000049288],
+      "median_ms_per_step": 373.48353335012996,
+      "samples_per_second": 85.67981488490666,
+      "warmup_seconds": 0.8984332999680191,
+      "warmup_skipped": 0,
+      "timed_updates": 6,
+      "timed_skipped": 0,
+      "first_loss": 4.69951057434082,
+      "final_loss": 1.877988576889038,
+      "weight_max_change": 0.0024059489369392395,
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1
+      },
+      "initial_fp32_agreement": {
+        "policy_rms_relative_error": 0,
+        "value_max_absolute_error": 0,
+        "top1_agreement": 1
+      },
+      "peak_memory": null,
+      "input_transfer_ms": 0
+    },
+    {
+      "device": "cpu",
+      "precision": "fp32",
+      "batch": 32,
+      "entities": 64,
+      "actions": 64,
+      "threads": 14,
+      "warmup": 2,
+      "steps": 3,
+      "rounds": 2,
+      "seed": 20260922,
+      "status": "ok",
+      "config": {
+        "width": 384,
+        "layers": 6,
+        "heads": 6,
+        "ffn": 1536,
+        "entity_features": 64,
+        "global_features": 32,
+        "action_features": 64,
+        "kind_count": 256
+      },
+      "parameters": 11547266,
+      "model_sha256": "e1c20235d2f03296b11601dccded183035fc5374c4ee56a1bbb65712189df647",
+      "input_sha256": "50ee39e595c8875923b393df05114e5d74dedf26740f4ed3c6c98c005630e93e",
+      "torch": "2.14.0+xpu",
+      "device_name": "Intel64 Family 6 Model 197 Stepping 2, GenuineIntel",
+      "matmul_output_dtype": "torch.float32",
+      "parameter_dtype": "torch.float32",
+      "samples_ms_per_step": [406.4097666802506, 394.52306666256237],
+      "median_ms_per_step": 400.4664166714065,
+      "samples_per_second": 79.90682531128913,
+      "warmup_seconds": 1.00187979999464,
+      "warmup_skipped": 0,
+      "timed_updates": 6,
+      "timed_skipped": 0,
+      "first_loss": 4.69951057434082,
+      "final_loss": 1.8779881000518799,
+      "weight_max_change": 0.0024059489369392395,
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1
+      },
+      "initial_fp32_agreement": {
+        "policy_rms_relative_error": 0,
+        "value_max_absolute_error": 0,
+        "top1_agreement": 1
+      },
+      "peak_memory": null,
+      "input_transfer_ms": 0
+    }
+  ]
+}

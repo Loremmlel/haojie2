@@ -1,6 +1,10 @@
 node_modules/
 dist/
 artifacts/
+**/.venv/
+**/__pycache__/
+**/*.egg-info/
+**/.ruff_cache/
 package-lock.json
 index.html
 
