@@ -77,10 +77,19 @@ export async function* encodeTeacherFile(path: string) {
       games.add(row.game);
       current = row.game;
       count = 0;
+      const group = `${row.ruleset}:${row.rules}:${row.seed}`;
+      ensure(
+        row.gameId === undefined ||
+          (typeof row.gameId === 'string' && row.gameId.length > 0 && row.gameId.length <= 512),
+        '教师对局标识无效。',
+      );
       yield {
         type: 'game',
         game: current,
-        group: `${row.ruleset}:${row.rules}:${row.seed}`,
+        group,
+        game_id: row.gameId ?? group,
+        teachers: row.teachers,
+        primary_player: row.primaryPlayer,
         rules: row.rules,
         seed: row.seed,
         difficulty: row.difficulty,
@@ -119,11 +128,18 @@ export async function* encodeTeacherFile(path: string) {
         current !== undefined && row.game === current && row.commands === count,
         '终局记录与样本数不一致。',
       );
+      const wasInterrupted =
+        row.interrupted === true ||
+        (typeof row.interrupted === 'string' && row.interrupted.length > 0);
+      ensure(
+        row.interrupted == null || row.interrupted === false || wasInterrupted,
+        '中断标记必须为空、布尔值或非空原因。',
+      );
       ensure(
         typeof row.terminated === 'boolean' &&
           typeof row.truncated === 'boolean' &&
-          row.terminated !== row.truncated,
-        '结束记录必须为真实终局或显式截断。',
+          Number(row.terminated) + Number(row.truncated) + Number(wasInterrupted) === 1,
+        '结束记录必须且只能是真实终局、显式截断或中断之一。',
       );
       if (row.terminated) {
         ensure(row.winner === 1 || row.winner === 2 || row.winner === 'draw', '终局胜负无效。');
@@ -139,7 +155,8 @@ export async function* encodeTeacherFile(path: string) {
         commands: count,
         terminated: row.terminated,
         truncated: row.truncated,
-        interrupted: false,
+        interrupted: wasInterrupted,
+        interruptionReason: typeof row.interrupted === 'string' ? row.interrupted : undefined,
         returns: row.returns,
         winner: row.winner,
       };

@@ -1,6 +1,6 @@
 # PyTorch训练子项目
 
-Python 3.12独立环境，与TypeScript规则代码同仓库维护。当前实现约11.70M参数的实体Transformer、候选评分/价值头、共享TypeScript公开状态编码和动作分解、教师数据准备、整局验证划分、张量训练与续训，以及CPU/XPU精度基准。尚未接入可完整对局的网络解码器、MCTS或浏览器模型部署；训练loss与教师拟合率没有对作者胜率含义。
+Python 3.12独立环境，与TypeScript规则代码同仓库维护。当前实现约11.70M参数的实体Transformer、候选评分/价值头、共享TypeScript公开状态编码和动作分解、教师数据准备、整局验证划分、张量训练与续训，以及CPU/XPU精度基准。网络CLI已能完成完整对局，浏览器已验收本地HTTP前向；MCTS和单HTML模型部署尚未接入。训练loss与教师拟合率没有对作者胜率含义。
 
 当前阶段与实际实验记录维护在[训练进度](../docs/ai/TRAINING-PROGRESS.md)。
 
@@ -40,11 +40,29 @@ training/.venv/Scripts/python.exe -X utf8 -m haojie_training.prepare artifacts/t
 training/.venv/Scripts/python.exe -X utf8 -m haojie_training.train --data artifacts/training/pilot-20260922/encoded/train.pt --validation artifacts/training/pilot-20260922/encoded/validation.pt --overfit-examples 64 --device xpu --precision bf16 --batch-size 32 --steps 300 --checkpoint artifacts/training/pilot-20260922/overfit-v2.pt --report artifacts/training/pilot-20260922/overfit-v2-300.json
 ```
 
-prepare调用本仓库Node/tsx编码器，Python只做张量化、填充和标签连接。可传多个教师JSONL，但拒绝重复规则/种子。默认按整局分出25%验证组，至少各一局；manifest记录源码/输入指纹、分组、完整/截断/中断局数、命令/分步数量、输入最大长度和动作覆盖。没有outcome的尾局显式标记中断，仍保留策略数据，价值遮罩为False。
+prepare调用本仓库Node/tsx编码器，Python只做张量化、填充和标签连接。可传多个教师JSONL，拒绝重复game_id；同一规则/种子的换边对局有不同game_id，但共用group种子族并放在同一个集合。默认按种子族分出25%验证组，训练/验证至少各一个种子族；manifest记录源码/输入指纹、分组、教师来源、完整/截断/中断局数、命令/分步数量、输入最大长度和动作覆盖。没有outcome的尾局或明确取消的对局保留中断标记，仍保留策略数据，价值遮罩为False。旧记录没有gameId时仍以规则/种子作为轨迹标识。
 
 `--overfit-examples 64`从训练集固定抽取64个分步样本，只用于确认网络能记住真实输入。移除此参数才使用整个训练集；验证集始终不参与优化。报告分别列出训练前后策略loss、全部/多候选/根决策拟合率和已知终局的价值MSE；单候选的强制步骤不能抬高多候选指标。价值仅训练每个实际命令的根决策，按actor视角，不按active猜测。
 
 首批实际数据的实体序列可超过64，含死亡记录和附属状态，不能直接套用合成性能基准的batch 128。当前张量文件整体驻留CPU，每个训练批次再移除全无效的尾部填充；扩到5万–20万决策前先实现分片和长度分桶。
+
+## 教师对照与数据审计
+
+指定`--opponent`后，相邻两局使用相同种子并交换主教师席位。下例是20个种子、共40局；两个预算均为固定work，墙钟只记录成本。省略`--opponent`保留原有同难度、逐局递增种子的采样方式；完全相同的两个教师配置会被拒绝，避免产生同种子的重复轨迹。
+
+```powershell
+npm run train:selfplay -- --games 40 --seed 2026092230 --difficulty hard --nodes 800 --opponent medium --opponent-nodes 320 --plies 100 --commands 3000 --output artifacts/training/teachers/paired.jsonl --report artifacts/training/teachers/paired.json
+npm run train:inspect -- artifacts/training/teachers/paired.jsonl --encode --output artifacts/training/teachers/inspection.json
+npm run train:audit-teacher -- --input artifacts/training/pilot-20260922/teacher.jsonl --positions 32 --output artifacts/training/teachers/budget-audit.json
+```
+
+`--report`保存两方配置、运行源码指纹、基础提交、硬件和每局结果。采样逐命令记录来源与耗时；取消或故障写出明确中断原因，已执行的命令仍可重放。同步教师搜索只能在调用之间响应取消，返回后会再次检查取消状态，不提交迟到命令。
+
+`train:inspect`接收多个完整JSONL，逐条核对公开Observation、真实引擎结算和命令后指纹；同名JSON报告存在时也按原有上限复核截断。按教师统计命令、来源棋种、实际施放技能的棋种、反应、路径、缓存、采用回应的决策数及各终局收益对应的命令数；全部命令和实际非缓存搜索的耗时分别报告。只对两个席位均已真实终局的种子给成对分数，已出现某棋种不代表学会其能力。加`--encode`会逐条通过共享动作树和输入编码器，统计分步/多候选数量及最大实体/候选长度，不保存整批填充张量。检查器拒绝缺少结尾的文件，编码器则可显式保留这种中断数据。
+
+预算审计从每局/实际回合/操作者的首个非缓存、多候选play位置中，按公开指纹哈希选样；要求至少4个场上棋子。对每个选中位置重新比较medium/320、hard/800、hard/1600，并重复决策核对确定性；不继承原局的缓存或预算历史。`changedHardBudgetCommands`只是换招数量，不能当作1600更强的证据。
+
+混合教师文件默认编码双方实际动作。向prepare传`--teacher-difficulty hard`可只保留hard方完整命令的全部分步标签；manifest逐局记录保留/排除的命令数，种子族划分仍保持完整。教师来源缺失或筛选后出现空局会报错。筛选不会把medium的动作改成hard答案；在弱方实际到达局面上重新查询强教师仍待实现。终局价值反映原混合对手续局，不能解释为对统一强对手的胜率。大批采样及训练仍按[训练进度](../docs/ai/TRAINING-PROGRESS.md)的分阶段门槛推进。
 
 ## 训练与续训
 

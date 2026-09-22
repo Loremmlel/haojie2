@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { encodeTeacherFile } from '../../scripts/training/encode';
@@ -39,6 +39,26 @@ test('教师转换保留中断局的策略样本，标签与宿主种子不进�
     assert.ok('input' in sample && sample.input);
     for (const forbidden of ['seed', 'rng', 'policy', 'value', 'selected', 'observation'])
       assert.equal(forbidden in sample.input, false);
+    await appendFile(
+      path,
+      '\n' +
+        JSON.stringify({
+          type: 'outcome',
+          game: 0,
+          commands: 1,
+          terminated: false,
+          truncated: false,
+          interrupted: 'cancelled',
+          returns: null,
+          winner: null,
+        }),
+    );
+    const explicit = [];
+    for await (const row of encodeTeacherFile(path)) explicit.push(row);
+    const outcome = explicit.at(-1)!;
+    assert.ok('interrupted' in outcome && outcome.interrupted);
+    assert.ok('interruptionReason' in outcome && outcome.interruptionReason === 'cancelled');
+    assert.ok('returns' in outcome && outcome.returns === null);
   } finally {
     await rm(folder, { recursive: true, force: true });
   }

@@ -98,5 +98,8 @@ test('热启动样本可按终局记录分组，教师无trace/伪MCTS标签，�
   );
   assert.equal(cancelled.cancelled, true);
   assert.equal(samples, 1);
-  assert.equal(cancelled.results.length, 0);
+  assert.equal(cancelled.results.length, 1);
+  assert.equal(cancelled.results[0].commands, 1);
+  assert.equal(cancelled.results[0].interrupted, 'cancelled');
+  assert.equal(cancelled.results[0].returns, null);
 });

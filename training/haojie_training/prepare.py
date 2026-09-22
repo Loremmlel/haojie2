@@ -69,13 +69,20 @@ def tensor_example(row: dict, config: ModelConfig) -> dict[str, torch.Tensor]:
 
 
 def prepare(
-    paths: list[Path], output: Path, validation_fraction=0.25, split_seed=20260922, node="node"
+    paths: list[Path],
+    output: Path,
+    validation_fraction=0.25,
+    split_seed=20260922,
+    node="node",
+    teacher_difficulty: str | None = None,
 ) -> dict:
     """首批试验整体驻留CPU；整局和相同种子不可跨集合，不为截断/中断局制造价值标签。"""
     if output.exists():
         raise ValueError("输出目录已存在，请使用新的数据版本目录")
     if not 0 < validation_fraction < 1:
         raise ValueError("验证集比例必须在0与1之间")
+    if teacher_difficulty not in {None, "easy", "medium", "hard"}:
+        raise ValueError("教师筛选难度无效")
     config = ModelConfig()
     header, groups, provenance = None, {}, []
     for path in paths:
@@ -93,11 +100,24 @@ def prepare(
                     if schema[name] != getattr(config, name):
                         raise ValueError(f"模型与编码器的{name}不匹配")
             elif row["type"] == "game":
-                if row["group"] in groups:
-                    raise ValueError("同一种子/规则对局重复，拒绝重采样污染统计")
+                identity = row.get("game_id", row["group"])
+                if identity in groups:
+                    raise ValueError("同一教师对局重复，拒绝重采样污染统计")
                 current = {"metadata": row, "examples": [], "records": [], "outcome": None}
-                groups[row["group"]] = current
+                groups[identity] = current
             elif row["type"] == "example":
+                if teacher_difficulty is not None:
+                    game = current["metadata"]
+                    profile = (game.get("teachers") or {}).get(str(row["actor"]))
+                    difficulty = (
+                        (profile or {}).get("difficulty")
+                        if game.get("teachers") is not None
+                        else game.get("difficulty")
+                    )
+                    if difficulty not in {"easy", "medium", "hard"}:
+                        raise ValueError("样本缺少可验证的教师来源，不能按难度筛选")
+                    if difficulty != teacher_difficulty:
+                        continue
                 current["examples"].append(tensor_example(row, config))
                 current["records"].append(
                     {key: row[key] for key in ["index", "step", "actor", "command", "stage"]}
@@ -112,12 +132,13 @@ def prepare(
                 current = None
             else:
                 raise ValueError("未知编码记录类型")
-    if len(groups) < 2 or any(not game["examples"] for game in groups.values()):
-        raise ValueError("至少需要两局非空记录，才能按整局分开训练和验证")
+    families = {game["metadata"]["group"] for game in groups.values()}
+    if len(families) < 2 or any(not game["examples"] for game in groups.values()):
+        raise ValueError("至少需要两个不同种子族且各局筛选后非空，才能分开训练和验证")
     if any(game["outcome"] is None for game in groups.values()):
         raise ValueError("编码流缺少显式终局/截断/中断标记")
     ordered = sorted(
-        groups, key=lambda key: hashlib.sha256(f"{split_seed}:{key}".encode()).digest()
+        families, key=lambda key: hashlib.sha256(f"{split_seed}:{key}".encode()).digest()
     )
     count = min(len(ordered) - 1, max(1, round(len(ordered) * validation_fraction)))
     splits = {"train": ordered[count:], "validation": ordered[:count]}
@@ -129,20 +150,40 @@ def prepare(
         "source_sha256": header["source_sha256"],
         "sources": provenance,
         "split_seed": split_seed,
+        "teacher_difficulty": teacher_difficulty,
     }
     report = {**metadata, "splits": {}, "games": []}
     for key, game in groups.items():
         report["games"].append(
-            {**game["metadata"], **game["outcome"], "group": key, "examples": len(game["examples"])}
+            {
+                **game["metadata"],
+                **game["outcome"],
+                "game_id": key,
+                "examples": len(game["examples"]),
+                "selected_decisions": sum(r["step"] == 0 for r in game["records"]),
+                "excluded_decisions": game["outcome"]["commands"]
+                - sum(r["step"] == 0 for r in game["records"]),
+            }
         )
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="prepare-", dir=output.parent) as folder:
-        for split, keys in splits.items():
+        for split, split_families in splits.items():
+            keys = [
+                key
+                for family in split_families
+                for key, game in groups.items()
+                if game["metadata"]["group"] == family
+            ]
             examples = [e for key in keys for e in groups[key]["examples"]]
-            records = [{"group": key, **r} for key in keys for r in groups[key]["records"]]
+            records = [
+                {"group": groups[key]["metadata"]["group"], "game_id": key, **r}
+                for key in keys
+                for r in groups[key]["records"]
+            ]
             batch = collate_examples(examples, config)
             details = {
-                "groups": keys,
+                "groups": split_families,
+                "game_ids": keys,
                 "examples": len(examples),
                 "decisions": sum(r["step"] == 0 for r in records),
                 "value_labels": int(batch["value_mask"].sum()),
@@ -156,7 +197,13 @@ def prepare(
             torch.save(
                 {
                     "format": FORMAT,
-                    "metadata": {**metadata, "split": split, "groups": keys, "records": records},
+                    "metadata": {
+                        **metadata,
+                        "split": split,
+                        "groups": split_families,
+                        "game_ids": keys,
+                        "records": records,
+                    },
                     "tensors": batch,
                 },
                 Path(folder) / f"{split}.pt",
@@ -175,9 +222,17 @@ def main():
     parser.add_argument("--validation-fraction", type=float, default=0.25)
     parser.add_argument("--split-seed", type=int, default=20260922)
     parser.add_argument("--node", default=shutil.which("node") or "node")
+    parser.add_argument("--teacher-difficulty", choices=["easy", "medium", "hard"])
     args = parser.parse_args()
     torch.set_num_threads(2)
-    report = prepare(args.inputs, args.output, args.validation_fraction, args.split_seed, args.node)
+    report = prepare(
+        args.inputs,
+        args.output,
+        args.validation_fraction,
+        args.split_seed,
+        args.node,
+        args.teacher_difficulty,
+    )
     print(json.dumps({"output": str(args.output), "splits": report["splits"]}, ensure_ascii=False))
 
 

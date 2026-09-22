@@ -61,8 +61,16 @@ class PreparationTests(unittest.TestCase):
             },
         }
         rows = [header]
-        for game in range(3):
-            rows.append({"type": "game", "game": game, "group": f"game-{game}"})
+        for game in range(4):
+            rows.append(
+                {
+                    "type": "game",
+                    "game": game,
+                    "group": f"game-{game % 3}",
+                    "game_id": f"trajectory-{game}",
+                    "teachers": {"1": {"difficulty": "hard"}, "2": {"difficulty": "medium"}},
+                }
+            )
             for index, (actor, step) in enumerate([(1, 0), (1, 1), (2, 0)]):
                 rows.append(
                     {
@@ -81,10 +89,10 @@ class PreparationTests(unittest.TestCase):
                     "type": "outcome",
                     "game": game,
                     "commands": 2,
-                    "terminated": game == 0,
+                    "terminated": game % 3 == 0,
                     "truncated": game == 1,
                     "interrupted": game == 2,
-                    "returns": {"1": 1, "2": -1} if game == 0 else None,
+                    "returns": {"1": 1, "2": -1} if game % 3 == 0 else None,
                 }
             )
         with tempfile.TemporaryDirectory() as folder:
@@ -97,6 +105,11 @@ class PreparationTests(unittest.TestCase):
             validation, meta = load_dataset(root / "prepared/validation.pt", config)
             validate_split(training, meta)
             self.assertEqual(len(training["groups"]) + len(meta["groups"]), 3)
+            self.assertEqual(len(training["game_ids"]) + len(meta["game_ids"]), 4)
+            for split in [training, meta]:
+                self.assertEqual(
+                    "trajectory-0" in split["game_ids"], "trajectory-3" in split["game_ids"]
+                )
             for batch, provenance in [(train, training), (validation, meta)]:
                 for i, record in enumerate(provenance["records"]):
                     known = record["group"] == "game-0" and record["step"] == 0
@@ -106,9 +119,27 @@ class PreparationTests(unittest.TestCase):
                             float(batch["value"][i]), 1 if record["actor"] == 1 else -1
                         )
             report = json.loads((root / "prepared/manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(sum(s["value_labels"] for s in report["splits"].values()), 2)
+            self.assertEqual(sum(s["value_labels"] for s in report["splits"].values()), 4)
             with self.assertRaises(ValueError):
                 validate_split(training, training)
+            duplicate = [
+                dict(row, game_id="trajectory-0")
+                if row["type"] == "game" and row["game"] == 3
+                else row
+                for row in rows
+            ]
+            with patch("haojie_training.prepare.encoded_rows", return_value=iter(duplicate)):
+                with self.assertRaisesRegex(ValueError, "重复"):
+                    prepare([source], root / "duplicate")
+            with patch("haojie_training.prepare.encoded_rows", return_value=iter(rows)):
+                filtered = prepare([source], root / "hard-only", teacher_difficulty="hard")
+            self.assertEqual(sum(g["selected_decisions"] for g in filtered["games"]), 4)
+            self.assertEqual(sum(g["excluded_decisions"] for g in filtered["games"]), 4)
+            self.assertEqual(sum(s["value_labels"] for s in filtered["splits"].values()), 2)
+            for split in ["train", "validation"]:
+                _, selected = load_dataset(root / f"hard-only/{split}.pt", config)
+                self.assertTrue(all(r["actor"] == 1 for r in selected["records"]))
+                self.assertEqual(selected["groups"], filtered["splits"][split]["groups"])
 
 
 if __name__ == "__main__":
