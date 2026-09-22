@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>浩劫 · 浏览器推理实验</title>
+    <style>
+      body {
+        max-width: 1100px;
+        margin: 32px auto;
+        padding: 0 24px;
+        font:
+          16px/1.6 system-ui,
+          sans-serif;
+        color: #20352c;
+        background: #f6f5ef;
+      }
+      h1 {
+        font-size: 28px;
+      }
+      button {
+        padding: 10px 18px;
+        margin: 4px 8px 4px 0;
+        cursor: pointer;
+      }
+      pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: 12px;
+        background: white;
+        padding: 16px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      td,
+      th {
+        text-align: left;
+        padding: 8px;
+        border-bottom: 1px solid #ccc;
+      }
+      #status {
+        min-height: 2em;
+        font-weight: 600;
+      }
+      .note {
+        color: #57665d;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>浏览器推理实验 · 11.7M</h1>
+    <p class="note">
+      真实公开局面，动态实体／候选长度。计时含输入上传和输出回读，每组预热3次、测量20次。这里只测网络前向，不代表完整动作、MCTS或棋力。
+    </p>
+    <pre id="capabilities">正在检查设备…</pre>
+    <div>
+      <button id="cpu" disabled>运行CPU FP32</button>
+      <button id="gpu32" disabled>运行WebGPU FP32</button>
+      <button id="gpu16" disabled>运行WebGPU混合FP16</button>
+      <button id="audit" disabled>检查GPU算子执行</button>
+    </div>
+    <p id="status" role="status">正在加载真实输入…</p>
+    <table>
+      <thead>
+        <tr>
+          <th>后端／精度</th>
+          <th>样本 B×N×A</th>
+          <th>首次 ms</th>
+          <th>中位 ms</th>
+          <th>P95 ms</th>
+          <th>概率最大误差</th>
+          <th>Top1一致</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p class="note">
+      本地HTTP试验；全部资产来自本机，不使用CDN。CPU为WASM单线程；不自动切换执行后端。FP16模式保留候选评分FP32。峰值内存与离线file://兼容性未在这里验收。
+    </p>
+    <details>
+      <summary>完整实验记录</summary>
+      <pre id="report"></pre>
+    </details>
+    <script type="module" src="/client.mjs"></script>
+  </body>
+</html>

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 
-from .model import ModelConfig, PolicyValueNet, policy_value_loss
+from .model import NETWORK_VERSION, ModelConfig, PolicyValueNet, policy_value_loss
 
 
 def resolve_device(name: str) -> torch.device:
@@ -90,6 +90,7 @@ class Trainer:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "format": "haojie-checkpoint-v1",
+            "network": NETWORK_VERSION,
             "config": asdict(self.model.config),
             "metadata": metadata,
             "precision": self.precision,
@@ -112,6 +113,7 @@ class Trainer:
         payload = torch.load(path, map_location="cpu", weights_only=True)
         if (
             payload.get("format") != "haojie-checkpoint-v1"
+            or payload.get("network") != NETWORK_VERSION
             or payload["config"] != asdict(self.model.config)
             or payload["metadata"] != metadata
             or payload["precision"] != self.precision
@@ -128,6 +130,6 @@ class Trainer:
 
 def checkpoint_config(path: Path) -> ModelConfig:
     payload = torch.load(path, map_location="cpu", weights_only=True)
-    if payload.get("format") != "haojie-checkpoint-v1":
-        raise ValueError("不支持的检查点格式")
+    if payload.get("format") != "haojie-checkpoint-v1" or payload.get("network") != NETWORK_VERSION:
+        raise ValueError("检查点网络版本不兼容；旧骨架检查点需用原版本代码读取")
     return ModelConfig(**payload["config"])

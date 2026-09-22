@@ -1,0 +1,251 @@
+{
+  "format": "haojie-torch-benchmark-v1",
+  "network": "entity-transformer-v2",
+  "created_utc": "2026-09-22T05:02:56.398352+00:00",
+  "hardware": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.9 (tags/v3.12.9:fdb8142, Feb  4 2025, 15:27:58) [MSC v.1942 64 bit (AMD64)]",
+    "logical_cpus": 14,
+    "memory_bytes": 33820106752,
+    "cpu": "Intel(R) Core(TM) Ultra 5 225H",
+    "gpu": [
+      {
+        "Name": "Intel(R) Arc(TM) 130T GPU (16GB)",
+        "DriverVersion": "32.0.101.8243"
+      }
+    ]
+  },
+  "torch": "2.14.0+xpu",
+  "source_sha256": "b8832b4abf73f6e46151d66413009dc1337f89592a2a98d6dc03e563d7b21466",
+  "commit": "db2fe7ed903c5a6973d97a93943a94587414085d",
+  "config": {
+    "devices": ["cpu", "xpu"],
+    "precisions": ["fp32", "bf16"],
+    "batches": [32],
+    "cpu_threads": [8],
+    "xpu_threads": 4,
+    "entities": 256,
+    "actions": 117,
+    "warmup": 3,
+    "steps": 5,
+    "rounds": 3,
+    "timeout": 180
+  },
+  "method": "eager; AdamW foreach; FP32 parameters/states/action projection/policy; AMP backbone/value for bf16/fp16; resident synthetic batches; synchronized complete optimization steps; 1 inter-op thread",
+  "results": [
+    {
+      "device": "cpu",
+      "precision": "fp32",
+      "batch": 32,
+      "entities": 256,
+      "actions": 117,
+      "threads": 8,
+      "warmup": 3,
+      "steps": 5,
+      "rounds": 3,
+      "seed": 20260922,
+      "status": "ok",
+      "config": {
+        "width": 384,
+        "layers": 6,
+        "heads": 6,
+        "ffn": 1536,
+        "entity_features": 64,
+        "global_features": 32,
+        "action_features": 64,
+        "kind_count": 256
+      },
+      "parameters": 11695874,
+      "model_sha256": "da44662f3033f3dbc852d6ace29670bf34f53daab0c90cee7aff3019b04e693b",
+      "input_sha256": "89beeed619bc9de131429d1daf8f54d36ad5df24b77f818cf6e3db5f0666bd61",
+      "torch": "2.14.0+xpu",
+      "device_name": "Intel64 Family 6 Model 197 Stepping 2, GenuineIntel",
+      "matmul_output_dtype": "torch.float32",
+      "parameter_dtype": "torch.float32",
+      "samples_ms_per_step": [1329.0273600025102, 1337.3409799998626, 1350.7736600004137],
+      "median_ms_per_step": 1337.3409799998626,
+      "samples_per_second": 23.928078536861474,
+      "warmup_seconds": 4.1307830000296235,
+      "warmup_skipped": 0,
+      "timed_updates": 15,
+      "timed_skipped": 0,
+      "first_loss": 5.293323040008545,
+      "final_loss": 0.0419001430273056,
+      "weight_max_change": 0.005298372358083725,
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1
+      },
+      "initial_fp32_agreement": {
+        "policy_rms_relative_error": 0,
+        "value_max_absolute_error": 0,
+        "top1_agreement": 1
+      },
+      "peak_memory": null,
+      "input_transfer_ms": 0
+    },
+    {
+      "device": "xpu",
+      "precision": "fp32",
+      "batch": 32,
+      "entities": 256,
+      "actions": 117,
+      "threads": 4,
+      "warmup": 3,
+      "steps": 5,
+      "rounds": 3,
+      "seed": 20260922,
+      "status": "ok",
+      "config": {
+        "width": 384,
+        "layers": 6,
+        "heads": 6,
+        "ffn": 1536,
+        "entity_features": 64,
+        "global_features": 32,
+        "action_features": 64,
+        "kind_count": 256
+      },
+      "parameters": 11695874,
+      "model_sha256": "da44662f3033f3dbc852d6ace29670bf34f53daab0c90cee7aff3019b04e693b",
+      "input_sha256": "89beeed619bc9de131429d1daf8f54d36ad5df24b77f818cf6e3db5f0666bd61",
+      "torch": "2.14.0+xpu",
+      "device_name": "Intel(R) Arc(TM) 130T GPU (16GB)",
+      "matmul_output_dtype": "torch.float32",
+      "parameter_dtype": "torch.float32",
+      "samples_ms_per_step": [457.99458001274616, 438.7208200059831, 457.8611599979922],
+      "median_ms_per_step": 457.8611599979922,
+      "samples_per_second": 69.89018243028154,
+      "warmup_seconds": 3.4171750000678003,
+      "warmup_skipped": 0,
+      "timed_updates": 15,
+      "timed_skipped": 0,
+      "first_loss": 5.293322563171387,
+      "final_loss": 0.12373188138008118,
+      "weight_max_change": 0.005366146564483643,
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1
+      },
+      "initial_fp32_agreement": {
+        "policy_rms_relative_error": 0.0000010674111763364635,
+        "value_max_absolute_error": 4.172325134277344e-7,
+        "top1_agreement": 1
+      },
+      "peak_memory": {
+        "allocated_mib": 1692.63623046875,
+        "reserved_mib": 1902
+      },
+      "input_transfer_ms": 1.5394999645650387
+    },
+    {
+      "device": "cpu",
+      "precision": "bf16",
+      "batch": 32,
+      "entities": 256,
+      "actions": 117,
+      "threads": 8,
+      "warmup": 3,
+      "steps": 5,
+      "rounds": 3,
+      "seed": 20260922,
+      "status": "ok",
+      "config": {
+        "width": 384,
+        "layers": 6,
+        "heads": 6,
+        "ffn": 1536,
+        "entity_features": 64,
+        "global_features": 32,
+        "action_features": 64,
+        "kind_count": 256
+      },
+      "parameters": 11695874,
+      "model_sha256": "da44662f3033f3dbc852d6ace29670bf34f53daab0c90cee7aff3019b04e693b",
+      "input_sha256": "89beeed619bc9de131429d1daf8f54d36ad5df24b77f818cf6e3db5f0666bd61",
+      "torch": "2.14.0+xpu",
+      "device_name": "Intel64 Family 6 Model 197 Stepping 2, GenuineIntel",
+      "matmul_output_dtype": "torch.bfloat16",
+      "parameter_dtype": "torch.float32",
+      "samples_ms_per_step": [1381.1377999838442, 1384.0280199889094, 1389.1541399993002],
+      "median_ms_per_step": 1384.0280199889094,
+      "samples_per_second": 23.120919185043974,
+      "warmup_seconds": 4.278949899948202,
+      "warmup_skipped": 0,
+      "timed_updates": 15,
+      "timed_skipped": 0,
+      "first_loss": 5.294541835784912,
+      "final_loss": 0.0346708782017231,
+      "weight_max_change": 0.005301915109157562,
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1
+      },
+      "initial_fp32_agreement": {
+        "policy_rms_relative_error": 0.0028129785787314177,
+        "value_max_absolute_error": 0.0037215352058410645,
+        "top1_agreement": 1
+      },
+      "peak_memory": null,
+      "input_transfer_ms": 0
+    },
+    {
+      "device": "xpu",
+      "precision": "bf16",
+      "batch": 32,
+      "entities": 256,
+      "actions": 117,
+      "threads": 4,
+      "warmup": 3,
+      "steps": 5,
+      "rounds": 3,
+      "seed": 20260922,
+      "status": "ok",
+      "config": {
+        "width": 384,
+        "layers": 6,
+        "heads": 6,
+        "ffn": 1536,
+        "entity_features": 64,
+        "global_features": 32,
+        "action_features": 64,
+        "kind_count": 256
+      },
+      "parameters": 11695874,
+      "model_sha256": "da44662f3033f3dbc852d6ace29670bf34f53daab0c90cee7aff3019b04e693b",
+      "input_sha256": "89beeed619bc9de131429d1daf8f54d36ad5df24b77f818cf6e3db5f0666bd61",
+      "torch": "2.14.0+xpu",
+      "device_name": "Intel(R) Arc(TM) 130T GPU (16GB)",
+      "matmul_output_dtype": "torch.bfloat16",
+      "parameter_dtype": "torch.float32",
+      "samples_ms_per_step": [375.3113599959761, 377.02243998646736, 378.2611600123346],
+      "median_ms_per_step": 377.02243998646736,
+      "samples_per_second": 84.87558459689718,
+      "warmup_seconds": 3.150638799997978,
+      "warmup_skipped": 0,
+      "timed_updates": 15,
+      "timed_skipped": 0,
+      "first_loss": 5.294007778167725,
+      "final_loss": 0.12388213723897934,
+      "weight_max_change": 0.005366981029510498,
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1
+      },
+      "initial_fp32_agreement": {
+        "policy_rms_relative_error": 0.002717320341616869,
+        "value_max_absolute_error": 0.0037215054035186768,
+        "top1_agreement": 1
+      },
+      "peak_memory": {
+        "allocated_mib": 1323.6806640625,
+        "reserved_mib": 1484
+      },
+      "input_transfer_ms": 1.8736000638455153
+    }
+  ]
+}

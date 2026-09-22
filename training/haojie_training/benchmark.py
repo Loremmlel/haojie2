@@ -16,7 +16,7 @@ from pathlib import Path
 import torch
 
 from .data import synthetic_batch
-from .model import ModelConfig, PolicyValueNet
+from .model import NETWORK_VERSION, ModelConfig, PolicyValueNet
 from .runtime import Trainer, autocast, resolve_device, synchronize
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -227,6 +227,7 @@ def main():
         digest.update(path.read_bytes())
     report = {
         "format": "haojie-torch-benchmark-v1",
+        "network": NETWORK_VERSION,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "hardware": hardware(),
         "torch": str(torch.__version__),
@@ -238,7 +239,8 @@ def main():
             key: value for key, value in vars(args).items() if key not in {"case", "output"}
         },
         "method": (
-            "eager; AdamW foreach; FP32 parameters/states; AMP for bf16/fp16; "
+            "eager; AdamW foreach; FP32 parameters/states/action projection/policy; "
+            "AMP backbone/value for bf16/fp16; "
             "resident synthetic batches; synchronized complete optimization steps; "
             "1 inter-op thread"
         ),

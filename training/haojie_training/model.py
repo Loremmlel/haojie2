@@ -6,6 +6,8 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+NETWORK_VERSION = "entity-transformer-v2"
+
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -60,7 +62,7 @@ class PolicyValueNet(nn.Module):
     """
     共享实体主干，给外部提供的候选评分，并预测观察所属方的终局收益。
     输入由data.validate_batch在CPU边界校验；前向不修改输入、不复制游戏规则。
-    候选src/target是实体索引，-1指全局token；候选特征编码尚待游戏适配层定义。
+    候选src/target是实体索引，-1指全局token；游戏编码来自共享TypeScript适配层。
     不设实体数量上限、不截断实体，不把候选评分误称为完整动作生成器。
     """
 
@@ -72,8 +74,13 @@ class PolicyValueNet(nn.Module):
         self.global_projection = nn.Linear(config.global_features, config.width)
         self.blocks = nn.ModuleList(EncoderBlock(config) for _ in range(config.layers))
         self.norm = nn.LayerNorm(config.width)
+        self.action_projection = nn.Sequential(
+            nn.Linear(config.action_features, config.width),
+            nn.GELU(approximate="tanh"),
+            nn.LayerNorm(config.width),
+        )
         self.policy = nn.Sequential(
-            nn.Linear(config.width * 3 + config.action_features, config.width),
+            nn.Linear(config.width * 4, config.width),
             nn.GELU(approximate="tanh"),
             nn.Linear(config.width, config.width),
             nn.GELU(approximate="tanh"),
@@ -101,8 +108,14 @@ class PolicyValueNet(nn.Module):
         context = x[:, :1].expand(-1, action_count, -1)
         sources = x.gather(1, (batch["sources"] + 1).unsqueeze(-1).expand(-1, -1, x.shape[-1]))
         targets = x.gather(1, (batch["targets"] + 1).unsqueeze(-1).expand(-1, -1, x.shape[-1]))
-        action_context = torch.cat((context, sources, targets, batch["candidates"]), dim=-1)
-        logits = self.policy(action_context).squeeze(-1).float()
+        # 候选先独立提取非线性特征，避免坐标差异被共享上下文淹没；评分保持FP32，
+        # 防止BF16在较大logit附近把相邻落点量化成相同分数。实体主干仍使用所选AMP。
+        with torch.autocast(x.device.type, enabled=False):
+            actions = self.action_projection(batch["candidates"].float())
+            action_context = torch.cat(
+                (context.float(), sources.float(), targets.float(), actions), dim=-1
+            )
+            logits = self.policy(action_context).squeeze(-1)
         logits = logits.masked_fill(~batch["candidate_mask"], -1e9)
         return logits, self.value(x[:, 0]).squeeze(-1).float()
 

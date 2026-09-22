@@ -4,6 +4,7 @@ from pathlib import Path
 
 import torch
 from torch import Tensor
+from torch.nn.utils.rnn import pad_sequence
 
 from .model import ModelConfig
 
@@ -11,6 +12,37 @@ FORMAT = "haojie-training-tensors-v1"
 FLOAT_KEYS = {"entities", "globals", "candidates", "policy", "value"}
 MASK_KEYS = {"entity_mask", "candidate_mask", "value_mask"}
 INDEX_KEYS = {"kinds", "sources", "targets"}
+ENTITY_KEYS = {"entities", "kinds", "entity_mask"}
+ACTION_KEYS = {"candidates", "sources", "targets", "candidate_mask", "policy"}
+
+
+def collate_examples(examples: list[dict[str, Tensor]], config: ModelConfig) -> dict[str, Tensor]:
+    """按本组最大长度填充，无截断；来源/目标保持样本内索引，填充指针使用全局token。"""
+    if not examples:
+        raise ValueError("没有可训练样本")
+    batch = {}
+    for key in FLOAT_KEYS | MASK_KEYS | INDEX_KEYS:
+        values = [example[key] for example in examples]
+        batch[key] = (
+            pad_sequence(
+                values, batch_first=True, padding_value=-1 if key in {"sources", "targets"} else 0
+            )
+            if key in ENTITY_KEYS | ACTION_KEYS
+            else torch.stack(values)
+        )
+    validate_batch(batch, config)
+    return batch
+
+
+def select_batch(dataset: dict[str, Tensor], indices: Tensor) -> dict[str, Tensor]:
+    """取样后仅移除整批无效的尾部填充，较大局面不会增加其他批次的注意力开销。"""
+    batch = {key: value[indices] for key, value in dataset.items()}
+    for mask, keys in [("entity_mask", ENTITY_KEYS), ("candidate_mask", ACTION_KEYS)]:
+        used = batch[mask].any(dim=0).nonzero()
+        length = int(used[-1, 0]) + 1 if used.numel() else 1
+        for key in keys:
+            batch[key] = batch[key][:, :length]
+    return batch
 
 
 def validate_batch(batch: dict[str, Tensor], config: ModelConfig) -> None:

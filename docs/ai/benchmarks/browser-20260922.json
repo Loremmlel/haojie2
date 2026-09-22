@@ -1,0 +1,452 @@
+{
+  "format": "haojie-browser-result-summary-v1",
+  "started": "2026-09-22T05:25:14.177Z",
+  "node_assignment_audit": {
+    "time": "2026-09-22T05:30:46Z",
+    "backend": "webgpu",
+    "precision": "mixed-fp16",
+    "gpu_nodes": 344,
+    "cpu_nodes": 54,
+    "source": "ORT verbose VerifyEachNodeIsAssignedToAnEp console output, separate untimed session",
+    "js_gpu_profiling_callback": "unavailable in native WebGPU runtime; no per-kernel timings claimed"
+  },
+  "environment": {
+    "host": "Codex In-app Browser",
+    "browser": "Chrome/153.0.0.0",
+    "os": "Windows",
+    "cpu": "Intel Core Ultra 5 225H",
+    "gpu": "Intel Arc 130T",
+    "vendor": "intel",
+    "architecture": "xe-lpg",
+    "hardware_concurrency": 14,
+    "wasm_threads": 1,
+    "secure_context": true,
+    "cross_origin_isolated": false,
+    "shader_f16": true,
+    "is_fallback_adapter": false,
+    "url": "http://127.0.0.1:4318/",
+    "ort": "1.30.0"
+  },
+  "method": {
+    "warmup": 3,
+    "measured": 20,
+    "times_rounded_decimal_places": 1,
+    "median_rounded_decimal_places": 2,
+    "cpu_inputs": true,
+    "cpu_output_readback": true,
+    "includes_encoding": false,
+    "includes_action_decoding": false,
+    "includes_mcts": false,
+    "run_order": ["wasm-fp32", "webgpu-fp32", "webgpu-mixed-fp16"],
+    "notes": [
+      "四个不同真实输入，batch4为这四个输入一起填充；不是八个独立样本。",
+      "每个尺寸首次运行含当时未缓存的编译成本，尺寸按此顺序执行；不是各尺寸独立冷启动。",
+      "浏览器采用默认电源状态，未控制频率或热状态；一次探索性运行，不能外推所有普通笔记本。",
+      "WebGPU有CPU算子分配；不是全图在GPU运行。",
+      "首次尝试错配JSEP WASM导致初始化失败，修正为1.30.0 WebGPU bundle对应asyncify WASM后重载；失败不计入本报告。",
+      "内置浏览器策略拒绝file://；本次为本地HTTP模型验收。"
+    ]
+  },
+  "manifest": {
+    "format": "haojie-browser-benchmark-v1",
+    "network": "entity-transformer-v2",
+    "config": {
+      "width": 384,
+      "layers": 6,
+      "heads": 6,
+      "ffn": 1536,
+      "entity_features": 64,
+      "global_features": 32,
+      "action_features": 64,
+      "kind_count": 256
+    },
+    "parameters": 11695874,
+    "checkpoint_sha256": "88eefa557f5436fe807dc79b383ffbcba4c69e3c6044e31ee165b98f27fe98b3",
+    "data_sha256": "fb71170daf3f6ccbeba6c10f5ce9c7ce245a4e69ed3377e30ce6ee77f38fa3b9",
+    "ruleset": "3.0-feedback4-counter-freeze",
+    "encoding": "haojie-entities-factorized-v1",
+    "versions": {
+      "torch": "2.14.0+xpu",
+      "onnx": "1.23.0",
+      "onnxruntime": "1.30.0"
+    },
+    "cases_sha256": "6ba8eb2a3b8fc37cf88e28da75cb3204428382f5db79a51d0526e5d0785d9fdc",
+    "models": {
+      "fp32": {
+        "file": "fp32.onnx",
+        "bytes": 47260927,
+        "sha256": "1668c7fae4a76b7565200ffe84bb72e267a78fb52742354de94d399170968364",
+        "native_cpu_parity": {
+          "small": {
+            "finite": true,
+            "max_logit_abs": 0.000011444091796875,
+            "max_probability_abs": 1.4901161193847656e-7,
+            "max_value_abs": 0,
+            "top1_equal": 1,
+            "samples": 1
+          },
+          "medium": {
+            "finite": true,
+            "max_logit_abs": 0.000011444091796875,
+            "max_probability_abs": 1.0186340659856796e-10,
+            "max_value_abs": 5.960464477539063e-8,
+            "top1_equal": 1,
+            "samples": 1
+          },
+          "large": {
+            "finite": true,
+            "max_logit_abs": 0.00002288818359375,
+            "max_probability_abs": 0.0000010132789611816406,
+            "max_value_abs": 0,
+            "top1_equal": 1,
+            "samples": 1
+          },
+          "wide": {
+            "finite": true,
+            "max_logit_abs": 0.00003814697265625,
+            "max_probability_abs": 0.0000011920928955078125,
+            "max_value_abs": 0,
+            "top1_equal": 1,
+            "samples": 1
+          },
+          "batch4": {
+            "finite": true,
+            "max_logit_abs": 0.00003814697265625,
+            "max_probability_abs": 0.000001043081283569336,
+            "max_value_abs": 5.960464477539063e-8,
+            "top1_equal": 4,
+            "samples": 4
+          }
+        }
+      },
+      "mixed-fp16": {
+        "file": "mixed-fp16.onnx",
+        "bytes": 25401917,
+        "sha256": "ac2857e84467a29b31df12986028058da067d8eff595d86d9b02a6bcb05c29ab",
+        "native_cpu_parity": {
+          "small": {
+            "finite": true,
+            "max_logit_abs": 0.0062713623046875,
+            "max_probability_abs": 0.00017213821411132812,
+            "max_value_abs": 0.00021350383758544922,
+            "top1_equal": 1,
+            "samples": 1
+          },
+          "medium": {
+            "finite": true,
+            "max_logit_abs": 0.00630950927734375,
+            "max_probability_abs": 4.749381332658231e-8,
+            "max_value_abs": 0.000023245811462402344,
+            "top1_equal": 1,
+            "samples": 1
+          },
+          "large": {
+            "finite": true,
+            "max_logit_abs": 0.007415771484375,
+            "max_probability_abs": 0.0006280094385147095,
+            "max_value_abs": 0.00021094083786010742,
+            "top1_equal": 1,
+            "samples": 1
+          },
+          "wide": {
+            "finite": true,
+            "max_logit_abs": 0.00370025634765625,
+            "max_probability_abs": 0.00003849342465400696,
+            "max_value_abs": 0.00008767843246459961,
+            "top1_equal": 1,
+            "samples": 1
+          },
+          "batch4": {
+            "finite": true,
+            "max_logit_abs": 0.00740814208984375,
+            "max_probability_abs": 0.0006276518106460571,
+            "max_value_abs": 0.00021350383758544922,
+            "top1_equal": 4,
+            "samples": 4
+          }
+        }
+      }
+    }
+  },
+  "runtime": {
+    "file": "ort-wasm-simd-threaded.asyncify.wasm",
+    "bytes": 26781914,
+    "load_ms": 165.6
+  },
+  "cases": [
+    {
+      "name": "small",
+      "shape": [1, 4, 3]
+    },
+    {
+      "name": "medium",
+      "shape": [1, 94, 26]
+    },
+    {
+      "name": "large",
+      "shape": [1, 291, 37]
+    },
+    {
+      "name": "wide",
+      "shape": [1, 192, 117]
+    },
+    {
+      "name": "batch4",
+      "shape": [4, 291, 117]
+    }
+  ],
+  "runs": [
+    {
+      "backend": "wasm",
+      "precision": "fp32",
+      "model_load_ms": 221.3,
+      "session_create_ms": 484.8,
+      "cases": [
+        {
+          "name": "small",
+          "first_ms": 24.5,
+          "median_ms": 5.85,
+          "p95_ms": 6.9,
+          "times_ms": [
+            5.8, 5.7, 5.9, 6.6, 6.9, 7.5, 6.2, 5.7, 5.8, 5.9, 5.4, 5.9, 6.4, 6.9, 6, 5.6, 4.9, 5.3,
+            5.5, 5.1
+          ],
+          "max_logit_abs": 0.000011444091796875,
+          "max_probability_abs": 1.3825190973981716e-7,
+          "max_value_abs": 0,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "medium",
+          "first_ms": 59.6,
+          "median_ms": 54.2,
+          "p95_ms": 56.2,
+          "times_ms": [
+            55.6, 54.3, 54.3, 51.8, 52.9, 52.4, 51.7, 55, 55.2, 52.5, 54.6, 53, 53.4, 54.1, 54.1,
+            56.2, 52.8, 54.8, 54.7, 57.1
+          ],
+          "max_logit_abs": 0.000011444091796875,
+          "max_probability_abs": 1.5590406743370977e-10,
+          "max_value_abs": 5.960464477539063e-8,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "large",
+          "first_ms": 182.4,
+          "median_ms": 178.8,
+          "p95_ms": 184,
+          "times_ms": [
+            179, 175.8, 174.1, 176.9, 183.3, 183.1, 178.5, 181, 176.4, 175.4, 175.4, 177.4, 178.6,
+            180, 179.8, 177.5, 182.4, 184, 184.3, 183.3
+          ],
+          "max_logit_abs": 0.000030517578125,
+          "max_probability_abs": 2.9230723011530735e-7,
+          "max_value_abs": 0,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "wide",
+          "first_ms": 119.9,
+          "median_ms": 117.35,
+          "p95_ms": 122.4,
+          "times_ms": [
+            120.1, 122.1, 122.4, 120.9, 122.3, 117.3, 116.2, 117.4, 115.1, 119.6, 116.8, 116.7,
+            122.9, 118, 113.3, 115.1, 117.8, 116.8, 115.7, 113.8
+          ],
+          "max_logit_abs": 0.00003814697265625,
+          "max_probability_abs": 9.100936642220114e-7,
+          "max_value_abs": 5.960464477539063e-8,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "batch4",
+          "first_ms": 752,
+          "median_ms": 733.7,
+          "p95_ms": 754.8,
+          "times_ms": [
+            735.8, 744.8, 754.8, 760.1, 742.1, 729.6, 731.6, 737.7, 741.5, 716.6, 720.1, 721.9, 729,
+            740.1, 721.2, 720.8, 728.3, 736.7, 747.4, 730.7
+          ],
+          "max_logit_abs": 0.00003814697265625,
+          "max_probability_abs": 8.844178081834908e-7,
+          "max_value_abs": 1.1920928955078125e-7,
+          "top1_equal": 4,
+          "samples": 4
+        }
+      ],
+      "finite": true
+    },
+    {
+      "backend": "webgpu",
+      "precision": "fp32",
+      "model_load_ms": 228.7,
+      "session_create_ms": 234.2,
+      "cases": [
+        {
+          "name": "small",
+          "first_ms": 1234.3,
+          "median_ms": 32.8,
+          "p95_ms": 39.5,
+          "times_ms": [
+            34.2, 30.6, 34.1, 33.3, 42.2, 32.9, 34.4, 31.5, 36.3, 32.3, 32.3, 39.5, 34.8, 31.7, 30,
+            32.3, 32.1, 33.1, 32.7, 30.1
+          ],
+          "max_logit_abs": 0.0000017285346984863281,
+          "max_probability_abs": 9.571269643515734e-8,
+          "max_value_abs": 5.960464477539063e-8,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "medium",
+          "first_ms": 777.8,
+          "median_ms": 46.45,
+          "p95_ms": 50.5,
+          "times_ms": [
+            46.1, 45.7, 46.4, 43.7, 43.4, 46.5, 43.9, 46.9, 47.2, 47.1, 44.6, 50.4, 50.5, 45.7,
+            46.5, 48.1, 45.6, 51.2, 45.8, 49.4
+          ],
+          "max_logit_abs": 0.000030517578125,
+          "max_probability_abs": 4.0872236767086146e-10,
+          "max_value_abs": 5.960464477539063e-8,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "large",
+          "first_ms": 231.6,
+          "median_ms": 81.15,
+          "p95_ms": 84.8,
+          "times_ms": [
+            78.2, 78.8, 80.5, 83.6, 81.8, 83.8, 81.8, 84.8, 83, 85, 77.8, 83.7, 83.1, 78.9, 84,
+            70.4, 55.9, 58.7, 59.6, 57
+          ],
+          "max_logit_abs": 0.000049591064453125,
+          "max_probability_abs": 5.428370601912036e-7,
+          "max_value_abs": 0,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "wide",
+          "first_ms": 59.8,
+          "median_ms": 51.85,
+          "p95_ms": 58.2,
+          "times_ms": [
+            52.7, 57, 49.5, 50.7, 48.7, 50, 46, 51.7, 52.9, 51.9, 50.2, 58.5, 57.4, 56.3, 57.4,
+            58.2, 53.5, 47, 51.8, 47.8
+          ],
+          "max_logit_abs": 0.00005340576171875,
+          "max_probability_abs": 0.0000018648684496913592,
+          "max_value_abs": 0,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "batch4",
+          "first_ms": 581.8,
+          "median_ms": 151.85,
+          "p95_ms": 160.1,
+          "times_ms": [
+            151, 160.1, 151.8, 158.7, 155.3, 150.9, 152.6, 165.3, 157.7, 151.9, 159.9, 159.4, 159.4,
+            151, 148.6, 144.6, 136.4, 137.8, 139.2, 135.6
+          ],
+          "max_logit_abs": 0.00006103515625,
+          "max_probability_abs": 0.000002875015456232921,
+          "max_value_abs": 5.960464477539063e-8,
+          "top1_equal": 4,
+          "samples": 4
+        }
+      ],
+      "finite": true
+    },
+    {
+      "backend": "webgpu",
+      "precision": "mixed-fp16",
+      "model_load_ms": 98,
+      "session_create_ms": 82.6,
+      "cases": [
+        {
+          "name": "small",
+          "first_ms": 1026.3,
+          "median_ms": 31.1,
+          "p95_ms": 33.4,
+          "times_ms": [
+            33.4, 30.8, 33.2, 35.1, 28.9, 29.3, 32.2, 32.3, 31.1, 30.5, 31.1, 32.8, 30.9, 29.4,
+            31.1, 30.4, 30.5, 32.1, 32, 30.8
+          ],
+          "max_logit_abs": 0.01367950439453125,
+          "max_probability_abs": 0.0003194325993010061,
+          "max_value_abs": 0.00021350383758544922,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "medium",
+          "first_ms": 539.8,
+          "median_ms": 46.3,
+          "p95_ms": 48.6,
+          "times_ms": [
+            48.1, 46.1, 46.1, 46.4, 48.6, 47.7, 46.3, 47.8, 46.6, 42.6, 45.7, 42.6, 45.6, 43.7,
+            45.7, 46.6, 48.8, 46.7, 45.2, 46.3
+          ],
+          "max_logit_abs": 0.0269317626953125,
+          "max_probability_abs": 3.766460494603052e-7,
+          "max_value_abs": 0.000023245811462402344,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "large",
+          "first_ms": 211.8,
+          "median_ms": 58.05,
+          "p95_ms": 63.3,
+          "times_ms": [
+            58, 56.9, 54.9, 55.6, 57.1, 54.2, 54.4, 58.3, 60.9, 58.5, 59.2, 53.5, 60.3, 58, 63.3,
+            54.5, 58.1, 62.1, 62.4, 63.4
+          ],
+          "max_logit_abs": 0.07968902587890625,
+          "max_probability_abs": 0.0029110166467118948,
+          "max_value_abs": 0.00021094083786010742,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "wide",
+          "first_ms": 59.5,
+          "median_ms": 39.8,
+          "p95_ms": 49,
+          "times_ms": [
+            39.7, 38.8, 37, 42, 37.8, 39, 34.8, 37.4, 41.4, 40.2, 39, 39.9, 43.1, 40, 37.4, 38.5,
+            42.8, 50.1, 46.9, 49
+          ],
+          "max_logit_abs": 0.00925445556640625,
+          "max_probability_abs": 0.00017181094701104738,
+          "max_value_abs": 0.00008767843246459961,
+          "top1_equal": 1,
+          "samples": 1
+        },
+        {
+          "name": "batch4",
+          "first_ms": 414.4,
+          "median_ms": 78.35,
+          "p95_ms": 87.2,
+          "times_ms": [
+            76.5, 78.7, 81.1, 79.5, 88, 79.9, 77.8, 73.2, 76.3, 79, 78.3, 76.8, 75.1, 77.9, 82.9,
+            78.4, 77.9, 77.7, 81.3, 87.2
+          ],
+          "max_logit_abs": 0.07969284057617188,
+          "max_probability_abs": 0.002912555749424006,
+          "max_value_abs": 0.00021350383758544922,
+          "top1_equal": 4,
+          "samples": 4
+        }
+      ],
+      "finite": true
+    }
+  ]
+}

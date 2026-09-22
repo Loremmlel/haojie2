@@ -1,0 +1,380 @@
+{
+  "format": "haojie-real-data-pilot-v1",
+  "date": "2026-09-22",
+  "base_commit": "db2fe7e",
+  "ruleset": "3.0-feedback4-counter-freeze",
+  "encoding": "haojie-entities-factorized-v1",
+  "encoding_source_sha256": "7ee549bb9e663f1b1f68601b370eb2325c713e68dc43919734d654a82f7ffa1a",
+  "teacher_sha256": "c0dd10df036608f7a1be5157ffb573a4a47352a328d81a125a31b4a81d5f4fd3",
+  "teacher": {
+    "difficulty": "easy",
+    "budget": 40,
+    "max_plies": 80,
+    "max_commands": 1200
+  },
+  "split_seed": 20260922,
+  "games": [
+    {
+      "type": "outcome",
+      "game": 0,
+      "group": "3.0-feedback4-counter-freeze:classic:2026092201",
+      "rules": "classic",
+      "seed": 2026092201,
+      "difficulty": "easy",
+      "budget": 40,
+      "commands": 754,
+      "terminated": true,
+      "truncated": false,
+      "interrupted": false,
+      "returns": {
+        "1": 1,
+        "2": -1
+      },
+      "winner": 1,
+      "examples": 1458
+    },
+    {
+      "type": "outcome",
+      "game": 1,
+      "group": "3.0-feedback4-counter-freeze:classic:2026092202",
+      "rules": "classic",
+      "seed": 2026092202,
+      "difficulty": "easy",
+      "budget": 40,
+      "commands": 437,
+      "terminated": true,
+      "truncated": false,
+      "interrupted": false,
+      "returns": {
+        "1": 1,
+        "2": -1
+      },
+      "winner": 1,
+      "examples": 826
+    },
+    {
+      "type": "outcome",
+      "game": 2,
+      "group": "3.0-feedback4-counter-freeze:classic:2026092203",
+      "rules": "classic",
+      "seed": 2026092203,
+      "difficulty": "easy",
+      "budget": 40,
+      "commands": 1200,
+      "terminated": false,
+      "truncated": true,
+      "interrupted": false,
+      "returns": null,
+      "winner": null,
+      "examples": 2200
+    },
+    {
+      "type": "outcome",
+      "game": 3,
+      "group": "3.0-feedback4-counter-freeze:classic:2026092204",
+      "rules": "classic",
+      "seed": 2026092204,
+      "difficulty": "easy",
+      "budget": 40,
+      "commands": 1013,
+      "terminated": true,
+      "truncated": false,
+      "interrupted": false,
+      "returns": {
+        "1": 1,
+        "2": -1
+      },
+      "winner": 1,
+      "examples": 1945
+    }
+  ],
+  "splits": {
+    "train": {
+      "groups": [
+        "3.0-feedback4-counter-freeze:classic:2026092203",
+        "3.0-feedback4-counter-freeze:classic:2026092201",
+        "3.0-feedback4-counter-freeze:classic:2026092202"
+      ],
+      "examples": 4484,
+      "decisions": 2391,
+      "value_labels": 1191,
+      "forced_examples": 492,
+      "max_entities": 291,
+      "max_candidates": 117,
+      "stages": {
+        "action": 2391,
+        "point": 872,
+        "target": 637,
+        "direction": 580,
+        "column": 2,
+        "death": 2
+      },
+      "commands": {
+        "summon": 320,
+        "begin": 157,
+        "deploy": 285,
+        "end": 154,
+        "move": 483,
+        "attack": 589,
+        "cast": 46,
+        "finish-mode": 16,
+        "react": 46,
+        "charge": 149,
+        "skill": 133,
+        "reroll": 1,
+        "equip": 12
+      }
+    },
+    "validation": {
+      "groups": ["3.0-feedback4-counter-freeze:classic:2026092204"],
+      "examples": 1945,
+      "decisions": 1013,
+      "value_labels": 1013,
+      "forced_examples": 191,
+      "max_entities": 181,
+      "max_candidates": 117,
+      "stages": {
+        "action": 1013,
+        "point": 443,
+        "target": 267,
+        "direction": 218,
+        "death": 1,
+        "column": 3
+      },
+      "commands": {
+        "summon": 112,
+        "begin": 54,
+        "deploy": 98,
+        "end": 54,
+        "move": 326,
+        "charge": 59,
+        "cast": 20,
+        "attack": 218,
+        "skill": 39,
+        "react": 22,
+        "finish-mode": 8,
+        "equip": 2,
+        "reroll": 1
+      }
+    }
+  },
+  "runs": [
+    {
+      "network": "entity-transformer-v1",
+      "training_source_sha256": "20f64b616da0feceff3c6f0c34da9cf0c1cef5be8103f6788e0ada5172066d5d",
+      "parameters": 11547266,
+      "device": "xpu",
+      "precision": "bf16",
+      "batch_size": 32,
+      "steps": 300,
+      "updates": 300,
+      "training_seconds_this_run": 86.19777800003067,
+      "dataset_sha256": "fb71170daf3f6ccbeba6c10f5ce9c7ce245a4e69ed3377e30ce6ee77f38fa3b9",
+      "validation_sha256": "6832f365f01705db6dd784ab54a222a1a7f604e1fdc1f8d3a2d85dee806ac42d",
+      "overfit_indices": [
+        426, 2703, 964, 2520, 3495, 1314, 849, 501, 4104, 3320, 367, 4255, 1033, 1539, 3144, 2832,
+        4013, 736, 808, 989, 3043, 996, 305, 3161, 4393, 700, 4043, 3368, 2873, 1300, 3837, 2273,
+        3995, 2163, 1435, 4253, 855, 933, 1459, 194, 1302, 2513, 3553, 4457, 3474, 207, 3044, 124,
+        1613, 3674, 2780, 1782, 2913, 2101, 3113, 4425, 1826, 239, 4320, 2446, 1047, 572, 1744, 1872
+      ],
+      "before": {
+        "train": {
+          "examples": 64,
+          "policy_loss": 1.7073962092399597,
+          "accuracy": 0.3125,
+          "choice_examples": 52,
+          "choice_accuracy": 0.15384615384615385,
+          "root_choices": 23,
+          "root_accuracy": 0.13043478260869565,
+          "value_labels": 10,
+          "value_mse": 1.028899335861206
+        },
+        "validation": {
+          "examples": 1945,
+          "policy_loss": 2.1114000511659756,
+          "accuracy": 0.22467866323907454,
+          "choice_examples": 1754,
+          "choice_accuracy": 0.1402508551881414,
+          "root_choices": 876,
+          "root_accuracy": 0.1004566210045662,
+          "value_labels": 1013,
+          "value_mse": 0.9731581227565211
+        }
+      },
+      "after": {
+        "train": {
+          "examples": 64,
+          "policy_loss": 0.31594595313072205,
+          "accuracy": 0.875,
+          "choice_examples": 52,
+          "choice_accuracy": 0.8461538461538461,
+          "root_choices": 23,
+          "root_accuracy": 0.8695652173913043,
+          "value_labels": 10,
+          "value_mse": 0.00003662109375
+        },
+        "validation": {
+          "examples": 1945,
+          "policy_loss": 37.73882215642071,
+          "accuracy": 0.3496143958868895,
+          "choice_examples": 1754,
+          "choice_accuracy": 0.27879133409350054,
+          "root_choices": 876,
+          "root_accuracy": 0.16095890410958905,
+          "value_labels": 1013,
+          "value_mse": 1.5642132038895964
+        }
+      },
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1
+      }
+    },
+    {
+      "network": "entity-transformer-v1",
+      "training_source_sha256": "20f64b616da0feceff3c6f0c34da9cf0c1cef5be8103f6788e0ada5172066d5d",
+      "parameters": 11547266,
+      "device": "xpu",
+      "precision": "bf16",
+      "batch_size": 32,
+      "steps": 1200,
+      "updates": 1200,
+      "training_seconds_this_run": 309.43834429990966,
+      "dataset_sha256": "fb71170daf3f6ccbeba6c10f5ce9c7ce245a4e69ed3377e30ce6ee77f38fa3b9",
+      "validation_sha256": "6832f365f01705db6dd784ab54a222a1a7f604e1fdc1f8d3a2d85dee806ac42d",
+      "overfit_indices": [
+        426, 2703, 964, 2520, 3495, 1314, 849, 501, 4104, 3320, 367, 4255, 1033, 1539, 3144, 2832,
+        4013, 736, 808, 989, 3043, 996, 305, 3161, 4393, 700, 4043, 3368, 2873, 1300, 3837, 2273,
+        3995, 2163, 1435, 4253, 855, 933, 1459, 194, 1302, 2513, 3553, 4457, 3474, 207, 3044, 124,
+        1613, 3674, 2780, 1782, 2913, 2101, 3113, 4425, 1826, 239, 4320, 2446, 1047, 572, 1744, 1872
+      ],
+      "before": {
+        "train": {
+          "examples": 64,
+          "policy_loss": 0.31594595313072205,
+          "accuracy": 0.875,
+          "choice_examples": 52,
+          "choice_accuracy": 0.8461538461538461,
+          "root_choices": 23,
+          "root_accuracy": 0.8695652173913043,
+          "value_labels": 10,
+          "value_mse": 0.00003662109375
+        },
+        "validation": {
+          "examples": 1945,
+          "policy_loss": 37.73882215642071,
+          "accuracy": 0.3496143958868895,
+          "choice_examples": 1754,
+          "choice_accuracy": 0.27879133409350054,
+          "root_choices": 876,
+          "root_accuracy": 0.16095890410958905,
+          "value_labels": 1013,
+          "value_mse": 1.5642132038895964
+        }
+      },
+      "after": {
+        "train": {
+          "examples": 64,
+          "policy_loss": 0.2914525866508484,
+          "accuracy": 0.921875,
+          "choice_examples": 52,
+          "choice_accuracy": 0.9038461538461539,
+          "root_choices": 23,
+          "root_accuracy": 0.9565217391304348,
+          "value_labels": 10,
+          "value_mse": 0
+        },
+        "validation": {
+          "examples": 1945,
+          "policy_loss": 198.8280503770686,
+          "accuracy": 0.3460154241645244,
+          "choice_examples": 1754,
+          "choice_accuracy": 0.2748004561003421,
+          "root_choices": 876,
+          "root_accuracy": 0.1643835616438356,
+          "value_labels": 1013,
+          "value_mse": 1.7274905769163622
+        }
+      },
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1
+      }
+    },
+    {
+      "network": "entity-transformer-v2",
+      "training_source_sha256": "cb7612bfc21158f2f67a6645dd7db5d340e38401f2dea77016efe6288b084cd5",
+      "parameters": 11695874,
+      "device": "xpu",
+      "precision": "bf16",
+      "batch_size": 32,
+      "steps": 300,
+      "updates": 300,
+      "training_seconds_this_run": 105.75495900004171,
+      "dataset_sha256": "fb71170daf3f6ccbeba6c10f5ce9c7ce245a4e69ed3377e30ce6ee77f38fa3b9",
+      "validation_sha256": "6832f365f01705db6dd784ab54a222a1a7f604e1fdc1f8d3a2d85dee806ac42d",
+      "overfit_indices": [
+        426, 2703, 964, 2520, 3495, 1314, 849, 501, 4104, 3320, 367, 4255, 1033, 1539, 3144, 2832,
+        4013, 736, 808, 989, 3043, 996, 305, 3161, 4393, 700, 4043, 3368, 2873, 1300, 3837, 2273,
+        3995, 2163, 1435, 4253, 855, 933, 1459, 194, 1302, 2513, 3553, 4457, 3474, 207, 3044, 124,
+        1613, 3674, 2780, 1782, 2913, 2101, 3113, 4425, 1826, 239, 4320, 2446, 1047, 572, 1744, 1872
+      ],
+      "before": {
+        "train": {
+          "examples": 64,
+          "policy_loss": 1.701334297657013,
+          "accuracy": 0.390625,
+          "choice_examples": 52,
+          "choice_accuracy": 0.25,
+          "root_choices": 23,
+          "root_accuracy": 0.13043478260869565,
+          "value_labels": 10,
+          "value_mse": 1.0543116092681886
+        },
+        "validation": {
+          "examples": 1945,
+          "policy_loss": 2.1109628613626437,
+          "accuracy": 0.3059125964010283,
+          "choice_examples": 1754,
+          "choice_accuracy": 0.23033067274800456,
+          "root_choices": 876,
+          "root_accuracy": 0.09931506849315068,
+          "value_labels": 1013,
+          "value_mse": 1.1259189701739327
+        }
+      },
+      "after": {
+        "train": {
+          "examples": 64,
+          "policy_loss": 0.1470177248120308,
+          "accuracy": 0.96875,
+          "choice_examples": 52,
+          "choice_accuracy": 0.9615384615384616,
+          "root_choices": 23,
+          "root_accuracy": 0.9130434782608695,
+          "value_labels": 10,
+          "value_mse": 0.00001983642578125
+        },
+        "validation": {
+          "examples": 1945,
+          "policy_loss": 19.112092123546454,
+          "accuracy": 0.34652956298200516,
+          "choice_examples": 1754,
+          "choice_accuracy": 0.27537058152793614,
+          "root_choices": 876,
+          "root_accuracy": 0.17465753424657535,
+          "value_labels": 1013,
+          "value_mse": 1.7183561786376713
+        }
+      },
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1
+      }
+    }
+  ],
+  "conclusion": "流程与小样本拟合检查，不是正式预训练或棋力评测。v2多候选拟合率96.15%，独立验证loss上升；浏览器部署与完整网络对局尚未验收。"
+}
