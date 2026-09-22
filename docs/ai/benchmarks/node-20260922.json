@@ -1,0 +1,354 @@
+{
+  "format": "haojie-training-benchmark-v1",
+  "timestamp": "2026-09-22T02:34:58.821Z",
+  "ruleset": "3.0-feedback4-counter-freeze-2026-09-21",
+  "commit": "28133f83a0a3468972772458bc9c89a4ca64220c",
+  "sourceSha256": "6fc6bba37ea859c57e05ec30f142a0b7beeca9b7546c4197cf96fc2aed960392",
+  "node": "v22.23.1",
+  "platform": "win32",
+  "cpu": "Intel(R) Core(TM) Ultra 5 225H",
+  "logicalCpus": 14,
+  "availableParallelism": 14,
+  "memoryGiB": 31.49742889404297,
+  "memory": {
+    "rss": 174510080,
+    "heapTotal": 74551296,
+    "heapUsed": 27626344,
+    "external": 3209621,
+    "arrayBuffers": 598196
+  },
+  "maxRssKiB": 181404,
+  "config": {
+    "iterations": 500,
+    "repeats": 30,
+    "rounds": 3,
+    "workers": 4,
+    "selfPlay": {
+      "games": 1,
+      "seed": 20260922,
+      "difficulty": "easy",
+      "simulations": 40,
+      "maxCommands": 1200,
+      "maxPlies": 60
+    }
+  },
+  "corpus": {
+    "path": "docs/playtests/cli-counter-freeze-20260921.jsonl",
+    "commands": 79,
+    "sha256": "19ffa2f9898883d26db253cf06650c69b514ff68c37bc449941268df1b19992c",
+    "finalFingerprint": "1ilzgj0:7901"
+  },
+  "cases": [
+    {
+      "name": "classic-opening",
+      "units": 0,
+      "landmarks": 0,
+      "pending": 0,
+      "handCards": 0,
+      "observationBytes": 361,
+      "command": {
+        "type": "summon"
+      }
+    },
+    {
+      "name": "recorded-midgame",
+      "units": 15,
+      "landmarks": 1,
+      "pending": 0,
+      "handCards": 3,
+      "observationBytes": 8892,
+      "command": {
+        "type": "move",
+        "unitId": "u62",
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "name": "demo-stress",
+      "units": 10,
+      "landmarks": 0,
+      "pending": 0,
+      "handCards": 7,
+      "observationBytes": 5598,
+      "command": {
+        "type": "attack",
+        "unitId": "u2",
+        "targetId": "u12"
+      }
+    }
+  ],
+  "measurements": [
+    {
+      "name": "classic-opening/clone",
+      "operations": 500,
+      "samplesMs": [3.985500000000002, 3.7069999999999936, 4.139399999999966],
+      "medianMs": 3.985500000000002,
+      "operationsPerSecond": 125454.77355413367
+    },
+    {
+      "name": "classic-opening/observe",
+      "operations": 500,
+      "samplesMs": [4.22059999999999, 3.394900000000007, 3.2830000000000155],
+      "medianMs": 3.394900000000007,
+      "operationsPerSecond": 147279.74314412766
+    },
+    {
+      "name": "classic-opening/encode-json",
+      "operations": 500,
+      "samplesMs": [1.2384999999999877, 0.883700000000033, 1.011700000000019],
+      "medianMs": 1.011700000000019,
+      "operationsPerSecond": 494217.65345457214
+    },
+    {
+      "name": "classic-opening/apply",
+      "operations": 500,
+      "samplesMs": [5.52109999999999, 5.4985999999999535, 5.489399999999989],
+      "medianMs": 5.4985999999999535,
+      "operationsPerSecond": 90932.23729676721
+    },
+    {
+      "name": "classic-opening/sample-observation",
+      "operations": 500,
+      "samplesMs": [16.589099999999974, 16.1216, 21.2611],
+      "medianMs": 16.589099999999974,
+      "operationsPerSecond": 30140.2728297497
+    },
+    {
+      "name": "classic-opening/public-inspect",
+      "operations": 500,
+      "samplesMs": [10.973299999999995, 7.132999999999981, 6.787099999999953],
+      "medianMs": 7.132999999999981,
+      "operationsPerSecond": 70096.73349221944
+    },
+    {
+      "name": "classic-opening/action-space",
+      "operations": 50,
+      "samplesMs": [7.468099999999993, 7.296500000000037, 7.197299999999984],
+      "medianMs": 7.296500000000037,
+      "operationsPerSecond": 6852.600561913211
+    },
+    {
+      "name": "recorded-midgame/clone",
+      "operations": 500,
+      "samplesMs": [34.33209999999997, 36.05600000000004, 35.87819999999999],
+      "medianMs": 35.87819999999999,
+      "operationsPerSecond": 13936.039154695613
+    },
+    {
+      "name": "recorded-midgame/observe",
+      "operations": 500,
+      "samplesMs": [35.18000000000001, 35.49980000000005, 37.335000000000036],
+      "medianMs": 35.49980000000005,
+      "operationsPerSecond": 14084.586392035992
+    },
+    {
+      "name": "recorded-midgame/encode-json",
+      "operations": 500,
+      "samplesMs": [8.606599999999958, 7.912399999999934, 9.052000000000021],
+      "medianMs": 8.606599999999958,
+      "operationsPerSecond": 58094.95038691266
+    },
+    {
+      "name": "recorded-midgame/apply",
+      "operations": 500,
+      "samplesMs": [58.025999999999954, 54.36539999999991, 58.50819999999999],
+      "medianMs": 58.025999999999954,
+      "operationsPerSecond": 8616.826939647752
+    },
+    {
+      "name": "recorded-midgame/sample-observation",
+      "operations": 500,
+      "samplesMs": [127.53609999999992, 126.62270000000012, 139.9339],
+      "medianMs": 127.53609999999992,
+      "operationsPerSecond": 3920.458599565145
+    },
+    {
+      "name": "recorded-midgame/public-inspect",
+      "operations": 500,
+      "samplesMs": [56.439800000000105, 53.819299999999885, 61.06400000000008],
+      "medianMs": 56.439800000000105,
+      "operationsPerSecond": 8858.996665473638
+    },
+    {
+      "name": "recorded-midgame/action-space",
+      "operations": 50,
+      "samplesMs": [55.43270000000007, 57.40800000000013, 54.437799999999925],
+      "medianMs": 55.43270000000007,
+      "operationsPerSecond": 901.9946710154825
+    },
+    {
+      "name": "demo-stress/clone",
+      "operations": 500,
+      "samplesMs": [17.968599999999924, 18.43600000000015, 18.188499999999976],
+      "medianMs": 18.188499999999976,
+      "operationsPerSecond": 27489.8974626825
+    },
+    {
+      "name": "demo-stress/observe",
+      "operations": 500,
+      "samplesMs": [18.811999999999898, 17.845800000000054, 17.244000000000142],
+      "medianMs": 17.845800000000054,
+      "operationsPerSecond": 28017.796904593713
+    },
+    {
+      "name": "demo-stress/encode-json",
+      "operations": 500,
+      "samplesMs": [5.253099999999904, 5.1077000000000226, 5.171899999999823],
+      "medianMs": 5.171899999999823,
+      "operationsPerSecond": 96676.26984280768
+    },
+    {
+      "name": "demo-stress/apply",
+      "operations": 500,
+      "samplesMs": [33.29140000000007, 34.16540000000009, 35.243000000000166],
+      "medianMs": 34.16540000000009,
+      "operationsPerSecond": 14634.688895783414
+    },
+    {
+      "name": "demo-stress/sample-observation",
+      "operations": 500,
+      "samplesMs": [77.62790000000018, 82.75279999999998, 78.28300000000013],
+      "medianMs": 78.28300000000013,
+      "operationsPerSecond": 6387.082763818443
+    },
+    {
+      "name": "demo-stress/public-inspect",
+      "operations": 500,
+      "samplesMs": [34.096300000000156, 34.74330000000009, 34.15890000000036],
+      "medianMs": 34.15890000000036,
+      "operationsPerSecond": 14637.47368914089
+    },
+    {
+      "name": "demo-stress/action-space",
+      "operations": 50,
+      "samplesMs": [34.62570000000005, 30.737099999999828, 32.465400000000045],
+      "medianMs": 32.465400000000045,
+      "operationsPerSecond": 1540.1011538437824
+    },
+    {
+      "name": "replay/engine",
+      "operations": 2370,
+      "samplesMs": [175.19939999999997, 167.24170000000004, 168.3476999999998],
+      "medianMs": 168.3476999999998,
+      "operationsPerSecond": 14078.006411730024
+    },
+    {
+      "name": "replay/training",
+      "operations": 2370,
+      "samplesMs": [193.01509999999962, 191.91359999999986, 192.64419999999973],
+      "medianMs": 192.64419999999973,
+      "operationsPerSecond": 12302.47264127341
+    },
+    {
+      "name": "replay/session-json",
+      "operations": 2370,
+      "samplesMs": [1806.1462999999994, 1789.1437999999998, 1816.7171000000017],
+      "medianMs": 1806.1462999999994,
+      "operationsPerSecond": 1312.1860615610158
+    },
+    {
+      "name": "replay/protocol-json",
+      "operations": 2370,
+      "samplesMs": [377.3718000000008, 323.42139999999927, 337.6313000000009],
+      "medianMs": 337.6313000000009,
+      "operationsPerSecond": 7019.491380094184
+    }
+  ],
+  "parallel": {
+    "workers": 4,
+    "elapsedMs": 228.63310000000092,
+    "commands": 9480,
+    "commandsPerSecond": 41463.81254507751,
+    "perProcess": [
+      {
+        "elapsedMs": 214.03180000000003,
+        "commands": 2370
+      },
+      {
+        "elapsedMs": 213.1257,
+        "commands": 2370
+      },
+      {
+        "elapsedMs": 215.08499999999998,
+        "commands": 2370
+      },
+      {
+        "elapsedMs": 226.98970000000003,
+        "commands": 2370
+      }
+    ]
+  },
+  "selfPlay": [
+    {
+      "rules": "classic",
+      "cancelled": false,
+      "results": [
+        {
+          "game": 0,
+          "ruleset": "3.0-feedback4-counter-freeze",
+          "commands": 995,
+          "ply": 61,
+          "phase": "summon",
+          "toPlay": null,
+          "terminated": false,
+          "truncated": true,
+          "truncation": "plies",
+          "winner": null,
+          "returns": null,
+          "elapsedMs": 123349.0007,
+          "simulations": 22413,
+          "maxUnits": 52,
+          "timing": {
+            "observationMs": 206.12019999990116,
+            "teacherMs": 122534.02520000015,
+            "stepMs": 390.2587999999341
+          }
+        }
+      ],
+      "elapsedMs": 123349.5148,
+      "commandsPerSecond": 8.066509232835669,
+      "simulationsPerSecond": 181.70318737240788
+    },
+    {
+      "rules": "shrine",
+      "cancelled": false,
+      "results": [
+        {
+          "game": 0,
+          "ruleset": "3.0-feedback4-counter-freeze",
+          "commands": 536,
+          "ply": 28,
+          "phase": "play",
+          "toPlay": null,
+          "terminated": true,
+          "truncated": false,
+          "truncation": null,
+          "winner": 1,
+          "returns": {
+            "1": 1,
+            "2": -1
+          },
+          "elapsedMs": 91365.5957,
+          "simulations": 13019,
+          "maxUnits": 54,
+          "timing": {
+            "observationMs": 133.57070000030217,
+            "teacherMs": 90820.9148999998,
+            "stepMs": 291.8593999998702
+          }
+        }
+      ],
+      "elapsedMs": 91365.72689999998,
+      "commandsPerSecond": 5.866532431648613,
+      "simulationsPerSecond": 142.49325695453973
+    }
+  ],
+  "limitations": [
+    "纯转移与回放不包含动作搜索或神经网络推理；吞吐不是MCTS节点数。",
+    "session-json含历史序列化，不含磁盘写入与教师trace；protocol-json含编码但不含OS管道传输。",
+    "demo-stress是人工演示局；实录片段不是完整比赛。",
+    "教师仅使用现有有界候选；截断不判胜，无胜率或浏览器模型延迟结论。",
+    "多进程结果仅测预热后的规则环境，不代表端到端训练可线性加速。"
+  ]
+}
