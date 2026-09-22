@@ -1,0 +1,147 @@
+{
+  "format": "haojie-torch-benchmark-v1",
+  "network": "entity-transformer-v2",
+  "created_utc": "2026-09-22T12:43:10.190564+00:00",
+  "hardware": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+    "logical_cpus": 16,
+    "gpu": [
+      {
+        "Name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "DriverVersion": "32.0.16.1088"
+      }
+    ],
+    "memory_bytes": 34188292096,
+    "cpu": "AMD Ryzen 7 5800H with Radeon Graphics         "
+  },
+  "torch": "2.14.0+cu130",
+  "source_sha256": "0856d489b23189779e96da328bdb9218ec3ccd47ede9831e46feef17f1dbafa4",
+  "commit": "63ac066f943e184e7b533434c2b30e0a700b3cc4",
+  "config": {
+    "devices": ["cuda"],
+    "precisions": ["bf16", "fp16"],
+    "batches": [32],
+    "cpu_threads": [4],
+    "xpu_threads": 4,
+    "entities": 348,
+    "actions": 212,
+    "warmup": 3,
+    "steps": 5,
+    "rounds": 3,
+    "timeout": 180
+  },
+  "method": "eager; AdamW foreach; FP32 parameters/states/action projection/policy; AMP backbone/value for bf16/fp16; resident synthetic batches; synchronized complete optimization steps; 1 inter-op thread",
+  "results": [
+    {
+      "device": "cuda",
+      "precision": "bf16",
+      "batch": 32,
+      "entities": 348,
+      "actions": 212,
+      "threads": 4,
+      "warmup": 3,
+      "steps": 5,
+      "rounds": 3,
+      "seed": 20260922,
+      "status": "ok",
+      "config": {
+        "width": 384,
+        "layers": 6,
+        "heads": 6,
+        "ffn": 1536,
+        "entity_features": 64,
+        "global_features": 32,
+        "action_features": 64,
+        "kind_count": 256
+      },
+      "parameters": 11695874,
+      "model_sha256": "da44662f3033f3dbc852d6ace29670bf34f53daab0c90cee7aff3019b04e693b",
+      "input_sha256": "e7ed2e560738968b6e178eebc2361235d9af61c60c758e360bc2df6768d5ea99",
+      "torch": "2.14.0+cu130",
+      "device_name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+      "matmul_output_dtype": "torch.bfloat16",
+      "parameter_dtype": "torch.float32",
+      "samples_ms_per_step": [99.68128000000434, 83.37653999988106, 83.06162000008044],
+      "median_ms_per_step": 83.37653999988106,
+      "samples_per_second": 383.80100685451384,
+      "warmup_seconds": 0.5895145000013144,
+      "warmup_skipped": 0,
+      "timed_updates": 15,
+      "timed_skipped": 0,
+      "first_loss": 5.555012226104736,
+      "final_loss": 0.03440205380320549,
+      "weight_max_change": 0.0054587870836257935,
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1.0
+      },
+      "initial_fp32_agreement": {
+        "policy_rms_relative_error": 0.0032002378720790148,
+        "value_max_absolute_error": 0.002774135209619999,
+        "top1_agreement": 0.96875
+      },
+      "peak_memory": {
+        "allocated_mib": 1248.7529296875,
+        "reserved_mib": 1408.0
+      },
+      "input_transfer_ms": 2.0891000003757654
+    },
+    {
+      "device": "cuda",
+      "precision": "fp16",
+      "batch": 32,
+      "entities": 348,
+      "actions": 212,
+      "threads": 4,
+      "warmup": 3,
+      "steps": 5,
+      "rounds": 3,
+      "seed": 20260922,
+      "status": "ok",
+      "config": {
+        "width": 384,
+        "layers": 6,
+        "heads": 6,
+        "ffn": 1536,
+        "entity_features": 64,
+        "global_features": 32,
+        "action_features": 64,
+        "kind_count": 256
+      },
+      "parameters": 11695874,
+      "model_sha256": "da44662f3033f3dbc852d6ace29670bf34f53daab0c90cee7aff3019b04e693b",
+      "input_sha256": "e7ed2e560738968b6e178eebc2361235d9af61c60c758e360bc2df6768d5ea99",
+      "torch": "2.14.0+cu130",
+      "device_name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+      "matmul_output_dtype": "torch.float16",
+      "parameter_dtype": "torch.float32",
+      "samples_ms_per_step": [126.71560000017053, 138.0570599998464, 130.7225799999287],
+      "median_ms_per_step": 130.7225799999287,
+      "samples_per_second": 244.79321017086298,
+      "warmup_seconds": 0.6347599999990052,
+      "warmup_skipped": 0,
+      "timed_updates": 15,
+      "timed_skipped": 0,
+      "first_loss": 5.555124282836914,
+      "final_loss": 0.005258440040051937,
+      "weight_max_change": 0.005384229123592377,
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1024.0
+      },
+      "initial_fp32_agreement": {
+        "policy_rms_relative_error": 0.00031933115678839386,
+        "value_max_absolute_error": 0.0004366561770439148,
+        "top1_agreement": 1.0
+      },
+      "peak_memory": {
+        "allocated_mib": 1248.75439453125,
+        "reserved_mib": 1406.0
+      },
+      "input_transfer_ms": 2.5307999985670904
+    }
+  ]
+}

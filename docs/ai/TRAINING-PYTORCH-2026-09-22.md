@@ -1,4 +1,6 @@
-# PyTorch训练骨架与本机CPU/XPU性能
+# PyTorch训练性能：CPU、XPU与CUDA
+
+本页前半保留Core Ultra 5 225H／Arc 130T上的旧11.55M模型记录；[CUDA补测](#cuda补测rtx-3060-laptop)使用另一台Ryzen 7 5800H／RTX 3060 Laptop，对齐训练进度中的新版11.70M模型、256实体、117候选。两种模型与输入规模的样本吞吐不能直接混比。
 
 2026-09-22实测。首版模型为11,547,266参数的实体Transformer＋候选策略/价值头。本机Arc 130T核显可以有效训练：batch 128下，XPU BF16约466个样本/秒，是CPU FP32约96个样本/秒的4.84倍。训练先用XPU BF16，CPU使用FP32；batch 128可作为后续实验起点，仍需用真实数据验证收敛。
 
@@ -74,3 +76,68 @@ training/.venv/Scripts/python.exe -X utf8 -m haojie_training.benchmark --batches
 主表原始记录：[torch-cpu-xpu-20260922.json](benchmarks/torch-cpu-xpu-20260922.json)。报告中的Git提交是新增Python文件前的`c0d5cd3`，必须结合训练包源码SHA256 `a43b9f97ab99e91b2a8f03738a75a6dd7225e4dbd3ec90ba80f51d434e2a463d`识别本次代码，不能仅凭提交号复现。所有模型权重、临时数据和虚拟环境留在已忽略目录中。
 
 实现参考：[PyTorch XPU官方说明](https://docs.pytorch.org/docs/2.14/notes/get_start_xpu.html)、[AMP官方说明](https://docs.pytorch.org/docs/2.14/amp.html)。性能结论来自上述本机实测。
+
+## CUDA补测：RTX 3060 Laptop
+
+2026-09-22在另一台Windows电脑完成安装与实测。结论：这台RTX 3060 Laptop适合当前约11.7M网络的本地训练。同口径短测中CUDA BF16为305.24样本/秒，是历史Arc 130T XPU BF16的3.60倍、历史Intel CPU FP32的12.76倍、本机Ryzen CPU FP32的24.00倍。延长测量后BF16与FP16均约337–340样本/秒，当前优先以CUDA BF16、batch 32开始真实数据实验。
+
+### 安装与可比性
+
+- 本机AMD Ryzen 7 5800H，8核16线程，约31.84GiB系统内存；NVIDIA GeForce RTX 3060 Laptop，6GiB独立显存，计算能力8.6，驱动610.88。
+- Windows 11 build 26200，Python 3.12.10，PyTorch 2.14.0+cu130，CUDA运行时13.0，cuDNN 92400，NumPy 2.5.3。安装使用[PyTorch官方CUDA源](https://download.pytorch.org/whl/cu130/torch/)，依赖锁定在[requirements-win-cuda.txt](../../training/requirements-win-cuda.txt)，环境位于`training/.venv`。未更换驱动，也未另装系统CUDA Toolkit。
+- 插电、电量100%，Windows“平衡”电源方案；没有修改功耗或锁定频率，没有关闭用户桌面应用。开始检查时桌面显存占用约2.9GiB。[GPU遥测](benchmarks/cuda-20260922/telemetry.csv)包含测量、CPU对照及进程间空闲，归档262个完整的一秒采样点，去除停止采集时未写完的最后一行：温度42–63°C、板卡功耗23.31–118.83W、整卡显存2613–4655MiB。不能将全段平均功耗当作训练能耗，也没有测小时级热稳态。
+- 对齐[历史v2基准](benchmarks/torch-v2-20260922.json)：11,695,874参数，batch 32、256实体＋1全局token、117候选；相同种子、预热3步、3轮×5步、独立进程、同步完整优化步，eager模式。CPU正式8线程，CUDA宿主4线程，inter-op均为1。
+- 全部参数、梯度、Adam状态、候选投影和策略头均为FP32；仅主干／价值头使用AMP。FP16启用GradScaler。FP32矩阵精度为highest，CUDA matmul TF32关闭。输入驻留设备，排除编码、游戏采样、传输、参考前向、检查点IO。
+- 本轮模型SHA256 `da44662f3033f3dbc852d6ace29670bf34f53daab0c90cee7aff3019b04e693b`、输入SHA256 `89beeed619bc9de131429d1daf8f54d36ad5df24b77f818cf6e3db5f0666bd61`与历史v2记录逐项一致。当前基线提交`63ac066f943e184e7b533434c2b30e0a700b3cc4`，训练包源码SHA256 `0856d489b23189779e96da328bdb9218ec3ccd47ede9831e46feef17f1dbafa4`；包级源码hash与旧报告不同，模型、完整训练步和基准计时实现未变，数据校验等外围代码已有更新，当前检出为CRLF。
+
+### 同输入完整优化步对照
+
+| 机器／设备／精度               |   ms/步 | 样本/秒 | CUDA峰值allocated/reserved MiB |
+| ------------------------------ | ------: | ------: | -----------------------------: |
+| 历史Core Ultra 5 225H CPU FP32 | 1337.34 |   23.93 |                              — |
+| 历史Arc 130T XPU FP32          |  457.86 |   69.89 |                              — |
+| 历史Arc 130T XPU BF16          |  377.02 |   84.88 |                              — |
+| 本机Ryzen 7 5800H CPU FP32     | 2515.59 |   12.72 |                              — |
+| 本机RTX 3060 CUDA FP32         |  223.04 |  143.47 |                 1425.15 / 1640 |
+| 本机RTX 3060 CUDA BF16         |  104.84 |  305.24 |                  945.29 / 1054 |
+| 本机RTX 3060 CUDA FP16         |   95.19 |  336.18 |                  945.29 / 1054 |
+
+原始结果：[本机CPU](benchmarks/cuda-20260922/v2-cpu.json)、[CUDA三精度](benchmarks/cuda-20260922/v2-cuda.json)。这是一组跨机器、跨后端实现的实测比较，不能把倍数归因于CUDA接口本身。CPU预试4/8/16线程分别4388.66/2454.44/2588.04ms/步，正式选择8线程；[预试](benchmarks/cuda-20260922/cpu-threads.json)只用2步预热、2轮×3步，不替代正式结果。
+
+CUDA三组全部完成15/15次计时优化更新，预热也无跳步；参数、梯度、loss有限且权重确实变化。实际矩阵输出dtype匹配所选精度，未回退CPU。初始输出相对CPU FP32的有效logit RMS误差：BF16约0.294%、FP16约0.040%；价值最大绝对误差分别0.003732/0.000359，三组top1一致率均100%。输入拷贝另测约1.34–1.78ms/批，未计入主表。
+
+### 较长测量、批量与较大输入
+
+相同batch 32和256／117形状，改为预热10步、5轮×50步：[较长测量原始记录](benchmarks/cuda-20260922/v2-sustained.json)。BF16为94.24ms/步、339.56样本/秒，FP16为94.90ms/步、337.19样本/秒；两者都完成250/250次计时更新，无跳步。各轮BF16为92.51–94.53ms/步，FP16为73.67–97.29ms/步，短测中FP16领先没有保持，不能据此给两者稳定排序。这仍是每精度约24秒的计时窗口，不是长期训练稳定性证明。
+
+其他形状沿用3步预热、3轮×5步：
+
+| 批量×实体×候选 | 精度 |  ms/步 | 样本/秒 | 峰值allocated/reserved MiB |
+| -------------- | ---- | -----: | ------: | -------------------------: |
+| 8×256×117      | BF16 |  25.55 |  313.07 |               373.34 / 418 |
+| 8×256×117      | FP16 |  28.12 |  284.47 |               373.34 / 418 |
+| 64×256×117     | BF16 | 114.58 |  558.58 |             1712.42 / 1872 |
+| 64×256×117     | FP16 | 115.51 |  554.06 |             1712.42 / 1872 |
+| 32×348×212     | BF16 |  83.38 |  383.80 |             1248.75 / 1408 |
+| 32×348×212     | FP16 | 130.72 |  244.79 |             1248.75 / 1406 |
+
+原始结果：[批量扩展](benchmarks/cuda-20260922/v2-batches.json)、[较大输入](benchmarks/cuda-20260922/v2-dense.json)。348实体／212候选取自文档中的hard样本最大长度，张量仍为合成数据。所有配置均有效更新、无跳步。不同形状独立顺序测量、频率与桌面负载未锁定；较大输入BF16甚至快于先前较小形状，是本次短测波动的线索，不能解释为序列越长越快，也不能拿这些行推导精确扩展规律。batch 64已实测可行，正式训练先保留batch 32，之后用变长真实数据与验证曲线决定是否增大。
+
+较大输入BF16的初始top1与CPU FP32一致率为31/32，FP16为32/32；BF16有效logit RMS误差约0.320%，价值最大绝对误差0.002774。数值有限不等于动作完全不变，更不等于真实验证集收敛相同。混合精度训练需持续保留FP32验证参照。
+
+显存列为PyTorch分配器统计，不含完整CUDA上下文、驱动和桌面程序；WDDM下它与整卡驻留显存并非简单相加。未测batch 128的容量边界，也没有证明任意更长局面都能装入6GiB。不要根据模型约23.4MB的半精度权重大小估计训练显存。
+
+### 安装验收与复现
+
+已通过CUDA张量前向／反向、`pip check`、现有7项Python行为测试。全尺寸CUDA BF16合成训练10步、保存后另起进程续训至20步，优化器更新数也为20，参数／梯度有限；[首次训练](benchmarks/cuda-20260922/train.json)、[续训](benchmarks/cuda-20260922/resume.json)保留记录。本轮未训练真实棋谱模型，未测收敛、棋力或浏览器性能。
+
+安装命令见[训练子项目](../../training/README.md#安装与检查)。基准文件拒绝覆盖，重复测量须改输出名：
+
+```powershell
+training/.venv/Scripts/python.exe -X utf8 -m haojie_training.benchmark --devices cpu --precisions fp32 --batches 32 --cpu-threads 8 --entities 256 --actions 117 --output artifacts/training/cuda-repeat/cpu.json
+training/.venv/Scripts/python.exe -X utf8 -m haojie_training.benchmark --devices cuda --precisions fp32 bf16 fp16 --batches 32 --entities 256 --actions 117 --output artifacts/training/cuda-repeat/cuda.json
+training/.venv/Scripts/python.exe -X utf8 -m haojie_training.benchmark --devices cuda --precisions bf16 fp16 --batches 32 --entities 256 --actions 117 --warmup 10 --steps 50 --rounds 5 --output artifacts/training/cuda-repeat/sustained.json
+training/.venv/Scripts/python.exe -X utf8 -m haojie_training.train --synthetic --device cuda --precision bf16 --batch-size 32 --entities 256 --actions 117 --steps 10 --checkpoint artifacts/training/cuda-repeat/smoke.pt
+```
+
+实际采样、编码、数据加载、变长分桶和MCTS都不在以上样本吞吐内。CUDA训练明显快于历史XPU，并不表示端到端采样训练会同倍加速；Node教师仍主要使用CPU，本机CPU基准也不能直接替代教师吞吐测量。

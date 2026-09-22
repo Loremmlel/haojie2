@@ -1,0 +1,43 @@
+{
+  "format": "haojie-training-run-v1",
+  "network": "entity-transformer-v2",
+  "created_utc": "2026-09-22T12:44:03.229612+00:00",
+  "torch": "2.14.0+cu130",
+  "training_source_sha256": "0856d489b23189779e96da328bdb9218ec3ccd47ede9831e46feef17f1dbafa4",
+  "config": {
+    "width": 384,
+    "layers": 6,
+    "heads": 6,
+    "ffn": 1536,
+    "entity_features": 64,
+    "global_features": 32,
+    "action_features": 64,
+    "kind_count": 256
+  },
+  "threads": 4,
+  "device": "cuda",
+  "precision": "bf16",
+  "parameters": 11695874,
+  "steps": 20,
+  "updates": 20,
+  "loss": 5.171267032623291,
+  "training_seconds": 1.3288007000010111,
+  "checkpoint": "artifacts\\training\\cuda-20260922\\smoke.pt",
+  "metadata": {
+    "ruleset": "synthetic-only",
+    "encoding": "synthetic-v1",
+    "synthetic": true,
+    "seed": 20260922,
+    "batch_size": 32,
+    "entities": 256,
+    "actions": 117,
+    "learning_rate": 0.0003
+  },
+  "health": {
+    "finite_parameters": true,
+    "finite_gradients": true,
+    "scale": 1.0
+  },
+  "before": {},
+  "after": {}
+}

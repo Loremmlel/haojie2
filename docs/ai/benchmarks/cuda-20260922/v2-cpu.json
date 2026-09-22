@@ -1,0 +1,89 @@
+{
+  "format": "haojie-torch-benchmark-v1",
+  "network": "entity-transformer-v2",
+  "created_utc": "2026-09-22T12:40:07.751566+00:00",
+  "hardware": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+    "logical_cpus": 16,
+    "memory_bytes": 34188292096,
+    "cpu": "AMD Ryzen 7 5800H with Radeon Graphics         ",
+    "gpu": [
+      {
+        "Name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "DriverVersion": "32.0.16.1088"
+      }
+    ]
+  },
+  "torch": "2.14.0+cu130",
+  "source_sha256": "0856d489b23189779e96da328bdb9218ec3ccd47ede9831e46feef17f1dbafa4",
+  "commit": "63ac066f943e184e7b533434c2b30e0a700b3cc4",
+  "config": {
+    "devices": ["cpu"],
+    "precisions": ["fp32"],
+    "batches": [32],
+    "cpu_threads": [8],
+    "xpu_threads": 4,
+    "entities": 256,
+    "actions": 117,
+    "warmup": 3,
+    "steps": 5,
+    "rounds": 3,
+    "timeout": 180
+  },
+  "method": "eager; AdamW foreach; FP32 parameters/states/action projection/policy; AMP backbone/value for bf16/fp16; resident synthetic batches; synchronized complete optimization steps; 1 inter-op thread",
+  "results": [
+    {
+      "device": "cpu",
+      "precision": "fp32",
+      "batch": 32,
+      "entities": 256,
+      "actions": 117,
+      "threads": 8,
+      "warmup": 3,
+      "steps": 5,
+      "rounds": 3,
+      "seed": 20260922,
+      "status": "ok",
+      "config": {
+        "width": 384,
+        "layers": 6,
+        "heads": 6,
+        "ffn": 1536,
+        "entity_features": 64,
+        "global_features": 32,
+        "action_features": 64,
+        "kind_count": 256
+      },
+      "parameters": 11695874,
+      "model_sha256": "da44662f3033f3dbc852d6ace29670bf34f53daab0c90cee7aff3019b04e693b",
+      "input_sha256": "89beeed619bc9de131429d1daf8f54d36ad5df24b77f818cf6e3db5f0666bd61",
+      "torch": "2.14.0+cu130",
+      "device_name": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+      "matmul_output_dtype": "torch.float32",
+      "parameter_dtype": "torch.float32",
+      "samples_ms_per_step": [2554.487119999976, 2515.593179999996, 2477.179320000141],
+      "median_ms_per_step": 2515.593179999996,
+      "samples_per_second": 12.720657797299342,
+      "warmup_seconds": 7.801728299999013,
+      "warmup_skipped": 0,
+      "timed_updates": 15,
+      "timed_skipped": 0,
+      "first_loss": 5.293322563171387,
+      "final_loss": 0.041898466646671295,
+      "weight_max_change": 0.005298372358083725,
+      "health": {
+        "finite_parameters": true,
+        "finite_gradients": true,
+        "scale": 1.0
+      },
+      "initial_fp32_agreement": {
+        "policy_rms_relative_error": 0.0,
+        "value_max_absolute_error": 0.0,
+        "top1_agreement": 1.0
+      },
+      "peak_memory": null,
+      "input_transfer_ms": 0
+    }
+  ]
+}

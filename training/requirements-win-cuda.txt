@@ -1,0 +1,14 @@
+# 2026-09-22本机Python 3.12 / RTX 3060 Laptop环境；CUDA版torch来自官方源。
+--extra-index-url https://download.pytorch.org/whl/cu130
+filelock==3.32.3
+fsspec==2026.7.0
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+mpmath==1.3.0
+networkx==3.6.1
+numpy==2.5.3
+ruff==0.15.6
+setuptools==78.1.0
+sympy==1.14.0
+torch==2.14.0+cu130
+typing_extensions==4.16.0

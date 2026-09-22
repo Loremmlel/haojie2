@@ -17,6 +17,17 @@ training/.venv/Scripts/python.exe -c "import torch; print(torch.__version__); pr
 
 其他平台先安装适合设备的PyTorch 2.14.0，再`python -m pip install -e 'training[dev]'`。`.venv`、缓存和egg-info不提交，也不进入Prettier/目录结构检查；数据与模型放在已忽略的artifacts/training。代码、配置与依赖版本提交Git，不将大模型权重放进源码仓库。
 
+Windows/NVIDIA CUDA环境使用单独的依赖清单，torch来自官方CUDA源；选择与本机显卡匹配的一份清单安装，不在同一环境叠加XPU与CUDA版torch：
+
+```powershell
+python -m venv training/.venv
+training/.venv/Scripts/python.exe -m pip install -r training/requirements-win-cuda.txt
+training/.venv/Scripts/python.exe -m pip install --no-deps -e training
+training/.venv/Scripts/python.exe -c "import torch; print(torch.__version__, torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
+```
+
+无需激活环境，直接使用上述Python路径即可。训练指定`--device cuda --precision bf16`；基准指定`--devices cuda`，因为基准默认设备仍为CPU/XPU。RTX 3060 Laptop与历史CPU/XPU的对照见[CUDA实测](../docs/ai/TRAINING-PYTORCH-2026-09-22.md#cuda补测rtx-3060-laptop)。
+
 ## 网络骨架
 
 - 6层Pre-LN Encoder，width=384，heads=6，FFN=1536，GELU，dropout=0。
