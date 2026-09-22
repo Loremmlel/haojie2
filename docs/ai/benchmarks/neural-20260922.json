@@ -1,0 +1,1343 @@
+{
+  "format": "haojie-neural-match-summary-v1",
+  "date": "2026-09-22",
+  "scope": "纯网络贪心解码和CLI工程验收；两轮使用相同种子，不是40个独立棋力样本。",
+  "checkpoint": {
+    "path": "artifacts/training/pilot-20260922/overfit-v2.pt",
+    "sha256": "88eefa557f5436fe807dc79b383ffbcba4c69e3c6044e31ee165b98f27fe98b3",
+    "network": "entity-transformer-v2",
+    "parameters": 11695874,
+    "config": {
+      "width": 384,
+      "layers": 6,
+      "heads": 6,
+      "ffn": 1536,
+      "entity_features": 64,
+      "global_features": 32,
+      "action_features": 64,
+      "kind_count": 256
+    },
+    "training": "64个真实分步样本拟合300步，仅用于流程检查；不是正式预训练模型。"
+  },
+  "runtime": {
+    "node": "v22.23.1",
+    "cpu": "Intel(R) Core(TM) Ultra 5 225H",
+    "ramBytes": 33820106752,
+    "torch": "2.14.0+xpu",
+    "device": "cpu",
+    "precision": "fp32",
+    "threads": 4
+  },
+  "ruleset": "3.0-feedback4-counter-freeze",
+  "schema": {
+    "encoding": "haojie-entities-factorized-v1",
+    "entity_features": 64,
+    "global_features": 32,
+    "action_features": 64,
+    "kind_count": 256,
+    "kinds": [
+      1,
+      2,
+      3,
+      "3p",
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      "17p",
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      "grave",
+      "wall",
+      "u1",
+      "u2",
+      "u3",
+      "u4",
+      "u5",
+      "u6",
+      "u7",
+      "u8",
+      "u9",
+      "u10",
+      "u11",
+      "u12",
+      "u12p",
+      "u13",
+      "u14",
+      "u15",
+      "u16",
+      "u17",
+      "u18",
+      "u19",
+      "u20",
+      "u21",
+      "u22",
+      "u23",
+      "u24",
+      "u25",
+      "u26",
+      "u27",
+      "u28",
+      "firelord",
+      "sage",
+      "formless",
+      "slayer",
+      "citadel",
+      "archmage",
+      "s1",
+      "s2",
+      "s3",
+      "s4",
+      "s5",
+      "s6",
+      "s7",
+      "s8",
+      "s9",
+      "s10",
+      "s11",
+      "s12",
+      "s13",
+      "s14",
+      "s15",
+      "s16",
+      "laoqian"
+    ],
+    "roles": [
+      "base",
+      "unit",
+      "landmark",
+      "card",
+      "death",
+      "effect",
+      "equipment",
+      "ability",
+      "attacked",
+      "guard",
+      "received",
+      "hazard",
+      "siphon",
+      "ice",
+      "reaction",
+      "snapshot",
+      "frame",
+      "aura",
+      "draft-offer",
+      "draft-choice",
+      "summon-offer",
+      "prefix",
+      "argument",
+      "path"
+    ],
+    "commands": [
+      "end",
+      "summon",
+      "begin",
+      "reroll",
+      "deploy",
+      "move",
+      "attack",
+      "charge",
+      "skill",
+      "cast",
+      "equip",
+      "craft",
+      "synthesize",
+      "skip-synthesis",
+      "react",
+      "finish-mode",
+      "choose-shrine",
+      "finish-shrine-setup",
+      "activate-aura",
+      "extra-summon",
+      "choose-summons",
+      "clock",
+      "shatter"
+    ],
+    "modes": [
+      "none",
+      "move",
+      "attack",
+      "skill",
+      "damage",
+      "heal",
+      "summon",
+      "single",
+      "double",
+      "row",
+      "column",
+      "pull",
+      "normal"
+    ],
+    "phases": ["shrine-draft", "shrine-setup", "synthesis", "summon", "play"],
+    "effects": [
+      "attack",
+      "immune",
+      "execute",
+      "convert",
+      "mark",
+      "freeze",
+      "burn",
+      "stun",
+      "inner-fire"
+    ],
+    "reactions": ["death-shot", "reflect", "bounce", "hut-spawn", "hit-pull"],
+    "unit_fields": [
+      "x",
+      "y",
+      "hp",
+      "maxHp",
+      "size",
+      "born",
+      "offset",
+      "deployedAt",
+      "chargedOnDeploy",
+      "mode",
+      "operations",
+      "shots",
+      "moves",
+      "bonusAttacks",
+      "bonusSequence",
+      "weaponFirstUsed",
+      "charge",
+      "readyCharge",
+      "chargeType",
+      "lastCharge",
+      "upgrades",
+      "kills",
+      "attackBonus",
+      "rangeBonus",
+      "guardUsed",
+      "rerollUsedPly",
+      "silenced",
+      "freeUsed",
+      "onceUsed",
+      "extraOperations",
+      "bannerHp",
+      "overMaxFromBanner",
+      "bladeQualified",
+      "expiresAt",
+      "hookReadyAt",
+      "hookExpiresAt",
+      "dormantSince",
+      "rebuildTicks"
+    ]
+  },
+  "timingNotes": [
+    "本机原生PyTorch CPU FP32，4线程；不能替代浏览器WASM/WebGPU或MCTS延迟。",
+    "totalMs包括观察、动作树/公开预检、编码、JSON管道、模型推理及引擎提交；排除启动、提交后trace构造/落盘和对方思考。",
+    "network含单候选免推理步骤；evaluatedNetwork只统计确实调用网络的完整命令；暂停尝试单列anomalies。",
+    "networkTimePerGlobalPlyMs按每局/实际全局回合/操作者累计网络命令耗时，包含对方回合中的反应，不是浏览器整回合等待时间。",
+    "modelMs包括输入传输、前向、输出回读与设备同步；startupMs另含启动进程/导入等；首次真实推理没有从决策分布中剔除。",
+    "P50/P95采用排序后的nearest-rank。单机开发实测，未控制电源/温度，不外推所有笔记本。"
+  ],
+  "runs": [
+    {
+      "artifacts": "artifacts/training/neural-cpu-20260922",
+      "started": "2026-09-22T05:55:24.557Z",
+      "commit": "f550787afba38efd82ed9dae27be6fe657874625",
+      "uncommittedWorktree": true,
+      "sourceSha256": "3febbd065dce4d49e85aced4fed68d25eb86dfcf67c3257283fc3d82dddd6ad2",
+      "experimentSourceSha256": "38154bb020c194707cca62afcec1b8ebe56738adf8f2618678bcfbfbec9e3397",
+      "options": {
+        "games": 20,
+        "seed": 2026092205,
+        "rules": "classic",
+        "difficulty": "easy",
+        "simulations": 40,
+        "maxPlies": 100,
+        "maxCommands": 1200,
+        "maxNodes": 64,
+        "maxEvaluations": 32,
+        "maxTurnCommands": 200
+      },
+      "counts": {
+        "games": 20,
+        "terminatedGames": 18,
+        "truncatedGames": 0,
+        "interruptedGames": 2,
+        "rejectedCommands": 0,
+        "networkWins": 0,
+        "teacherWins": 18,
+        "draws": 0,
+        "commands": 7228
+      },
+      "totalElapsedMs": 399945.147,
+      "startupMs": 1658.759,
+      "pythonLoadMs": 232.31850005686283,
+      "inference": {
+        "calls": 3008,
+        "modelMs": 26502.366001019254,
+        "validationMs": 4547.180703608319,
+        "roundTripMs": 33425.2501999995,
+        "bytesSent": 73720857
+      },
+      "network": {
+        "decisions": 2364,
+        "totalMs": {
+          "count": 2364,
+          "mean": 22.912183291031702,
+          "p50": 14.35819999999876,
+          "p95": 77.92700000008335,
+          "max": 230.65629999997327
+        },
+        "decisionMs": {
+          "count": 2364,
+          "mean": 22.644343527918792,
+          "p50": 14.134900000004563,
+          "p95": 77.4497000000556,
+          "max": 230.37349999998696
+        },
+        "inferenceCalls": {
+          "count": 2364,
+          "mean": 1.2690355329949239,
+          "p50": 1,
+          "p95": 3,
+          "max": 8
+        },
+        "treeMs": {
+          "count": 2364,
+          "mean": 7.762944331641124,
+          "p50": 2.546100000006845,
+          "p95": 30.7866000001668,
+          "max": 187.5052999999607
+        },
+        "encodingMs": {
+          "count": 2364,
+          "mean": 0.5131811759729012,
+          "p50": 0.3604000000632368,
+          "p95": 1.6440999999977066,
+          "max": 6.133299999986775
+        },
+        "inferenceMs": {
+          "count": 2364,
+          "mean": 14.122826099830872,
+          "p50": 10.625800000037998,
+          "p95": 45.93189999999595,
+          "max": 119.48240000009537
+        }
+      },
+      "evaluatedNetwork": {
+        "decisions": 1500,
+        "totalMs": {
+          "count": 1500,
+          "mean": 35.1573279999994,
+          "p50": 27.25899999999092,
+          "p95": 84.09239999999409,
+          "max": 230.65629999997327
+        },
+        "decisionMs": {
+          "count": 1500,
+          "mean": 34.813296866666576,
+          "p50": 26.86819999999716,
+          "p95": 83.52030000000377,
+          "max": 230.37349999998696
+        },
+        "inferenceCalls": {
+          "count": 1500,
+          "mean": 2,
+          "p50": 2,
+          "p95": 3,
+          "max": 8
+        },
+        "treeMs": {
+          "count": 1500,
+          "mean": 11.489491533333412,
+          "p50": 6.330300000030547,
+          "p95": 35.688900000066496,
+          "max": 187.5052999999607
+        },
+        "encodingMs": {
+          "count": 1500,
+          "mean": 0.8087735333332924,
+          "p50": 0.6950000000069849,
+          "p95": 1.8016999999963446,
+          "max": 6.133299999986775
+        },
+        "inferenceMs": {
+          "count": 1500,
+          "mean": 22.257573933333454,
+          "p50": 18.631900000000314,
+          "p95": 50.62650000001304,
+          "max": 119.48240000009537
+        }
+      },
+      "networkTimePerGlobalPlyMs": {
+        "count": 307,
+        "mean": 176.43127459283036,
+        "p50": 122.53309999999328,
+        "p95": 516.352699999974,
+        "max": 1390.8041000000667
+      },
+      "teacher": {
+        "decisions": 4864,
+        "totalMs": {
+          "count": 4864,
+          "mean": 70.65579769736807,
+          "p50": 55.14339999999356,
+          "p95": 189.03389999998035,
+          "max": 371.8456999999762
+        },
+        "decisionMs": {
+          "count": 4864,
+          "mean": 70.35548564967083,
+          "p50": 54.9149000000034,
+          "p95": 188.4496999999974,
+          "max": 371.5107999999891
+        },
+        "inferenceCalls": {
+          "count": 4864,
+          "mean": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "treeMs": {
+          "count": 4864,
+          "mean": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "encodingMs": {
+          "count": 4864,
+          "mean": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "inferenceMs": {
+          "count": 4864,
+          "mean": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0
+        }
+      },
+      "networkCommands": {
+        "summon": 595,
+        "begin": 285,
+        "deploy": 533,
+        "cast": 81,
+        "end": 283,
+        "move": 56,
+        "attack": 325,
+        "charge": 71,
+        "skill": 85,
+        "react": 49,
+        "finish-mode": 1
+      },
+      "networkReactions": 49,
+      "maxEntities": 193,
+      "maxCandidates": 117,
+      "backtracks": 1486,
+      "firstEvaluatedDecision": {
+        "game": 0,
+        "index": 3,
+        "actor": 1,
+        "ply": 1,
+        "command": {
+          "type": "deploy",
+          "cardId": "c2",
+          "charge": false,
+          "x": 9,
+          "y": 8
+        },
+        "timing": {
+          "observationMs": 0.0419000000001688,
+          "decisionMs": 19.86570000000006,
+          "stepMs": 0.15790000000015425,
+          "totalMs": 20.023600000000215
+        },
+        "stats": {
+          "nodes": 2,
+          "evaluations": 2,
+          "forcedNodes": 0,
+          "emptyBranches": 0,
+          "backtracks": 0,
+          "maxDepth": 1,
+          "maxEntities": 5,
+          "maxCandidates": 71,
+          "treeMs": 4.698599999999715,
+          "encodingMs": 1.336999999999989,
+          "inferenceMs": 13.570599999999786
+        }
+      },
+      "anomalies": [
+        {
+          "type": "pause",
+          "game": 10,
+          "index": 56,
+          "actor": 1,
+          "before": "1wkx8wy:6178",
+          "decoded": {
+            "status": "paused",
+            "value": 0.9602445960044861,
+            "path": [],
+            "stats": {
+              "nodes": 64,
+              "evaluations": 5,
+              "forcedNodes": 0,
+              "emptyBranches": 59,
+              "backtracks": 62,
+              "maxDepth": 2,
+              "maxEntities": 21,
+              "maxCandidates": 117,
+              "treeMs": 115.26209999987623,
+              "encodingMs": 1.3888999999908265,
+              "inferenceMs": 31.600600000005215
+            },
+            "reason": "node-budget"
+          },
+          "decisionMs": 148.6980999999796
+        },
+        {
+          "type": "pause",
+          "game": 16,
+          "index": 58,
+          "actor": 1,
+          "before": "1wmxi1n:5852",
+          "decoded": {
+            "status": "paused",
+            "value": -0.9968061447143555,
+            "path": [],
+            "stats": {
+              "nodes": 64,
+              "evaluations": 3,
+              "forcedNodes": 0,
+              "emptyBranches": 61,
+              "backtracks": 62,
+              "maxDepth": 2,
+              "maxEntities": 24,
+              "maxCandidates": 117,
+              "treeMs": 65.2390000000596,
+              "encodingMs": 0.6457000001100823,
+              "inferenceMs": 20.23380000004545
+            },
+            "reason": "node-budget"
+          },
+          "decisionMs": 86.5678000000189
+        }
+      ],
+      "outcomes": [
+        {
+          "game": 0,
+          "seed": 2026092205,
+          "networkPlayer": 1,
+          "commands": 202,
+          "ply": 20,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 4184.932000000001
+        },
+        {
+          "game": 1,
+          "seed": 2026092205,
+          "networkPlayer": 2,
+          "commands": 497,
+          "ply": 37,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 20438.101599999998
+        },
+        {
+          "game": 2,
+          "seed": 2026092206,
+          "networkPlayer": 1,
+          "commands": 405,
+          "ply": 34,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 17500.7308
+        },
+        {
+          "game": 3,
+          "seed": 2026092206,
+          "networkPlayer": 2,
+          "commands": 174,
+          "ply": 19,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 3479.749699999993
+        },
+        {
+          "game": 4,
+          "seed": 2026092207,
+          "networkPlayer": 1,
+          "commands": 333,
+          "ply": 30,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 13853.121299999999
+        },
+        {
+          "game": 5,
+          "seed": 2026092207,
+          "networkPlayer": 2,
+          "commands": 257,
+          "ply": 23,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 5586.915099999998
+        },
+        {
+          "game": 6,
+          "seed": 2026092208,
+          "networkPlayer": 1,
+          "commands": 1034,
+          "ply": 64,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 103083.59639999998
+        },
+        {
+          "game": 7,
+          "seed": 2026092208,
+          "networkPlayer": 2,
+          "commands": 551,
+          "ply": 39,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 39980.63220000002
+        },
+        {
+          "game": 8,
+          "seed": 2026092209,
+          "networkPlayer": 1,
+          "commands": 200,
+          "ply": 22,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 5851.732199999999
+        },
+        {
+          "game": 9,
+          "seed": 2026092209,
+          "networkPlayer": 2,
+          "commands": 180,
+          "ply": 19,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 6129.193800000008
+        },
+        {
+          "game": 10,
+          "seed": 2026092210,
+          "networkPlayer": 1,
+          "commands": 56,
+          "ply": 7,
+          "terminated": false,
+          "truncated": false,
+          "winner": null,
+          "interrupted": "node-budget",
+          "elapsedMs": 910.3490000000165
+        },
+        {
+          "game": 11,
+          "seed": 2026092210,
+          "networkPlayer": 2,
+          "commands": 311,
+          "ply": 27,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 9493.974799999996
+        },
+        {
+          "game": 12,
+          "seed": 2026092211,
+          "networkPlayer": 1,
+          "commands": 408,
+          "ply": 32,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 25908.859599999996
+        },
+        {
+          "game": 13,
+          "seed": 2026092211,
+          "networkPlayer": 2,
+          "commands": 210,
+          "ply": 21,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 5110.832200000004
+        },
+        {
+          "game": 14,
+          "seed": 2026092212,
+          "networkPlayer": 1,
+          "commands": 977,
+          "ply": 60,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 81472.19660000002
+        },
+        {
+          "game": 15,
+          "seed": 2026092212,
+          "networkPlayer": 2,
+          "commands": 256,
+          "ply": 25,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 6846.422499999986
+        },
+        {
+          "game": 16,
+          "seed": 2026092213,
+          "networkPlayer": 1,
+          "commands": 58,
+          "ply": 7,
+          "terminated": false,
+          "truncated": false,
+          "winner": null,
+          "interrupted": "node-budget",
+          "elapsedMs": 686.9106000000029
+        },
+        {
+          "game": 17,
+          "seed": 2026092213,
+          "networkPlayer": 2,
+          "commands": 310,
+          "ply": 25,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 11676.320199999958
+        },
+        {
+          "game": 18,
+          "seed": 2026092214,
+          "networkPlayer": 1,
+          "commands": 211,
+          "ply": 22,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 3650.345100000035
+        },
+        {
+          "game": 19,
+          "seed": 2026092214,
+          "networkPlayer": 2,
+          "commands": 598,
+          "ply": 45,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 34100.231299999985
+        }
+      ]
+    },
+    {
+      "artifacts": "artifacts/training/neural-cpu256-20260922",
+      "started": "2026-09-22T06:07:29.438Z",
+      "commit": "f550787afba38efd82ed9dae27be6fe657874625",
+      "uncommittedWorktree": true,
+      "sourceSha256": "22a1885bfcf226b5713cae7bf71fc0c3f00347d6a02ff81cfdbadbd5d7b100ab",
+      "experimentSourceSha256": "6e772558c1b987b5bbdfeea77910d987efb4ed8591ddbe7e0d4722663155cd4a",
+      "options": {
+        "games": 20,
+        "seed": 2026092205,
+        "rules": "classic",
+        "difficulty": "easy",
+        "simulations": 40,
+        "maxPlies": 100,
+        "maxCommands": 1200,
+        "maxNodes": 256,
+        "maxEvaluations": 32,
+        "maxTurnCommands": 200
+      },
+      "counts": {
+        "games": 20,
+        "terminatedGames": 20,
+        "truncatedGames": 0,
+        "interruptedGames": 0,
+        "rejectedCommands": 0,
+        "networkWins": 0,
+        "teacherWins": 20,
+        "draws": 0,
+        "commands": 7854
+      },
+      "totalElapsedMs": 435478.6326000001,
+      "startupMs": 1588.1372,
+      "pythonLoadMs": 222.24559995811433,
+      "inference": {
+        "calls": 3271,
+        "modelMs": 29039.333999040537,
+        "validationMs": 4998.602699837647,
+        "roundTripMs": 36625.630500000276,
+        "bytesSent": 81508067
+      },
+      "network": {
+        "decisions": 2557,
+        "totalMs": {
+          "count": 2557,
+          "mean": 23.77796535001961,
+          "p50": 15.008600000001024,
+          "p95": 78.92350000003353,
+          "max": 239.98399999999674
+        },
+        "decisionMs": {
+          "count": 2557,
+          "mean": 23.505509737973775,
+          "p50": 14.771899999999732,
+          "p95": 78.42810000001919,
+          "max": 239.70549999998184
+        },
+        "inferenceCalls": {
+          "count": 2557,
+          "mean": 1.2792334767305436,
+          "p50": 1,
+          "p95": 3,
+          "max": 8
+        },
+        "treeMs": {
+          "count": 2557,
+          "mean": 8.403843723113072,
+          "p50": 2.6719000000157394,
+          "p95": 32.82129999998142,
+          "max": 201.31530000007479
+        },
+        "encodingMs": {
+          "count": 2557,
+          "mean": 0.5184100117321205,
+          "p50": 0.3650999999954365,
+          "p95": 1.6881000000867061,
+          "max": 4.139799999946263
+        },
+        "inferenceMs": {
+          "count": 2557,
+          "mean": 14.329286859601089,
+          "p50": 10.968399999999974,
+          "p95": 46.69949999998789,
+          "max": 112.26140000007581
+        }
+      },
+      "evaluatedNetwork": {
+        "decisions": 1627,
+        "totalMs": {
+          "count": 1627,
+          "mean": 36.35471929932401,
+          "p50": 27.97070000000531,
+          "p95": 86.31410000000324,
+          "max": 239.98399999999674
+        },
+        "decisionMs": {
+          "count": 1627,
+          "mean": 36.00792821143202,
+          "p50": 27.491699999998673,
+          "p95": 85.79430000000866,
+          "max": 239.70549999998184
+        },
+        "inferenceCalls": {
+          "count": 1627,
+          "mean": 2.0104486785494777,
+          "p50": 2,
+          "p95": 3,
+          "max": 8
+        },
+        "treeMs": {
+          "count": 1627,
+          "mean": 12.410834050399535,
+          "p50": 7.019200000038836,
+          "p95": 37.92139999996289,
+          "max": 201.31530000007479
+        },
+        "encodingMs": {
+          "count": 1627,
+          "mean": 0.8147353411180285,
+          "p50": 0.6784000000334345,
+          "p95": 1.8783999999868684,
+          "max": 4.139799999946263
+        },
+        "inferenceMs": {
+          "count": 1627,
+          "mean": 22.519967117393968,
+          "p50": 19.000599999999395,
+          "p95": 52.188300000038,
+          "max": 112.26140000007581
+        }
+      },
+      "networkTimePerGlobalPlyMs": {
+        "count": 332,
+        "mean": 183.13330542168723,
+        "p50": 128.641100000008,
+        "p95": 530.6972000000042,
+        "max": 1530.9957000000286
+      },
+      "teacher": {
+        "decisions": 5297,
+        "totalMs": {
+          "count": 5297,
+          "mean": 70.32765544647914,
+          "p50": 59.25390000001062,
+          "p95": 188.14860000000044,
+          "max": 359.28979999996955
+        },
+        "decisionMs": {
+          "count": 5297,
+          "mean": 70.01685535208611,
+          "p50": 58.964099999982864,
+          "p95": 187.73119999999471,
+          "max": 358.92799999998533
+        },
+        "inferenceCalls": {
+          "count": 5297,
+          "mean": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "treeMs": {
+          "count": 5297,
+          "mean": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "encodingMs": {
+          "count": 5297,
+          "mean": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "inferenceMs": {
+          "count": 5297,
+          "mean": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0
+        }
+      },
+      "networkCommands": {
+        "summon": 641,
+        "begin": 307,
+        "deploy": 574,
+        "cast": 87,
+        "end": 307,
+        "move": 69,
+        "attack": 346,
+        "charge": 77,
+        "skill": 94,
+        "react": 54,
+        "finish-mode": 1
+      },
+      "networkReactions": 54,
+      "maxEntities": 193,
+      "maxCandidates": 117,
+      "backtracks": 1942,
+      "firstEvaluatedDecision": {
+        "game": 0,
+        "index": 3,
+        "actor": 1,
+        "ply": 1,
+        "command": {
+          "type": "deploy",
+          "cardId": "c2",
+          "charge": false,
+          "x": 9,
+          "y": 8
+        },
+        "timing": {
+          "observationMs": 0.04020000000014079,
+          "decisionMs": 19.474100000000135,
+          "stepMs": 0.1531999999999698,
+          "totalMs": 19.627300000000105
+        },
+        "stats": {
+          "nodes": 2,
+          "evaluations": 2,
+          "forcedNodes": 0,
+          "emptyBranches": 0,
+          "backtracks": 0,
+          "maxDepth": 1,
+          "maxEntities": 5,
+          "maxCandidates": 71,
+          "treeMs": 4.786599999999908,
+          "encodingMs": 1.3161999999999807,
+          "inferenceMs": 13.146400000000085
+        }
+      },
+      "anomalies": [],
+      "outcomes": [
+        {
+          "game": 0,
+          "seed": 2026092205,
+          "networkPlayer": 1,
+          "commands": 202,
+          "ply": 20,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 3938.6321
+        },
+        {
+          "game": 1,
+          "seed": 2026092205,
+          "networkPlayer": 2,
+          "commands": 497,
+          "ply": 37,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 21155.535900000003
+        },
+        {
+          "game": 2,
+          "seed": 2026092206,
+          "networkPlayer": 1,
+          "commands": 405,
+          "ply": 34,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 18667.611199999996
+        },
+        {
+          "game": 3,
+          "seed": 2026092206,
+          "networkPlayer": 2,
+          "commands": 174,
+          "ply": 19,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 4031.1998999999996
+        },
+        {
+          "game": 4,
+          "seed": 2026092207,
+          "networkPlayer": 1,
+          "commands": 333,
+          "ply": 30,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 14437.875499999995
+        },
+        {
+          "game": 5,
+          "seed": 2026092207,
+          "networkPlayer": 2,
+          "commands": 257,
+          "ply": 23,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 5799.473999999995
+        },
+        {
+          "game": 6,
+          "seed": 2026092208,
+          "networkPlayer": 1,
+          "commands": 1034,
+          "ply": 64,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 103292.2915
+        },
+        {
+          "game": 7,
+          "seed": 2026092208,
+          "networkPlayer": 2,
+          "commands": 551,
+          "ply": 39,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 37870.841600000014
+        },
+        {
+          "game": 8,
+          "seed": 2026092209,
+          "networkPlayer": 1,
+          "commands": 200,
+          "ply": 22,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 5976.219200000021
+        },
+        {
+          "game": 9,
+          "seed": 2026092209,
+          "networkPlayer": 2,
+          "commands": 180,
+          "ply": 19,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 5557.197500000009
+        },
+        {
+          "game": 10,
+          "seed": 2026092210,
+          "networkPlayer": 1,
+          "commands": 479,
+          "ply": 36,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 27276.2635
+        },
+        {
+          "game": 11,
+          "seed": 2026092210,
+          "networkPlayer": 2,
+          "commands": 311,
+          "ply": 27,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 8761.269700000004
+        },
+        {
+          "game": 12,
+          "seed": 2026092211,
+          "networkPlayer": 1,
+          "commands": 408,
+          "ply": 32,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 23842.619000000006
+        },
+        {
+          "game": 13,
+          "seed": 2026092211,
+          "networkPlayer": 2,
+          "commands": 210,
+          "ply": 21,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 4608.372399999993
+        },
+        {
+          "game": 14,
+          "seed": 2026092212,
+          "networkPlayer": 1,
+          "commands": 977,
+          "ply": 60,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 80648.08630000002
+        },
+        {
+          "game": 15,
+          "seed": 2026092212,
+          "networkPlayer": 2,
+          "commands": 256,
+          "ply": 25,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 7018.760500000033
+        },
+        {
+          "game": 16,
+          "seed": 2026092213,
+          "networkPlayer": 1,
+          "commands": 261,
+          "ply": 24,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 12244.185599999968
+        },
+        {
+          "game": 17,
+          "seed": 2026092213,
+          "networkPlayer": 2,
+          "commands": 310,
+          "ply": 25,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 11838.363300000026
+        },
+        {
+          "game": 18,
+          "seed": 2026092214,
+          "networkPlayer": 1,
+          "commands": 211,
+          "ply": 22,
+          "terminated": true,
+          "truncated": false,
+          "winner": 2,
+          "interrupted": null,
+          "elapsedMs": 3860.1143000000156
+        },
+        {
+          "game": 19,
+          "seed": 2026092214,
+          "networkPlayer": 2,
+          "commands": 598,
+          "ply": 45,
+          "terminated": true,
+          "truncated": false,
+          "winner": 1,
+          "interrupted": null,
+          "elapsedMs": 34653.71960000001
+        }
+      ]
+    }
+  ],
+  "diagnosis": {
+    "cause": "神行千里（普通21）先选落点、再选目标；117个落点中仅3/4个存在完整合法补全，原64节点预算在空分支回溯时耗尽。",
+    "action": "默认固定节点预算改为256，并保留暂停时的最后参数前缀；规则、候选域和模型评分没有改变。",
+    "standaloneReproductionBudget": 512,
+    "completedNodeCounts": [81, 90],
+    "caution": "仍不保证256节点覆盖所有组合；耗尽时明确暂停，不强行end或切换教师。"
+  },
+  "replayValidation": {
+    "replays": [
+      {
+        "dir": "artifacts/training/neural-cpu-20260922",
+        "games": 20,
+        "commands": 7228,
+        "pauses": 2,
+        "traceSha256": "c197dd871202a5195758af19b42e585efadea2aabed3a955252f889f67f14cb3",
+        "reportSha256": "ae0528d33488fc6bb99006cc157e8f304ef6ab954f732713863a032d9ff4a4aa"
+      },
+      {
+        "dir": "artifacts/training/neural-cpu256-20260922",
+        "games": 20,
+        "commands": 7854,
+        "pauses": 0,
+        "traceSha256": "0c01b3ed9d0790cfe03875583751eba56974771c2aedbec61f7489f574fdbcda",
+        "reportSha256": "ab6e6bf1e81b7a4371c850845c9a6bc8b75edd4173a411b7898b8affa74f88cd"
+      }
+    ],
+    "identicalRecordedCommands": 7228,
+    "resolutions": [
+      {
+        "game": 10,
+        "index": 56,
+        "before": "1wkx8wy:6178",
+        "command": {
+          "type": "skill",
+          "unitId": "u9",
+          "x": 7,
+          "y": 5,
+          "targetId": "u17"
+        },
+        "stats": {
+          "nodes": 81,
+          "evaluations": 5,
+          "forcedNodes": 1,
+          "emptyBranches": 75,
+          "backtracks": 78,
+          "maxDepth": 2,
+          "maxEntities": 21,
+          "maxCandidates": 117,
+          "treeMs": 113.4258999999729,
+          "encodingMs": 0.8260999999765772,
+          "inferenceMs": 27.99419999998645
+        }
+      },
+      {
+        "game": 16,
+        "index": 58,
+        "before": "1wmxi1n:5852",
+        "command": {
+          "type": "skill",
+          "unitId": "u9",
+          "x": 5,
+          "y": 4,
+          "targetId": "u17"
+        },
+        "stats": {
+          "nodes": 90,
+          "evaluations": 3,
+          "forcedNodes": 1,
+          "emptyBranches": 86,
+          "backtracks": 87,
+          "maxDepth": 2,
+          "maxEntities": 24,
+          "maxCandidates": 117,
+          "treeMs": 89.32519999990473,
+          "encodingMs": 0.6652999999932945,
+          "inferenceMs": 19.867599999997765
+        }
+      }
+    ]
+  },
+  "interpretation": [
+    "256节点复验20局全部真实终局，网络0胜、教师20胜；不证明正式模型或对作者的棋力。",
+    "两轮所有7228条共有命令及前后公开指纹一致；256节点运行只继续了原先中断的两局。",
+    "当前天然命令覆盖11类，含54次网络反应；路径与合成仅由专项测试覆盖，不能称为完整罕见能力覆盖。",
+    "下一步扩充教师数据、整局验证及能力补样，再形成正式预训练基线；MCTS和浏览器完整集成另行验收。"
+  ]
+}

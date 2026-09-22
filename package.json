@@ -22,6 +22,7 @@
     "train:serve": "tsx scripts/training/serve.ts",
     "bench:training:browser": "node scripts/training/browser/serve.mjs",
     "train:selfplay": "tsx scripts/training/self-play.ts",
+    "train:match": "tsx scripts/training/neural-match.ts",
     "bench:training": "tsx scripts/training/benchmark.ts",
     "preview:vfx": "node scripts/vfx/build-preview.mjs",
     "test:browser:vfx": "node tests/browser/vfx.mjs",

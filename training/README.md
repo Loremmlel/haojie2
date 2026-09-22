@@ -111,7 +111,28 @@ npm run bench:training:browser -- --data artifacts/training/pilot-20260922/brows
 
 所有资产由本机服务提供，服务器只允许GET预列路径；不发布目录、不访问CDN。ONNX Runtime Web 1.30.0的`ort.webgpu.bundle.min.mjs`必须配套`ort-wasm-simd-threaded.asyncify.wasm`，不可混用旧JSEP文件。CPU当前用同一运行库的WASM单线程；混合FP16是主干/价值头FP16＋候选评分FP32，外部浮点输入/输出仍为FP32。
 
-实测见[训练进度](../docs/ai/TRAINING-PROGRESS.md#浏览器实测117m模型)。这只是独立开发工具，不进入发行HTML；本次Codex内置浏览器阻止file://，所以记录为本地HTTP。完整命令解码、MCTS、单HTML内嵌运行库/权重、离线启动和峰值内存另行验收。
+实测见[训练进度](../docs/ai/TRAINING-PROGRESS.md#浏览器实测117m模型)。这只是独立开发工具，不进入发行HTML；本次Codex内置浏览器阻止file://，所以记录为本地HTTP。浏览器完整命令解码、MCTS、单HTML内嵌运行库/权重、离线启动和峰值内存另行验收。
+
+## 网络CLI对战
+
+```powershell
+npm run train:match -- --checkpoint artifacts/training/pilot-20260922/overfit-v2.pt --output artifacts/training/neural-cpu256-20260922 --games 20 --seed 2026092205 --plies 100 --commands 1200 --device cpu --precision fp32 --threads 4
+```
+
+命令启动一个常驻Python推理进程，Node持有权威环境、分步动作树和原手工教师。模型只接收八项公开输入张量，握手核对完整编码schema和规则版本；不向Python发送原始Observation、正式seed/rng、教师选择或标签。`--device xpu --precision fp32`可显式选择核显，另支持bf16/fp16；精度变化可能改变选招，不能直接用不同轨迹的整局时间证明加速。
+
+相邻两局用同一种子交换模型席位，`--games`为总局数，偶数可组成完整配对。默认对手easy、每决策40节点，可用`--difficulty`、`--nodes`调整。当前检查点只用于流程验收，不能当作正式棋力模型。`--output`必须是不存在的新目录，生成：
+
+- `games.jsonl`：每局种子与席位、逐命令前后公开指纹、所选动作/分解路径、耗时、终局/截断/中断；解码/推理/非法提交异常还记录公开局面，命令上限和重复局面暂停可沿此前命令重放定位。
+- `report.json`：模型/规则/编码及实验源码指纹、设备参数、完整决策P50/P95、需要推理的命令单独统计、推理次数、首个真实推理决策、终局/截断/异常和胜负计数。
+
+解码按网络logit稳定排序，逐参数深度优先选取，第一个可合法完成的分支即返回；空分支回溯，不做全路径联合概率搜索。单候选节点直接推进，无需推理；价值输出只记录根决策，不把带动作前缀的价值当根局面价值。这是纯网络策略对战，尚未接MCTS。
+
+`--decode-nodes`默认256、`--evaluations`默认32，是每条完整命令的固定工作量上限。落点后选目标的分支可能枚举117格；首轮实测64节点不足，相关记录保留在进度文档。耗尽即暂停并记录最后前缀，不强行end、不改用教师；`--turn-commands`默认200，同一实际全局回合的同操作者/公开指纹出现第四次也会暂停检查。这是防失控保护，不是规则判和依据。`--timeout-ms`默认60000，只处理子进程故障，不据墙钟改选动作。Ctrl+C会取消在途推理并在落子前再次校验，不提交迟到结果。
+
+统计中的完整命令耗时包含观察、动作树/合法性查询、编码、JSON管道、网络计算和引擎提交，排除模型启动、提交后trace构造/落盘及对方思考。Python `model_ms`含输入传输和输出回读并同步设备；端到端数值仍以Node计时为准。此处是原生PyTorch CPU/XPU性能，不能当作浏览器WASM/WebGPU延迟。动作前缀进入主干，本轮没有直接缓存主干结果；回合外可选巨大化抢占调度和浏览器Worker接入另做。
+
+异常或取消返回非零退出码；正常触及局数/命令/回合上限的截断不判胜负。保持`report.json`及逐命令trace配套保存，不把本地开发对局胜率当对作者胜率。
 
 ## 验证
 

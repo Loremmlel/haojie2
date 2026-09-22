@@ -14,6 +14,7 @@ MASK_KEYS = {"entity_mask", "candidate_mask", "value_mask"}
 INDEX_KEYS = {"kinds", "sources", "targets"}
 ENTITY_KEYS = {"entities", "kinds", "entity_mask"}
 ACTION_KEYS = {"candidates", "sources", "targets", "candidate_mask", "policy"}
+INPUT_KEYS = (FLOAT_KEYS | MASK_KEYS | INDEX_KEYS) - {"policy", "value", "value_mask"}
 
 
 def collate_examples(examples: list[dict[str, Tensor]], config: ModelConfig) -> dict[str, Tensor]:
@@ -45,9 +46,9 @@ def select_batch(dataset: dict[str, Tensor], indices: Tensor) -> dict[str, Tenso
     return batch
 
 
-def validate_batch(batch: dict[str, Tensor], config: ModelConfig) -> None:
-    """仅在CPU加载边界校验，拒绝错位标签、无效指针、全空候选及隐藏状态字段。"""
-    if set(batch) != FLOAT_KEYS | MASK_KEYS | INDEX_KEYS:
+def validate_inputs(batch: dict[str, Tensor], config: ModelConfig) -> None:
+    """训练和推理共用CPU输入边界，拒绝无效指针、全空候选及隐藏状态字段。"""
+    if set(batch) != INPUT_KEYS:
         raise ValueError("输入必须是固定张量白名单；不能传入Observation、Session或seed/rng")
     for key, tensor in batch.items():
         if not isinstance(tensor, Tensor) or tensor.device.type != "cpu":
@@ -74,9 +75,6 @@ def validate_batch(batch: dict[str, Tensor], config: ModelConfig) -> None:
         "sources": (size, actions),
         "targets": (size, actions),
         "candidate_mask": (size, actions),
-        "policy": (size, actions),
-        "value": (size,),
-        "value_mask": (size,),
     }
     if any(tuple(batch[k].shape) != shape for k, shape in shapes.items()):
         raise ValueError("张量形状与模型输入约定不一致")
@@ -91,6 +89,29 @@ def validate_batch(batch: dict[str, Tensor], config: ModelConfig) -> None:
             raise ValueError(f"{key}实体指针越界")
         if (~valid_entities.gather(1, indices + 1) & batch["candidate_mask"]).any():
             raise ValueError(f"{key}指向填充实体")
+
+
+def validate_batch(batch: dict[str, Tensor], config: ModelConfig) -> None:
+    """训练在相同输入约束上另外校验标签和终局遮罩。"""
+    if set(batch) != FLOAT_KEYS | MASK_KEYS | INDEX_KEYS:
+        raise ValueError("输入必须是固定张量白名单；不能传入Observation、Session或seed/rng")
+    validate_inputs({key: batch[key] for key in INPUT_KEYS}, config)
+    size, actions = batch["candidate_mask"].shape
+    for key, shape, dtype in [
+        ("policy", (size, actions), torch.float32),
+        ("value", (size,), torch.float32),
+        ("value_mask", (size,), torch.bool),
+    ]:
+        tensor = batch[key]
+        if (
+            not isinstance(tensor, Tensor)
+            or tensor.device.type != "cpu"
+            or tensor.dtype != dtype
+            or tuple(tensor.shape) != shape
+        ):
+            raise ValueError(f"{key}标签类型/形状不匹配")
+        if not torch.isfinite(tensor).all():
+            raise ValueError(f"{key}含非有限数值")
     policy = batch["policy"]
     if (policy < 0).any() or (policy[~batch["candidate_mask"]] != 0).any():
         raise ValueError("策略标签不能向无效候选分配概率")
