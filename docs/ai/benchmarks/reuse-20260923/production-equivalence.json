@@ -1,0 +1,79 @@
+{
+  "baseline": "cec107917b840f9cb34954fa1635db58ccd2ae66",
+  "cases": [
+    {
+      "name": "demo",
+      "units": 10,
+      "phase": "play"
+    },
+    {
+      "name": "shrine-draft",
+      "units": 0,
+      "phase": "shrine-draft"
+    },
+    {
+      "name": "replay-15",
+      "units": 1,
+      "phase": "play"
+    },
+    {
+      "name": "replay-30",
+      "units": 4,
+      "phase": "summon"
+    },
+    {
+      "name": "replay-45",
+      "units": 6,
+      "phase": "play"
+    },
+    {
+      "name": "replay-60",
+      "units": 13,
+      "phase": "play"
+    },
+    {
+      "name": "replay-75",
+      "units": 12,
+      "phase": "play"
+    },
+    {
+      "name": "clones-neutral-loner",
+      "units": 7,
+      "phase": "play"
+    },
+    {
+      "name": "giants-landmarks",
+      "units": 5,
+      "phase": "play"
+    },
+    {
+      "name": "synthesis",
+      "units": 4,
+      "phase": "synthesis"
+    },
+    {
+      "name": "live-deployment",
+      "units": 3,
+      "phase": "play"
+    },
+    {
+      "name": "inherited-equipment",
+      "units": 5,
+      "phase": "play"
+    },
+    {
+      "name": "dense-48",
+      "units": 48,
+      "phase": "play"
+    }
+  ],
+  "commands": 79,
+  "placements": 30888,
+  "paths": 748,
+  "groups": 130,
+  "attacks": 344,
+  "decisions": 39,
+  "decisionSha256": "1e3613e6a6aebf6bba82ea11c57d2aca5dd835d52662123d73979b154f041bce",
+  "fullStateEqual": true,
+  "fixedWorkDecisionsEqual": true
+}

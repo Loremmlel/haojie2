@@ -129,9 +129,13 @@ export function hitDistance(s: GameState, u: Unit, t: Target, ignoreId = ''): nu
     return shortest <= st.range ? shortest : Infinity;
   }
   const field = attackField(s, u, st.range, ignoreId);
-  return Math.min(
-    ...ends.filter(inside).map((p) => (field[index(p)] < 0 ? Infinity : field[index(p)])),
-  );
+  let shortest = Infinity;
+  for (const p of ends) {
+    if (!inside(p)) continue;
+    const d = field[index(p)];
+    if (d >= 0 && d < shortest) shortest = d;
+  }
+  return shortest;
 }
 export function isFrontHit(s: GameState, u: Unit, t: Target, ignoreId = ''): boolean {
   if (!piercing(u) || hasWeapon(u, 'u28')) {

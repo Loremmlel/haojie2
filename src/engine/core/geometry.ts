@@ -71,6 +71,39 @@ export function ring(a: Unit, b: Point | Unit) {
     ) && !cells(a).some((c) => bc.some((d) => equal(c, d)))
   );
 }
+interface PlacementContext {
+  occupants: Unit[][];
+  friends: Record<Player, Unit[]>;
+  loners: Record<Player, Unit[]>;
+  rows: Partial<Record<Player, number[]>>;
+}
+/**
+ * 为同步只读查询批次创建索引。调用期间不得修改 s 或其棋子；新局面必须重新创建。
+ * 不挂载全局缓存、不改变权威 canPlace 的默认入口，不保存到局面或消耗随机数。
+ */
+export function createPlacementQuery(s: GamePosition) {
+  const context: PlacementContext = {
+    occupants: Array.from({ length: 117 }, () => []),
+    friends: { 1: [], 2: [] },
+    loners: { 1: [], 2: [] },
+    rows: {},
+  };
+  for (const v of s.units) {
+    for (const p of cells(v)) if (inside(p)) context.occupants[(p.y - 1) * 9 + p.x - 1].push(v);
+    const owner = allegiance(s, v);
+    if (owner) {
+      context.friends[owner].push(v);
+      if (hasTrait(v, 23) && passive(s, v)) context.loners[owner].push(v);
+    }
+  }
+  const place = (u: Unit, at: Point, deployment = false, ignore: string[] = []) =>
+    placement(s, u, at, deployment, ignore, context);
+  return {
+    canPlace: place,
+    movementPath: (u: Unit, to: Point, limit: number, straight = false) =>
+      movement(s, u, to, limit, straight, place),
+  };
+}
 export function canPlace(
   s: GamePosition,
   u: Unit,
@@ -78,6 +111,18 @@ export function canPlace(
   deployment = false,
   ignore: string[] = [],
 ): boolean {
+  return placement(s, u, at, deployment, ignore);
+}
+function placement(
+  s: GamePosition,
+  u: Unit,
+  at: Point,
+  deployment: boolean,
+  ignore: string[],
+  context?: PlacementContext,
+): boolean {
+  const occupied = (p: Point) =>
+    context ? context.occupants[(p.y - 1) * 9 + p.x - 1] : occupants(s, p);
   const moved = { ...u, ...at },
     footprint = cells(moved);
   if (footprint.some((p) => !inside(p) || equal(p, basePoint(1)) || equal(p, basePoint(2))))
@@ -85,10 +130,14 @@ export function canPlace(
   if (isLandmark(u)) {
     if (!deployment) return equal(u, at);
     if (!landmarkSquare(u.kind, at) || landmarkAt(s, at)) return false;
-    const over = occupants(s, at).filter((v) => !ignore.includes(v.id));
+    const over = occupied(at).filter((v) => !ignore.includes(v.id));
     return over.length <= 1 && over.every((v) => allegiance(s, v) === u.owner);
   }
-  const rows = deployment ? deploymentRows(s, u.owner) : [];
+  const rows = deployment
+    ? context
+      ? (context.rows[u.owner] ??= deploymentRows(s, u.owner))
+      : deploymentRows(s, u.owner)
+    : [];
   if (
     deployment &&
     !hasTrait(u, 'u27') &&
@@ -104,9 +153,12 @@ export function canPlace(
     if (u.size > 1) return false;
     if (deployment && liveLandmark(land) && allegiance(s, land) !== u.owner) return false;
     // 地标即使休眠也只能承载一个随从，不能承载克隆叠放。
-    if (occupants(s, p).some((v) => v.id !== u.id && !ignore.includes(v.id))) return false;
+    if (occupied(p).some((v) => v.id !== u.id && !ignore.includes(v.id))) return false;
   }
-  const others = s.units.filter((v) => v.id !== u.id && !ignore.includes(v.id));
+  // 候选落点的重叠查询只读对应格；默认权威路径仍扫描原始单位数组。
+  const others = context
+    ? footprint.flatMap(occupied).filter((v) => v.id !== u.id && !ignore.includes(v.id))
+    : s.units.filter((v) => v.id !== u.id && !ignore.includes(v.id));
   if (
     others.some(
       (v) =>
@@ -121,8 +173,14 @@ export function canPlace(
     )
   )
     return false;
+  const isolation = context
+    ? (hasTrait(u, 23) && passive(s, u)
+        ? context.friends[u.owner]
+        : context.loners[u.owner]
+      ).filter((v) => v.id !== u.id && !ignore.includes(v.id))
+    : others;
   if (
-    others.some(
+    isolation.some(
       (v) =>
         allegiance(s, v) === u.owner &&
         ((hasTrait(v, 23) && passive(s, v)) || (hasTrait(u, 23) && passive(s, u))) &&
@@ -148,14 +206,24 @@ export function movementPath(
   limit: number,
   straight = false,
 ): Point[] | null {
-  if (!inside(to) || equal(u, to) || !canPlace(s, u, to)) return null;
+  return movement(s, u, to, limit, straight, (unit, p) => canPlace(s, unit, p));
+}
+function movement(
+  s: GamePosition,
+  u: Unit,
+  to: Point,
+  limit: number,
+  straight: boolean,
+  place: (unit: Unit, p: Point) => boolean,
+): Point[] | null {
+  if (!inside(to) || equal(u, to) || !place(u, to)) return null;
   if (straight) {
     if (distance(u, to) !== 3 || (u.x !== to.x && u.y !== to.y)) return null;
     const path = Array.from({ length: 4 }, (_, i) => ({
       x: u.x + Math.sign(to.x - u.x) * i,
       y: u.y + Math.sign(to.y - u.y) * i,
     }));
-    return path.slice(1).every((p) => canPlace(s, u, p)) ? path : null;
+    return path.slice(1).every((p) => place(u, p)) ? path : null;
   }
   const queue: Point[][] = [[{ x: u.x, y: u.y }]],
     seen = new Set([key(u)]);
@@ -163,7 +231,7 @@ export function movementPath(
     const path = queue[i];
     if (path.length - 1 >= limit) continue;
     for (const p of neighbors(path.at(-1)!)) {
-      if (seen.has(key(p)) || !canPlace(s, u, p)) continue;
+      if (seen.has(key(p)) || !place(u, p)) continue;
       const next = [...path, p];
       if (equal(p, to)) return next;
       seen.add(key(p));

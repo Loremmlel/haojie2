@@ -6,7 +6,8 @@ import { createStateKeys } from '../../src/ai/simulation/state-key';
 import { distribution } from '../../src/ai/simulation/simulate';
 
 test('搜索快照键保留公共字符串，独立快照与新的搜索上下文不共享旧结果', () => {
-  const s = createGame(19), keys = createStateKeys();
+  const s = createGame(19),
+    keys = createStateKeys();
   assert.equal(keys.positionKey(s), positionKey(s));
   assert.equal(keys.fingerprint(s), fingerprint(s));
   const next = structuredClone(s);
@@ -21,11 +22,20 @@ test('搜索快照键保留公共字符串，独立快照与新的搜索上下�
 });
 
 test('共享原字符串键不改变精确与抽样随机分布、权重或工作量', () => {
-  const s = createGame(19), original = structuredClone(s);
+  const s = createGame(19),
+    original = structuredClone(s);
   for (const limit of [2, 64]) {
     const expected = distribution(s, { type: 'summon' }, limit, 3);
     assert.ok(expected.outcomes.length > 0);
-    const actual = distribution(s, { type: 'summon' }, limit, 3, 0, undefined, createStateKeys().positionKey);
+    const actual = distribution(
+      s,
+      { type: 'summon' },
+      limit,
+      3,
+      0,
+      undefined,
+      createStateKeys().positionKey,
+    );
     assert.deepEqual(actual, expected);
   }
   assert.deepEqual(s, original);
