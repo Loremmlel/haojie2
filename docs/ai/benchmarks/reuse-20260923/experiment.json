@@ -1,0 +1,194 @@
+{
+  "date": "2026-09-23",
+  "repository": "Loremmlel/haojie2",
+  "baseline": "cec107917b840f9cb34954fa1635db58ccd2ae66",
+  "sourceProvenance": {
+    "githubPagesRun": 35833453938,
+    "artifactId": 10738241189,
+    "zipSha256": "e4eb8d60c3f05f2b12950a654cdc381ed6a7c7a68b28f588980702ae9cf53a1a",
+    "sourceGitBlobHashes": {
+      "src/ai/evaluation/spatial.ts": "853213c8d46715adeafc54a6894fe96e09894607",
+      "src/engine/core/geometry.ts": "7e83ba9f6a31a52123bce44a6e01f81cbdd65f72",
+      "src/ai/planning/search.ts": "3cfda28ca7d4b15d6842fb228bd9694aaf3c55ba",
+      "src/ai/evaluation/evaluate.ts": "edf2300babca7ddcb0b4a6d03cd93f607c25bf62",
+      "src/ai/planning/candidates.ts": "0e40850fbe422b274505d8fb39d3d42bad435da3"
+    }
+  },
+  "remoteMutations": false,
+  "runtime": {
+    "node": "v22.16.0",
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "typescript": "5.8.3",
+    "bundled": false,
+    "browserTested": false,
+    "cpuFrequencyLocked": false
+  },
+  "variants": {
+    "O": "remote cec1079",
+    "A": "prior reuse prototype ported to TS",
+    "B": "A + exact final-step target/row prefilter",
+    "C": "A + synchronous placement/movement batch queries + hoisted lookups",
+    "D": "A+B+C (conservative combination)",
+    "E": "B + lazy point ranking for fixed-priority single-point groups in lean rollouts",
+    "G": "C + per-evaluation material-value reuse by unit object identity",
+    "H": "A+E+G (full combination)"
+  },
+  "options": {
+    "games": 2,
+    "seed": 2026092301,
+    "rules": "classic",
+    "difficulty": "hard",
+    "simulations": 800,
+    "opponent": { "difficulty": "medium", "simulations": 320 },
+    "maxPlies": 40,
+    "maxCommands": 600
+  },
+  "primaryResults": {
+    "A": {
+      "runTags": ["extended-A-1", "extended-A-2"],
+      "elapsedMs": [50390.171162, 50143.387639],
+      "meanMs": 50266.7794005,
+      "reductionVsA": 0.0,
+      "reductionVsO": 0.1385037968014754,
+      "hardSearchP95Ms": 944.4995257000007
+    },
+    "E": {
+      "runTags": ["extended-E-1", "extended-E-2"],
+      "elapsedMs": [49842.013592, 49713.813417],
+      "meanMs": 49777.9135045,
+      "reductionVsA": 0.00972542704805035,
+      "reductionVsO": 0.14688221527785505,
+      "hardSearchP95Ms": 941.738626249999
+    },
+    "G": {
+      "runTags": ["extended-G-1", "extended-G-2"],
+      "elapsedMs": [46760.533871, 45764.65046],
+      "meanMs": 46262.5921655,
+      "reductionVsA": 0.07965871859616647,
+      "reductionVsO": 0.20712948042373247,
+      "hardSearchP95Ms": 851.7079203999995
+    },
+    "H": {
+      "runTags": ["extended-H-1", "extended-H-2"],
+      "elapsedMs": [44428.821566000006, 44637.53114],
+      "meanMs": 44533.176353,
+      "reductionVsA": 0.1140634652922079,
+      "reductionVsO": 0.23676903907437918,
+      "hardSearchP95Ms": 831.4355975500011
+    },
+    "O": {
+      "runTags": ["pilot-O", "main-O-1"],
+      "elapsedMs": [57734.356104, 58962.105735],
+      "meanMs": 58348.2309195,
+      "reductionVsA": -0.1607712213788577,
+      "reductionVsO": 0.0,
+      "hardSearchP95Ms": 1106.8326899000008
+    }
+  },
+  "conservativeResults": {
+    "A": { "meanMs": 50537.2173545, "reductionVsA": 0.0, "runTags": ["main-A-1", "main-A-2"] },
+    "B": {
+      "meanMs": 48933.853652000005,
+      "reductionVsA": 0.031726394653923795,
+      "runTags": ["main-B-1", "main-B-2"]
+    },
+    "C": {
+      "meanMs": 45837.6049375,
+      "reductionVsA": 0.09299309821579493,
+      "runTags": ["main-C-1", "main-C-2"]
+    },
+    "D": {
+      "meanMs": 45551.7163095,
+      "reductionVsA": 0.09865009009159609,
+      "runTags": ["main-D-1", "main-D-2"]
+    }
+  },
+  "results": {
+    "additionalTimeReduction": 0.1140634652922079,
+    "totalTimeReduction": 0.23676903907437918,
+    "throughputIncreaseVsA": 0.1287490252671759
+  },
+  "equivalence": {
+    "classicRuns": 18,
+    "independentClassicSeedPairs": 1,
+    "classicCommandsPerRun": 633,
+    "allClassicTrajectoriesIdentical": true,
+    "allFullDecisionsIdentical": true,
+    "classicTraceSha256": "c72ff5880fcc2184a2f2c5bfd5bf1e624f8c9e786ecbe38ddd680efd85fc51e7",
+    "classicDecisionSha256": "d9e07066544f2fefd45d50ada14dff140c2a73d05ff095c8711d6d4caecff402",
+    "fullStateReplays": [
+      {
+        "file": "pilot-O.jsonl",
+        "games": 2,
+        "commands": 633,
+        "fullStateSha256": "e1c5ff34fe08ccbd84cbd59fcadb95384c9c68b23a83bfbd23694f65a278cb20",
+        "identical": true
+      },
+      {
+        "file": "shrine-O.jsonl",
+        "games": 2,
+        "commands": 309,
+        "fullStateSha256": "cbb1de0fbc19ac8c5236bbc1534e7e210f33da76e164b6c201f5c92e69145bb0",
+        "identical": true
+      }
+    ],
+    "differential": {
+      "cases": [
+        { "name": "classic-0-331", "reachable": true, "units": 22, "phase": "play" },
+        { "name": "classic-0-122", "reachable": true, "units": 15, "phase": "play" },
+        { "name": "classic-0-211", "reachable": true, "units": 16, "phase": "play" },
+        { "name": "classic-0-8", "reachable": true, "units": 2, "phase": "summon" },
+        { "name": "classic-1-8", "reachable": true, "units": 2, "phase": "summon" },
+        { "name": "classic-1-137", "reachable": true, "units": 17, "phase": "play" },
+        { "name": "classic-0-152", "reachable": true, "units": 14, "phase": "play" },
+        { "name": "classic-0-206", "reachable": true, "units": 15, "phase": "summon" },
+        { "name": "classic-0-58", "reachable": true, "units": 11, "phase": "play" },
+        { "name": "classic-1-58", "reachable": true, "units": 11, "phase": "play" },
+        { "name": "classic-0-144", "reachable": true, "units": 12, "phase": "summon" },
+        { "name": "classic-1-166", "reachable": true, "units": 15, "phase": "play" },
+        { "name": "classic-0-366", "reachable": true, "units": 24, "phase": "summon" },
+        { "name": "classic-0-367", "reachable": true, "units": 24, "phase": "play" },
+        { "name": "clones-neutral-loner", "reachable": false, "units": 7, "phase": "play" },
+        { "name": "giants-and-live-landmarks", "reachable": false, "units": 5, "phase": "play" },
+        { "name": "synthesis-materials", "reachable": false, "units": 4, "phase": "synthesis" },
+        { "name": "new-deployment-row", "reachable": false, "units": 3, "phase": "play" },
+        { "name": "multi-ability-and-weapons", "reachable": false, "units": 5, "phase": "play" },
+        { "name": "dense-48", "reachable": false, "units": 48, "phase": "play" }
+      ],
+      "placementChecks": 54522,
+      "pathChecks": 1276,
+      "targetChecks": 722,
+      "groupChecks": 200,
+      "decisionChecks": 60,
+      "queriesElapsedMs": 1947.683885,
+      "totalElapsedMs": 35107.306092,
+      "decisionSha256": "22f9276d7e0fcbd882786916f2bfd183d9c7398207146d3384b81ae632661b7f"
+    }
+  },
+  "shrineSmoke": {
+    "runs": ["shrine-O", "shrine-H"],
+    "seed": 2026092303,
+    "maxPlies": 12,
+    "commands": 309,
+    "elapsedMs": [19774.517748, 16413.5854],
+    "reductionVsO": 0.16996279711245676,
+    "allTrajectoriesAndFullDecisionsIdentical": true,
+    "bothGamesTruncated": true
+  },
+  "tests": {
+    "passed": 271,
+    "failed": 0,
+    "originalBehaviorTests": 266,
+    "newTests": 5,
+    "typecheck": "Scoped AI/engine dependency graph; not full project CI"
+  },
+  "limits": [
+    "Two timings per primary variant on one paired classic seed, not distinct independent games per repetition.",
+    "Shine smoke is two capped trajectories, not complete games or a general speed estimate.",
+    "Work-budget equivalence; fixed-wall-clock timed decisions can change as more work is completed.",
+    "Node ESM transpilation only; no esbuild production bundle, browser, worker messaging, UI, or full CI validation.",
+    "Primary and conservative experiments use separate balanced blocks; small between-block differences are not strong evidence of superiority.",
+    "No profiling, tests, or builds ran concurrently with measured benchmarks. CPU frequency and other host workloads were not controlled.",
+    "Read-only query objects must not be retained across state mutations. The new call sites keep them inside synchronous read-only batches."
+  ]
+}
