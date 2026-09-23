@@ -71,15 +71,13 @@ export function canPlace(
     const over = occupants(s, at).filter((v) => !ignore.includes(v.id));
     return over.length <= 1 && over.every((v) => allegiance(s, v) === u.owner);
   }
+  const rows = deployment ? deploymentRows(s, u.owner) : [];
   if (
     deployment &&
     !hasTrait(u, 'u27') &&
     footprint.some((p) => {
       const land = landmarkAt(s, p);
-      return (
-        !s.deployRows[u.owner].includes(p.y) &&
-        !(liveLandmark(land) && allegiance(s, land) === u.owner)
-      );
+      return !rows.includes(p.y) && !(liveLandmark(land) && allegiance(s, land) === u.owner);
     })
   )
     return false;
@@ -209,14 +207,21 @@ export function frontal(path: Point[], owner: Player) {
     b = path.at(-1)!;
   return owner === 1 ? b.y < a.y : b.y > a.y;
 }
-export function refreshDeployment(s: GamePosition, owner: Player) {
-  s.deployRows[owner] = [];
-  for (let y = 1; y <= 13; y++) {
-    const count = (p: Player) =>
-      s.units.filter((u) => allegiance(s, u) === p && cells(u).some((c) => c.y === y)).length;
-    if ((owner === 1 ? y <= 8 : y >= 6) || count(owner) - count(other(owner)) >= 2)
-      s.deployRows[owner].push(y);
+/** 从当前占位派生部署行；每枚棋子在接触行计一次，中立与独立地标不计数。 */
+export function deploymentRows(s: GamePosition, owner: Player): number[] {
+  const counts = Array<number>(14).fill(0);
+  for (const u of s.units) {
+    const side = allegiance(s, u);
+    if (!side) continue;
+    for (const y of new Set(cells(u).map((p) => p.y))) counts[y] += side === owner ? 1 : -1;
   }
+  return Array.from({ length: 13 }, (_, i) => i + 1).filter(
+    (y) => (owner === 1 ? y <= 8 : y >= 6) || counts[y] >= 2,
+  );
+}
+/** 保留 v2 序列化字段，但它只镜像当前局面，不能作为权限来源。 */
+export function refreshDeployment(s: GamePosition, owner: Player) {
+  s.deployRows[owner] = deploymentRows(s, owner);
 }
 export function inSquare(u: Unit, p: Point, radius = 5) {
   return inside(p) && Math.abs(p.x - u.x) <= radius && Math.abs(p.y - u.y) <= radius;

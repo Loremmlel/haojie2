@@ -25,7 +25,9 @@ const paced = fixture();
 paced.heads = { 1: 0, 2: 0 };
 const archer = add(paced, 23, 1, 4, 7);
 archer.born = 1; // 与部署疲劳无关，这是其能攻击六次的实际行动回合。
-add(paced, 'grave', 2, 4, 8);
+const barricade = add(paced, 'wall', 2, 4, 8);
+barricade.hp = barricade.maxHp = 70;
+paced.log = ['5 · 独行侠准备攻击路障'];
 save('pacing', paced, { mode: 'ai', human: 2, difficulty: 'medium' });
 
 // 精确脱敏的 CLI 失败局面，位于错误的“部署后缓存结束回合”计划之前。

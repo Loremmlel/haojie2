@@ -79,6 +79,49 @@ try {
     }
     checks.push(`${name}: deployment highlighter and accepted placement`);
   }
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1080 });
+    await load('live-deployment');
+    await page.locator('.hand-card').click();
+    await button('部署随从').click();
+    assert.ok(!(await cell(8, 9).getAttribute('aria-label')).includes('可选择'));
+    await page.keyboard.press('Escape');
+    await cell(3, 8).click();
+    await button('移动').click();
+    await cell(3, 9).click();
+    await page.locator('.hand-card').click();
+    await button('部署随从').click();
+    assert.match(await cell(8, 9).getAttribute('aria-label'), /可选择/);
+    await page.screenshot({ path: `artifacts/live-deployment-${width}.png` });
+    await cell(8, 9).focus();
+    await page.keyboard.press('Enter');
+    assert.ok((await state()).present.units.some((u) => u.x === 8 && u.y === 9));
+    await button('悔棋').click();
+    await button('悔棋').click();
+    await page.locator('.hand-card').click();
+    await button('部署随从').click();
+    assert.ok(!(await cell(8, 9).getAttribute('aria-label')).includes('可选择'));
+    await page.keyboard.press('Escape');
+    checks.push(
+      `${width}px: move unlocks deployment immediately, keyboard placement and undo restore it`,
+    );
+    await load('neutral-grave');
+    assert.match(await cell(3, 5).getAttribute('aria-label'), /中立墓地/);
+    await cell(3, 5).click();
+    assert.match(await page.locator('.role-chip').innerText(), /中立/);
+    assert.equal(await page.locator('.piece-wrap.p0').count(), 1);
+    await page.locator('.hand-card').click();
+    await button('献祭两名 · 召唤两次').click();
+    assert.ok(!(await cell(3, 5).getAttribute('aria-label')).includes('可选择'));
+    assert.match(await cell(5, 5).getAttribute('aria-label'), /可选择/);
+    await page.screenshot({ path: `artifacts/neutral-grave-${width}.png` });
+    assert.ok(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+    );
+    await page.keyboard.press('Escape');
+    checks.push(`${width}px: neutral grave is labeled and excluded from reforge`);
+  }
+  await page.setViewportSize({ width: 1440, height: 1080 });
   await load('hook');
   await cell(3, 4).click();
   await button('牵引').click();

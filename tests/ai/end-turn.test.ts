@@ -43,7 +43,8 @@ function finishTurn(arena: Arena, max = 20) {
 
 test('the recorded deployment no longer carries a cached END past profitable remaining attacks', () => {
   const initial = beforeDeploy();
-  assert.equal(fingerprint(initial), '151ngyz:14340');
+  // 固定原始公开夹具；当前引擎派生实时部署行，不改写历史指纹。
+  assert.equal(fingerprint(position as Observation), '151ngyz:14340');
   const arena = arenaFor(initial);
   const entries = finishTurn(arena);
   assert.ok(entries.some((e) => e.command.type === 'deploy'));

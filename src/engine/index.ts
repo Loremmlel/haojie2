@@ -39,6 +39,7 @@ export {
   targets,
   distance,
   canPlace,
+  deploymentRows,
   movementPath,
   attackPath,
   attackRoutes,

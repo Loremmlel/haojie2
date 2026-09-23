@@ -14,13 +14,17 @@ import {
   definition,
   ALL_CELLS,
   isStored,
+  deploymentRows,
 } from '../../src/engine';
 import { add, card, fixture, round, seedFor, strike, unit } from '../helpers';
 import { draw, addEffect } from '../../src/engine/core/state';
 import { damage, resolution, kill } from '../../src/engine/commands/combat';
 import type { Command, GameState } from '../../src/engine';
 const roundtrip = (s: GameState) =>
-  assert.deepEqual(parseSession(JSON.stringify(createSession(s))).present, s);
+  assert.deepEqual(parseSession(JSON.stringify(createSession(s))).present, {
+    ...s,
+    deployRows: { 1: deploymentRows(s, 1), 2: deploymentRows(s, 2) },
+  });
 
 test('v2 saves roundtrip opening, demonstration and multi-operation history', () => {
   for (const s of [createGame(7), createDemoGame()]) roundtrip(s);

@@ -41,7 +41,7 @@ try {
     await hut.getByRole('heading', { name: '跑得快小屋', exact: true }).click();
     assert.equal(await page.locator('dialog[open]').count(), 1);
     assert.doesNotMatch(await codex.innerText(), /(?:普通|终极)\s*\d/);
-    const runner = hut.getByRole('link', { name: '超级跑得快', exact: true });
+    const runner = hut.getByRole('link', { name: '超级跑得快', exact: true }).first();
     assert.equal(
       await runner.evaluate((link) => getComputedStyle(link).textDecorationLine),
       'none',

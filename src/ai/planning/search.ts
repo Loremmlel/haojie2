@@ -1,8 +1,10 @@
 import { draftDecision } from './shrines';
+import { deploymentRows } from '../../engine/core/geometry';
 import type { Command, GameState, Player } from '../../engine/types';
 import {
   iterateCandidateGroups,
   attackCandidates,
+  deploymentCandidates,
   commandPriority,
   type CandidateGroup,
 } from './candidates';
@@ -166,10 +168,58 @@ function* expand(
       }
       yield;
     }
-    if (!lean && !path.length && !stopped(ctx))
+    if (!lean && !path.length && !stopped(ctx)) {
       result.push(...(yield* attackContinuations(ctx, result.slice(passStart), level)));
+      result.push(...(yield* deploymentContinuations(ctx, s, result.slice(passStart))));
+    }
   }
   return result;
+}
+/** 避免即时部署的物质收益挤掉“先移动开行、再落子”。只接续确定且无反应的移动，共用原预算；完整结果仍接受危险与对手回应评估。 */
+function* deploymentContinuations(
+  ctx: Context,
+  before: GameState,
+  roots: Node[],
+): Generator<void, Node[]> {
+  const added: Node[] = [];
+  const rows = deploymentRows(before, before.active);
+  for (const root of roots) {
+    if (stopped(ctx)) break;
+    if (
+      root.path.at(-1)?.command.type !== 'move' ||
+      !root.expandable ||
+      root.sampled ||
+      root.outcomes.length !== 1
+    )
+      continue;
+    const state = root.outcomes[0].state;
+    if (state.pending.length) continue;
+    const gained = deploymentRows(state, state.active).filter((y) => !rows.includes(y));
+    if (!gained.length) continue;
+    for (const command of deploymentCandidates(state, gained).slice(0, 4)) {
+      if (stopped(ctx)) break;
+      const d = distribution(state, command, 1, 1);
+      ctx.count += d.attempts;
+      if (d.sampled) ctx.sampled++;
+      if (d.outcomes.length) {
+        ctx.candidates++;
+        const next = d.outcomes.length === 1 ? d.outcomes[0].state : null;
+        const path = [...root.path, { before: fingerprint(state), command }];
+        added.push({
+          outcomes: d.outcomes,
+          sampled: d.sampled,
+          score: expectation(ctx, d.outcomes) - 0.2,
+          root: root.root,
+          path,
+          expandable:
+            !!next && !next.winner && !next.pending.length && next.active === state.active,
+        });
+        ctx.depth = Math.max(ctx.depth, path.length);
+      }
+      yield;
+    }
+  }
+  return added;
 }
 /** 同时评估短小但完整的连射操作，避免因束深度到不了第六发而输给无收益移动。保留单发节点以允许穿插标记或治疗；遇未知随机或反应必须停止。 */
 function* attackContinuations(

@@ -115,3 +115,7 @@ HaojieGame保持本地协议；HaojieOnlineGame只消费PlayerView和宿主回�
 新增和修改注释使用中文，保留代码标识符与工具指令。复杂函数和类文档须说明责任、输入信任边界、可变性、副作用、异常/取消和关键不变量中实际相关的部分，不逐行复述代码。作者原文、旧回放及第三方许可原样保留。
 
 状态与特性词条统一在 `engine/library/keywords.ts` 维护稳定ID、说明、别名与相关单位；不得另建UI文案表。`RuleReference` 区分单位和词条，同名引用在 catalog 的 `keywordReferences` 或调用处显式消歧。规则词链接仅进入规则、图鉴正文和折叠状态；查看当前实例从最新公开局面派生，失效时保留通用说明，不为介绍生成存档字段、计时器或规则命令。
+
+## 2026-09-23 反馈5不变量
+
+见`docs/feedback/FEEDBACK-2026-09-23.md`。部署行改为当前局面实时判定，覆盖此前回合开始快照要求；共用`deploymentRows`，旧存档的deployRows不能授权落子。小屋排除普通20死亡，王城不受影响；普通20反伤20且保持原50%分界。墓地通过allegiance统一视为中立，不能重铸，保留来源owner兼容存档。AI可在原预算内比较移动开行后部署，不以行权奖励代替安全评估。当前CLI回放`docs/playtests/current/cli-feedback5-20260923.jsonl`；9月21日counter-freeze旧回放固定`b49223f9f8f3e8beb55199b963afbd4bf2020126`，不改历史指纹。

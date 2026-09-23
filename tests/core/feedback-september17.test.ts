@@ -27,7 +27,8 @@ for (const spell of [18, 22] as const) {
     for (const hornFirst of [false, true]) {
       let s = fixture();
       const carrier = add(s, 9, 1, 3, 4),
-        victim = add(s, 'grave', 2, 3, 6);
+        victim = add(s, 'wall', 2, 3, 6);
+      victim.hp = victim.maxHp = 70;
       const enchantment = card(s, spell),
         horn = card(s, 'u17');
       for (const id of hornFirst ? [horn, enchantment] : [enchantment, horn])
@@ -59,7 +60,7 @@ test('execution bypasses every knife source; gold still blocks and consumes the 
   for (const gold of [false, true]) {
     let s = fixture();
     const a = add(s, 9, 1, 4, 4),
-      v = add(s, 'grave', 2, 4, 6);
+      v = add(s, 'wall', 2, 4, 6);
     add(s, 3, 2, 3, 6);
     add(s, 3, 2, 5, 6);
     const id = card(s, 18);
@@ -74,7 +75,7 @@ test('execution bypasses every knife source; gold still blocks and consumes the 
       gold,
     );
     if (gold) {
-      assert.equal(unit(s, v.id).hp, 70);
+      assert.equal(unit(s, v.id).hp, 50);
       assert.equal(availableGuardians(s, unit(s, v.id)).length, 2);
     }
     assert.ok(!unit(s, a.id).effects.some((e) => e.type === 'execute'));

@@ -14,7 +14,10 @@ import { add, card, fixture } from '../helpers';
 import type { Command } from '../../src/engine';
 
 test('训练环境逐步复现当前79条正式命令，公开指纹、身份与实际随机结果不漂移', () => {
-  const [header, ...rows] = readFileSync('docs/playtests/cli-counter-freeze-20260921.jsonl', 'utf8')
+  const [header, ...rows] = readFileSync(
+    'docs/playtests/current/cli-feedback5-20260923.jsonl',
+    'utf8',
+  )
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line));

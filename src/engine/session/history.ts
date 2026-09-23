@@ -4,7 +4,7 @@ import { normalizeHornStorage } from './migrations';
 import { definition, SHRINE_POOL } from '../catalog';
 import { canDeployKind, hasTrait, isLandmark } from '../core/traits';
 import { landmarkSquare } from '../setup/shrines';
-import { cells, inside, key, basePoint, equal } from '../core/geometry';
+import { cells, inside, key, basePoint, equal, deploymentRows } from '../core/geometry';
 import type { Command, GameState, Player, Unit, Landmark } from '../types';
 export interface Session {
   format: 'haojie-session-v2';
@@ -18,7 +18,10 @@ const LIMIT = 60;
 export const createSession = (present: GameState, match?: MatchSettings): Session => ({
   ...(match ? { match: { ...match } } : {}),
   format: 'haojie-session-v2',
-  present,
+  present: {
+    ...present,
+    deployRows: { 1: deploymentRows(present, 1), 2: deploymentRows(present, 2) },
+  },
   past: [],
   future: [],
 });

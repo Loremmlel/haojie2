@@ -28,6 +28,21 @@ for (const advantage of [false, true]) {
 }
 {
   const s = fixture();
+  add(s, 9, 1, 1, 9);
+  add(s, 9, 1, 3, 8);
+  card(s, 9);
+  save('live-deployment', s);
+}
+{
+  const s = fixture();
+  add(s, 'grave', 1, 3, 5);
+  add(s, 1, 1, 5, 5);
+  add(s, 1, 1, 7, 5);
+  card(s, 25);
+  save('neutral-grave', s);
+}
+{
+  const s = fixture();
   add(s, 7, 1, 3, 4);
   add(s, 5, 2, 3, 6);
   save('hook', s);

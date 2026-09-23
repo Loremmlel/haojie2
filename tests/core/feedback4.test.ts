@@ -112,7 +112,7 @@ for (const owner of [1, 2] as const) {
     assertAtomic(s, command, /没有射程内/);
   });
 
-  test(`feedback4 deployment: player ${owner} snapshots count differences at turn start`, () => {
+  test(`deployment: player ${owner} requires a count advantage of two`, () => {
     const row = owner === 1 ? 9 : 5;
     for (const [own, enemy, expected] of [
       [1, 1, false],
@@ -134,16 +134,16 @@ for (const owner of [1, 2] as const) {
   });
 }
 
-test('feedback4 row permissions survive movement, save/load and public projection until next own turn', () => {
+test('row permissions change immediately with movement and survive save/load and public projection', () => {
   const s = fixture();
   add(s, 9, 1, 1, 9);
   const second = add(s, 9, 1, 3, 9);
   refreshDeployment(s, 1);
   const moved = applyCommand(s, { type: 'move', unitId: second.id, x: 3, y: 8 });
-  add(moved, 9, 2, 7, 9); // 当前为一比一，但回合开始时为二比零。
-  assert.ok(moved.deployRows[1].includes(9));
+  add(moved, 9, 2, 7, 9);
+  assert.ok(!moved.deployRows[1].includes(9));
   const restored = parseSession(JSON.stringify(createSession(moved))).present;
-  deployable(restored, 9, true);
+  deployable(restored, 9, false);
   const next = round(restored);
   deployable(next, 9, false);
   const gained = fixture();
@@ -151,7 +151,7 @@ test('feedback4 row permissions survive movement, save/load and public projectio
   const incoming = add(gained, 9, 1, 3, 8);
   refreshDeployment(gained, 1);
   const nowTwo = applyCommand(gained, { type: 'move', unitId: incoming.id, x: 3, y: 9 });
-  deployable(nowTwo, 9, false);
+  deployable(nowTwo, 9, true);
   deployable(round(nowTwo), 9, true);
 });
 

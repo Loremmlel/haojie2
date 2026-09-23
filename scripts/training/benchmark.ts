@@ -24,7 +24,7 @@ import { sampleTrainingTransition } from '../../src/ai/training/simulation';
 import { TrainingService } from './protocol';
 import { runSelfPlay } from './self-play';
 
-const corpusPath = 'docs/playtests/cli-counter-freeze-20260921.jsonl';
+const corpusPath = 'docs/playtests/current/cli-feedback5-20260923.jsonl';
 const corpusText = readFileSync(corpusPath, 'utf8');
 const [header, ...rows] = corpusText
   .trim()

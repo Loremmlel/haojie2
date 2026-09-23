@@ -78,7 +78,7 @@ test('command-line entry accepts piped human play and replay without loading or 
 });
 
 test('current rules fixture replays every command and refuses an explicitly different ruleset', () => {
-  const text = readFileSync('docs/playtests/cli-counter-freeze-20260921.jsonl', 'utf8');
+  const text = readFileSync('docs/playtests/current/cli-feedback5-20260923.jsonl', 'utf8');
   assert.equal(replayTranscript(text).commands, 79);
   const [header, ...commands] = text.trim().split('\n');
   const initial = JSON.parse(header);

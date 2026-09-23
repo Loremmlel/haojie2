@@ -14,7 +14,7 @@ export async function verifyPacing({ page, load, exported, waitForState, scenari
     let last = '70';
     window.pacingObserver = new MutationObserver(() => {
       const text = document.querySelector('[data-cell="4,8"]')?.getAttribute('aria-label') ?? '';
-      const hp = text.includes('墓地') ? text.match(/(\d+)生命/)?.[1] : null;
+      const hp = text.includes('路障') ? text.match(/(\d+)生命/)?.[1] : null;
       if (hp && hp !== last) {
         window.pacingHits.push({ time: performance.now(), hp: Number(hp) });
         last = hp;
@@ -74,21 +74,17 @@ export async function verifyPacing({ page, load, exported, waitForState, scenari
     await load('pacing');
     const logReference = page
       .locator('.battle-log')
-      .getByRole('link', { name: '墓地', exact: true })
+      .getByRole('link', { name: '独行侠', exact: true })
       .first();
     await logReference.waitFor();
     await ready();
     const referenceSnapshot = await exported();
     await logReference.click();
     await page
-      .getByRole('dialog', { name: '墓地', exact: true })
-      .getByRole('link', { name: '策反', exact: true })
+      .getByRole('dialog', { name: '独行侠', exact: true })
+      .getByRole('link', { name: '休眠', exact: true })
       .click();
-    await page
-      .getByRole('dialog', { name: '策反', exact: true })
-      .getByRole('link', { name: '金身', exact: true })
-      .click();
-    const keyword = page.getByRole('dialog', { name: '金身 · 状态与特性', exact: true });
+    const keyword = page.getByRole('dialog', { name: '疲劳／休眠 · 状态与特性', exact: true });
     await keyword.waitFor();
     await page.waitForTimeout(1800);
     await keyword.getByRole('button', { name: '返回上一介绍' }).click();

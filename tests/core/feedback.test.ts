@@ -94,7 +94,7 @@ test('feedback paths: directional BFS obeys blockers, board edges, friendly trav
   const s = fixture(),
     a = add(s, 26, 1, 4, 4),
     b = add(s, 24, 2, 4, 6);
-  const blocker = add(s, 'grave', 2, 5, 6);
+  const blocker = add(s, 'wall', 2, 5, 6);
   assert.equal(attackPath(s, a, asTarget(b), 4, 'left'), null);
   blocker.owner = 1;
   assert.ok(attackPath(s, a, asTarget(b), 4, 'left'));

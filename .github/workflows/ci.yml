@@ -50,7 +50,17 @@ jobs:
       - run: npm run test:browser:online
       - run: node --import tsx scripts/ai/shrine-smoke.ts
       - name: Verify current rules CLI command fingerprints
-        run: npm run play:cli -- --replay docs/playtests/cli-counter-freeze-20260921.jsonl
+        run: npm run play:cli -- --replay docs/playtests/current/cli-feedback5-20260923.jsonl
+      - name: Check out the September 21 counter-freeze rules
+        uses: actions/checkout@v4
+        with:
+          ref: b49223f9f8f3e8beb55199b963afbd4bf2020126
+          path: artifacts/counter-freeze-rules
+          persist-credentials: false
+      - name: Verify the unmodified counter-freeze recording
+        run: |
+          ln -s "$GITHUB_WORKSPACE/node_modules" artifacts/counter-freeze-rules/node_modules
+          npm --prefix artifacts/counter-freeze-rules run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/cli-counter-freeze-20260921.jsonl"
       - name: Check out the original September 21 feedback4 rules
         uses: actions/checkout@v4
         with:

@@ -335,7 +335,7 @@ test('19 barricade expires at next own turn', () => {
   s = round(s);
   assert.equal(s.units.filter((v) => v.kind === 'wall').length, 0);
 });
-test('20 death lottery either denies a head or retaliates for30, deterministically', () => {
+test('20 death lottery either denies a head or retaliates for20, deterministically', () => {
   for (const deny of [true, false]) {
     const s = fixture(),
       u = add(s, 26, 1, 3, 4),
@@ -343,7 +343,7 @@ test('20 death lottery either denies a head or retaliates for30, deterministical
     s.rng = seedFor(deny ? 0 : 0.5, deny ? 0.5 : 1);
     const n = strike(s, u, v);
     assert.equal(n.heads[1], deny ? 6 : 7);
-    assert.equal(unit(n, u.id).hp, deny ? 55 : 25);
+    assert.equal(unit(n, u.id).hp, deny ? 55 : 35);
   }
 });
 test('21 two explicit charge rounds unlock move-and-attack as one skill', () => {
@@ -411,7 +411,7 @@ test('26 growth cycles cap/heal then attack then range', () => {
   const u = add(s, 26, 1, 3, 4);
   for (let i = 0; i < 4; i++) {
     unit(s, u.id).operations = 0;
-    const v = add(s, 'grave', 2, 3, 5);
+    const v = add(s, 'wall', 2, 3, 5);
     v.hp = 1;
     s = strike(s, unit(s, u.id), v);
   }
@@ -444,7 +444,7 @@ test('storage includes draw turn and expires at exact next-own boundary', () => 
     false,
   );
 });
-test('extra deployment control is sampled once at turn start', () => {
+test('extra deployment control uses the current row advantage', () => {
   let s = fixture();
   add(s, 1, 1, 1, 10);
   add(s, 1, 1, 3, 10);
@@ -452,7 +452,8 @@ test('extra deployment control is sampled once at turn start', () => {
   s = round(s);
   assert.ok(s.deployRows[1].includes(10));
   s.units.pop();
-  assert.ok(s.deployRows[1].includes(10));
+  const id = card(s, 1);
+  assert.ok(commandError(s, { type: 'deploy', cardId: id, x: 8, y: 10 }));
   s = round(s);
   assert.equal(s.deployRows[1].includes(10), false);
 });

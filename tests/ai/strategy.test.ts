@@ -289,7 +289,7 @@ test('idle zero-damage hits and full-health heals cannot consume an AI turn whil
 });
 
 test('damage to a threatened enemy never makes that enemy a more valuable asset; charge is expendable power', () => {
-  for (const kind of ['grave', 1, 7] as const) {
+  for (const kind of ['wall', 1, 7] as const) {
     const s = fixture(),
       cannon = add(s, 4, 1, 4, 4),
       victim = add(s, kind, 2, 4, 6);

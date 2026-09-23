@@ -13,6 +13,7 @@ import {
   signedAttack,
   hasAura,
   canAttackFriend,
+  canDeployKind,
 } from '../../engine/core/traits';
 import { regularSummonCommands, summonChoices } from './shrines';
 import { availableSyntheses, synthesisDestinations } from '../../engine/setup/synthesis';
@@ -33,6 +34,7 @@ import {
   attackPath,
   selectableAttackRoutes,
   canPlace,
+  deploymentRows,
   cells,
   distance,
   equal,
@@ -213,6 +215,26 @@ function pointRank(s: GameState, a: ActionSpec, c: Command, p: Point, u?: Unit):
       placementValue(s, ghost, p) +
       baseCoverValue(s, { ...ghost, ...p }) +
       payloadCoverValue(s, { ...ghost, ...p }, (v) => materialValue(s, v));
+    if (c.type === 'move' && u) {
+      const cards = s.hands[u.owner].filter((c) => canDeployKind(c.kind));
+      if (cards.length) {
+        const before = deploymentRows(s, u.owner);
+        const view = { ...s, units: s.units.map((v) => (v.id === u.id ? { ...v, ...p } : v)) };
+        const gained = deploymentRows(view, u.owner).filter((y) => !before.includes(y));
+        // 仅为可实际落子的增援保留推进候选；最终搜索继续比较暴露、反击和不推进。
+        if (
+          gained.length &&
+          cards.some((card) =>
+            ALL_CELLS.some(
+              (at) =>
+                gained.includes(at.y) &&
+                canPlace(view, template(card.kind, u.owner, 0, at), at, true),
+            ),
+          )
+        )
+          value += Math.min(2, cards.length) * 8;
+      }
+    }
     if (isRunner(ghost))
       value += occupants(s, p)
         .filter((v) => v.id !== ghost.id && v.owner !== ghost.owner)
@@ -431,7 +453,14 @@ function choices(s: GameState, a: ActionSpec, c: Command, step: SelectionStep): 
   if (step.kind === 'point') return points(s, a, c).map((p) => ({ ...c, ...p }));
   if (step.kind === 'death')
     return s.deaths
-      .filter((d) => d.owner === s.active && !d.revived && s.ply - d.ply <= 4 && s.ply > d.ply)
+      .filter(
+        (d) =>
+          d.kind !== 'grave' &&
+          d.owner === s.active &&
+          !d.revived &&
+          s.ply - d.ply <= 4 &&
+          s.ply > d.ply,
+      )
       .sort((a, b) => definition(b.kind).attack - definition(a.kind).attack)
       .map((d) => ({ ...c, deathId: d.id }));
   const lines = Array.from({ length: step.kind === 'row' ? 13 : 9 }, (_, i) => ({
@@ -648,6 +677,19 @@ export function* iterateCandidateGroups(
 }
 export function candidateGroups(s: GameState, difficulty: Difficulty): CandidateGroup[] {
   return [...iterateCandidateGroups(s, difficulty)];
+}
+
+/** 推进行权后的短续招，只枚举新开放行的合法部署，仍复用手牌模式与落点评分。 */
+export function deploymentCandidates(s: GameState, rows: number[]): Command[] {
+  return s.hands[s.active].flatMap((card) =>
+    cardActions(s, card)
+      .filter((a) => a.command.type === 'deploy')
+      .flatMap((a) =>
+        expand(s, a, 1)
+          .filter((c) => c.y !== undefined && rows.includes(c.y))
+          .slice(0, 2),
+      ),
+  );
 }
 
 /** 低成本战术续招：复用目标规则，不枚举全部移动。 */

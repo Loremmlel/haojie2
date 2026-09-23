@@ -12,7 +12,10 @@ import { TrainingEnvironment } from '../../src/match/training';
 import { add, card, fixture } from '../helpers';
 
 test('79条当前正式回放命令均能分解并恢复，实际随机结果保持一致', () => {
-  const [header, ...rows] = readFileSync('docs/playtests/cli-counter-freeze-20260921.jsonl', 'utf8')
+  const [header, ...rows] = readFileSync(
+    'docs/playtests/current/cli-feedback5-20260923.jsonl',
+    'utf8',
+  )
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line));

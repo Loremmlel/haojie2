@@ -7,6 +7,37 @@ import { distribution } from '../../src/ai/simulation/simulate';
 import { imagined, observe } from '../../src/ai/observation';
 import { add, card, fixture } from '../helpers';
 import type { Difficulty } from '../../src/ai/types';
+import { decide } from '../../src/ai/planning/search';
+
+test('三档AI能先推进再部署，但不会为开放同一行走进就绪定炮火线', () => {
+  for (const danger of [false, true])
+    for (const difficulty of ['easy', 'medium', 'hard'] as const) {
+      let s = fixture();
+      add(s, 3, 1, 3, 10).operations = 1;
+      const mover = add(s, 20, 1, 5, 8);
+      card(s, 1);
+      s.bases[2] = 20;
+      if (danger) {
+        const gun = add(s, 4, 2, 5, 12);
+        gun.charge = gun.readyCharge = 2;
+      }
+      const original = structuredClone(s);
+      const result = decide(observe(s), 1, difficulty, { simulations: 900 });
+      assert.deepEqual(
+        decide(observe(s), 1, difficulty, { simulations: 900 }).command,
+        result.command,
+      );
+      assert.deepEqual(s, original);
+      assert.ok(result.stats.simulations <= 900);
+      for (const step of result.plan) s = applyCommand(s, step.command);
+      if (danger) {
+        assert.ok(s.units.find((u) => u.id === mover.id)!.y < 10, JSON.stringify(result.plan));
+      } else {
+        assert.equal(result.command?.type, 'move');
+        assert.ok(result.plan.some((p) => p.command.type === 'deploy' && p.command.y === 10));
+      }
+    }
+});
 
 test('feedback AI: all levels enumerate legal flank/knockback directions and both explicit charge deployments', () => {
   for (const difficulty of ['easy', 'medium', 'hard'] as Difficulty[]) {
@@ -100,7 +131,7 @@ test('feedback AI: gold lottery is exactly 20/80 conditional on normal slot 17; 
 test('September17 AI: global delayed payloads wait through horn offsets and guard-aware conversion requires real loss', () => {
   const s = fixture(),
     carrier = add(s, 9, 1, 4, 4),
-    victim = add(s, 'grave', 2, 4, 6);
+    victim = add(s, 'wall', 2, 4, 6);
   carrier.offset = 2;
   carrier.effects.push({
     type: 'execute',
