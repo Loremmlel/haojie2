@@ -80,8 +80,9 @@ test('热启动样本可按终局记录分组，教师无trace/伪MCTS标签，�
   assert.equal(report.results[0].returns, null);
   assert.equal(rows.filter((r) => r.type === 'sample').length, 3);
   for (const r of rows.filter((r) => r.type === 'sample')) {
-    assert.equal('seed' in r.observation, false);
-    assert.equal('rng' in r.observation, false);
+    assert.equal('observation' in r, false);
+    assert.equal(typeof r.before, 'string');
+    assert.equal(typeof r.after, 'string');
     assert.equal('trace' in r, false);
     assert.equal('visits' in r, false);
   }

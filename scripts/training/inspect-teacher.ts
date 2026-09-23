@@ -1,17 +1,16 @@
 import assert from 'node:assert/strict';
-import { createReadStream, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { createInterface } from 'node:readline';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { TrainingEnvironment } from '../../src/match/training';
-import { fingerprint, decisionOwner } from '../../src/ai/observation';
+import { decisionOwner } from '../../src/ai/observation';
 import { HAOJIE_RULESET } from '../../src/engine/online/player-view';
 import { encodingSourceHash } from './encode';
 import { TrainingActionTree } from '../../src/ai/training/action-tree';
 import { encodeDecision } from '../../src/ai/training/encoding/decision';
-import { parseSession } from '../../src/engine';
+import { readTrainingRecords } from './records/replay';
+import { hashRecordFile } from './records/io';
 
 const increment = (counts: Record<string, number>, key: string) => {
   counts[key] = (counts[key] ?? 0) + 1;
@@ -32,7 +31,7 @@ const latency = (values: number[]) => {
 /**
  * 流式重放教师记录，只在宿主恢复正式种子；验证每条公开观察、命令后指纹和实际胜负。
  * 统计被观察到与实际作为动作来源的种类，区分缓存/零模拟/真实搜索；不把覆盖率当棋力。
- * 相邻同名JSON报告存在时也验证训练上限，否则仅验证引擎状态、不猜测旧采样上限。
+ * 实际上限来自轨迹头；相邻同名JSON报告存在时一并检查，不能改变重放边界。
  */
 export async function inspectTeacherFiles(paths: string[], encodeInputs = false) {
   const files = [],
@@ -40,26 +39,18 @@ export async function inspectTeacherFiles(paths: string[], encodeInputs = false)
     profiles: Record<string, any> = {},
     identities = new Set();
   for (const path of paths) {
-    const reportPath = path.replace(/\.jsonl$/, '.json');
+    const reportPath = path.replace(/\.jsonl(?:\.gz)?$/, '.json');
     const producer =
       reportPath !== path && existsSync(reportPath)
         ? JSON.parse(readFileSync(reportPath, 'utf8'))
         : null;
     if (producer) assert.equal(producer.format, 'haojie-teacher-run-v1');
-    const source = createReadStream(path),
-      digest = createHash('sha256');
-    source.on('data', (chunk) => digest.update(chunk));
-    const lines = createInterface({ input: source, crlfDelay: Infinity });
-    let env: TrainingEnvironment | undefined,
-      header: any,
+    let header: any,
       actorCommands = { 1: 0, 2: 0 },
       actorProfiles: Partial<Record<1 | 2, string>> = {},
       fileCommands = 0;
-    for await (const line of lines) {
-      if (!line.trim()) continue;
-      const row = JSON.parse(line);
+    for await (const row of readTrainingRecords(path)) {
       if (row.type === 'game') {
-        assert.equal(env, undefined, '上一局缺少结束记录');
         assert.equal(row.ruleset, HAOJIE_RULESET);
         const identity = row.gameId ?? `${row.ruleset}:${row.rules}:${row.seed}`;
         assert.ok(!identities.has(identity), '重复教师轨迹');
@@ -67,30 +58,13 @@ export async function inspectTeacherFiles(paths: string[], encodeInputs = false)
         header = row;
         actorCommands = { 1: 0, 2: 0 };
         actorProfiles = {};
-        const options = {
-          maxCommands: 1e9,
-          maxPlies: 1e9,
-          ...producer?.options,
-          seed: row.seed,
-          rules: row.rules,
-        };
-        env =
-          row.source === 'saved-game'
-            ? TrainingEnvironment.fromState(
-                parseSession(JSON.stringify(row.initial)).present,
-                options,
-              )
-            : new TrainingEnvironment(options);
+        if (producer)
+          for (const key of ['maxCommands', 'maxPlies'])
+            if (producer.options?.[key] !== undefined)
+              assert.equal(row.limits[key], producer.options[key]);
       } else if (row.type === 'sample') {
-        assert.ok(env, '样本缺少对局头');
         assert.equal(row.game, header.game);
-        assert.equal(row.index, env.status().commands);
-        const observation = env.observation(row.actor);
-        assert.deepEqual(
-          row.observation,
-          observation,
-          `公开局面漂移：${path}/${row.game}/${row.index}`,
-        );
+        const observation = row.observation as import('../../src/ai/types').Observation;
         const owner: 1 | 2 = row.actor;
         if (header.source !== 'saved-game') assert.equal(owner, decisionOwner(observation));
         const name =
@@ -184,18 +158,9 @@ export async function inspectTeacherFiles(paths: string[], encodeInputs = false)
             summary.totalCandidates += input.candidates.length;
           }
         }
-        env.step(owner, row.command);
         fileCommands++;
-        if (row.after) assert.equal(row.after, fingerprint(env.observation()));
       } else if (row.type === 'outcome') {
-        assert.ok(env, '结束记录缺少对局');
         assert.equal(row.game, header.game);
-        const status = env.status();
-        for (const key of ['commands', 'ply', 'phase', 'terminated', 'winner', 'returns'] as const)
-          assert.deepEqual(row[key], status[key], `终局状态漂移：${path}/${row.game}/${key}`);
-        if (producer)
-          for (const key of ['truncated', 'truncation', 'toPlay'] as const)
-            assert.deepEqual(row[key], status[key]);
         assert.equal(Number(row.terminated) + Number(row.truncated) + Number(!!row.interrupted), 1);
         for (const owner of [1, 2] as const) {
           const name = actorProfiles[owner];
@@ -217,13 +182,12 @@ export async function inspectTeacherFiles(paths: string[], encodeInputs = false)
           seed: header.seed,
           primaryPlayer: header.primaryPlayer,
           teachers: header.teachers,
-          finalFingerprint: fingerprint(env.observation()),
+          finalFingerprint: row.after,
         });
-        env = undefined;
+        header = undefined;
       } else throw new Error(`未知教师记录：${row.type}`);
     }
-    assert.equal(env, undefined, '文件尾部缺少显式结束记录');
-    files.push({ path, sha256: digest.digest('hex'), commands: fileCommands, producer });
+    files.push({ path, sha256: await hashRecordFile(path), commands: fileCommands, producer });
   }
   const pairs = new Map<string, any[]>();
   for (const game of games) {

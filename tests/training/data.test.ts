@@ -5,23 +5,35 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { encodeTeacherFile } from '../../scripts/training/encode';
 import { TrainingEnvironment } from '../../src/match/training';
-import { HAOJIE_RULESET } from '../../src/engine/online/player-view';
+import { recordHeader } from '../../scripts/training/records/replay';
+import { fingerprint } from '../../src/ai/observation';
 
 test('教师转换保留中断局的策略样本，标签与宿主种子不进入网络输入', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'haojie-encoding-'));
   try {
     const path = join(folder, 'teacher.jsonl');
     const env = new TrainingEnvironment({ seed: 19 });
+    const before = fingerprint(env.observation());
+    env.step(1, { type: 'summon' });
     await writeFile(
       path,
       [
-        { type: 'game', game: 0, ruleset: HAOJIE_RULESET, rules: 'classic', seed: 19, budget: 40 },
+        {
+          type: 'game',
+          game: 0,
+          ...recordHeader(env),
+          source: 'teacher',
+          rules: 'classic',
+          seed: 19,
+          budget: 40,
+        },
         {
           type: 'sample',
           game: 0,
           index: 0,
           actor: 1,
-          observation: env.observation(),
+          before,
+          after: fingerprint(env.observation()),
           command: { type: 'summon' },
         },
       ]
@@ -45,9 +57,8 @@ test('教师转换保留中断局的策略样本，标签与宿主种子不进�
         JSON.stringify({
           type: 'outcome',
           game: 0,
-          commands: 1,
-          terminated: false,
-          truncated: false,
+          ...env.status(),
+          after: fingerprint(env.observation()),
           interrupted: 'cancelled',
           returns: null,
           winner: null,

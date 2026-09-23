@@ -10,7 +10,7 @@ import {
   validAttackRoute,
   WIDTH,
 } from '../../engine/core/geometry';
-import { ensure, getStats, piercing } from '../../engine/core/state';
+import { allegiance, ensure, getStats, piercing } from '../../engine/core/state';
 import { allPieces } from '../../engine/core/traits';
 import { parseCommand } from '../../engine/online/authority';
 import { SYNTHESIS_RECIPES, synthesisDestinations } from '../../engine/setup/synthesis';
@@ -164,8 +164,10 @@ export class TrainingActionTree {
       case 'target':
         for (const t of targets(this.position)) {
           if (step.unitOnly && !t.unit) continue;
-          if (step.relation === 'friend' && t.owner !== this.actor) continue;
-          if (step.relation === 'enemy' && t.owner === this.actor) continue;
+          // 墓地保留来源 owner，但目标关系必须使用引擎派生的当前阵营。
+          const owner = t.unit ? allegiance(this.position, t.unit) : t.owner;
+          if (step.relation === 'friend' && owner !== this.actor) continue;
+          if (step.relation === 'enemy' && owner === this.actor) continue;
           if (step.field === 'sacrificeIds' && c.sacrificeIds?.includes(t.id)) continue;
           add(
             t.id,

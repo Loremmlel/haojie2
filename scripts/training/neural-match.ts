@@ -1,5 +1,4 @@
-import { once } from 'node:events';
-import { createWriteStream, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +20,8 @@ import type { Difficulty } from '../../src/ai/types';
 import { PythonPolicy } from './python-policy';
 import { encodingSourceHash } from './encode';
 import { summarizeMatches } from './neural-report';
+import { recordHeader } from './records/replay';
+import { withRecordOutput } from './records/io';
 
 export interface NeuralMatchOptions extends TrainingOptions, DecodeOptions {
   games: number;
@@ -57,7 +58,8 @@ export async function runNeuralMatches(
       seed,
       networkPlayer,
       rules: options.rules ?? 'classic',
-      ruleset: env.status().ruleset,
+      ...recordHeader(env),
+      source: 'neural',
       teacher: options.difficulty ?? 'easy',
       teacherBudget: options.simulations ?? 'production-work',
       maxNodes: options.maxNodes ?? DEFAULT_DECODE_NODES,
@@ -111,7 +113,6 @@ export async function runNeuralMatches(
               index: status.commands,
               actor,
               before,
-              observation,
               decoded,
               decisionMs: performance.now() - decisionStart,
             });
@@ -128,7 +129,6 @@ export async function runNeuralMatches(
           index: status.commands,
           actor,
           before,
-          observation,
           error,
         });
         break;
@@ -152,7 +152,6 @@ export async function runNeuralMatches(
           index: status.commands,
           actor,
           before,
-          observation,
           command,
           decoded,
           error,
@@ -183,6 +182,7 @@ export async function runNeuralMatches(
       seed,
       networkPlayer,
       ...status,
+      after: fingerprint(env.observation()),
       interrupted,
       error,
       elapsedMs: performance.now() - started,
@@ -245,9 +245,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     signal: cancellation.signal,
   };
   mkdirSync(values.output, { recursive: true });
-  const tracePath = resolve(values.output, 'games.jsonl');
-  const stream = createWriteStream(tracePath, { flags: 'wx' });
-  await once(stream, 'open');
+  const tracePath = resolve(values.output, 'games.jsonl.gz');
   let policy: PythonPolicy | undefined;
   const started = new Date().toISOString();
   const sourceSha256 = encodingSourceHash();
@@ -265,25 +263,25 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const experimentSourceSha256 = sources.digest('hex');
   let failure: string | null = null;
   try {
-    policy = await PythonPolicy.start({
-      python: values.python!,
-      checkpoint: values.checkpoint,
-      device: values.device!,
-      precision: values.precision!,
-      threads: numeric('threads'),
-      timeoutMs: numeric('timeout-ms'),
-      signal: cancellation.signal,
-    });
-    await runNeuralMatches(options, policy.evaluate, async (row) => {
-      if (!stream.write(JSON.stringify(row) + '\n')) await once(stream, 'drain');
-      if (row.type === 'outcome') console.error(JSON.stringify(row));
+    await withRecordOutput(tracePath, async (emit) => {
+      policy = await PythonPolicy.start({
+        python: values.python!,
+        checkpoint: values.checkpoint!,
+        device: values.device!,
+        precision: values.precision!,
+        threads: numeric('threads'),
+        timeoutMs: numeric('timeout-ms'),
+        signal: cancellation.signal,
+      });
+      await runNeuralMatches(options, policy.evaluate, async (row) => {
+        await emit(row);
+        if (row.type === 'outcome') console.error(JSON.stringify(row));
+      });
     });
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
   } finally {
     policy?.close();
-    stream.end();
-    await once(stream, 'finish');
   }
   const { signal: _, ...recordOptions } = options;
   const report = {

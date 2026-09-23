@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { createReadStream, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { createInterface } from 'node:readline';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readTrainingRecords } from './records/replay';
+import { hashRecordFile } from './records/io';
 import { createHash } from 'node:crypto';
 import { cpus } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -74,15 +75,9 @@ export async function auditPositions(
 async function selectPositions(path: string, count: number) {
   const selected: (Position & { rank: string })[] = [],
     seen = new Set<string>();
-  const digest = createHash('sha256'),
-    source = createReadStream(path);
-  source.on('data', (chunk) => digest.update(chunk));
-  const lines = createInterface({ input: source, crlfDelay: Infinity });
   let game: any,
     eligible = 0;
-  for await (const line of lines) {
-    if (!line.trim()) continue;
-    const row = JSON.parse(line);
+  for await (const row of readTrainingRecords(path)) {
     if (row.type === 'game') {
       assert.equal(row.ruleset, HAOJIE_RULESET, '旧规则样本不能用于当前教师审计');
       game = row;
@@ -114,7 +109,7 @@ async function selectPositions(path: string, count: number) {
   return {
     positions: selected.map(({ rank: _, ...p }) => p),
     eligible,
-    sha256: digest.digest('hex'),
+    sha256: await hashRecordFile(path),
   };
 }
 

@@ -11,6 +11,18 @@ import { trainingGeometry } from '../../src/ai/training/queries';
 import { TrainingEnvironment } from '../../src/match/training';
 import { add, card, fixture } from '../helpers';
 
+test('墓地中立阵营进入牵引目标域，不按保留的来源owner误删合法教师动作', () => {
+  const state = fixture();
+  const hook = add(state, 7, 1, 4, 10);
+  const grave = add(state, 'grave', 1, 5, 12);
+  const command: Command = { type: 'skill', unitId: hook.id, targetId: grave.id, x: 3, y: 12 };
+  const expected = applyCommand(state, command);
+  const tree = new TrainingActionTree(observe(state, 1), 1);
+  const trace = tree.trace(command);
+  const last = trace.at(-1)!;
+  assert.deepEqual(applyCommand(state, last.node.choices[last.selected].command), expected);
+});
+
 test('79条当前正式回放命令均能分解并恢复，实际随机结果保持一致', () => {
   const [header, ...rows] = readFileSync(
     'docs/playtests/current/cli-feedback5-20260923.jsonl',

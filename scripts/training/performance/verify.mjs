@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { build } from 'esbuild';
+import { gunzipSync } from 'node:zlib';
 
 // 仅适用于本次 geometry 优化：其余源码共用工作树，以指定提交的原几何实现作对照。
 // 完整状态包含正式 rng、事件和日志，留在宿主断言中，绝不送给教师。
@@ -55,15 +56,26 @@ for (const unit of demo.units)
 let commands = 0;
 for (const path of paths) {
   let a, b;
-  for (const line of readFileSync(path, 'utf8').trim().split('\n')) {
+  const bytes = readFileSync(path);
+  const text = (path.endsWith('.gz') ? gunzipSync(bytes) : bytes).toString('utf8');
+  for (const line of text.trim().split('\n')) {
     const row = JSON.parse(line);
     if (row.type === 'game') {
-      a = before.createGame(row.seed, row.rules);
-      b = after.createGame(row.seed, row.rules);
+      assert.equal(
+        row.format,
+        'haojie-training-record-v1',
+        '旧训练轨迹请重新生成；历史实验使用当时脚本',
+      );
+      a = row.initial
+        ? before.parseSession(JSON.stringify(row.initial)).present
+        : before.createGame(row.seed, row.rules);
+      b = row.initial
+        ? after.parseSession(JSON.stringify(row.initial)).present
+        : after.createGame(row.seed, row.rules);
     } else if (row.format === 'haojie-cli-v1') {
       a = before.parseSession(JSON.stringify(row.initial)).present;
       b = after.parseSession(JSON.stringify(row.initial)).present;
-    } else if (row.command) {
+    } else if (row.command && !['rejected', 'pause', 'error'].includes(row.type)) {
       a = before.applyCommand(a, row.command);
       b = after.applyCommand(b, row.command);
       assert.deepEqual(b, a, `${path} 第${commands + 1}条命令状态漂移`);

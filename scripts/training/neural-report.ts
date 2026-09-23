@@ -1,5 +1,4 @@
-import { createReadStream } from 'node:fs';
-import { createInterface } from 'node:readline';
+import { readTrainingRecords } from './records/replay';
 
 function distribution(values: number[]) {
   const sorted = [...values].sort((a, b) => a - b);
@@ -19,17 +18,14 @@ export async function summarizeMatches(path: string) {
     decisions: any[] = [];
   let games = 0,
     rejectedCommands = 0;
-  const lines = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
-  for await (const line of lines) {
-    if (!line.trim()) continue;
-    const row = JSON.parse(line);
+  for await (const record of readTrainingRecords(path)) {
+    const { observation: _, ...row } = record;
     if (row.type === 'game') games++;
     if (row.type === 'decision') decisions.push(row);
     if (row.type === 'outcome') outcomes.push(row);
     if (['pause', 'error', 'rejected'].includes(row.type)) {
-      // 完整观察留在trace，摘要只记可定位的原因，避免报告随异常局面体积膨胀。
-      const { observation: _, ...small } = row;
-      anomalies.push(small);
+      // 局面可由轨迹重建，摘要只保留定位信息。
+      anomalies.push(row);
       if (row.type === 'rejected') rejectedCommands++;
     }
   }

@@ -1,10 +1,9 @@
-import { createWriteStream, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { cpus } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { once } from 'node:events';
 import { setImmediate } from 'node:timers/promises';
 import {
   TrainingEnvironment,
@@ -16,6 +15,8 @@ import { decisionOwner, fingerprint } from '../../src/ai/observation';
 import type { Difficulty } from '../../src/ai/types';
 import type { Player } from '../../src/engine/types';
 import { encodingSourceHash } from './encode';
+import { recordHeader } from './records/replay';
+import { withRecordOutput } from './records/io';
 
 export interface TeacherProfile {
   difficulty: Difficulty;
@@ -90,7 +91,8 @@ export async function runSelfPlay(
       gameId,
       primaryPlayer,
       teachers: profiles,
-      ruleset: env.status().ruleset,
+      ...recordHeader(env),
+      source: 'teacher',
       seed,
       rules: options.rules ?? 'classic',
       difficulty: options.difficulty ?? 'easy',
@@ -141,7 +143,7 @@ export async function runSelfPlay(
         game,
         index: status.commands - 1,
         actor,
-        observation,
+        before: fingerprint(observation),
         command: decision.command,
         teacherStats: decision.stats,
         timing: { teacherMs, stepMs },
@@ -156,7 +158,7 @@ export async function runSelfPlay(
       ...status,
       interrupted,
       error,
-      ...(interrupted ? { observation: env.observation() } : {}),
+      after: fingerprint(env.observation()),
       elapsedMs: performance.now() - start,
       simulations,
       maxUnits,
@@ -178,9 +180,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const output = value('output', '');
   const reportPath = value('report', '');
   if (reportPath && existsSync(reportPath)) throw new Error('报告已存在，请保留旧实验。');
-  if (output) mkdirSync(dirname(output), { recursive: true });
-  const stream = output ? createWriteStream(output, { flags: 'wx' }) : undefined;
-  if (stream) await once(stream, 'open');
   const cancellation = new AbortController();
   process.once('SIGINT', () => cancellation.abort());
   const started = new Date().toISOString();
@@ -209,42 +208,34 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       : {}),
     signal: cancellation.signal,
   };
-  try {
-    const report = await runSelfPlay(options, async (row) => {
-      if (stream && !stream.write(JSON.stringify(row) + '\n')) await once(stream, 'drain');
-      if ((row as { type: string }).type === 'outcome') {
-        const { observation: _, ...brief } = row as Record<string, unknown>;
-        console.error(JSON.stringify(brief));
-      }
-    });
-    if (reportPath) {
-      mkdirSync(dirname(reportPath), { recursive: true });
-      const { signal: _, ...recordOptions } = options;
-      writeFileSync(
-        reportPath,
-        JSON.stringify(
-          {
-            format: 'haojie-teacher-run-v1',
-            started,
-            options: recordOptions,
-            sourceSha256,
-            commit,
-            runtime: { node: process.version, cpu: cpus()[0].model },
-            ...report,
-          },
-          null,
-          2,
-        ) + '\n',
-        { flag: 'wx' },
-      );
-    }
-    console.log(JSON.stringify(report, null, 2));
-    if (report.cancelled) process.exitCode = 130;
-    else if (report.results.some((r) => r.interrupted)) process.exitCode = 1;
-  } finally {
-    if (stream) {
-      stream.end();
-      await once(stream, 'finish');
-    }
+  const report = await withRecordOutput(output, (emit) =>
+    runSelfPlay(options, async (row) => {
+      await emit(row);
+      if ((row as { type: string }).type === 'outcome') console.error(JSON.stringify(row));
+    }),
+  );
+  if (reportPath) {
+    mkdirSync(dirname(reportPath), { recursive: true });
+    const { signal: _, ...recordOptions } = options;
+    writeFileSync(
+      reportPath,
+      JSON.stringify(
+        {
+          format: 'haojie-teacher-run-v1',
+          started,
+          options: recordOptions,
+          sourceSha256,
+          commit,
+          runtime: { node: process.version, cpu: cpus()[0].model },
+          ...report,
+        },
+        null,
+        2,
+      ) + '\n',
+      { flag: 'wx' },
+    );
   }
+  console.log(JSON.stringify(report, null, 2));
+  if (report.cancelled) process.exitCode = 130;
+  else if (report.results.some((r) => r.interrupted)) process.exitCode = 1;
 }

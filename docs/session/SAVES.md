@@ -28,16 +28,17 @@
 ## 转为训练样本
 
 ```sh
-npm run train:import-save -- artifacts/match.json artifacts/match-samples.jsonl
-npm run train:inspect -- artifacts/match-samples.jsonl --encode --output artifacts/match-inspection.json
-npx tsx scripts/training/encode.ts artifacts/match-samples.jsonl > artifacts/match-encoded.jsonl
+npm run train:import-save -- artifacts/match.json artifacts/match-samples.jsonl.gz
+npm run train:inspect -- artifacts/match-samples.jsonl.gz --encode --output artifacts/match-inspection.json
+# prepare至少需要两个不同种子族，以隔离训练集和验证集。
+training/.venv/Scripts/python.exe -X utf8 -m haojie_training.prepare artifacts/match-samples.jsonl.gz artifacts/another-match-samples.jsonl.gz --output artifacts/encoded-matches
 ```
 
-转换先通过同版重放校验，再从起点依序执行，以实际操作者生成`observation + command`。暗选、对方反应与回合外巨大化不能一律使用active阵营。记录的权威种子和起点仅留在整局元数据，网络输入仍经原有Observation白名单与编码器。
+转换先通过同版重放校验，再从起点依序执行，仅落盘命令、操作者和前后指纹。训练读取时重建操作者Observation；暗选、对方反应与回合外巨大化不能一律使用active阵营。权威种子和起点仅留在整局元数据，网络输入仍经公开白名单与编码器。
 
-输出沿用现有`game/sample/outcome` JSONL，标记`source: saved-game`，保留记录起点和真实胜负。未结束存档标记`interrupted`、`returns: null`，只能用于策略标签。不会伪造教师搜索分数、概率、耗时或工作量；审计以`saved-game:unrated`分类，并单列缺少搜索统计的样本。
+输出为`haojie-training-record-v1`的`game/sample/outcome`轨迹，标记`source: saved-game`，保留记录起点和真实胜负。`.gz`后缀启用流式gzip；旧快照训练JSONL不兼容，须重新生成。未结束存档标记`interrupted`、`returns: null`，只能用于策略标签。不会伪造教师搜索分数、概率、耗时或工作量；审计以`saved-game:unrated`分类，并单列缺少搜索统计的样本。
 
-训练头的`ruleset`沿用训练/公开协议的`HAOJIE_RULESET`，`recordRuleset`保留存档的`RULESET_ID`，二者现有命名不同，不替换旧训练数据版本。转换后的样本可以预先编码供反复训练，无需每轮重放原始存档；空间节省不代表棋力或训练吞吐提升。
+训练头的`ruleset`为`HAOJIE_RULESET`，`recordRuleset`为`RULESET_ID`，二者都严格验证。prepare经管道编码并直接保存二进制`.pt`，不落盘大数组JSON，无需每轮重放原始存档；空间节省不代表棋力或训练吞吐提升。
 
 输出文件独占创建，不覆盖已有数据。若后续编码发现尚未支持的动作会明确失败，不静默丢样本；保留原始存档便于修复编码器后重试。
 

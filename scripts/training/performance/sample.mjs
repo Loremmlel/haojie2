@@ -6,9 +6,11 @@ import { cpus } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { createGzip } from 'node:zlib';
+import { pipeline } from 'node:stream/promises';
 
 // 输入是冻结的 self-play ESM 构建；每次独立进程测量真实搜索、序列化和落盘。
-// 固定 work 预算，计时不进入决策；轨迹摘要包含观察、命令、搜索统计和结果，排除耗时。
+// 固定 work 预算，计时不进入决策；摘要包含增量命令、指纹、统计和结果，排除耗时。
 const { values } = parseArgs({
   options: {
     module: { type: 'string' },
@@ -31,13 +33,19 @@ const options = {
 assert.ok(Number.isSafeInteger(options.maxCommands) && options.maxCommands > 0);
 const { runSelfPlay } = await import(pathToFileURL(resolve(values.module)).href);
 mkdirSync(dirname(values.output), { recursive: true });
-const stream = createWriteStream(`${values.output}.jsonl`, { flags: 'wx' });
-await once(stream, 'open');
+const output = createWriteStream(`${values.output}.jsonl.gz`, { flags: 'wx' });
+await once(output, 'open');
+const stream = createGzip();
+const written = pipeline(stream, output);
+void written.catch(() => {});
+const trajectoryFormat = 'haojie-training-record-v1';
 const digest = createHash('sha256');
 let commands = 0;
 const started = new Date().toISOString();
 const start = performance.now();
 const result = await runSelfPlay(options, async (row) => {
+  if (row.type === 'game') assert.equal(row.format, trajectoryFormat, '请重新构建增量教师模块');
+  assert.ok(!('observation' in row), '教师模块仍输出旧快照，请重新构建');
   const { timing, elapsedMs, ...stable } = row;
   digest.update(JSON.stringify(stable) + '\n');
   if (!stream.write(JSON.stringify(row) + '\n')) await once(stream, 'drain');
@@ -45,7 +53,7 @@ const result = await runSelfPlay(options, async (row) => {
     console.error(`${commands}条命令，${((performance.now() - start) / 1000).toFixed(1)}秒`);
 });
 stream.end();
-await once(stream, 'finish');
+await written;
 const elapsedMs = performance.now() - start;
 assert.ok(!result.cancelled && result.results.every((r) => !r.interrupted));
 const report = {
@@ -56,6 +64,8 @@ const report = {
   elapsedMs,
   commands,
   commandsPerSecond: (commands * 1000) / elapsedMs,
+  trajectoryFormat,
+  compression: 'gzip',
   trajectorySha256: digest.digest('hex'),
   ...result,
 };

@@ -4,7 +4,7 @@
 
 持续更新的阶段状态、实验结果和下一步见[训练进度](TRAINING-PROGRESS.md)。
 
-网页/CLI增量存档可通过`npm run train:import-save -- 输入.json 输出.jsonl`转换为现有训练样本，并沿用审计与编码器；起点、未结束局标签和隐私边界见[存档与训练转换](../session/SAVES.md)。
+网页/CLI增量存档可通过`npm run train:import-save -- 输入.json 输出.jsonl.gz`转换为增量训练轨迹，并沿用审计与编码器；起点、未结束局标签和隐私边界见[存档与训练转换](../session/SAVES.md)。旧快照训练JSONL不兼容，须重新生成。
 
 ## 已讨论的训练方向
 
@@ -122,13 +122,15 @@ geometry复用共享查询：`{type:"attack",unitId,targetId}`返回可选方向
 ## 生成热启动样本
 
 ```sh
-npm run train:selfplay -- --games 10 --seed 20260922 --rules classic --difficulty easy --nodes 100 --plies 100 --commands 3000 --output artifacts/teacher-classic.jsonl
-npm run train:selfplay -- --games 10 --rules shrine --difficulty hard --output artifacts/teacher-shrine.jsonl
+npm run train:selfplay -- --games 10 --seed 20260922 --rules classic --difficulty easy --nodes 100 --plies 100 --commands 3000 --output artifacts/teacher-classic.jsonl.gz
+npm run train:selfplay -- --games 10 --rules shrine --difficulty hard --output artifacts/teacher-shrine.jsonl.gz
 ```
 
 不指定output只输出摘要，便于测量不含记录IO的吞吐；指定后流式写出并遵守背压，拒绝覆盖已有文件。游戏种子依次递增；难度easy/medium/hard，不给nodes时共享现有production-work预算，指定时为每次决策固定节点目标，均不使用墙钟停止。
 
-记录分三种：game为宿主复现元数据（种子、规则与教师设置）；sample为观察、操作者、实际命令及教师统计；outcome为终局/截断与returns，另含观察、教师、落子的耗时分解及出现过的最大棋子数。计时只用于性能报告，不参与预算分配或选招。只将sample.observation作为网络输入，game中的种子不可送给策略。teacherStats不是MCTS访问分布；不伪造visits或将手工分数当作胜率。按game分组连接终局标签，截断/中断且无outcome的样本不能冒充已完成比赛。
+格式为`haojie-training-record-v1`，记录分三种：game保存种子、规则、实际截断上限与教师设置；sample只保存操作者、实际命令、前后指纹及教师统计；outcome保存真实结果和耗时摘要。没有逐步Observation或异常快照。`.jsonl.gz`启用流式gzip，`.jsonl`可用于调试；大批量集合和必要统计仍随命令数量增长，不保证所有文件小于1MB。
+
+编码、数据检查、预算审计和网络报告共用重放入口，严格检查版本、命令顺序、权限、指纹及结果。操作者Observation在内存中生成并经原有编码器输入网络，宿主种子/初始局面不进入特征。teacherStats不是MCTS访问分布；计时不参与预算或选招。缺少结束行的完整命令前缀显式标记中断，不能产生价值标签；损坏JSON/gzip报错。prepare通过管道直接写二进制`.pt`，训练阶段不再重放。旧快照训练JSONL不兼容，历史报告保留，重新采样使用新格式。
 
 SIGINT在命令边界取消，同步教师搜索尚不能在调用内部抢占。取消后丢弃本次未执行命令，不自动结束回合。规则版本改变时冻结旧数据与代码，禁止改写历史指纹。
 

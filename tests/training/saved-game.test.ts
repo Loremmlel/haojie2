@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { savedGameSamples } from '../../scripts/training/import/save';
 import { encodeTeacherFile } from '../../scripts/training/encode';
 import { inspectTeacherFiles } from '../../scripts/training/inspect-teacher';
+import { readTrainingRecords } from '../../scripts/training/records/replay';
 import {
   createGame,
   createSession,
@@ -28,12 +29,15 @@ async function verifyPipeline(session: Session) {
     const encoded: any[] = [];
     for await (const row of encodeTeacherFile(path)) encoded.push(row);
     assert.ok(encoded.some((r) => r.type === 'example'));
-    for (const row of rows.filter((r) => r.type === 'sample')) {
+    assert.ok(rows.every((r) => !('observation' in r)));
+    const restored: any[] = [];
+    for await (const row of readTrainingRecords(path)) restored.push(row);
+    for (const row of restored.filter((r) => r.type === 'sample')) {
       assert.equal('rng' in row.observation, false);
       assert.equal('seed' in row.observation, false);
       assert.equal(row.teacherStats, undefined);
     }
-    return rows;
+    return restored;
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
