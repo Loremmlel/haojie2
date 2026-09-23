@@ -6,7 +6,7 @@ permissions:
   contents: write
 concurrency:
   group: ai-combined-preparation
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   prepare:
     runs-on: ubuntu-latest
@@ -31,9 +31,29 @@ jobs:
           test "$(git hash-object src/ai/simulation/simulate.ts)" = 2a8a664af7c94c3dbee0e9239dbb0ca652edc227
           test "$(git hash-object src/ai/simulation/state-key.ts)" = 07497ccd0b9fe9d6f8db97cac70d3387a191ec7e
           test "$(git hash-object src/engine/core/geometry.ts)" = e27460039f42fbaf51a9a7d13685553fe7909f35
+      - name: Repair inaccessible lockfile URLs without changing versions or integrity
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          const original = structuredClone(lock);
+          const prefix = 'http://172.16.18.116:8082/repository/all/';
+          let changed = 0;
+          for (const [name, entry] of Object.entries(lock.packages)) {
+            if (!entry.resolved?.startsWith(prefix)) continue;
+            entry.resolved = 'https://registry.npmjs.org/' + entry.resolved.slice(prefix.length);
+            original.packages[name].resolved = entry.resolved;
+            changed++;
+          }
+          assert.equal(changed, 16);
+          assert.deepEqual(lock, original);
+          writeFileSync('package-lock.json', JSON.stringify(lock, null, 2) + '\n');
+          console.log('Repaired 16 registry URLs; all versions and integrity hashes unchanged.');
+          NODE
       - name: Install exact dependencies and format changed files
         run: |
-          npm ci --no-audit --no-fund
+          npm ci --no-audit --no-fund --fetch-retries=1 --fetch-timeout=60000
           npx prettier --config config/prettier.json --ignore-path config/prettierignore --write src/ai/evaluation/evaluate.ts src/ai/evaluation/spatial.ts src/ai/planning/candidates.ts src/ai/planning/search.ts src/ai/simulation/simulate.ts src/ai/simulation/state-key.ts src/engine/core/geometry.ts tests/ai/lazy-candidates.test.ts tests/ai/snapshot-cache.test.ts tests/core/placement-query.test.ts scripts/ai/performance/equivalence.mjs docs/ai/performance/AI-REUSE-2026-09-23.md docs/ai/benchmarks/reuse-20260923/experiment.json .github/workflows/ai-combined-build.yml
       - name: Full project checks
         run: |
@@ -92,14 +112,14 @@ jobs:
           cp artifacts/ai-reuse-equivalence-report.json docs/ai/benchmarks/reuse-20260923/production-equivalence.json
           npx prettier --config config/prettier.json --write docs/ai/benchmarks/reuse-20260923/production-equivalence.json
           git restore .github/workflows/ai-combined-build.yml
-          git add src/ai/evaluation/evaluate.ts src/ai/evaluation/spatial.ts src/ai/planning/candidates.ts src/ai/planning/search.ts src/ai/simulation/simulate.ts src/ai/simulation/state-key.ts src/engine/core/geometry.ts tests/ai/lazy-candidates.test.ts tests/ai/snapshot-cache.test.ts tests/core/placement-query.test.ts scripts/ai/performance/equivalence.mjs docs/ai/performance/AI-REUSE-2026-09-23.md docs/ai/benchmarks/reuse-20260923 index.html
+          git add src/ai/evaluation/evaluate.ts src/ai/evaluation/spatial.ts src/ai/planning/candidates.ts src/ai/planning/search.ts src/ai/simulation/simulate.ts src/ai/simulation/state-key.ts src/engine/core/geometry.ts tests/ai/lazy-candidates.test.ts tests/ai/snapshot-cache.test.ts tests/core/placement-query.test.ts scripts/ai/performance/equivalence.mjs docs/ai/performance/AI-REUSE-2026-09-23.md docs/ai/benchmarks/reuse-20260923 index.html package-lock.json
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'perf(ai): verify complete reuse combination and rebuild offline release'
           git push origin HEAD:build/ai-combined-20260923
           git rev-parse HEAD | tee artifacts/verified-commit.txt
-          git diff --name-only cec107917b840f9cb34954fa1635db58ccd2ae66 HEAD -- src tests scripts docs index.html | while IFS= read -r path; do git ls-tree HEAD -- "$path"; done | tee artifacts/verified-blobs.txt
+          git diff --name-only cec107917b840f9cb34954fa1635db58ccd2ae66 HEAD -- src tests scripts docs index.html package-lock.json | while IFS= read -r path; do git ls-tree HEAD -- "$path"; done | tee artifacts/verified-blobs.txt
           git archive HEAD | gzip > artifacts/verified-source.tar.gz
       - uses: actions/upload-artifact@v4
         if: always()
