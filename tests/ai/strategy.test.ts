@@ -3,8 +3,15 @@ import assert from 'node:assert/strict';
 import { add, card, fixture, round } from '../helpers';
 import { createGame, applyCommand, createSession } from '../../src/engine';
 import { asTarget, resetUnit } from '../../src/engine/core/state';
-import { attackPath, basePoint, distance, targets } from '../../src/engine/core/geometry';
-import { hitDistance, actionWindow } from '../../src/ai/evaluation/spatial';
+import {
+  ALL_CELLS,
+  cells,
+  attackPath,
+  basePoint,
+  distance,
+  targets,
+} from '../../src/engine/core/geometry';
+import { attackField, hitDistance, actionWindow } from '../../src/ai/evaluation/spatial';
 import { incoming } from '../../src/ai/evaluation/threats';
 import { evaluate, explainEvaluation } from '../../src/ai/evaluation/evaluate';
 import { decide } from '../../src/ai/planning/search';
@@ -74,6 +81,48 @@ test('cached hit fields agree with engine pathfinding around normal, large, froz
         );
       }
   }
+});
+
+test('攻击距离场逐格等于规则最短路径，保留体型、边界、忽略旧占位和穿透语义', () => {
+  for (const owner of [1, 2] as const)
+    for (const size of [1, 2])
+      for (const pierce of [false, true]) {
+        const s = fixture();
+        const attacker = add(s, 9, owner, 4, owner === 1 ? 10 : 2);
+        attacker.size = size;
+        if (pierce) attacker.equipment.push('u28');
+        const enemy = owner === 1 ? 2 : 1;
+        const blocker = add(s, 5, enemy, 6, 6);
+        add(s, 'u25', enemy, 3, 6);
+        add(s, 'u25', enemy, 3, 6);
+        add(s, 'grave', owner, 4, 6);
+        add(s, 1, owner, 7, 6);
+        const before = structuredClone(s);
+        for (const ignoreId of ['', blocker.id])
+          for (const range of [0, 3, 8]) {
+            const field = attackField(s, attacker, range, ignoreId);
+            const view = { ...s, units: s.units.filter((u) => u.id !== ignoreId) };
+            for (const [at, p] of ALL_CELLS.entries()) {
+              const id = p.x === 5 && p.y === (enemy === 1 ? 1 : 13) ? `base-${enemy}` : 'point';
+              const path = attackPath(
+                view,
+                attacker,
+                { ...p, id, owner: enemy },
+                range,
+                undefined,
+                pierce,
+              );
+              // 自身覆盖格距离为0；规则路径可能先从另一主格走到该格。
+              const origin = cells(attacker).some((q) => q.x === p.x && q.y === p.y);
+              assert.equal(
+                field[at],
+                origin ? 0 : path ? path.length - 1 : -1,
+                `${owner}/${size}/${pierce}/${ignoreId}/${range}/${at}`,
+              );
+            }
+          }
+        assert.deepEqual(s, before);
+      }
 });
 test('all levels establish safe contact instead of fleeing the uncharged opening cannon', () => {
   for (const d of levels) {

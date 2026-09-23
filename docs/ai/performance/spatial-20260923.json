@@ -1,0 +1,188 @@
+{
+  "date": "2026-09-23",
+  "baselineCommit": "80890de",
+  "ruleset": "3.0-feedback5-live-deployment",
+  "runtime": {
+    "node": "v22.23.1",
+    "cpu": "Intel(R) Core(TM) Ultra 5 225H"
+  },
+  "options": {
+    "games": 2,
+    "seed": 2026092301,
+    "rules": "classic",
+    "difficulty": "hard",
+    "simulations": 800,
+    "opponent": {
+      "difficulty": "medium",
+      "simulations": 320
+    },
+    "maxPlies": 40,
+    "maxCommands": 600
+  },
+  "profile": {
+    "path": "artifacts/training/perf-round2-20260923/current.cpuprofile",
+    "sha256": "7d1c4b99f3257c0c5621391b02d6e86a87a8239ab64d7e0572f6cceb18432b75",
+    "topSelf": [
+      {
+        "name": "attackField",
+        "ms": 7005.618,
+        "percent": 12.115514639646339
+      },
+      {
+        "name": "structuredClone",
+        "ms": 6310.563,
+        "percent": 10.913486634713813
+      },
+      {
+        "name": "(garbage collector)",
+        "ms": 3923.063,
+        "percent": 6.784544519663345
+      },
+      {
+        "name": "hitDistance",
+        "ms": 3646.52,
+        "percent": 6.306291100051868
+      },
+      {
+        "name": "attackPath",
+        "ms": 2637.141,
+        "percent": 4.5606712201995006
+      },
+      {
+        "name": "canPlace",
+        "ms": 2370.221,
+        "percent": 4.099059815236456
+      },
+      {
+        "name": "positionKey",
+        "ms": 2353.53,
+        "percent": 4.070194402527635
+      },
+      {
+        "name": "inside",
+        "ms": 1274.886,
+        "percent": 2.2047876428432382
+      },
+      {
+        "name": "expand2",
+        "ms": 1217.99,
+        "percent": 2.106391709616888
+      },
+      {
+        "name": "neighbors",
+        "ms": 1205.449,
+        "percent": 2.0847033062389415
+      },
+      {
+        "name": "statsFor",
+        "ms": 1059.009,
+        "percent": 1.8314499938502542
+      },
+      {
+        "name": "spatial",
+        "ms": 971.397,
+        "percent": 1.6799338151764105
+      }
+    ]
+  },
+  "beforeMs": 59773.2739,
+  "afterMs": 47398.0318,
+  "timeReduction": 0.2070363775071722,
+  "speedup": 1.2610918983349009,
+  "beforeCommandsPerSecond": 10.590017221726916,
+  "afterCommandsPerSecond": 13.35498492154689,
+  "scope": "固定work的单进程双局，BAAB复测；未重测四进程或小时级吞吐。",
+  "games": [
+    {
+      "game": 0,
+      "gameId": "3.0-feedback5-live-deployment:classic:2026092301:hard-800:medium-320",
+      "seed": 2026092301,
+      "primaryPlayer": 1,
+      "ruleset": "3.0-feedback5-live-deployment",
+      "commands": 423,
+      "ply": 31,
+      "phase": "play",
+      "toPlay": null,
+      "terminated": true,
+      "truncated": false,
+      "truncation": null,
+      "winner": 1,
+      "returns": {
+        "1": 1,
+        "2": -1
+      },
+      "interrupted": null,
+      "error": null,
+      "simulations": 20300,
+      "maxUnits": 24
+    },
+    {
+      "game": 1,
+      "gameId": "3.0-feedback5-live-deployment:classic:2026092301:medium-320:hard-800",
+      "seed": 2026092301,
+      "primaryPlayer": 2,
+      "ruleset": "3.0-feedback5-live-deployment",
+      "commands": 210,
+      "ply": 19,
+      "phase": "play",
+      "toPlay": null,
+      "terminated": true,
+      "truncated": false,
+      "truncation": null,
+      "winner": 1,
+      "returns": {
+        "1": 1,
+        "2": -1
+      },
+      "interrupted": null,
+      "error": null,
+      "simulations": 9880,
+      "maxUnits": 18
+    }
+  ],
+  "runs": [
+    {
+      "name": "spatial-1",
+      "started": "2026-09-23T06:40:06.531Z",
+      "elapsedMs": 49100.0629,
+      "moduleSha256": "989a7d777fe77ed9462a68c8846ae70ae02807501d50c2b1594d2971d65bf0fe",
+      "commands": 633,
+      "trajectorySha256": "c72ff5880fcc2184a2f2c5bfd5bf1e624f8c9e786ecbe38ddd680efd85fc51e7"
+    },
+    {
+      "name": "baseline-1",
+      "started": "2026-09-23T06:41:13.776Z",
+      "elapsedMs": 61233.762200000005,
+      "moduleSha256": "72aac1c0b44e3324e8a033db7cfd3b43d319cfdc679f6a256b054ab01a1bae29",
+      "commands": 633,
+      "trajectorySha256": "c72ff5880fcc2184a2f2c5bfd5bf1e624f8c9e786ecbe38ddd680efd85fc51e7"
+    },
+    {
+      "name": "baseline-2",
+      "started": "2026-09-23T06:42:32.540Z",
+      "elapsedMs": 58312.785599999996,
+      "moduleSha256": "72aac1c0b44e3324e8a033db7cfd3b43d319cfdc679f6a256b054ab01a1bae29",
+      "commands": 633,
+      "trajectorySha256": "c72ff5880fcc2184a2f2c5bfd5bf1e624f8c9e786ecbe38ddd680efd85fc51e7"
+    },
+    {
+      "name": "spatial-2",
+      "started": "2026-09-23T06:44:01.187Z",
+      "elapsedMs": 45696.000700000004,
+      "moduleSha256": "989a7d777fe77ed9462a68c8846ae70ae02807501d50c2b1594d2971d65bf0fe",
+      "commands": 633,
+      "trajectorySha256": "c72ff5880fcc2184a2f2c5bfd5bf1e624f8c9e786ecbe38ddd680efd85fc51e7"
+    }
+  ],
+  "verification": {
+    "exactDistanceChecks": 5616,
+    "behaviorTestsPassed": 344,
+    "typescriptPassed": true,
+    "structurePassed": true,
+    "formatCheck": "prettier --end-of-line auto",
+    "browser": "game and ai: offline file://",
+    "currentCliFingerprintCommands": 79,
+    "releaseBytes": 812782,
+    "deployCheckPassed": true
+  }
+}
