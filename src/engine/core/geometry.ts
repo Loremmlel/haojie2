@@ -18,14 +18,31 @@ export const distance = (a: Point, b: Point) => Math.abs(a.x - b.x) + Math.abs(a
 export const key = (p: Point) => `${p.x},${p.y}`;
 export function cells(u: { kind: Unit['kind']; x: number; y: number; size?: number }): Point[] {
   const size = u.size ?? definition(u.kind).size ?? 1;
+  // 常见占位直接构造新坐标，保留逐行顺序与调用方可独立修改返回值的约定。
+  if (size === 1) return [{ x: u.x, y: u.y }];
+  if (size === 2)
+    return [
+      { x: u.x, y: u.y },
+      { x: u.x + 1, y: u.y },
+      { x: u.x, y: u.y + 1 },
+      { x: u.x + 1, y: u.y + 1 },
+    ];
   return Array.from({ length: size * size }, (_, i) => ({
     x: u.x + (i % size),
     y: u.y + Math.floor(i / size),
   }));
 }
-export const occupants = (s: GamePosition, p: Point) =>
-  s.units.filter((u) => cells(u).some((c) => equal(c, p)));
-export const occupant = (s: GamePosition, p: Point) => occupants(s, p)[0];
+/** 只读占位查询，不分配坐标数组；整数偏移保留逐格匹配，不能把格间位置当作占位。 */
+function covers(u: Unit, p: Point): boolean {
+  const size = u.size ?? definition(u.kind).size ?? 1;
+  const dx = p.x - u.x,
+    dy = p.y - u.y;
+  return (
+    Number.isInteger(dx) && Number.isInteger(dy) && dx >= 0 && dy >= 0 && dx < size && dy < size
+  );
+}
+export const occupants = (s: GamePosition, p: Point) => s.units.filter((u) => covers(u, p));
+export const occupant = (s: GamePosition, p: Point) => s.units.find((u) => covers(u, p));
 export function targets(s: GamePosition): Target[] {
   return [
     ...allPieces(s).map((u) => ({ id: u.id, owner: u.owner, x: u.x, y: u.y, unit: u })),
@@ -33,7 +50,7 @@ export function targets(s: GamePosition): Target[] {
   ];
 }
 export function targetAt(s: GamePosition, p: Point): Target | undefined {
-  return targets(s).find((t) => (t.unit ? cells(t.unit).some((c) => equal(c, p)) : equal(t, p)));
+  return targets(s).find((t) => (t.unit ? covers(t.unit, p) : equal(t, p)));
 }
 export function topTarget(s: GamePosition, t: Target) {
   if (!t.unit) return true;
@@ -93,7 +110,7 @@ export function canPlace(
   if (
     others.some(
       (v) =>
-        cells(v).some((c) => footprint.some((p) => equal(c, p))) &&
+        footprint.some((p) => covers(v, p)) &&
         !(
           u.kind === 'u25' &&
           v.kind === 'u25' &&
@@ -213,7 +230,9 @@ export function deploymentRows(s: GamePosition, owner: Player): number[] {
   for (const u of s.units) {
     const side = allegiance(s, u);
     if (!side) continue;
-    for (const y of new Set(cells(u).map((p) => p.y))) counts[y] += side === owner ? 1 : -1;
+    // 正方形每个覆盖行只计一枚；无需先展开所有格子再去重。
+    const size = u.size ?? definition(u.kind).size ?? 1;
+    for (let offset = 0; offset < size; offset++) counts[u.y + offset] += side === owner ? 1 : -1;
   }
   return Array.from({ length: 13 }, (_, i) => i + 1).filter(
     (y) => (owner === 1 ? y <= 8 : y >= 6) || counts[y] >= 2,
@@ -304,11 +323,9 @@ export function expansionAnchors(s: GamePosition, u: Unit): Point[] {
 export function validAttackRoute(s: GamePosition, u: Unit, path: Point[], limit: number): boolean {
   if (!Array.isArray(path) || !path.length || path.length > Math.min(117, limit + 1)) return false;
   if (path.some((p) => !p || !inside(p))) return false;
-  if (!cells(u).some((p) => equal(p, path[0])) || new Set(path.map(key)).size !== path.length)
-    return false;
+  if (!covers(u, path[0]) || new Set(path.map(key)).size !== path.length) return false;
   for (let i = 1; i < path.length; i++) {
-    if (distance(path[i - 1], path[i]) !== 1 || cells(u).some((p) => equal(p, path[i])))
-      return false;
+    if (distance(path[i - 1], path[i]) !== 1 || covers(u, path[i])) return false;
     if (i < path.length - 1 && equal(path[i], basePoint(other(u.owner)))) return false;
   }
   return true;

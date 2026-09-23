@@ -1,6 +1,8 @@
 # AI训练进度
 
-本文件持续记录已完成工作、当前实验、复现入口和下一步。最后更新：2026-09-22。训练路线见[TRAINING.md](TRAINING.md)，Python用法见[training/README.md](../../training/README.md)。只有实际运行并通过验收的项目才标记完成。
+本文件持续记录已完成工作、当前实验、复现入口和下一步。最后更新：2026-09-23。训练路线见[TRAINING.md](TRAINING.md)，Python用法见[training/README.md](../../training/README.md)。只有实际运行并通过验收的项目才标记完成。
+
+9月23日补充：[教师采样几何优化与速度对照](performance/TEACHER-2026-09-23.md)。下文40局试采仍属9月22日旧规则，保留原始数据与测量值；当前规则的速度使用新种子、固定预算另测，不能将旧语料改版本号继续编码。
 
 ## 目标与约束
 

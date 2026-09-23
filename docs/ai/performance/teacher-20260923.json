@@ -1,0 +1,327 @@
+{
+  "date": "2026-09-23",
+  "baselineCommit": "89b8bf8c1e4b0561516269abc8bb9937c7fab837",
+  "ruleset": "3.0-feedback5-live-deployment",
+  "runtime": {
+    "node": "v22.23.1",
+    "cpu": "Intel(R) Core(TM) Ultra 5 225H"
+  },
+  "options": {
+    "games": 2,
+    "seed": 2026092301,
+    "rules": "classic",
+    "difficulty": "hard",
+    "simulations": 800,
+    "opponent": {
+      "difficulty": "medium",
+      "simulations": 320
+    },
+    "maxPlies": 40,
+    "maxCommands": 600
+  },
+  "modules": {
+    "baseline": "853712a3e0de234047a043ee65ffa8ab633de40871ca550ab72e32b6f5347493",
+    "optimized": "72aac1c0b44e3324e8a033db7cfd3b43d319cfdc679f6a256b054ab01a1bae29"
+  },
+  "single": {
+    "beforeMs": 80841.5128,
+    "afterMs": 56304.7402,
+    "timeReduction": 0.3035169896028962,
+    "speedup": 1.4357852023265352,
+    "runs": [
+      {
+        "name": "baseline-1",
+        "started": "2026-09-23T06:13:25.319Z",
+        "elapsedMs": 80868.4578,
+        "commands": 633,
+        "trajectorySha256": "c72ff5880fcc2184a2f2c5bfd5bf1e624f8c9e786ecbe38ddd680efd85fc51e7"
+      },
+      {
+        "name": "optimized-1",
+        "started": "2026-09-23T06:15:19.403Z",
+        "elapsedMs": 57742.5416,
+        "commands": 633,
+        "trajectorySha256": "c72ff5880fcc2184a2f2c5bfd5bf1e624f8c9e786ecbe38ddd680efd85fc51e7"
+      },
+      {
+        "name": "optimized-2",
+        "started": "2026-09-23T06:17:10.299Z",
+        "elapsedMs": 54866.9388,
+        "commands": 633,
+        "trajectorySha256": "c72ff5880fcc2184a2f2c5bfd5bf1e624f8c9e786ecbe38ddd680efd85fc51e7"
+      },
+      {
+        "name": "baseline-2",
+        "started": "2026-09-23T06:18:15.172Z",
+        "elapsedMs": 80814.56779999999,
+        "commands": 633,
+        "trajectorySha256": "c72ff5880fcc2184a2f2c5bfd5bf1e624f8c9e786ecbe38ddd680efd85fc51e7"
+      }
+    ]
+  },
+  "parallel": {
+    "workers": 4,
+    "beforeMs": 284784.8871,
+    "afterMs": 181665.4128,
+    "commands": 2921,
+    "beforeCommandsPerSecond": 10.256864504801877,
+    "afterCommandsPerSecond": 16.079010060191273,
+    "timeReduction": 0.36209602043871947,
+    "speedup": 1.5676340515821072,
+    "runs": [
+      {
+        "seed": 2026092301,
+        "startedBefore": "2026-09-23T06:19:53.872Z",
+        "startedAfter": "2026-09-23T06:25:25.250Z",
+        "beforeMs": 84925.3329,
+        "afterMs": 62036.420699999995,
+        "commands": 633,
+        "trajectorySha256": "c72ff5880fcc2184a2f2c5bfd5bf1e624f8c9e786ecbe38ddd680efd85fc51e7",
+        "games": [
+          {
+            "game": 0,
+            "gameId": "3.0-feedback5-live-deployment:classic:2026092301:hard-800:medium-320",
+            "seed": 2026092301,
+            "primaryPlayer": 1,
+            "ruleset": "3.0-feedback5-live-deployment",
+            "commands": 423,
+            "ply": 31,
+            "phase": "play",
+            "toPlay": null,
+            "terminated": true,
+            "truncated": false,
+            "truncation": null,
+            "winner": 1,
+            "returns": {
+              "1": 1,
+              "2": -1
+            },
+            "interrupted": null,
+            "error": null,
+            "simulations": 20300,
+            "maxUnits": 24
+          },
+          {
+            "game": 1,
+            "gameId": "3.0-feedback5-live-deployment:classic:2026092301:medium-320:hard-800",
+            "seed": 2026092301,
+            "primaryPlayer": 2,
+            "ruleset": "3.0-feedback5-live-deployment",
+            "commands": 210,
+            "ply": 19,
+            "phase": "play",
+            "toPlay": null,
+            "terminated": true,
+            "truncated": false,
+            "truncation": null,
+            "winner": 1,
+            "returns": {
+              "1": 1,
+              "2": -1
+            },
+            "interrupted": null,
+            "error": null,
+            "simulations": 9880,
+            "maxUnits": 18
+          }
+        ]
+      },
+      {
+        "seed": 2026092302,
+        "startedBefore": "2026-09-23T06:19:53.879Z",
+        "startedAfter": "2026-09-23T06:25:25.259Z",
+        "beforeMs": 40478.8276,
+        "afterMs": 28236.9848,
+        "commands": 373,
+        "trajectorySha256": "2e3fccc933d569dac56d1d44f1f5ec7bfa6be10075f0bec931f0b36143795736",
+        "games": [
+          {
+            "game": 0,
+            "gameId": "3.0-feedback5-live-deployment:classic:2026092302:hard-800:medium-320",
+            "seed": 2026092302,
+            "primaryPlayer": 1,
+            "ruleset": "3.0-feedback5-live-deployment",
+            "commands": 169,
+            "ply": 15,
+            "phase": "play",
+            "toPlay": null,
+            "terminated": true,
+            "truncated": false,
+            "truncation": null,
+            "winner": 1,
+            "returns": {
+              "1": 1,
+              "2": -1
+            },
+            "interrupted": null,
+            "error": null,
+            "simulations": 7890,
+            "maxUnits": 21
+          },
+          {
+            "game": 1,
+            "gameId": "3.0-feedback5-live-deployment:classic:2026092302:medium-320:hard-800",
+            "seed": 2026092302,
+            "primaryPlayer": 2,
+            "ruleset": "3.0-feedback5-live-deployment",
+            "commands": 204,
+            "ply": 17,
+            "phase": "play",
+            "toPlay": null,
+            "terminated": true,
+            "truncated": false,
+            "truncation": null,
+            "winner": 1,
+            "returns": {
+              "1": 1,
+              "2": -1
+            },
+            "interrupted": null,
+            "error": null,
+            "simulations": 8747,
+            "maxUnits": 18
+          }
+        ]
+      },
+      {
+        "seed": 2026092303,
+        "startedBefore": "2026-09-23T06:19:53.886Z",
+        "startedAfter": "2026-09-23T06:25:25.262Z",
+        "beforeMs": 208250.88259999998,
+        "afterMs": 142167.69489999997,
+        "commands": 978,
+        "trajectorySha256": "9d031d0e900fe0946c492f62edc5914c9f0b01e1d4ad8b6da0a916328054f8fa",
+        "games": [
+          {
+            "game": 0,
+            "gameId": "3.0-feedback5-live-deployment:classic:2026092303:hard-800:medium-320",
+            "seed": 2026092303,
+            "primaryPlayer": 1,
+            "ruleset": "3.0-feedback5-live-deployment",
+            "commands": 474,
+            "ply": 37,
+            "phase": "play",
+            "toPlay": null,
+            "terminated": true,
+            "truncated": false,
+            "truncation": null,
+            "winner": 1,
+            "returns": {
+              "1": 1,
+              "2": -1
+            },
+            "interrupted": null,
+            "error": null,
+            "simulations": 24939,
+            "maxUnits": 31
+          },
+          {
+            "game": 1,
+            "gameId": "3.0-feedback5-live-deployment:classic:2026092303:medium-320:hard-800",
+            "seed": 2026092303,
+            "primaryPlayer": 2,
+            "ruleset": "3.0-feedback5-live-deployment",
+            "commands": 504,
+            "ply": 35,
+            "phase": "play",
+            "toPlay": null,
+            "terminated": true,
+            "truncated": false,
+            "truncation": null,
+            "winner": 1,
+            "returns": {
+              "1": 1,
+              "2": -1
+            },
+            "interrupted": null,
+            "error": null,
+            "simulations": 33979,
+            "maxUnits": 35
+          }
+        ]
+      },
+      {
+        "seed": 2026092304,
+        "startedBefore": "2026-09-23T06:19:53.895Z",
+        "startedAfter": "2026-09-23T06:25:25.269Z",
+        "beforeMs": 284662.2992,
+        "afterMs": 181546.9997,
+        "commands": 937,
+        "trajectorySha256": "c99341bc1edc16865a121d4f8d7dba14455f969b014d03c4e70ae1aeeb02a4ea",
+        "games": [
+          {
+            "game": 0,
+            "gameId": "3.0-feedback5-live-deployment:classic:2026092304:hard-800:medium-320",
+            "seed": 2026092304,
+            "primaryPlayer": 1,
+            "ruleset": "3.0-feedback5-live-deployment",
+            "commands": 341,
+            "ply": 27,
+            "phase": "play",
+            "toPlay": null,
+            "terminated": true,
+            "truncated": false,
+            "truncation": null,
+            "winner": 1,
+            "returns": {
+              "1": 1,
+              "2": -1
+            },
+            "interrupted": null,
+            "error": null,
+            "simulations": 17025,
+            "maxUnits": 26
+          },
+          {
+            "game": 1,
+            "gameId": "3.0-feedback5-live-deployment:classic:2026092304:medium-320:hard-800",
+            "seed": 2026092304,
+            "primaryPlayer": 2,
+            "ruleset": "3.0-feedback5-live-deployment",
+            "commands": 596,
+            "ply": 41,
+            "phase": "summon",
+            "toPlay": null,
+            "terminated": false,
+            "truncated": true,
+            "truncation": "plies",
+            "winner": null,
+            "returns": null,
+            "interrupted": null,
+            "error": null,
+            "simulations": 37863,
+            "maxUnits": 37
+          }
+        ]
+      }
+    ]
+  },
+  "verification": {
+    "identicalTrajectories": true,
+    "fullStateCommands": 3000,
+    "placementComparisons": 4680,
+    "behaviorTestsPassed": 343,
+    "typescriptPassed": true,
+    "structurePassed": true,
+    "formatCheck": "prettier --end-of-line auto",
+    "releaseBytes": 812773,
+    "deployCheckPassed": true,
+    "currentCliFingerprintCommands": 79,
+    "browserSuitesPassed": [
+      "game",
+      "ai",
+      "vfx",
+      "shrine",
+      "feedback3",
+      "feedback4",
+      "online",
+      "library",
+      "pages"
+    ]
+  },
+  "limitations": [
+    "四进程仅一次前后对照，单进程按ABBA重复；未锁定频率。",
+    "四个种子共8局，7终局1截断；重复运行不是新增独立对局。",
+    "不将当前短批次收益直接外推到旧规则40局长局。"
+  ]
+}
