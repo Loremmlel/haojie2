@@ -158,6 +158,9 @@ test('knife source ledger survives save/undo; legacy aggregate saves remain load
     [newer.id],
   );
   const legacy = structuredClone(history);
+  // 旧快照格式没有命令记录；本例只验证旧字段迁移，不伪造带校验的新记录。
+  delete legacy.record;
+  delete legacy.humanAnchorCursor;
   delete unit(legacy.present, victim.id).guardSourceIds;
   const migrated = parseSession(JSON.stringify(legacy));
   assert.deepEqual(unit(migrated.present, victim.id).guardSourceIds, [older.id, newer.id]);

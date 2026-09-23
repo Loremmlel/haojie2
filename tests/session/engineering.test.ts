@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyCommand, createGame, createSession, parseSession } from '../../src/engine';
+import {
+  applyCommand,
+  createGame,
+  createSession,
+  dispatch,
+  parseSession,
+  serializeSession,
+} from '../../src/engine';
 import { fixture, add, card, round } from '../helpers';
 import {
   DEFAULT_STORAGE_KEY,
@@ -47,13 +54,13 @@ test('reload uses the stable schema key and retains both current state and histo
       data.set(key, value);
     },
   };
-  const session = createSession(fixture());
-  session.past.push(createGame(9));
+  const session = dispatch(createSession(createGame(7)), { type: 'summon' });
   assert.equal(writeStoredSession(storage, DEFAULT_STORAGE_KEY, session), 'saved');
   const loaded = readStoredSession(storage, DEFAULT_STORAGE_KEY, () => {
     throw new Error('must not start a new game');
   });
-  assert.deepEqual(loaded.session, session);
+  assert.equal(serializeSession(loaded.session), serializeSession(session));
+  assert.deepEqual(loaded.session.past, session.past);
   assert.equal(loaded.writable, true);
   assert.equal(data.size, 1);
 });
@@ -72,13 +79,12 @@ test('corrupt saved data remains untouched and pauses writes until explicit repl
   assert.match(result.notice, /暂停/);
 });
 test('quota exhaustion can save a current-only snapshot; denied storage reports failure', () => {
-  const session = createSession(fixture());
-  session.past.push(createGame(5));
+  const session = dispatch(createSession(createGame(7)), { type: 'summon' });
   let value = '';
   const quota = {
     getItem: () => null,
     setItem: (_key: string, raw: string) => {
-      if (JSON.parse(raw).past.length) throw new Error('quota');
+      if (JSON.parse(raw).commands.length) throw new Error('quota');
       value = raw;
     },
   };

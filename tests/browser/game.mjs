@@ -112,6 +112,34 @@ try {
   await button('重做').click();
   assert.match(await cell(2, 4).getAttribute('aria-label'), /冲锋怪/);
   scenario('formal staged summons, charge deployment, movement, keyboard undo and redo');
+  const savedPosition = await readState();
+  const recording = JSON.parse(await readFile('artifacts/browser-save.json', 'utf8'));
+  assert.equal(recording.format, 'haojie-record-v1');
+  assert.equal(recording.origin, 'opening');
+  assert.equal(recording.past, undefined);
+  assert.ok(recording.commands.length >= 5);
+  await button('悔棋').click();
+  const beforeRestore = await readState();
+  const restoreInput = { name: 'record.json', mimeType: 'application/json' };
+  await page.locator('input[type=file]').setInputFiles({
+    ...restoreInput,
+    buffer: Buffer.from(JSON.stringify(recording)),
+  });
+  assert.deepEqual(await readState(), savedPosition);
+  await button('悔棋').click();
+  assert.deepEqual(await readState(), beforeRestore);
+  await button('重做').click();
+  const corruptRecord = structuredClone(recording);
+  corruptRecord.present.rng++;
+  await page.locator('input[type=file]').setInputFiles({
+    ...restoreInput,
+    buffer: Buffer.from(JSON.stringify(corruptRecord)),
+  });
+  assert.deepEqual(await readState(), savedPosition);
+  assert.match(await page.locator('.toast').innerText(), /不一致|损坏/);
+  scenario(
+    'incremental JSON restores command history and undo; mismatched replay leaves the match intact',
+  );
   await load('summon');
   await page.getByRole('button', { name: /^终极召唤/ }).click();
   let state = await readState();

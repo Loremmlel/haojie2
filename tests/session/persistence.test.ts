@@ -142,16 +142,10 @@ test('old saves and malformed numeric, graph and event fields fail without mutat
   assert.deepEqual(base.present, createDemoGame());
 });
 test('history retains the most recent 60 commands with reversible random state', () => {
-  let session = createSession(createGame(7));
-  // 人头设置仅为测试准备，召唤和开始行动仍通过真实引擎命令。
-  for (let n = 0; n < 24; n++) {
-    for (let i = 0; i < 2; i++) session = dispatch(session, { type: 'summon' });
-    session = dispatch(session, { type: 'begin' });
-    const clean = structuredClone(session.present);
-    clean.hands[clean.active] = [];
-    session = { ...session, present: clean };
-    session = dispatch(session, { type: 'end' });
-  }
+  const initial = fixture();
+  initial.bonus[2] = 100;
+  let session = dispatch(createSession(initial), { type: 'end' });
+  for (let n = 0; n < 96; n++) session = dispatch(session, { type: 'summon' });
   assert.equal(session.past.length, 60);
   assert.deepEqual(parseSession(JSON.stringify(session)), session);
 });

@@ -74,7 +74,9 @@ try {
   await page.getByRole('button', { name: '攻击', exact: true }).click();
   await page.locator('[data-cell="3,6"]').click();
   const playing = await exported();
-  assert.ok(playing.past.length > 0);
+  assert.ok(playing.commands.length > 0);
+  assert.equal(playing.format, 'haojie-record-v1');
+  assert.equal(playing.past, undefined);
   checks.push('main/root HTML serves the game at a project subpath, not README');
   release = 'second';
   await page.close();

@@ -6,7 +6,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from '
 import { dirname } from 'node:path';
 import { Arena } from '../../src/match/arena';
 import type { ArenaEntry } from '../../src/match/arena';
-import { parseSession, applyCommand } from '../../src/engine';
+import { parseSession, applyCommand, serializeSession } from '../../src/engine';
 import { fingerprint } from '../../src/ai/observation';
 import { candidateGroups } from '../../src/ai/planning/candidates';
 import { commandError } from '../../src/engine/commands/game';
@@ -62,7 +62,7 @@ const limits: Partial<import('../../src/ai/types').SearchLimits> = {
 };
 function persist() {
   mkdirSync(dirname(save), { recursive: true });
-  writeFileSync(save + '.tmp', JSON.stringify(arena.session));
+  writeFileSync(save + '.tmp', serializeSession(arena.session));
   renameSync(save + '.tmp', save);
 }
 function log(entry: ArenaEntry) {

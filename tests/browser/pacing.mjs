@@ -52,7 +52,7 @@ export async function verifyPacing({ page, load, exported, waitForState, scenari
     assert.deepEqual(await exported(), paused);
     report.cancellation.push('pause during ready-to-act wait');
     await button('继续AI').click();
-    await waitForState((s) => s.past.length > paused.past.length);
+    await waitForState((s) => s.commands.length > paused.commands.length);
     await button('暂停AI').click();
     scenario('AI opening and cached attacks are paced; a ready action is cancellable and resumes');
 

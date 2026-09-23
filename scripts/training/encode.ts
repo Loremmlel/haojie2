@@ -94,6 +94,8 @@ export async function* encodeTeacherFile(path: string) {
         seed: row.seed,
         difficulty: row.difficulty,
         budget: row.budget,
+        source: row.source,
+        origin: row.origin,
       };
     } else if (row.type === 'sample') {
       ensure(

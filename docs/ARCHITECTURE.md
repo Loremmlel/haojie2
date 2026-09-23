@@ -26,7 +26,8 @@ React 展示/交互 → ActionSpec / 分步Intent → Command
 | `commands/movement.ts`  | 普通移动、SZF/小BW连续冲撞、反应队列选点                                     |
 | `commands/lifecycle.ts` | 全局回合开始/结束、持续区域、虹吸、DOT和个体推进                             |
 | `commands/game.ts`      | 唯一命令边界、阶段约束、胜负和明确标注的演示局                               |
-| `session/history.ts`    | v2存档验证、60步撤销/重做，不接触任何存储API                                 |
+| `session/history.ts`    | 运行时60步撤销/重做、旧v2存档验证，不接触任何存储API                         |
+| `session/recording.ts`  | 初始局面、完整命令路线与当前局面的增量存档；同版重放校验与恢复               |
 | `commands/options.ts`   | 提供可展示的操作描述与选点步骤；不含React类型                                |
 
 复杂技能不在React里直接扣血。UI仅暂存还没选完的参数（目标、落点、行列或阵亡记录），完整指令仍由引擎验证。一个动作不合法时，输入状态、手牌和随机数都不变。金身、免疫塔等不能只在UI禁用按钮，必须在效果结算层生效。

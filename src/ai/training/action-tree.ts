@@ -54,7 +54,7 @@ const matches = (prefix: Command, command: Command) =>
       : value === target;
   });
 
-/** 仅统一规则已有默认值与旧合成别名，不把不同方向或不同路径合并。 */
+/** 统一规则默认值、旧合成别名和非玉碎的无效奇偶参数，不合并不同方向或路径。 */
 export function canonicalTrainingCommand(
   observation: Observation,
   actor: Player,
@@ -68,7 +68,11 @@ export function canonicalTrainingCommand(
     delete c.cardIds;
   }
   if (c.type === 'deploy') c.charge ??= false;
-  if (c.type === 'choose-shrine') c.player = actor;
+  if (c.type === 'choose-shrine') {
+    c.player = actor;
+    // 网页选择器始终带奇偶值，规则只在玉碎上读取该参数。
+    if (c.shrineKind !== 's9') delete c.parity;
+  }
   if (c.type === 'summon' || c.type === 'extra-summon') c.ultimate ??= false;
   if (c.type === 'attack' && c.path) c.mode ??= 'damage';
   if (c.type === 'cast' && observation.hands[actor].find((v) => v.id === c.cardId)?.kind === 25)

@@ -124,7 +124,7 @@ try {
     const synthesized = await waitForState((s) => s.present.active === 2);
     assert.equal(synthesized.present.units.filter((u) => u.kind === 'u22').length, 0);
     assert.ok(synthesized.present.units.some((u) => u.kind === 'citadel'));
-    assert.ok(synthesized.past.some((s) => s.phase === 'synthesis'));
+    assert.ok(synthesized.commands.some((c) => c.type === 'synthesize'));
     scenario(
       `2.5 synthesis deploys its result, then completes summon and play phases through ${backend}`,
     );
@@ -147,7 +147,7 @@ try {
   assert.deepEqual(await exported(), frozen);
   await page.screenshot({ path: 'artifacts/ai-desktop.png', fullPage: true });
   await button('继续AI').click();
-  await waitForState((s) => s.past.length > frozen.past.length);
+  await waitForState((s) => s.commands.length > frozen.commands.length);
   await button('暂停AI').click();
   scenario('pause cancels work, leaves state stable, and continue resumes legal operations');
   await load('response');

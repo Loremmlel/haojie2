@@ -12,6 +12,7 @@ import {
   createSession,
   dispatch,
   parseSession,
+  serializeSession,
   commandError,
 } from '../../src/engine';
 import type { Command, GameState, Player } from '../../src/engine';
@@ -47,7 +48,7 @@ for (const row of rows) {
 }
 
 /** 同一实录比较包装开销；不是自由对弈，更不包含搜索或神经网络推理。 */
-function replay(mode: 'engine' | 'training' | 'session-json' | 'protocol-json') {
+function replay(mode: 'engine' | 'training' | 'record-json' | 'protocol-json') {
   if (mode === 'training') {
     const env = TrainingEnvironment.fromState(initial);
     for (const row of rows) env.step(row.owner, row.command);
@@ -71,11 +72,11 @@ function replay(mode: 'engine' | 'training' | 'session-json' | 'protocol-json') 
     }
     return;
   }
-  if (mode === 'session-json') {
+  if (mode === 'record-json') {
     let session = createSession(initial);
     for (const row of rows) {
       session = dispatch(session, row.command);
-      JSON.stringify(session);
+      serializeSession(session);
       fingerprint(session.present);
     }
     assert.equal(fingerprint(session.present), fingerprint(final));
@@ -231,7 +232,7 @@ if (worker) {
       Math.max(10, Math.floor(iterations / 10)),
     );
   }
-  for (const mode of ['engine', 'training', 'session-json', 'protocol-json'] as const)
+  for (const mode of ['engine', 'training', 'record-json', 'protocol-json'] as const)
     measure(`replay/${mode}`, () => replay(mode), repeats, rows.length);
 
   // 子进程先预热再计时；测量隔离环境的扩展性，不把多个线程当成共享同一搜索树。
@@ -345,7 +346,7 @@ if (worker) {
     selfPlay,
     limitations: [
       '纯转移与回放不包含动作搜索或神经网络推理；吞吐不是MCTS节点数。',
-      'session-json含历史序列化，不含磁盘写入与教师trace；protocol-json含编码但不含OS管道传输。',
+      'record-json含完整命令路线的增量序列化，不含磁盘写入与教师trace；不与旧session-json快照指标混同。protocol-json含编码但不含OS管道传输。',
       'demo-stress是人工演示局；实录片段不是完整比赛。',
       '教师仅使用现有有界候选；截断不判胜，无胜率或浏览器模型延迟结论。',
       '多进程结果仅测预热后的规则环境，不代表端到端训练可线性加速。',

@@ -11,6 +11,7 @@ import { HAOJIE_RULESET } from '../../src/engine/online/player-view';
 import { encodingSourceHash } from './encode';
 import { TrainingActionTree } from '../../src/ai/training/action-tree';
 import { encodeDecision } from '../../src/ai/training/encoding/decision';
+import { parseSession } from '../../src/engine';
 
 const increment = (counts: Record<string, number>, key: string) => {
   counts[key] = (counts[key] ?? 0) + 1;
@@ -66,35 +67,46 @@ export async function inspectTeacherFiles(paths: string[], encodeInputs = false)
         header = row;
         actorCommands = { 1: 0, 2: 0 };
         actorProfiles = {};
-        env = new TrainingEnvironment({
+        const options = {
           maxCommands: 1e9,
           maxPlies: 1e9,
           ...producer?.options,
           seed: row.seed,
           rules: row.rules,
-        });
+        };
+        env =
+          row.source === 'saved-game'
+            ? TrainingEnvironment.fromState(
+                parseSession(JSON.stringify(row.initial)).present,
+                options,
+              )
+            : new TrainingEnvironment(options);
       } else if (row.type === 'sample') {
         assert.ok(env, '样本缺少对局头');
         assert.equal(row.game, header.game);
         assert.equal(row.index, env.status().commands);
-        const observation = env.observation();
+        const observation = env.observation(row.actor);
         assert.deepEqual(
           row.observation,
           observation,
           `公开局面漂移：${path}/${row.game}/${row.index}`,
         );
-        const owner = decisionOwner(observation);
-        assert.equal(row.actor, owner);
-        const name = profileName(
-          header.teachers?.[owner] ?? {
-            difficulty: header.difficulty,
-            simulations: typeof header.budget === 'number' ? header.budget : undefined,
-          },
-        );
+        const owner: 1 | 2 = row.actor;
+        if (header.source !== 'saved-game') assert.equal(owner, decisionOwner(observation));
+        const name =
+          header.source === 'saved-game'
+            ? 'saved-game:unrated'
+            : profileName(
+                header.teachers?.[owner] ?? {
+                  difficulty: header.difficulty,
+                  simulations: typeof header.budget === 'number' ? header.budget : undefined,
+                },
+              );
         const entry = (profiles[name] ??= {
           commands: 0,
           cached: 0,
           zeroSimulations: 0,
+          unknownSearchStats: 0,
           simulations: 0,
           replyDecisions: 0,
           exhausted: 0,
@@ -115,11 +127,16 @@ export async function inspectTeacherFiles(paths: string[], encodeInputs = false)
         actorProfiles[owner] = name;
         increment(entry.commandKinds, row.command.type);
         increment(entry.phases, observation.phase);
-        entry.cached += Number(!!row.teacherStats.cached);
-        entry.zeroSimulations += Number(row.teacherStats.simulations === 0);
-        entry.simulations += row.teacherStats.simulations;
-        entry.replyDecisions += Number((row.teacherStats.replyCandidates ?? 0) > 0);
-        entry.exhausted += Number(row.teacherStats.exhausted);
+        if (row.teacherStats) {
+          entry.cached += Number(!!row.teacherStats.cached);
+          entry.zeroSimulations += Number(row.teacherStats.simulations === 0);
+          entry.simulations += row.teacherStats.simulations;
+          entry.replyDecisions += Number((row.teacherStats.replyCandidates ?? 0) > 0);
+          entry.exhausted += Number(row.teacherStats.exhausted);
+        } else {
+          assert.equal(header.source, 'saved-game', '教师搜索记录缺少统计');
+          entry.unknownSearchStats++;
+        }
         entry.reactions += Number(observation.pending.length > 0);
         entry.paths += Number(!!row.command.path);
         entry.maxUnits = Math.max(entry.maxUnits, observation.units.length);
@@ -138,7 +155,7 @@ export async function inspectTeacherFiles(paths: string[], encodeInputs = false)
         }
         if (row.timing) {
           entry.durations.push(row.timing.teacherMs);
-          if (!row.teacherStats.cached && row.teacherStats.simulations > 0)
+          if (row.teacherStats && !row.teacherStats.cached && row.teacherStats.simulations > 0)
             entry.searchDurations.push(row.timing.teacherMs);
         }
         if (encodeInputs) {

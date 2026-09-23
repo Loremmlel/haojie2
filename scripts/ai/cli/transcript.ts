@@ -1,13 +1,26 @@
 import { RULESET_ID } from '../../../src/engine/catalog';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { applyCommand, parseSession } from '../../../src/engine';
+import { applyCommand, parseSession, createSession, sessionSave } from '../../../src/engine';
 import type { Session } from '../../../src/engine';
 import type { ArenaEntry } from '../../../src/match/arena';
 import { fingerprint } from '../../../src/ai/observation';
 
 /** 完整局面仅用于确定性本地回放，绝不发送给规划器。 */
 export function replayTranscript(text: string) {
+  // 网页存档与CLI命令行共用回放入口；旧JSONL仍逐步验证原指纹。
+  if (text.trimStart().startsWith('{')) {
+    let save;
+    try {
+      save = JSON.parse(text);
+    } catch {
+      /* 多行JSONL继续走原解析路径。 */
+    }
+    if (save?.format === 'haojie-record-v1') {
+      const session = parseSession(text);
+      return { state: session.present, commands: session.record!.cursor };
+    }
+  }
   const rows = text
     .trim()
     .split('\n')
@@ -33,7 +46,11 @@ export function prepareTranscript(path: string, session: Session, replace: boole
   }
   writeFileSync(
     path,
-    JSON.stringify({ format: 'haojie-cli-v1', ruleset: RULESET_ID, initial: session }) + '\n',
+    JSON.stringify({
+      format: 'haojie-cli-v1',
+      ruleset: RULESET_ID,
+      initial: sessionSave(createSession(session.present, session.match)),
+    }) + '\n',
   );
 }
 export function appendEntry(path: string, entry: ArenaEntry) {
