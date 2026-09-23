@@ -1,0 +1,114 @@
+name: Prepare and verify approved AI combination
+on:
+  push:
+    branches: [build/ai-combined-20260923]
+permissions:
+  contents: write
+concurrency:
+  group: ai-combined-preparation
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply reviewed patches and verify exact source identities
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor cec107917b840f9cb34954fa1635db58ccd2ae66 HEAD
+          git apply --check .github/ai-combined/*.patch
+          git apply .github/ai-combined/*.patch
+          test "$(git hash-object src/ai/evaluation/evaluate.ts)" = 184ce6f4db7dbc10df5c86ecadfce08f8e5a9f4e
+          test "$(git hash-object src/ai/evaluation/spatial.ts)" = a5a446612ea5e55b2b6374287ed52854c97e4478
+          test "$(git hash-object src/ai/planning/candidates.ts)" = f0eff994f1401a3c64901c3662e3e566346f7e04
+          test "$(git hash-object src/ai/planning/search.ts)" = 01c7b7fc951f895635f7846a7b924454b5a4dbe4
+          test "$(git hash-object src/ai/simulation/simulate.ts)" = 2a8a664af7c94c3dbee0e9239dbb0ca652edc227
+          test "$(git hash-object src/ai/simulation/state-key.ts)" = 07497ccd0b9fe9d6f8db97cac70d3387a191ec7e
+          test "$(git hash-object src/engine/core/geometry.ts)" = e27460039f42fbaf51a9a7d13685553fe7909f35
+      - name: Install exact dependencies and format changed files
+        run: |
+          npm ci --no-audit --no-fund
+          npx prettier --config config/prettier.json --ignore-path config/prettierignore --write src/ai/evaluation/evaluate.ts src/ai/evaluation/spatial.ts src/ai/planning/candidates.ts src/ai/planning/search.ts src/ai/simulation/simulate.ts src/ai/simulation/state-key.ts src/engine/core/geometry.ts tests/ai/lazy-candidates.test.ts tests/ai/snapshot-cache.test.ts tests/core/placement-query.test.ts scripts/ai/performance/equivalence.mjs docs/ai/performance/AI-REUSE-2026-09-23.md docs/ai/benchmarks/reuse-20260923/experiment.json .github/workflows/ai-combined-build.yml
+      - name: Full project checks
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          npm run format:check
+          npm run check
+          npm run check:structure
+          npm test | tee artifacts/engine-report.txt
+      - name: Build and verify standalone release
+        run: |
+          npm run deploy
+          npm run deploy:check
+      - name: Full-source fixed-work differential check
+        run: node scripts/ai/performance/equivalence.mjs cec107917b840f9cb34954fa1635db58ccd2ae66
+      - name: Install acceptance browser
+        run: npx playwright install --with-deps chromium
+      - name: Offline browser and integration acceptance
+        run: |
+          set -euo pipefail
+          npm run test:browser
+          npm run test:browser:library
+          npm run test:pages
+          npm run test:browser:ai
+          npm run test:browser:vfx
+          npm run test:browser:shrine
+          npm run test:browser:feedback3
+          npm run test:browser:feedback4
+          npm run test:browser:online
+          node --import tsx scripts/ai/shrine-smoke.ts
+          npm run play:cli -- --replay docs/playtests/current/cli-feedback5-20260923.jsonl
+      - name: Verify untouched historical recordings against their original rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify() {
+            ref="$1"; record="$2"; dir="$GITHUB_WORKSPACE/artifacts/history-$ref"
+            if [ ! -d "$dir" ]; then
+              git worktree add --detach "$dir" "$ref"
+              ln -s "$GITHUB_WORKSPACE/node_modules" "$dir/node_modules"
+            fi
+            npm --prefix "$dir" run play:cli -- --replay "$GITHUB_WORKSPACE/docs/playtests/$record"
+          }
+          verify b49223f9f8f3e8beb55199b963afbd4bf2020126 cli-counter-freeze-20260921.jsonl
+          verify 4cdea28c22b599ed09ca8be67e30d3393cf109f1 cli-feedback4-20260921.jsonl
+          verify 7824f47c0deb0797819833f6641021f87f4aecbd cli-feedback3-20260920.jsonl
+          verify ef3c9ad75ecaf99878d2b8f1560b2dc25e907d04 cli-shrine-20260918.jsonl
+          verify ae797bf25cc7f25ad746a43662324c8a3ec4fe46 cli-synthesis-20260917.jsonl
+          verify 9b6abdb8b02e9e0814c99574b7aff989d3a84f63 cli-feedback-20260917.jsonl
+          verify 1d31a7db858b6596c175de8e135a43e0e2fd66c3 cli-feedback-20260915.jsonl
+          verify 3a856cf3177dea7eb8c8c20d942199bd2da2fd1a cli-human-20260907.jsonl.gz
+          verify 3a856cf3177dea7eb8c8c20d942199bd2da2fd1a cli-manual-budget-20260908.jsonl.gz
+      - name: Publish verified source and release only to the preparation branch
+        run: |
+          set -euo pipefail
+          cp artifacts/ai-reuse-equivalence-report.json docs/ai/benchmarks/reuse-20260923/production-equivalence.json
+          npx prettier --config config/prettier.json --write docs/ai/benchmarks/reuse-20260923/production-equivalence.json
+          git restore .github/workflows/ai-combined-build.yml
+          git add src/ai/evaluation/evaluate.ts src/ai/evaluation/spatial.ts src/ai/planning/candidates.ts src/ai/planning/search.ts src/ai/simulation/simulate.ts src/ai/simulation/state-key.ts src/engine/core/geometry.ts tests/ai/lazy-candidates.test.ts tests/ai/snapshot-cache.test.ts tests/core/placement-query.test.ts scripts/ai/performance/equivalence.mjs docs/ai/performance/AI-REUSE-2026-09-23.md docs/ai/benchmarks/reuse-20260923 index.html
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'perf(ai): verify complete reuse combination and rebuild offline release'
+          git push origin HEAD:build/ai-combined-20260923
+          git rev-parse HEAD | tee artifacts/verified-commit.txt
+          git diff --name-only cec107917b840f9cb34954fa1635db58ccd2ae66 HEAD -- src tests scripts docs index.html | while IFS= read -r path; do git ls-tree HEAD -- "$path"; done | tee artifacts/verified-blobs.txt
+          git archive HEAD | gzip > artifacts/verified-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-combined-production-evidence
+          path: |
+            artifacts/*report.json
+            artifacts/engine-report.txt
+            artifacts/verified-*
+            dist/index.html
+          if-no-files-found: ignore
+          retention-days: 7
