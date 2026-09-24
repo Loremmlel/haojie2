@@ -2,6 +2,7 @@
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -140,6 +141,37 @@ class PreparationTests(unittest.TestCase):
                 _, selected = load_dataset(root / f"hard-only/{split}.pt", config)
                 self.assertTrue(all(r["actor"] == 1 for r in selected["records"]))
                 self.assertEqual(selected["groups"], filtered["splits"][split]["groups"])
+
+            second = root / "teacher-2.jsonl"
+            second.write_text("second input", encoding="utf-8")
+            per_file_rows = {source: rows[:11], second: [header, *rows[11:]]}
+            barrier = threading.Barrier(2, timeout=5)
+
+            def concurrent_rows(path, _node):
+                barrier.wait()
+                yield from per_file_rows[path]
+
+            with patch("haojie_training.prepare.encoded_rows", side_effect=concurrent_rows):
+                parallel = prepare([source, second], root / "parallel", workers=2)
+            self.assertEqual(parallel["splits"], report["splits"])
+            self.assertEqual(parallel["games"], report["games"])
+            for split in ["train", "validation"]:
+                expected, expected_meta = load_dataset(root / f"prepared/{split}.pt", config)
+                actual, actual_meta = load_dataset(root / f"parallel/{split}.pt", config)
+                self.assertEqual(actual_meta["records"], expected_meta["records"])
+                for key in expected:
+                    torch.testing.assert_close(actual[key], expected[key])
+
+            duplicate_files = {
+                source: per_file_rows[source],
+                second: [header, dict(rows[11], game_id="trajectory-0"), *rows[12:]],
+            }
+            with patch(
+                "haojie_training.prepare.encoded_rows",
+                side_effect=lambda path, _node: iter(duplicate_files[path]),
+            ):
+                with self.assertRaisesRegex(ValueError, "重复"):
+                    prepare([source, second], root / "cross-file-duplicate", workers=2)
 
 
 if __name__ == "__main__":

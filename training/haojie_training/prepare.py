@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import torch
@@ -68,6 +69,58 @@ def tensor_example(row: dict, config: ModelConfig) -> dict[str, torch.Tensor]:
     return example
 
 
+def load_file(path: Path, node: str, config: ModelConfig, teacher_difficulty: str | None):
+    """独立重放一个来源文件并编码样本；只返回局部分组，跨文件一致性由主线程校验。"""
+    with path.open("rb") as source:
+        digest = hashlib.file_digest(source, "sha256").hexdigest()
+    header, groups, current = None, {}, None
+    for row in encoded_rows(path, node):
+        if row["type"] == "encoding":
+            if header is not None and row != header:
+                raise ValueError("不能混合不同规则、编码或源码的数据")
+            header = row
+            schema = row["schema"]
+            for name in ["entity_features", "global_features", "action_features", "kind_count"]:
+                if schema[name] != getattr(config, name):
+                    raise ValueError(f"模型与编码器的{name}不匹配")
+        elif row["type"] == "game":
+            identity = row.get("game_id", row["group"])
+            if identity in groups:
+                raise ValueError("同一教师对局重复，拒绝重采样污染统计")
+            current = {"metadata": row, "examples": [], "records": [], "outcome": None}
+            groups[identity] = current
+        elif row["type"] == "example":
+            if teacher_difficulty is not None:
+                game = current["metadata"]
+                profile = (game.get("teachers") or {}).get(str(row["actor"]))
+                difficulty = (
+                    (profile or {}).get("difficulty")
+                    if game.get("teachers") is not None
+                    else game.get("difficulty")
+                )
+                if difficulty not in {"easy", "medium", "hard"}:
+                    raise ValueError("样本缺少可验证的教师来源，不能按难度筛选")
+                if difficulty != teacher_difficulty:
+                    continue
+            current["examples"].append(tensor_example(row, config))
+            current["records"].append(
+                {key: row[key] for key in ["index", "step", "actor", "command", "stage"]}
+            )
+        elif row["type"] == "outcome":
+            current["outcome"] = row
+            for example, record in zip(current["examples"], current["records"]):
+                # 价值只训练根决策，避免重复计权，也不把条件动作前缀当成同一状态价值。
+                if row["terminated"] and record["step"] == 0:
+                    example["value"].fill_(row["returns"][str(record["actor"])])
+                    example["value_mask"].fill_(True)
+            current = None
+        else:
+            raise ValueError("未知编码记录类型")
+    if header is None:
+        raise ValueError("编码流缺少版本头")
+    return header, groups, {"path": str(path.resolve()), "sha256": digest}
+
+
 def prepare(
     paths: list[Path],
     output: Path,
@@ -75,6 +128,7 @@ def prepare(
     split_seed=20260922,
     node="node",
     teacher_difficulty: str | None = None,
+    workers: int = 1,
 ) -> dict:
     """首批试验整体驻留CPU；整局和相同种子不可跨集合，不为截断/中断局制造价值标签。"""
     if output.exists():
@@ -83,55 +137,21 @@ def prepare(
         raise ValueError("验证集比例必须在0与1之间")
     if teacher_difficulty not in {None, "easy", "medium", "hard"}:
         raise ValueError("教师筛选难度无效")
+    if workers < 1:
+        raise ValueError("并发数必须大于0")
     config = ModelConfig()
     header, groups, provenance = None, {}, []
-    for path in paths:
-        with path.open("rb") as source:
-            digest = hashlib.file_digest(source, "sha256").hexdigest()
-        provenance.append({"path": str(path.resolve()), "sha256": digest})
-        current = None
-        for row in encoded_rows(path, node):
-            if row["type"] == "encoding":
-                if header is not None and row != header:
-                    raise ValueError("不能混合不同规则、编码或源码的数据")
-                header = row
-                schema = row["schema"]
-                for name in ["entity_features", "global_features", "action_features", "kind_count"]:
-                    if schema[name] != getattr(config, name):
-                        raise ValueError(f"模型与编码器的{name}不匹配")
-            elif row["type"] == "game":
-                identity = row.get("game_id", row["group"])
-                if identity in groups:
-                    raise ValueError("同一教师对局重复，拒绝重采样污染统计")
-                current = {"metadata": row, "examples": [], "records": [], "outcome": None}
-                groups[identity] = current
-            elif row["type"] == "example":
-                if teacher_difficulty is not None:
-                    game = current["metadata"]
-                    profile = (game.get("teachers") or {}).get(str(row["actor"]))
-                    difficulty = (
-                        (profile or {}).get("difficulty")
-                        if game.get("teachers") is not None
-                        else game.get("difficulty")
-                    )
-                    if difficulty not in {"easy", "medium", "hard"}:
-                        raise ValueError("样本缺少可验证的教师来源，不能按难度筛选")
-                    if difficulty != teacher_difficulty:
-                        continue
-                current["examples"].append(tensor_example(row, config))
-                current["records"].append(
-                    {key: row[key] for key in ["index", "step", "actor", "command", "stage"]}
-                )
-            elif row["type"] == "outcome":
-                current["outcome"] = row
-                for example, record in zip(current["examples"], current["records"]):
-                    # 价值只训练根决策，避免重复计权，也不把条件动作前缀当成同一状态价值。
-                    if row["terminated"] and record["step"] == 0:
-                        example["value"].fill_(row["returns"][str(record["actor"])])
-                        example["value_mask"].fill_(True)
-                current = None
-            else:
-                raise ValueError("未知编码记录类型")
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for file_header, file_groups, source in executor.map(
+            lambda path: load_file(path, node, config, teacher_difficulty), paths
+        ):
+            if header is not None and file_header != header:
+                raise ValueError("不能混合不同规则、编码或源码的数据")
+            header = file_header
+            if groups.keys() & file_groups.keys():
+                raise ValueError("同一教师对局重复，拒绝重采样污染统计")
+            groups.update(file_groups)
+            provenance.append(source)
     families = {game["metadata"]["group"] for game in groups.values()}
     if len(families) < 2 or any(not game["examples"] for game in groups.values()):
         raise ValueError("至少需要两个不同种子族且各局筛选后非空，才能分开训练和验证")
@@ -223,6 +243,7 @@ def main():
     parser.add_argument("--split-seed", type=int, default=20260922)
     parser.add_argument("--node", default=shutil.which("node") or "node")
     parser.add_argument("--teacher-difficulty", choices=["easy", "medium", "hard"])
+    parser.add_argument("--workers", type=int, default=1, help="并行编码来源文件的进程数")
     args = parser.parse_args()
     torch.set_num_threads(2)
     report = prepare(
@@ -232,6 +253,7 @@ def main():
         args.split_seed,
         args.node,
         args.teacher_difficulty,
+        args.workers,
     )
     print(json.dumps({"output": str(args.output), "splits": report["splits"]}, ensure_ascii=False))
 

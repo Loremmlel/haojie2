@@ -53,7 +53,7 @@ training/.venv/Scripts/python.exe -X utf8 -m haojie_training.train --data artifa
 
 教师轨迹使用`haojie-training-record-v1`：每局只保存种子/模式（导入存档则另带初始局面）、实际截断上限，逐步保存命令、操作者、前后指纹和教师统计，结尾保存真实结果。没有逐步Observation或异常局面快照。`.jsonl.gz`使用Node内置gzip流式压缩；`.jsonl`仍可用于人工检查。旧快照训练JSONL不兼容，请重新生成；游戏存档兼容逻辑不变。
 
-prepare调用本仓库Node/tsx编码器，统一重放入口验证版本、顺序、权限、指纹和结果，再生成操作者的公开观察。Python通过管道接收编码输入，只做张量化、填充和标签连接，直接生成二进制`train.pt`和`validation.pt`，无需落盘大数组JSON。重放只发生在预处理阶段，每轮训练读取`.pt`。可传多个压缩/普通轨迹，拒绝重复game_id；同一规则/种子的换边对局共用group种子族并放在同一个集合。默认分出25%验证组，训练/验证至少各一个种子族；manifest记录源码/输入指纹、来源、结果和动作覆盖。缺少outcome的完整命令前缀或明确取消的对局仍保留策略数据，价值遮罩为False；损坏JSON/gzip明确报错，不静默截掉坏尾部。
+prepare调用本仓库Node/tsx编码器，统一重放入口验证版本、顺序、权限、指纹和结果，再生成操作者的公开观察。Python通过管道接收编码输入，只做张量化、填充和标签连接，直接生成二进制`train.pt`和`validation.pt`，无需落盘大数组JSON。审计与预处理分别重放轨迹，每轮训练直接读取`.pt`。多文件可加`--workers 6`并行运行每个文件的Node编码进程；完成后仍按输入顺序统一检查跨文件版本与重复对局，划分种子族、填充和写入张量由主进程完成。可传多个压缩/普通轨迹，拒绝重复game_id；同一规则/种子的换边对局共用group种子族并放在同一个集合。默认分出25%验证组，训练/验证至少各一个种子族；manifest记录源码/输入指纹、来源、结果和动作覆盖。缺少outcome的完整命令前缀或明确取消的对局仍保留策略数据，价值遮罩为False；损坏JSON/gzip明确报错，不静默截掉坏尾部。
 
 `--overfit-examples 64`从训练集固定抽取64个分步样本，只用于确认网络能记住真实输入。移除此参数才使用整个训练集；验证集始终不参与优化。报告分别列出训练前后策略loss、全部/多候选/根决策拟合率和已知终局的价值MSE；单候选的强制步骤不能抬高多候选指标。价值仅训练每个实际命令的根决策，按actor视角，不按active猜测。
 
@@ -69,9 +69,19 @@ npm run train:inspect -- artifacts/training/teachers/paired.jsonl.gz --encode --
 npm run train:audit-teacher -- --input artifacts/training/pilot-20260923/teacher.jsonl.gz --positions 32 --output artifacts/training/teachers/budget-audit.json
 ```
 
+大批换边采样使用动态队列。`--games`须为偶数，每个子进程只处理一个种子的两局；最多同时运行`--workers`个子进程，任意一对完成后立即领取下一个种子。输出目录必须是新目录，每个种子分别保存压缩轨迹、报告和日志，最后生成`summary.json`。失败会停止分发新种子，已完成的文件保留；Ctrl+C停止分发并等待正在运行的种子对结束。
+
+```powershell
+npm run train:selfplay:parallel -- --games 40 --seed 2026092421 --workers 6 --rules classic --difficulty hard --nodes 800 --opponent medium --opponent-nodes 320 --plies 100 --commands 3000 --output-dir artifacts/training/teachers-dynamic
+```
+
+当前9月24日40局已由旧静态分组采完，位于`artifacts/training/teacher-feedback5-20260924/`；无需因调度器改变而重采。动态队列用于后续新种子，轨迹与`train:selfplay`共用同一生成入口和版本校验。
+
 `--report`保存两方配置、运行源码指纹、基础提交、硬件和每局结果。采样逐命令记录来源与耗时；取消或故障写出明确中断原因，已执行的命令仍可重放。同步教师搜索只能在调用之间响应取消，返回后会再次检查取消状态，不提交迟到命令。
 
 `train:inspect`接收多个压缩/普通轨迹，通过统一入口重建公开Observation、核对真实引擎结算和前后指纹；实际截断上限来自轨迹头，同名JSON报告存在时也核对其上限。按教师统计命令、来源棋种、技能、反应、路径、缓存、回应和终局收益；全部命令与非缓存搜索的耗时分别报告。只对双方席位均已真实终局的种子给成对分数，覆盖率不代表学会能力。加`--encode`检查共享动作树与编码器，统计分步/多候选数量及最大输入长度。缺少结束行时，检查器与编码器统一标记`missing-outcome`中断，不给胜负标签。
+
+多文件审计可用`npm run train:inspect:parallel -- 轨迹1.jsonl.gz 轨迹2.jsonl.gz --encode --workers 6 --output artifacts/training/inspection.json`。每个文件由独立进程完整重放，完成后统一检查跨文件重复对局、规则和源码指纹，并汇总局数、命令数和换边得分；各文件的教师耗时分布保留在`profilesByFile`，不把分位数错误相加。旁边的`.parts`目录保留各进程报告和日志，失败时不生成最终审计报告。
 
 预算审计从每局/实际回合/操作者的首个非缓存、多候选play位置中，按公开指纹哈希选样；要求至少4个场上棋子。对每个选中位置重新比较medium/320、hard/800、hard/1600，并重复决策核对确定性；不继承原局的缓存或预算历史。`changedHardBudgetCommands`只是换招数量，不能当作1600更强的证据。
 
