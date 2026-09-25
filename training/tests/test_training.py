@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 
 from haojie_training.data import FORMAT, load_dataset, synthetic_batch, validate_batch
+from haojie_training.evaluate import value_baselines, value_diagnostics
 from haojie_training.model import ModelConfig, PolicyValueNet, policy_value_loss
 from haojie_training.runtime import Trainer
 
@@ -76,6 +77,10 @@ class TrainingTests(unittest.TestCase):
             path = Path(folder) / "checkpoint.pt"
             metadata = {"synthetic": True, "ruleset": "test-only", "encoding": "test-v1"}
             trainer.save(path, metadata)
+            # 旧检查点没有权重字段，必须继续按原策略加价值目标恢复。
+            legacy = torch.load(path, weights_only=True)
+            legacy.pop("value_weight")
+            torch.save(legacy, path)
             resumed = Trainer(PolicyValueNet(self.config), torch.device("cpu"), lr=0.002)
             resumed.restore(path, metadata)
             torch.testing.assert_close(
@@ -95,6 +100,48 @@ class TrainingTests(unittest.TestCase):
         for entities in (1, 3, 17):
             batch = synthetic_batch(self.config, 2, entities, 5)
             self.assertEqual(tuple(model(batch)[0].shape), (2, 5))
+
+    def test_value_ablation_and_checkpoint_objective_boundary(self):
+        model = PolicyValueNet(self.config)
+        output = model(self.batch)
+        policy_only = policy_value_loss(output, self.batch, 0)
+        changed = {**self.batch, "value": -self.batch["value"]}
+        torch.testing.assert_close(policy_only, policy_value_loss(output, changed, 0))
+        policy_only.backward()
+        self.assertTrue(all(not p.grad.any() for p in model.value.parameters()))
+        trainer = Trainer(model, torch.device("cpu"), value_weight=0)
+        trainer.step(self.batch)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "policy.pt"
+            trainer.save(path, {})
+            same = Trainer(PolicyValueNet(self.config), torch.device("cpu"), value_weight=0)
+            same.restore(path, {})
+            torch.testing.assert_close(trainer.step(self.batch), same.step(self.batch))
+            with self.assertRaises(ValueError):
+                Trainer(PolicyValueNet(self.config), torch.device("cpu")).restore(path, {})
+        for weight in (-1, float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                Trainer(model, torch.device("cpu"), value_weight=weight)
+
+    def test_value_baselines_use_training_labels_and_exclude_unknown_values(self):
+        training = {
+            "value": torch.tensor([1.0, 1.0, -1.0, -1.0]),
+            "value_mask": torch.tensor([True, True, True, False]),
+        }
+        records = [{"actor": a, "game_id": g} for a, g in [(1, "a"), (1, "a"), (2, "b"), (2, "c")]]
+        baselines = value_baselines(training, records)
+        self.assertAlmostEqual(baselines["mean"], 1 / 3)
+        self.assertEqual(baselines["by_actor"], {"1": 1.0, "2": -1.0})
+        validation = {**training, "value": -training["value"]}
+        result = value_diagnostics(
+            torch.tensor([1.0, 0.0, -1.0, 100.0]), validation, records, baselines
+        )
+        self.assertEqual(result["overall"]["labels"], 3)
+        self.assertEqual(result["overall"]["train_actor_mean_mse"], 4)
+        self.assertEqual(result["overall"]["zero_mse"], 1)
+        self.assertEqual(result["overall"]["model_mse"], 3)
+        self.assertEqual(result["game_macro_mse"], 3.25)
+        self.assertEqual(result["by_actor"]["2"]["labels"], 1)
 
 
 if __name__ == "__main__":

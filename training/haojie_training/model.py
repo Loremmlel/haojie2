@@ -120,10 +120,12 @@ class PolicyValueNet(nn.Module):
         return logits, self.value(x[:, 0]).squeeze(-1).float()
 
 
-def policy_value_loss(output: tuple[Tensor, Tensor], batch: dict[str, Tensor]) -> Tensor:
+def policy_value_loss(
+    output: tuple[Tensor, Tensor], batch: dict[str, Tensor], value_weight: float = 1.0
+) -> Tensor:
     """策略支持软访问分布/one-hot教师标签；截断样本的价值mask为False，不充当平局。"""
     logits, value = output
     policy_loss = -(batch["policy"] * F.log_softmax(logits, dim=-1)).sum(dim=-1).mean()
     known = batch["value_mask"].float()
     value_loss = ((value - batch["value"]).square() * known).sum() / known.sum().clamp_min(1)
-    return policy_loss + value_loss
+    return policy_loss + value_weight * value_loss

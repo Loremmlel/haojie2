@@ -1,5 +1,6 @@
 """共用训练步与检查点；FP32参数/Adam状态、可选AMP计算，异常不冒充成功更新。"""
 
+import math
 from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
@@ -43,9 +44,19 @@ class Trainer:
     同步与数值健康检查由调用方在计时边界执行，避免逐张量GPU同步影响测量。
     """
 
-    def __init__(self, model: PolicyValueNet, device: torch.device, precision="fp32", lr=3e-4):
+    def __init__(
+        self,
+        model: PolicyValueNet,
+        device: torch.device,
+        precision="fp32",
+        lr=3e-4,
+        value_weight=1.0,
+    ):
         if precision not in {"fp32", "bf16", "fp16"}:
             raise ValueError("未知训练精度")
+        if not math.isfinite(value_weight) or value_weight < 0:
+            raise ValueError("价值权重必须是有限非负数")
+        self.value_weight = value_weight
         self.device, self.precision = device, precision
         self.model = model.to(device).train()
         self.optimizer = torch.optim.AdamW(
@@ -64,7 +75,7 @@ class Trainer:
     def step(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         self.optimizer.zero_grad(set_to_none=True)
         with autocast(self.device, self.precision):
-            loss = policy_value_loss(self.model(batch), batch)
+            loss = policy_value_loss(self.model(batch), batch, self.value_weight)
         self.scaler.scale(loss).backward()
         self.scaler.unscale_(self.optimizer)
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0, foreach=True)
@@ -94,6 +105,7 @@ class Trainer:
             "config": asdict(self.model.config),
             "metadata": metadata,
             "precision": self.precision,
+            "value_weight": self.value_weight,
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "scaler": self.scaler.state_dict(),
@@ -117,8 +129,9 @@ class Trainer:
             or payload["config"] != asdict(self.model.config)
             or payload["metadata"] != metadata
             or payload["precision"] != self.precision
+            or payload.get("value_weight", 1.0) != self.value_weight
         ):
-            raise ValueError("检查点的模型、数据来源或精度与当前训练不一致")
+            raise ValueError("检查点的模型、数据来源、精度或损失权重与当前训练不一致")
         self.model.load_state_dict(payload["model"])
         self.optimizer.load_state_dict(payload["optimizer"])
         self.scaler.load_state_dict(payload["scaler"])

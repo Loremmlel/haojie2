@@ -12,7 +12,15 @@ from pathlib import Path
 
 import torch
 
-from .data import FLOAT_KEYS, FORMAT, INDEX_KEYS, MASK_KEYS, collate_examples, validate_batch
+from .data import (
+    FLOAT_KEYS,
+    FORMAT,
+    INDEX_KEYS,
+    MASK_KEYS,
+    SHARD_FORMAT,
+    collate_examples,
+    validate_batch,
+)
 from .model import ModelConfig
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -129,6 +137,8 @@ def prepare(
     node="node",
     teacher_difficulty: str | None = None,
     workers: int = 1,
+    shard_size: int = 0,
+    split_manifest: Path | None = None,
 ) -> dict:
     """首批试验整体驻留CPU；整局和相同种子不可跨集合，不为截断/中断局制造价值标签。"""
     if output.exists():
@@ -139,6 +149,8 @@ def prepare(
         raise ValueError("教师筛选难度无效")
     if workers < 1:
         raise ValueError("并发数必须大于0")
+    if shard_size < 0:
+        raise ValueError("分片样本上限不能为负")
     config = ModelConfig()
     header, groups, provenance = None, {}, []
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -162,6 +174,27 @@ def prepare(
     )
     count = min(len(ordered) - 1, max(1, round(len(ordered) * validation_fraction)))
     splits = {"train": ordered[count:], "validation": ordered[:count]}
+    split_reference = None
+    if split_manifest is not None:
+        reference = json.loads(split_manifest.read_text(encoding="utf-8"))
+        if (
+            reference["ruleset"] != header["ruleset"]
+            or reference["encoding"] != header["schema"]["encoding"]
+        ):
+            raise ValueError("固定划分的规则/编码不匹配")
+        old_train = reference["splits"]["train"]["groups"]
+        old_validation = reference["splits"]["validation"]["groups"]
+        original = set(old_train) | set(old_validation)
+        if (
+            not old_train
+            or not old_validation
+            or set(old_train) & set(old_validation)
+            or not original <= families
+        ):
+            raise ValueError("固定划分缺少原种子族或存在交叉")
+        splits = {"train": [*old_train, *sorted(families - original)], "validation": old_validation}
+        split_seed = reference["split_seed"]
+        split_reference = hashlib.sha256(split_manifest.read_bytes()).hexdigest()
     metadata = {
         "synthetic": False,
         "ruleset": header["ruleset"],
@@ -171,6 +204,7 @@ def prepare(
         "sources": provenance,
         "split_seed": split_seed,
         "teacher_difficulty": teacher_difficulty,
+        **({"split_reference_sha256": split_reference} if split_reference else {}),
     }
     report = {**metadata, "splits": {}, "games": []}
     for key, game in groups.items():
@@ -200,34 +234,46 @@ def prepare(
                 for key in keys
                 for r in groups[key]["records"]
             ]
-            batch = collate_examples(examples, config)
             details = {
                 "groups": split_families,
                 "game_ids": keys,
                 "examples": len(examples),
                 "decisions": sum(r["step"] == 0 for r in records),
-                "value_labels": int(batch["value_mask"].sum()),
-                "forced_examples": int((batch["candidate_mask"].sum(1) == 1).sum()),
-                "max_entities": batch["entities"].shape[1],
-                "max_candidates": batch["candidates"].shape[1],
+                "value_labels": sum(bool(e["value_mask"]) for e in examples),
+                "forced_examples": sum(int(e["candidate_mask"].sum()) == 1 for e in examples),
+                "max_entities": max(len(e["entity_mask"]) for e in examples),
+                "max_candidates": max(len(e["candidate_mask"]) for e in examples),
                 "stages": dict(Counter(r["stage"] for r in records)),
                 "commands": dict(Counter(r["command"] for r in records if r["step"] == 0)),
             }
             report["splits"][split] = details
-            torch.save(
-                {
+            split_metadata = {
+                **metadata,
+                "split": split,
+                "groups": split_families,
+                "game_ids": keys,
+                "records": records,
+            }
+            if shard_size:
+                shards = []
+                for start in range(0, len(examples), shard_size):
+                    batch = collate_examples(examples[start : start + shard_size], config)
+                    name = f"{split}-{len(shards):05d}.pt"
+                    path = Path(folder) / name
+                    torch.save({"format": FORMAT, "metadata": metadata, "tensors": batch}, path)
+                    with path.open("rb") as source:
+                        digest = hashlib.file_digest(source, "sha256").hexdigest()
+                    shards.append({"file": name, "sha256": digest, "examples": len(batch["value"])})
+                    del batch
+                payload = {"format": SHARD_FORMAT, "metadata": split_metadata, "shards": shards}
+                details["shards"] = len(shards)
+            else:
+                payload = {
                     "format": FORMAT,
-                    "metadata": {
-                        **metadata,
-                        "split": split,
-                        "groups": split_families,
-                        "game_ids": keys,
-                        "records": records,
-                    },
-                    "tensors": batch,
-                },
-                Path(folder) / f"{split}.pt",
-            )
+                    "metadata": split_metadata,
+                    "tensors": collate_examples(examples, config),
+                }
+            torch.save(payload, Path(folder) / f"{split}.pt")
         (Path(folder) / "manifest.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -244,6 +290,8 @@ def main():
     parser.add_argument("--node", default=shutil.which("node") or "node")
     parser.add_argument("--teacher-difficulty", choices=["easy", "medium", "hard"])
     parser.add_argument("--workers", type=int, default=1, help="并行编码来源文件的进程数")
+    parser.add_argument("--shard-size", type=int, default=0)
+    parser.add_argument("--split-manifest", type=Path)
     args = parser.parse_args()
     torch.set_num_threads(2)
     report = prepare(
@@ -254,6 +302,8 @@ def main():
         args.node,
         args.teacher_difficulty,
         args.workers,
+        args.shard_size,
+        args.split_manifest,
     )
     print(json.dumps({"output": str(args.output), "splits": report["splits"]}, ensure_ascii=False))
 

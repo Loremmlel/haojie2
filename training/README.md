@@ -57,7 +57,9 @@ prepare调用本仓库Node/tsx编码器，统一重放入口验证版本、顺�
 
 `--overfit-examples 64`从训练集固定抽取64个分步样本，只用于确认网络能记住真实输入。移除此参数才使用整个训练集；验证集始终不参与优化。报告分别列出训练前后策略loss、全部/多候选/根决策拟合率和已知终局的价值MSE；单候选的强制步骤不能抬高多候选指标。价值仅训练每个实际命令的根决策，按actor视角，不按active猜测。
 
-首批实际数据的实体序列可超过64，含死亡记录和附属状态，不能直接套用合成性能基准的batch 128。当前张量文件整体驻留CPU，每个训练批次再移除全无效的尾部填充；扩到5万–20万决策前先实现分片和长度分桶。
+首批实际数据的实体序列可超过64，含死亡记录和附属状态，不能直接套用合成性能基准的batch 128。旧填充张量继续兼容；扩量时给prepare增加`--shard-size 512`，按固定样本上限生成分片与`train.pt`/`validation.pt`索引。读取时先校验各分片SHA256和输入，再通过只读mmap映射，取样才填充当前批次；不将全库展开到最大形状。预处理仍在内存保留变长样本，尚不是无限容量流式转换。
+
+扩充已有语料时增加`--split-manifest 原目录/manifest.json`：全部原种子族必须在输入中，原验证族保持不变，新增族只进入训练。编码、规则变化会拒绝固定划分。训练可加`--length-bucket-size 256`：均匀选择样本锚点，再从其长度桶取一批，最后不足256的桶按实际样本数选中，保持样本的边际等概率；同批样本有相关性，此配置写入检查点，续训不能静默改变。它不等于按完整命令或整局平衡采样。
 
 ## 教师对照与数据审计
 
@@ -85,7 +87,19 @@ npm run train:selfplay:parallel -- --games 40 --seed 2026092421 --workers 6 --ru
 
 预算审计从每局/实际回合/操作者的首个非缓存、多候选play位置中，按公开指纹哈希选样；要求至少4个场上棋子。对每个选中位置重新比较medium/320、hard/800、hard/1600，并重复决策核对确定性；不继承原局的缓存或预算历史。`changedHardBudgetCommands`只是换招数量，不能当作1600更强的证据。
 
-混合教师文件默认编码双方实际动作。向prepare传`--teacher-difficulty hard`可只保留hard方完整命令的全部分步标签；manifest逐局记录保留/排除的命令数，种子族划分仍保持完整。教师来源缺失或筛选后出现空局会报错。筛选不会把medium的动作改成hard答案；在弱方实际到达局面上重新查询强教师仍待实现。终局价值反映原混合对手续局，不能解释为对统一强对手的胜率。大批采样及训练仍按[训练进度](../docs/ai/TRAINING-PROGRESS.md)的分阶段门槛推进。
+混合教师文件默认编码双方实际动作。向prepare传`--teacher-difficulty hard`可只保留hard方完整命令的全部分步标签；manifest逐局记录保留/排除的命令数，种子族划分仍保持完整。教师来源缺失或筛选后出现空局会报错。筛选不会把medium的动作改成hard答案。终局价值反映原混合对手续局，不能解释为对统一强对手的胜率。大批采样及训练仍按[训练进度](../docs/ai/TRAINING-PROGRESS.md)的分阶段门槛推进。
+
+### 学生局面教师重标
+
+`corrections/relabel.ts`重放经典模式网络对局，在学生需要推理的决策中，每回合/阶段/操作者/反应标志只取首个，再按公开指纹哈希选择每局最多32个。选择先于教师查询；标签相同的局面也保留，不只挑分歧。教师使用公开Observation上的hard固定work冷计划，没有实局seed/rng、对手缓存或预算历史。
+
+```powershell
+node --import tsx scripts/training/corrections/relabel.ts --input artifacts/training/value-ablation-20260925/policy-only-4000-easy/games.jsonl.gz --output artifacts/training/expansion-20260925/corrections.jsonl.gz --per-game 32 --nodes 800
+```
+
+输出`haojie-teacher-corrections-v1`只保存原轨迹相对路径/SHA256、位置/公开指纹、教师命令与统计，沿用gzip读写。prepare可与教师轨迹一起接收此文件；读取时重新核验原轨迹与每个标签位置、动作树和公开合法性。生成时另用固定独立模拟源执行一次引擎转移，但这不等于穷尽随机结果，也不证明教师更优。缺失完成尾行、重复位置、原轨迹变化或失配命令均拒绝。
+
+反事实标签没有真实教师续局，所有价值遮罩为False；不借用学生原对局胜负、不把未执行标签称为实际动作。标注集沿用原种子族，同源轨迹/重标版本不能跨训练与验证。实验中一旦使用以前的对战种子训练，就必须另选新的测试种子。此入口目前只处理学生网络轨迹，尚未给一般混合教师轨迹提供重标入口。
 
 ## 训练与续训
 
@@ -104,9 +118,21 @@ training/.venv/Scripts/python.exe -X utf8 -m haojie_training.train --synthetic -
 
 检查点保存模型配置、权重、优化器、缩放器、步数、训练随机状态和数据来源；拒绝无意覆盖、数据/精度/结构混用。完成训练且数值检查通过后，用临时文件替换检查点。Ctrl+C保留已有检查点，不保存可能中断在优化器内部的状态。本轮未实现自动定时检查点。
 
+### 价值目标诊断与消融
+
+`train --value-weight`控制价值MSE在总损失中的权重，默认1保持原训练行为；0只用于策略消融，所得价值头不能用于搜索。权重保存在检查点和报告中，续训不得更换目标权重，旧检查点按1读取。比较时保持数据文件、整种子族划分、初始化种子、学习率、批量及更新次数相同。
+
+训练报告额外提供按实际操作者席位的价值误差、预测均值、胜负标签数，以及整局等权MSE。零常数、训练集收益均值、训练集分席位收益均值三种基线只在训练集拟合；验证集绝不重新拟合。决策加权与整局等权结果分别报告，截断局和参数分步继续排除。旧检查点可用以下入口重新诊断，输出到新报告；它校验原训练及验证文件SHA256，不改变历史划分或报告。
+
+```powershell
+training/.venv/Scripts/python.exe -X utf8 -m haojie_training.evaluate --checkpoint artifacts/training/teacher-feedback5-20260924/lr1e4.pt --data artifacts/training/teacher-feedback5-20260924/encoded/train.pt --validation artifacts/training/teacher-feedback5-20260924/encoded/validation.pt --device cuda --precision fp32 --report artifacts/training/diagnostic.json
+```
+
+训练前后的常规指标仍采用指定训练精度。模型选择前额外运行FP32评估；策略模仿指标的提高不等于完整命令解码或实际棋力提高。
+
 ## 输入张量约定
 
-`--data encoded.pt`接受weights_only可加载的字典：`{format: 'haojie-training-tensors-v1', metadata, tensors}`。metadata必须有ruleset、encoding及布尔synthetic字段。训练会额外保存源文件SHA256。当前一次将文件加载到CPU内存，需要扩大数据量时再分片。
+`--data encoded.pt`接受weights_only可加载的普通张量字典或`haojie-training-shards-v1`分片索引。metadata必须有ruleset、encoding及布尔synthetic字段。检查点保存入口文件SHA256；分片索引再以各文件SHA256绑定完整内容，缺失/损坏/重复分片会失败。普通张量整体驻留CPU；分片采用mmap，标签与长度向量常驻，实际内存仍取决于操作系统页面缓存与批次大小。
 
 | 张量              | 形状／类型       | 含义                                               |
 | ----------------- | ---------------- | -------------------------------------------------- |

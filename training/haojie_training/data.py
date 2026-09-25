@@ -1,5 +1,7 @@
 """预编码公开张量的格式边界及合成性能数据；这里不推导游戏数值或真实随机状态。"""
 
+import hashlib
+from bisect import bisect_right
 from pathlib import Path
 
 import torch
@@ -9,12 +11,97 @@ from torch.nn.utils.rnn import pad_sequence
 from .model import ModelConfig
 
 FORMAT = "haojie-training-tensors-v1"
+SHARD_FORMAT = "haojie-training-shards-v1"
 FLOAT_KEYS = {"entities", "globals", "candidates", "policy", "value"}
 MASK_KEYS = {"entity_mask", "candidate_mask", "value_mask"}
 INDEX_KEYS = {"kinds", "sources", "targets"}
 ENTITY_KEYS = {"entities", "kinds", "entity_mask"}
 ACTION_KEYS = {"candidates", "sources", "targets", "candidate_mask", "policy"}
 INPUT_KEYS = (FLOAT_KEYS | MASK_KEYS | INDEX_KEYS) - {"policy", "value", "value_mask"}
+
+
+class TensorShards:
+    """校验并映射只读分片，仅标签/长度常驻；取样才填充，不把全库展开到最大形状。
+
+    索引文件中的哈希绑定所有分片内容，文件名不能越出目录。旧张量入口仍可读取。
+    分片已逐一校验，抽样保留顺序、重复索引及样本内指针，不修改映射页。
+    """
+
+    def __init__(self, path, payload, config):
+        self.shards, self.ends, self.config = [], [], config
+        values, masks, entities, candidates = [], [], [], []
+        total = 0
+        names = set()
+        for item in payload["shards"]:
+            name = item["file"]
+            if not isinstance(name, str) or Path(name).name != name or not name.endswith(".pt"):
+                raise ValueError("分片路径必须是同目录文件名")
+            if name in names:
+                raise ValueError("分片文件不能重复")
+            names.add(name)
+            shard_path = path.parent / name
+            with shard_path.open("rb") as source:
+                digest = hashlib.file_digest(source, "sha256").hexdigest()
+            if digest != item["sha256"]:
+                raise ValueError("分片SHA256不匹配")
+            shard = torch.load(shard_path, map_location="cpu", weights_only=True, mmap=True)
+            if shard.get("format") != FORMAT:
+                raise ValueError("分片格式不匹配")
+            for key in ("ruleset", "encoding", "schema", "source_sha256", "synthetic"):
+                if shard["metadata"].get(key) != payload["metadata"].get(key):
+                    raise ValueError(f"分片{key}不匹配")
+            batch = shard["tensors"]
+            validate_batch(batch, config)
+            if len(batch["value"]) != item["examples"]:
+                raise ValueError("分片样本数不匹配")
+            total += item["examples"]
+            self.ends.append(total)
+            self.shards.append(batch)
+            values.append(batch["value"])
+            masks.append(batch["value_mask"])
+            entities.append(batch["entity_mask"].sum(1))
+            candidates.append(batch["candidate_mask"].sum(1))
+        if not self.shards or len(payload["metadata"].get("records", [])) != total:
+            raise ValueError("分片为空或记录数不匹配")
+        self.small = {"value": torch.cat(values), "value_mask": torch.cat(masks)}
+        self.counts = {"entity_mask": torch.cat(entities), "candidate_mask": torch.cat(candidates)}
+
+    def __getitem__(self, key):
+        return self.small[key]
+
+    def select(self, indices):
+        examples = []
+        for index in indices.tolist():
+            if not 0 <= index < self.ends[-1]:
+                raise IndexError("样本下标越界")
+            shard = bisect_right(self.ends, index)
+            local = index - (self.ends[shard - 1] if shard else 0)
+            example = {key: value[local] for key, value in self.shards[shard].items()}
+            for mask, keys in (("entity_mask", ENTITY_KEYS), ("candidate_mask", ACTION_KEYS)):
+                used = example[mask].nonzero()
+                length = int(used[-1, 0]) + 1 if used.numel() else 1
+                for key in keys:
+                    example[key] = example[key][:length]
+            examples.append(example)
+        return collate_examples(examples, self.config)
+
+
+def token_counts(dataset, mask):
+    return dataset.counts[mask] if isinstance(dataset, TensorShards) else dataset[mask].sum(1)
+
+
+def sample_indices(dataset, size, rng, bucket_size=0):
+    """先均匀选择锚点再在其长度桶抽样，保持每个样本边际等概率；不按胜负加权。"""
+    count = len(dataset["value"])
+    if bucket_size < 0:
+        raise ValueError("长度桶大小不能为负")
+    if not bucket_size:
+        return torch.randint(count, (size,), generator=rng)
+    anchor = int(torch.randint(count, (1,), generator=rng))
+    start = anchor // bucket_size * bucket_size
+    indices = start + torch.randint(min(bucket_size, count - start), (size,), generator=rng)
+    order = torch.argsort(token_counts(dataset, "entity_mask"), stable=True)
+    return order[indices]
 
 
 def collate_examples(examples: list[dict[str, Tensor]], config: ModelConfig) -> dict[str, Tensor]:
@@ -35,8 +122,10 @@ def collate_examples(examples: list[dict[str, Tensor]], config: ModelConfig) -> 
     return batch
 
 
-def select_batch(dataset: dict[str, Tensor], indices: Tensor) -> dict[str, Tensor]:
+def select_batch(dataset: dict[str, Tensor] | TensorShards, indices: Tensor) -> dict[str, Tensor]:
     """取样后仅移除整批无效的尾部填充，较大局面不会增加其他批次的注意力开销。"""
+    if isinstance(dataset, TensorShards):
+        return dataset.select(indices)
     batch = {key: value[indices] for key, value in dataset.items()}
     for mask, keys in [("entity_mask", ENTITY_KEYS), ("candidate_mask", ACTION_KEYS)]:
         used = batch[mask].any(dim=0).nonzero()
@@ -155,10 +244,10 @@ def synthetic_batch(
     return batch
 
 
-def load_dataset(path: Path, config: ModelConfig) -> tuple[dict[str, Tensor], dict]:
+def load_dataset(path: Path, config: ModelConfig) -> tuple[dict[str, Tensor] | TensorShards, dict]:
     """只加载weights_only张量文件；元数据必须注明规则、编码与合成标记。"""
     payload = torch.load(path, map_location="cpu", weights_only=True)
-    if not isinstance(payload, dict) or payload.get("format") != FORMAT:
+    if not isinstance(payload, dict) or payload.get("format") not in (FORMAT, SHARD_FORMAT):
         raise ValueError("不支持的数据集格式；原始教师JSONL须先完成公开特征编码")
     metadata = payload.get("metadata", {})
     if (
@@ -170,7 +259,9 @@ def load_dataset(path: Path, config: ModelConfig) -> tuple[dict[str, Tensor], di
         or type(metadata.get("synthetic")) is not bool
     ):
         raise ValueError("数据集必须标明ruleset、encoding和synthetic")
+    if payload["format"] == SHARD_FORMAT:
+        return TensorShards(path, payload, config), metadata
     batch = payload["tensors"]
     validate_batch(batch, config)
-    # ponytail: 首版预编码数据整体驻留CPU内存；大数据集再改为分片或mmap读取。
+    # 旧格式保持整体驻留CPU的读取行为；扩量使用同入口的分片索引与mmap。
     return batch, metadata

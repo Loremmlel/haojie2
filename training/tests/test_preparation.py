@@ -173,6 +173,41 @@ class PreparationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "重复"):
                     prepare([source, second], root / "cross-file-duplicate", workers=2)
 
+            # 固定原分组，不因新切分种子而重选验证局；分片必须保留重复抽样和局内指针。
+            from haojie_training.data import sample_indices, select_batch, token_counts
+
+            with patch("haojie_training.prepare.encoded_rows", return_value=iter(rows)):
+                sharded = prepare(
+                    [source],
+                    root / "sharded",
+                    split_seed=999,
+                    shard_size=3,
+                    split_manifest=root / "prepared/manifest.json",
+                )
+            for split in ("train", "validation"):
+                expected, expected_meta = load_dataset(root / f"prepared/{split}.pt", config)
+                actual, actual_meta = load_dataset(root / f"sharded/{split}.pt", config)
+                self.assertEqual(actual_meta["records"], expected_meta["records"])
+                self.assertEqual(
+                    sharded["splits"][split]["groups"], report["splits"][split]["groups"]
+                )
+                for indices in (torch.arange(len(expected["value"])), torch.tensor([2, 0, 2])):
+                    before, after = select_batch(expected, indices), select_batch(actual, indices)
+                    for key in before:
+                        torch.testing.assert_close(before[key], after[key])
+                torch.testing.assert_close(
+                    token_counts(actual, "entity_mask"), expected["entity_mask"].sum(1)
+                )
+                first = sample_indices(actual, 32, torch.Generator().manual_seed(4), 3)
+                second_draw = sample_indices(actual, 32, torch.Generator().manual_seed(4), 3)
+                torch.testing.assert_close(first, second_draw)
+                self.assertTrue(bool(((first >= 0) & (first < len(expected["value"]))).all()))
+                bad = torch.load(root / f"sharded/{split}.pt", weights_only=True)
+                bad["shards"][0]["sha256"] = "corrupt"
+                torch.save(bad, root / "sharded/broken.pt")
+                with self.assertRaisesRegex(ValueError, "SHA256"):
+                    load_dataset(root / "sharded/broken.pt", config)
+
 
 if __name__ == "__main__":
     unittest.main()

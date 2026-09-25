@@ -13,7 +13,7 @@ import onnxruntime as ort
 import torch
 from torch import nn
 
-from .data import load_dataset, select_batch, synthetic_batch
+from .data import load_dataset, select_batch, synthetic_batch, token_counts
 from .model import NETWORK_VERSION, PolicyValueNet
 from .runtime import checkpoint_config
 
@@ -55,8 +55,9 @@ def sha256(path):
 
 def cases_from_data(dataset):
     """固定选择长短序列、最多候选和混合批量，不根据模型输出挑选样本。"""
-    counts = dataset["entity_mask"].sum(1)
-    nonforced = (dataset["candidate_mask"].sum(1) > 1).nonzero().flatten()
+    counts = token_counts(dataset, "entity_mask")
+    action_counts = token_counts(dataset, "candidate_mask")
+    nonforced = (action_counts > 1).nonzero().flatten()
     if not len(nonforced):
         raise ValueError("至少需要一个多候选真实样本")
     ordered = nonforced[torch.argsort(counts[nonforced], stable=True)]
@@ -64,7 +65,7 @@ def cases_from_data(dataset):
         ("small", [int(ordered[0])]),
         ("medium", [int(ordered[len(ordered) // 2])]),
         ("large", [int(counts.argmax())]),
-        ("wide", [int(dataset["candidate_mask"].sum(1).argmax())]),
+        ("wide", [int(action_counts.argmax())]),
     ]
     choices.append(("batch4", [indices[0] for _, indices in choices]))
     return [

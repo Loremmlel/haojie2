@@ -10,8 +10,8 @@ from pathlib import Path
 
 import torch
 
-from .data import load_dataset, select_batch, synthetic_batch
-from .evaluate import evaluate, validate_split
+from .data import load_dataset, sample_indices, select_batch, synthetic_batch
+from .evaluate import evaluate, validate_split, value_baselines
 from .model import NETWORK_VERSION, ModelConfig, PolicyValueNet
 from .runtime import Trainer, checkpoint_config, resolve_device, synchronize
 
@@ -35,11 +35,13 @@ def main():
     parser.add_argument("--validation", type=Path)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--value-weight", type=float, default=1.0)
+    parser.add_argument("--length-bucket-size", type=int, default=0)
     parser.add_argument("--overfit-examples", type=int, default=0)
     args = parser.parse_args()
     if min(args.steps, args.batch_size, args.threads, args.entities, args.actions) < 1:
         parser.error("步数、批量、线程和填充长度必须为正")
-    if args.overfit_examples < 0 or args.learning_rate <= 0:
+    if args.overfit_examples < 0 or args.learning_rate <= 0 or args.length_bucket_size < 0:
         parser.error("拟合样本数不能为负，学习率必须为正")
     if (args.validation or args.overfit_examples) and not args.data:
         parser.error("验证集/小样本拟合需要--data")
@@ -95,16 +97,26 @@ def main():
             with args.validation.open("rb") as source:
                 metadata["validation_sha256"] = hashlib.file_digest(source, "sha256").hexdigest()
     metadata["learning_rate"] = args.learning_rate
+    if args.length_bucket_size:
+        metadata["length_bucket_size"] = args.length_bucket_size
     device = resolve_device(args.device)
-    trainer = Trainer(PolicyValueNet(config), device, args.precision, lr=args.learning_rate)
+    trainer = Trainer(
+        PolicyValueNet(config),
+        device,
+        args.precision,
+        lr=args.learning_rate,
+        value_weight=args.value_weight,
+    )
     if args.resume:
         trainer.restore(args.resume, metadata)
+
+    baselines = value_baselines(dataset, records) if dataset is not None else None
 
     def metrics():
         result = {}
         if dataset is not None:
             result["train"] = evaluate(
-                trainer.model, dataset, device, args.precision, args.batch_size, records
+                trainer.model, dataset, device, args.precision, args.batch_size, records, baselines
             )
         if validation is not None:
             result["validation"] = evaluate(
@@ -114,6 +126,7 @@ def main():
                 args.precision,
                 args.batch_size,
                 validation_metadata.get("records"),
+                baselines,
             )
         return result
 
@@ -128,7 +141,7 @@ def main():
                 )
             else:
                 rng = torch.Generator().manual_seed(args.seed + trainer.steps)
-                indices = torch.randint(len(dataset["value"]), (args.batch_size,), generator=rng)
+                indices = sample_indices(dataset, args.batch_size, rng, args.length_bucket_size)
                 batch = select_batch(dataset, indices)
             batch = {key: value.to(device) for key, value in batch.items()}
             loss = trainer.step(batch)
@@ -164,6 +177,7 @@ def main():
         "threads": torch.get_num_threads(),
         "device": str(device),
         "precision": args.precision,
+        "value_weight": args.value_weight,
         "parameters": sum(p.numel() for p in trainer.model.parameters()),
         "steps": trainer.steps,
         "updates": trainer.updates,
