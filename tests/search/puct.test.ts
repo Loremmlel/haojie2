@@ -71,6 +71,7 @@ test('零模拟基线、取消、枚举上限和信息边界显式处理，不�
     assert.equal('command' in result, false);
   }
   assert.throws(() => commands(o, 1), /预算/);
+  assert.throws(() => reference(o, 2, { maxActions: 1 }), /参照动作预算/);
   const giant = fixture();
   add(giant, 'u7', 2, 5, 7);
   assert.equal(search(observe(giant), options).status, 'paused');

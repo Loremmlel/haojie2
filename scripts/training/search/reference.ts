@@ -9,8 +9,14 @@ import { commands, terminalValue, windowBoundary } from './puct';
  * 只用于小型验证夹具，不能称为游戏解；未知边界0与探针相同，不用教师或模型评分。
  * rootValues记录同一候选域中的全部等价最优动作，不把单个教师选择作为正确答案。
  */
-export function reference(observation: Observation, horizon: number) {
+export function reference(
+  observation: Observation,
+  horizon: number,
+  limits: { maxActions?: number; maxActionNodes?: number } = {},
+) {
   ensure(Number.isSafeInteger(horizon) && horizon > 0, '参照深度须为正整数。');
+  for (const limit of Object.values(limits))
+    ensure(Number.isSafeInteger(limit) && limit > 0, '参照工作量上限须为正整数。');
   const rootActor = decisionOwner(observation);
   const cache = new Map<string, number>();
   const stats = {
@@ -21,7 +27,7 @@ export function reference(observation: Observation, horizon: number) {
     cutoffLeaves: 0,
   };
   const expand = (o: Observation) => {
-    const result = commands(o);
+    const result = commands(o, limits.maxActionNodes);
     stats.actionNodes += result.nodes;
     ensure(result.commands.length, '参照遇到非终局无命令。');
     return result.commands;
@@ -49,6 +55,7 @@ export function reference(observation: Observation, horizon: number) {
     command: ReturnType<typeof expand>[number],
     depth: number,
   ) => {
+    ensure(stats.actions < (limits.maxActions ?? Infinity), '精确参照动作预算耗尽。');
     const distribution = trainingDistribution(o, decisionOwner(o), command, 0);
     stats.transitionAttempts += distribution.attempts;
     stats.actions++;
