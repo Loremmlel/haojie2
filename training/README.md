@@ -203,6 +203,38 @@ npm run train:match -- --checkpoint artifacts/training/pilot-20260922/overfit-v2
 
 ## 验证
 
+### 教师辅助搜索与自对弈启动验收
+
+`scripts/training/search/bootstrap`是经典模式的研究入口。当前每个搜索节点从easy/40的已验证候选中保留至多8个，根部逐个访问后完成16次PUCT模拟；未结束的叶端最多续演一条命令。它是教师候选子集上的搜索，不是全宽搜索，也不是已训练网络的自对弈。召唤等窗口和未支持的巨大化明确使用教师回退，记录中单独标明；没有偷偷跳过反应或强行结束回合。
+
+```powershell
+node --import tsx scripts/training/search/bootstrap/gate.ts artifacts/training/your-new-gate
+node --import tsx scripts/training/search/bootstrap/games.ts artifacts/training/your-new-games artifacts/training/your-new-gate/summary.json
+node --import tsx scripts/training/search/bootstrap/audit.ts artifacts/training/your-new-games
+training/.venv/Scripts/python.exe -m haojie_training.prepare artifacts/training/your-new-games/game-4.jsonl.gz artifacts/training/your-new-games/game-5.jsonl.gz --search-policy --workers 2 --shard-size 256 --output artifacts/training/your-new-search-tensors
+```
+
+这些命令运行固定的开发门槛与六局启动检查，不应用重复运行的相同种子宣称新独立评测。前四局为换边评测，后两局为双方使用同一辅助搜索的自对弈；编码器拒绝评测局进入训练。输出均独占创建，禁止覆盖历史产物。
+
+后续新种子批次使用同一个对局worker，可指定1–4个进程；每局仍固定120全局回合、1800命令上限，所有终局、截断和中断均保留。先选择尚未用过的连续种子范围，再运行，例如：
+
+```powershell
+node --import tsx scripts/training/search/bootstrap/sample.ts --output artifacts/training/your-new-selfplay --seed 2026092901 --games 4 --workers 4
+node --import tsx scripts/training/search/bootstrap/audit.ts artifacts/training/your-new-selfplay
+```
+
+完成搜索轨迹编码后，可运行下面的通路验收：逐分片检查软标签、整族划分和真实价值遮罩，再从训练集选取软策略、未知价值和双方终局价值样本，执行两次CUDA BF16更新与CPU FP32检查点重载。它要求训练集中有双方真实终局标签，不能以伪造标签满足条件；两次更新只证明数据通路，不证明训练收敛或棋力。
+
+```powershell
+training/.venv/Scripts/python.exe -X utf8 scripts/training/search/bootstrap/verify_tensors.py artifacts/training/your-new-search-tensors artifacts/training/your-new-pipeline-check
+```
+
+教师请求40个work单位，完整原子概率分支可实际超过40；实际消耗逐次记录，异常保护上限256。每个搜索决策最多17次教师调用、外层加叶续演最多32次转移；工作量与墙钟分开，不宣称与easy/40等计算成本。范围外回退和对手决策的访问标签为null，不能伪造MCTS访问次数。
+
+`--search-policy`只编码真实搜索样本。联合访问分布沿实际落子命令的分步解码路径投影，在每个前缀按到达概率归一；其它未经过的前缀不另造训练例。根价值仅监督一次，真实终局按操作者赋值，截断/中断没有价值标签。软分布直接通过管道写入`.pt`，不落大型JSON中间数组；原one-hot教师流程保持，搜索轨迹若未显式指定此选项会被拒绝。原反事实纠错的零价值遮罩不变。
+
+新自对弈种子族另立训练/验证集合，原固定验证族不挪用；整族隔离继续由prepare检查。当前采样与训练通路验收不等于棋力提升，网络反馈到下一轮搜索尚未实现；发行模型需独立对战验收后另行决定。
+
 ```powershell
 training/.venv/Scripts/python.exe -m unittest discover -s training/tests -v
 training/.venv/Scripts/python.exe -m ruff check training/haojie_training training/tests

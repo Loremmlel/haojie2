@@ -12,13 +12,39 @@ import torch
 from haojie_training.data import collate_examples, load_dataset, select_batch, synthetic_batch
 from haojie_training.evaluate import validate_split
 from haojie_training.model import ModelConfig
-from haojie_training.prepare import prepare
+from haojie_training.prepare import encoded_rows, prepare, tensor_example
 
 
 class PreparationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(2)
+
+    def test_soft_policy_survives_tensor_conversion_and_rejects_invalid_mass(self):
+        config = ModelConfig.tiny()
+        batch = synthetic_batch(config, 1, 3, 3)
+        data = {
+            key: value[0].tolist()
+            for key, value in batch.items()
+            if key not in {"policy", "value", "value_mask"}
+        }
+        data["candidate_mask"] = [True, True, True]
+        row = {"input": data, "selected": 1, "policy": [0.25, 0.75, 0.0]}
+        example = tensor_example(row, config)
+        torch.testing.assert_close(example["policy"], torch.tensor([0.25, 0.75, 0.0]))
+        self.assertFalse(bool(example["value_mask"]))
+        for invalid in ([0.2, 0.3, 0.0], [0.5, -0.2, 0.7], [float("nan"), 0.5, 0.5]):
+            with self.assertRaises(ValueError):
+                tensor_example({**row, "policy": invalid}, config)
+
+    def test_search_records_require_explicit_soft_policy_route(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "search.jsonl"
+            source.write_text(
+                json.dumps({"policyKind": "teacher-assisted-restricted-puct-v1"}), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "search-policy"):
+                list(encoded_rows(source, "node"))
 
     def test_padding_and_batch_crop_preserve_local_pointers(self):
         config = ModelConfig.tiny()
@@ -147,7 +173,8 @@ class PreparationTests(unittest.TestCase):
             per_file_rows = {source: rows[:11], second: [header, *rows[11:]]}
             barrier = threading.Barrier(2, timeout=5)
 
-            def concurrent_rows(path, _node):
+            def concurrent_rows(path, _node, search_policy=False):
+                self.assertFalse(search_policy)
                 barrier.wait()
                 yield from per_file_rows[path]
 
@@ -168,7 +195,7 @@ class PreparationTests(unittest.TestCase):
             }
             with patch(
                 "haojie_training.prepare.encoded_rows",
-                side_effect=lambda path, _node: iter(duplicate_files[path]),
+                side_effect=lambda path, _node, _search_policy=False: iter(duplicate_files[path]),
             ):
                 with self.assertRaisesRegex(ValueError, "重复"):
                     prepare([source, second], root / "cross-file-duplicate", workers=2)

@@ -1,6 +1,7 @@
 """调用同一TypeScript编码器，把教师JSONL按整局分组转换为PyTorch张量。"""
 
 import argparse
+import gzip
 import hashlib
 import json
 import shutil
@@ -26,12 +27,28 @@ from .model import ModelConfig
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def encoded_rows(path: Path, node: str):
+def encoded_rows(path: Path, node: str, search_policy: bool = False):
     """Node仅输出已编码张量和分离的元数据；子进程失败时连同错误退出，不保留半成品。"""
+    # 只判别协议路由；规则、命令和终态仍必须由TypeScript完整重放，不能静默丢弃访问分布。
+    opener = gzip.open if path.name.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8") as source:
+        first_line = next((line for line in source if line.strip()), None)
+    if first_line is None:
+        raise ValueError("训练记录为空")
+    first = json.loads(first_line)
+    if first.get("policyKind") == "teacher-assisted-restricted-puct-v1" and not search_policy:
+        raise ValueError("搜索轨迹必须显式使用--search-policy，不能降为教师one-hot标签")
     command = [
         node,
         str(ROOT / "node_modules/tsx/dist/cli.mjs"),
-        str(ROOT / "scripts/training/encode.ts"),
+        str(
+            ROOT
+            / (
+                "scripts/training/search/bootstrap/encoding.ts"
+                if search_policy
+                else "scripts/training/encode.ts"
+            )
+        ),
         str(path.resolve()),
     ]
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
@@ -69,20 +86,29 @@ def tensor_example(row: dict, config: ModelConfig) -> dict[str, torch.Tensor]:
     selected = row["selected"]
     if type(selected) is not int or not 0 <= selected < len(example["candidate_mask"]):
         raise ValueError("教师选择下标越界")
-    example["policy"] = torch.zeros(len(example["candidate_mask"]))
-    example["policy"][selected] = 1
+    if "policy" in row:
+        example["policy"] = torch.tensor(row["policy"], dtype=torch.float32)
+    else:
+        example["policy"] = torch.zeros(len(example["candidate_mask"]))
+        example["policy"][selected] = 1
     example["value"] = torch.tensor(0.0)
     example["value_mask"] = torch.tensor(False)
     validate_batch({key: value.unsqueeze(0) for key, value in example.items()}, config)
     return example
 
 
-def load_file(path: Path, node: str, config: ModelConfig, teacher_difficulty: str | None):
+def load_file(
+    path: Path,
+    node: str,
+    config: ModelConfig,
+    teacher_difficulty: str | None,
+    search_policy: bool = False,
+):
     """独立重放一个来源文件并编码样本；只返回局部分组，跨文件一致性由主线程校验。"""
     with path.open("rb") as source:
         digest = hashlib.file_digest(source, "sha256").hexdigest()
     header, groups, current = None, {}, None
-    for row in encoded_rows(path, node):
+    for row in encoded_rows(path, node, search_policy):
         if row["type"] == "encoding":
             if header is not None and row != header:
                 raise ValueError("不能混合不同规则、编码或源码的数据")
@@ -139,6 +165,7 @@ def prepare(
     workers: int = 1,
     shard_size: int = 0,
     split_manifest: Path | None = None,
+    search_policy: bool = False,
 ) -> dict:
     """首批试验整体驻留CPU；整局和相同种子不可跨集合，不为截断/中断局制造价值标签。"""
     if output.exists():
@@ -147,6 +174,8 @@ def prepare(
         raise ValueError("验证集比例必须在0与1之间")
     if teacher_difficulty not in {None, "easy", "medium", "hard"}:
         raise ValueError("教师筛选难度无效")
+    if search_policy and teacher_difficulty is not None:
+        raise ValueError("搜索访问分布不能使用教师难度筛选")
     if workers < 1:
         raise ValueError("并发数必须大于0")
     if shard_size < 0:
@@ -155,7 +184,7 @@ def prepare(
     header, groups, provenance = None, {}, []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         for file_header, file_groups, source in executor.map(
-            lambda path: load_file(path, node, config, teacher_difficulty), paths
+            lambda path: load_file(path, node, config, teacher_difficulty, search_policy), paths
         ):
             if header is not None and file_header != header:
                 raise ValueError("不能混合不同规则、编码或源码的数据")
@@ -204,6 +233,7 @@ def prepare(
         "sources": provenance,
         "split_seed": split_seed,
         "teacher_difficulty": teacher_difficulty,
+        **({"policy_source": header["policy_source"]} if "policy_source" in header else {}),
         **({"split_reference_sha256": split_reference} if split_reference else {}),
     }
     report = {**metadata, "splits": {}, "games": []}
@@ -292,6 +322,9 @@ def main():
     parser.add_argument("--workers", type=int, default=1, help="并行编码来源文件的进程数")
     parser.add_argument("--shard-size", type=int, default=0)
     parser.add_argument("--split-manifest", type=Path)
+    parser.add_argument(
+        "--search-policy", action="store_true", help="只编码自对弈真实搜索访问分布，排除回退及评测"
+    )
     args = parser.parse_args()
     torch.set_num_threads(2)
     report = prepare(
@@ -304,6 +337,7 @@ def main():
         args.workers,
         args.shard_size,
         args.split_manifest,
+        args.search_policy,
     )
     print(json.dumps({"output": str(args.output), "splits": report["splits"]}, ensure_ascii=False))
 

@@ -3,7 +3,7 @@ import { allPieces, hasTrait } from '../../../src/engine/core/traits';
 import type { Command, Player } from '../../../src/engine/types';
 import { decisionOwner, hash } from '../../../src/ai/observation';
 import { TrainingActionTree } from '../../../src/ai/training/action-tree';
-import { trainingPosition } from '../../../src/ai/training/queries';
+import { inspectTrainingCommand, trainingPosition } from '../../../src/ai/training/queries';
 import {
   sampleTrainingTransition,
   simulationRandomSource,
@@ -80,6 +80,9 @@ export interface ProbeOptions {
   leafValue?: (observation: Observation, rootActor: Player, remainingCommands: number) => number;
   firstPlayValue?: 'zero' | 'parent';
   profile?: ProbeProfile;
+  /** 实验候选子集，保留调用方顺序；不是全合法域，成本由提供方单列。 */
+  candidateCommands?: (observation: Observation) => Command[];
+  coverRoot?: boolean;
 }
 
 /**
@@ -131,9 +134,18 @@ export function search(observation: Observation, options: ProbeOptions) {
     networkCalls: 0,
   };
   const expand = (node: Node) => {
-    const result = measure('enumerationMs', () =>
-      commands(node.observation, options.maxActionNodes),
-    );
+    const result = measure('enumerationMs', () => {
+      if (!options.candidateCommands) return commands(node.observation, options.maxActionNodes);
+      const candidates = options.candidateCommands(node.observation);
+      const unique = new Map(candidates.map((c) => [JSON.stringify(c), c]));
+      ensure(unique.size === candidates.length, '搜索候选重复。');
+      for (const c of candidates)
+        ensure(
+          inspectTrainingCommand(node.observation, node.actor, c).status !== 'invalid',
+          '非法搜索候选。',
+        );
+      return { commands: candidates, nodes: 0 };
+    });
     stats.actionNodes += result.nodes;
     stats.expanded++;
     ensure(result.commands.length > 0, '非终局没有完整命令。');
@@ -142,7 +154,7 @@ export function search(observation: Observation, options: ProbeOptions) {
       hash(`${options.sampleSeed}:${JSON.stringify(node.observation)}`),
     );
     const ordered = [...result.commands];
-    for (let i = ordered.length - 1; i > 0; i--) {
+    for (let i = options.candidateCommands ? 0 : ordered.length - 1; i > 0; i--) {
       const j = Math.floor(ordering() * (i + 1));
       [ordered[i], ordered[j]] = [ordered[j], ordered[i]];
     }
@@ -179,7 +191,9 @@ export function search(observation: Observation, options: ProbeOptions) {
             ? (node.initialValue ?? 0)
             : 0) +
       ((1.5 / node.edges!.length) * Math.sqrt(node.visits + 1)) / (edge.visits + 1);
-    const edge = node.edges!.reduce((best, item) => (score(item) > score(best) ? item : best));
+    const edge =
+      (depth === 0 && options.coverRoot ? node.edges!.find((e) => !e.visits) : undefined) ??
+      node.edges!.reduce((best, item) => (score(item) > score(best) ? item : best));
     stats.transitions++;
     const next = measure('transitionMs', () =>
       sampleTrainingTransition(
