@@ -16,22 +16,29 @@ import { evaluate } from '../../../../src/ai/evaluation/evaluate';
 import { imagined, decisionOwner } from '../../../../src/ai/observation';
 import { inspectTrainingCommand } from '../../../../src/ai/training/queries';
 import type { Observation } from '../../../../src/ai/types';
+import type { Command } from '../../../../src/engine/types';
+import { terminalRollout, immediateCertificate } from './rollout';
 
 const fpu = process.argv.includes('--fpu');
-const variants = fpu
-  ? ['deferred-heuristic', 'deferred-parent']
-  : ['eager-zero', 'deferred-zero', 'deferred-heuristic'];
+const rollout = process.argv.includes('--rollout');
+assert.ok(!(fpu && rollout));
+const variants = rollout
+  ? ['deferred-zero', 'deferred-parent', 'terminal-rollout']
+  : fpu
+    ? ['deferred-heuristic', 'deferred-parent']
+    : ['eager-zero', 'deferred-zero', 'deferred-heuristic'];
 const seeds = [2026092731, 2026092732];
 const budget = 16;
 const digest = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
 interface Job {
   name: string;
-  kind: 'natural' | 'fixture';
+  kind: 'natural' | 'fixture' | 'terminal-natural';
   family?: string;
   observation: Observation;
   game?: number;
   index?: number;
   before?: string;
+  recordedCommand?: Command;
 }
 
 /** 同一局面独立比较成本与信号；手工评分只作估计，人工夹具仍用规则参照判定。 */
@@ -44,6 +51,7 @@ function probe(job: Job) {
     const order = seedIndex === 0 ? variants : [...variants].reverse();
     for (const variant of order) {
       const profile: ProbeProfile = { enumerationMs: 0, transitionMs: 0, leafMs: 0, leafCalls: 0 };
+      const continuation = variant === 'terminal-rollout' ? terminalRollout(seed) : undefined;
       const options: ProbeOptions = {
         simulations: budget,
         horizon: 2,
@@ -52,14 +60,17 @@ function probe(job: Job) {
         profile,
         deferExpansion: variant !== 'eager-zero',
         firstPlayValue: variant === 'deferred-parent' ? 'parent' : 'zero',
-        leafValue:
-          variant === 'deferred-heuristic' || variant === 'deferred-parent'
+        leafValue: continuation
+          ? continuation.leafValue
+          : variant === 'deferred-heuristic' || variant === 'deferred-parent'
             ? (o, actor) => Math.tanh(evaluate(imagined(o), actor) / 1000)
             : undefined,
       };
       const start = performance.now();
       const result = search(job.observation, options);
       const elapsedMs = performance.now() - start;
+      if (continuation)
+        assert.ok(result.stats.transitions + continuation.stats.transitions <= budget * 2);
       let scoring = {};
       if (result.status === 'command') {
         assert.notEqual(
@@ -78,6 +89,12 @@ function probe(job: Job) {
             optimal: Math.abs(oracle.best - value) < 1e-9,
           };
         }
+        if (job.recordedCommand)
+          scoring = {
+            ...scoring,
+            immediateChosen: immediateCertificate(job.observation, result.command),
+            immediateRecorded: immediateCertificate(job.observation, job.recordedCommand),
+          };
       }
       rows.push({
         name: job.name,
@@ -91,6 +108,7 @@ function probe(job: Job) {
         variant,
         elapsedMs,
         profile,
+        ...(continuation ? { rollout: { ...continuation.stats } } : {}),
         ...result,
         ...scoring,
       });
@@ -120,7 +138,12 @@ if (process.argv.includes('--worker')) {
   });
 } else {
   const { values } = parseArgs({
-    options: { source: { type: 'string' }, output: { type: 'string' }, fpu: { type: 'boolean' } },
+    options: {
+      source: { type: 'string' },
+      output: { type: 'string' },
+      fpu: { type: 'boolean' },
+      rollout: { type: 'boolean' },
+    },
   });
   assert.ok(values.source && values.output);
   const source = values.source;
@@ -148,6 +171,7 @@ if (process.argv.includes('--worker')) {
     'scripts/training/search/reference.ts',
     'scripts/training/search/positions.ts',
     'scripts/training/search/leaf/probe.ts',
+    'scripts/training/search/leaf/rollout.ts',
   ];
   const scriptHashes = Object.fromEntries(scripts.map((f) => [f, digest(readFileSync(f))]));
   const protocol = {
@@ -165,12 +189,35 @@ if (process.argv.includes('--worker')) {
     horizon: 2,
     maxActionNodes: 512,
     exploratoryFollowup: fpu,
+    terminalRollout: rollout,
+    terminalSelection: rollout
+      ? 'last decision in each terminated source game; keep unsupported; exclude truncated from this subset'
+      : null,
+    rolloutBudget: rollout
+      ? { commands: 1, teacher: 'easy', teacherWorkPerCall: 40, outerPlusRolloutTransitionsMax: 32 }
+      : null,
     leaf: 'tanh(existing public-state heuristic / 1000), root actor perspective; estimate only',
     note: '四个原开发族的固定首位置成本筛查；30个人工规则夹具检查，均非新盲测或比赛',
   };
   write('protocol.json', protocol);
   const jobs: Job[] = [];
-  for await (const r of readTrainingRecords(previous.input))
+  const terminalJobs: Job[] = [];
+  let last: any;
+  for await (const r of readTrainingRecords(previous.input)) {
+    if (r.type === 'game') last = undefined;
+    if (r.type === 'decision') last = r;
+    if (rollout && r.type === 'outcome' && r.terminated) {
+      assert.ok(last && last.game === r.game && last.index === r.commands - 1);
+      terminalJobs.push({
+        name: `terminal-game-${last.game}-index-${last.index}`,
+        kind: 'terminal-natural',
+        game: last.game,
+        index: last.index,
+        before: last.before,
+        observation: last.observation,
+        recordedCommand: last.command,
+      });
+    }
     if (
       r.type === 'decision' &&
       selected.some((p: any) => p.game === r.game && p.index === r.index)
@@ -188,7 +235,16 @@ if (process.argv.includes('--worker')) {
         observation: r.observation,
       });
     }
+  }
   assert.equal(jobs.length, 4);
+  if (rollout) {
+    assert.equal(terminalJobs.length, 8);
+    write(
+      'terminal-selection.json',
+      terminalJobs.map(({ observation, ...job }) => job),
+    );
+    jobs.push(...terminalJobs);
+  }
   const fixtures = positions();
   // 不重写旧指纹；只用旧已保存结果验证默认算法改造前后完全一致。
   const saved: any[] = JSON.parse(
@@ -218,6 +274,7 @@ if (process.argv.includes('--worker')) {
             fileURLToPath(import.meta.url),
             '--worker',
             ...(fpu ? ['--fpu'] : []),
+            ...(rollout ? ['--rollout'] : []),
           ],
           { stdio: ['ignore', 'ignore', 'inherit', 'ipc'], windowsHide: true },
         );
@@ -249,7 +306,9 @@ if (process.argv.includes('--worker')) {
   assert.equal(await hashRecordFile(previous.input), previous.inputSha256);
   const rows = results.flat();
   write('decisions.json', rows);
-  const groups = ['natural', 'fixture'].flatMap((kind) =>
+  const groups = (
+    rollout ? ['natural', 'fixture', 'terminal-natural'] : ['natural', 'fixture']
+  ).flatMap((kind) =>
     variants.map((variant) => {
       const group = rows.filter((r) => r.kind === kind && r.variant === variant);
       const ok = group.filter((r) => r.status === 'command');
@@ -275,6 +334,17 @@ if (process.argv.includes('--worker')) {
         leafMs: group.reduce((n, r) => n + r.profile.leafMs, 0),
         expanded: group.reduce((n, r) => n + r.stats.expanded, 0),
         terminalLeaves: group.reduce((n, r) => n + r.stats.terminalLeaves, 0),
+        rolloutTransitions: group.reduce((n, r) => n + (r.rollout?.transitions ?? 0), 0),
+        rolloutTerminals: group.reduce((n, r) => n + (r.rollout?.terminal ?? 0), 0),
+        rolloutUnknown: group.reduce((n, r) => n + (r.rollout?.unknown ?? 0), 0),
+        teacherWork: group.reduce((n, r) => n + (r.rollout?.teacherWork ?? 0), 0),
+        certifiedRecordedWins: ok.filter(
+          (r) =>
+            r.immediateRecorded?.status === 'exact' && r.immediateRecorded.winProbability === 1,
+        ).length,
+        certifiedChosenWins: ok.filter(
+          (r) => r.immediateChosen?.status === 'exact' && r.immediateChosen.winProbability === 1,
+        ).length,
         reasons: group
           .filter((r) => r.status === 'paused')
           .map((r) => ({ name: r.name, seed: r.seed, reason: r.reason })),

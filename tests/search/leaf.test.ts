@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { positions } from '../../scripts/training/search/positions';
 import { search } from '../../scripts/training/search/puct';
+import { terminalRollout } from '../../scripts/training/search/leaf/rollout';
+import { sampleTrainingTransition } from '../../src/ai/training/simulation';
 
 test('延迟首次枚举保持零估值搜索的命令、机会采样和访问分配，计时不影响选招', () => {
   for (const p of positions()) {
@@ -64,4 +66,31 @@ test('父节点初值避免高正估计把小预算全部锁在首次抽到的�
   assert.equal(zero.edges.filter((e) => e.visits).length, 1);
   assert.ok(parent.edges.filter((e) => e.visits).length > 1);
   assert.ok(parent.edges.some((e) => e.visits && e.command.type === 'attack'));
+});
+
+test('短续演按反应操作者取真实胜负，深度耗尽明确未知，随机流可复现且输入不变', () => {
+  for (const p of positions().filter((p) => p.family === 'reaction-to-play' && p.x === 5)) {
+    const before = structuredClone(p.observation);
+    const rollout = terminalRollout(2026092731);
+    assert.equal(rollout.leafValue(p.observation, p.actor, 1), 1);
+    assert.equal(rollout.leafValue(p.observation, p.actor === 1 ? 2 : 1, 1), -1);
+    assert.equal(rollout.leafValue(p.observation, p.actor, 0), 0);
+    assert.equal(rollout.stats.terminal, 2);
+    assert.equal(rollout.stats.unknown, 1);
+    assert.equal(rollout.stats.reactionCalls, 2);
+    assert.deepEqual(p.observation, before);
+  }
+  const p = positions().find((p) => p.family === 'chance-win')!;
+  const a = terminalRollout(71),
+    b = terminalRollout(71);
+  const av = Array.from({ length: 60 }, () => a.leafValue(p.observation, p.actor, 1));
+  assert.deepEqual(
+    av,
+    Array.from({ length: 60 }, () => b.leafValue(p.observation, p.actor, 1)),
+  );
+  assert.ok(av.includes(0) && av.includes(1));
+  const endedWindow = sampleTrainingTransition(p.observation, p.actor, { type: 'end' }, 0);
+  const calls = a.stats.teacherCalls;
+  assert.equal(a.leafValue(endedWindow, p.actor, 1), 0);
+  assert.equal(a.stats.teacherCalls, calls);
 });

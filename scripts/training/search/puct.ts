@@ -77,7 +77,7 @@ export interface ProbeOptions {
   maxActionNodes?: number;
   signal?: AbortSignal;
   deferExpansion?: boolean;
-  leafValue?: (observation: Observation, rootActor: Player) => number;
+  leafValue?: (observation: Observation, rootActor: Player, remainingCommands: number) => number;
   firstPlayValue?: 'zero' | 'parent';
   profile?: ProbeProfile;
 }
@@ -110,10 +110,10 @@ export function search(observation: Observation, options: ProbeOptions) {
       options.profile[key] += performance.now() - started;
     }
   };
-  const estimate = (o: Observation) => {
+  const estimate = (o: Observation, depth: number) => {
     if (options.profile) options.profile.leafCalls++;
     return measure('leafMs', () => {
-      const value = options.leafValue?.(o, rootActor) ?? 0;
+      const value = options.leafValue?.(o, rootActor, Math.max(0, options.horizon - depth)) ?? 0;
       ensure(Number.isFinite(value) && Math.abs(value) <= 1, '叶端估计须为[-1,1]有限数。');
       return value;
     });
@@ -158,14 +158,14 @@ export function search(observation: Observation, options: ProbeOptions) {
     }
     if (depth >= options.horizon || windowBoundary(node.observation)) {
       stats.cutoffLeaves++;
-      return estimate(node.observation);
+      return estimate(node.observation, depth);
     }
     if (!node.edges) {
       if (!node.evaluated) {
         node.evaluated = true;
         if (!options.deferExpansion) expand(node);
         stats.expansionLeaves++;
-        node.initialValue = estimate(node.observation);
+        node.initialValue = estimate(node.observation, depth);
         return node.initialValue;
       }
       expand(node);
@@ -209,7 +209,7 @@ export function search(observation: Observation, options: ProbeOptions) {
     checkPosition(observation);
     ensure(!observation.winner, '终局不搜索。');
     ensure(!windowBoundary(observation), '搜索根须位于play或强制反应窗口。');
-    if (options.firstPlayValue === 'parent') root.initialValue = estimate(observation);
+    if (options.firstPlayValue === 'parent') root.initialValue = estimate(observation, 0);
     expand(root);
     const baseline = root.edges![0].command;
     for (let i = 0; i < options.simulations; i++) {
