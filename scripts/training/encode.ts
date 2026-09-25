@@ -9,12 +9,20 @@ import { ENCODING_SCHEMA } from '../../src/ai/training/encoding/schema';
 import { HAOJIE_RULESET } from '../../src/engine/online/player-view';
 import { ensure } from '../../src/engine/core/state';
 import { readTrainingRecords } from './records/replay';
+import { readRecordLines } from './records/io';
+import { CORRECTION_FORMAT, readCorrections } from './corrections/records';
 
 /** 记录实际工作树内容，未提交的编码/规则修改同样改变指纹。 */
 export function encodingSourceHash() {
   const root = fileURLToPath(new URL('../../', import.meta.url));
   const hash = createHash('sha256');
-  for (const folder of ['src/engine', 'src/ai', 'src/match', 'scripts/training/records']) {
+  for (const folder of [
+    'src/engine',
+    'src/ai',
+    'src/match',
+    'scripts/training/records',
+    'scripts/training/corrections',
+  ]) {
     const path = resolve(root, folder);
     for (const name of readdirSync(path, { recursive: true })
       .map(String)
@@ -45,7 +53,12 @@ export async function* encodeTeacherFile(path: string) {
   let games = 0;
   let current: number | undefined,
     count = 0;
-  for await (const row of readTrainingRecords(path)) {
+  let corrections = false;
+  for await (const header of readRecordLines(path)) {
+    corrections = header.format === CORRECTION_FORMAT;
+    break;
+  }
+  for await (const row of corrections ? readCorrections(path) : readTrainingRecords(path)) {
     if (row.type === 'game') {
       ensure(row.source !== 'neural', '教师编码器不接受网络对战标签。');
       games++;
