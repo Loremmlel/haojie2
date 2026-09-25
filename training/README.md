@@ -261,4 +261,14 @@ training/.venv/Scripts/python.exe -m ruff check training/haojie_training trainin
 training/.venv/Scripts/python.exe -m ruff format --check training/haojie_training training/tests
 ```
 
+### 连续分轮运行与恢复
+
+`scripts/training/search/continuous/run.py`提供冻结配置的长跑入口，串接采样、重放、最近三轮根数据池、实际训练、FP32数值检查和候选换边筛选。完整协议、配置字段和恢复验收见[连续自对弈实验](../docs/ai/experiments/search/CONTINUOUS-2026-09-25.md)。
+
+```powershell
+training/.venv/Scripts/python.exe -X utf8 scripts/training/search/continuous/run.py --config artifacts/training/continuous-night-20260925.config.json --output artifacts/training/continuous-night-20260925
+```
+
+同一命令可恢复已验证阶段；先确认旧进程退出，配置及源码不能改变。未完成尝试独立保留、限次重跑。输出内创建`STOP`文件可停止，恢复须明确移除；总截止时间不因恢复延长。评测数据不进训练，截断不赋价值，固定验证族不变。候选筛选只更新实验父代，不发布模型；这仍是教师辅助的开发实验。
+
 参考：[PyTorch XPU](https://docs.pytorch.org/docs/2.14/notes/get_start_xpu.html)、[AMP](https://docs.pytorch.org/docs/2.14/amp.html)、[SDPA遮罩语义](https://docs.pytorch.org/docs/2.14/generated/torch.nn.functional.scaled_dot_product_attention.html)。设备速度结论必须以本仓库实际模型基准为准。

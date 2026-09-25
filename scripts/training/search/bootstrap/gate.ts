@@ -144,8 +144,10 @@ try {
   };
   write('summary.json', summary);
   console.log(JSON.stringify(summary));
-  assert.equal(summary.fixtureOptimal, protocol.thresholds.fixtureOptimal);
-  assert.equal(summary.supportedNaturalWins, protocol.thresholds.supportedNaturalWins);
+  if (!process.argv.includes('--report-only')) {
+    assert.equal(summary.fixtureOptimal, protocol.thresholds.fixtureOptimal);
+    assert.equal(summary.supportedNaturalWins, protocol.thresholds.supportedNaturalWins);
+  }
 } finally {
   neural?.model.close();
 }

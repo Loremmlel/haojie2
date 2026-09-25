@@ -22,6 +22,9 @@ interface Job {
   kind: 'evaluation' | 'selfplay';
   output: string;
   checkpoint?: string;
+  opponentCheckpoint?: string;
+  maxPlies?: number;
+  maxCommands?: number;
 }
 const digest = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
@@ -30,8 +33,8 @@ async function run(job: Job) {
   const env = new TrainingEnvironment({
     seed: job.seed,
     rules: 'classic',
-    maxPlies: 120,
-    maxCommands: 1800,
+    maxPlies: job.maxPlies ?? 120,
+    maxCommands: job.maxCommands ?? 1800,
   });
   const cancellation = new AbortController();
   process.once('SIGINT', () => cancellation.abort());
@@ -43,7 +46,12 @@ async function run(job: Job) {
   const learned = job.checkpoint
     ? await openValueModel(job.checkpoint, cancellation.signal)
     : undefined;
+  let opponent: Awaited<ReturnType<typeof openValueModel>> | undefined;
   try {
+    if (job.opponentCheckpoint) {
+      assert.equal(job.kind, 'evaluation');
+      opponent = await openValueModel(job.opponentCheckpoint, cancellation.signal);
+    }
     await withRecordOutput(path, async (emit) => {
       await emit({
         type: 'game',
@@ -63,6 +71,7 @@ async function run(job: Job) {
         ...(learned
           ? { valueModelSha256: learned.model.ready.checkpoint_sha256, neuralLeafScale: 0.25 }
           : {}),
+        ...(opponent ? { opponentModelSha256: opponent.model.ready.checkpoint_sha256 } : {}),
       });
       let interrupted: string | null = null,
         error: string | null = null;
@@ -88,6 +97,13 @@ async function run(job: Job) {
                   cancellation.signal,
                 )
               : bootstrapDecision(observation, searchSeed);
+          else if (opponent)
+            result = await bootstrapValueDecision(
+              observation,
+              searchSeed,
+              opponent.value,
+              cancellation.signal,
+            );
           else {
             const d = decide(observation, actor, 'easy', { simulations: 40, mode: 'work' });
             assert.ok(
@@ -137,15 +153,18 @@ async function run(job: Job) {
           valueStats: 'valueStats' in result ? result.valueStats : null,
           elapsedMs: performance.now() - begin,
         });
-        if (env.status().commands % 50 === 0)
-          process.send?.({
+        if (env.status().commands % 50 === 0) {
+          const progress = {
             progress: {
               game: job.game,
               commands: env.status().commands,
               ply: env.status().ply,
               counts,
             },
-          });
+          };
+          if (process.send) process.send(progress);
+          else console.log(JSON.stringify(progress));
+        }
       }
       await emit({
         type: 'outcome',
@@ -167,9 +186,13 @@ async function run(job: Job) {
       work,
       elapsedMs: performance.now() - started,
       ...(learned ? { model: learned.model.ready, inference: learned.model.totals } : {}),
+      ...(opponent
+        ? { opponentModel: opponent.model.ready, opponentInference: opponent.model.totals }
+        : {}),
     };
   } finally {
     learned?.model.close();
+    opponent?.model.close();
   }
 }
 
@@ -181,6 +204,18 @@ if (process.argv.includes('--worker')) {
     } catch (error) {
       process.send!({ error: error instanceof Error ? error.stack : String(error) });
     }
+  });
+} else if (process.argv[2] === '--job') {
+  // 连续调度器每次只启动一个独立任务；临时目录由宿主独占管理，完成回执最后发布。
+  const job = JSON.parse(readFileSync(process.argv[3], 'utf8')) as Job;
+  assert.ok(Number.isSafeInteger(job.seed) && job.seed > 0 && job.seed <= 0xffffffff);
+  assert.ok(job.primary === 1 || job.primary === 2);
+  assert.ok(job.kind === 'evaluation' || job.kind === 'selfplay');
+  for (const n of [job.maxCommands ?? 1800, job.maxPlies ?? 120])
+    assert.ok(Number.isSafeInteger(n) && n > 0);
+  const result = await run(job);
+  writeFileSync(resolve(job.output, 'result.json'), JSON.stringify(result, null, 2), {
+    flag: 'wx',
   });
 } else {
   const output = process.argv[2];
