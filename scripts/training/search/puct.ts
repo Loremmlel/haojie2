@@ -61,6 +61,14 @@ interface Node {
   actor: Player;
   visits: number;
   edges?: Edge[];
+  evaluated?: boolean;
+  initialValue?: number;
+}
+export interface ProbeProfile {
+  enumerationMs: number;
+  transitionMs: number;
+  leafMs: number;
+  leafCalls: number;
 }
 export interface ProbeOptions {
   simulations: number;
@@ -68,12 +76,18 @@ export interface ProbeOptions {
   sampleSeed: number;
   maxActionNodes?: number;
   signal?: AbortSignal;
+  deferExpansion?: boolean;
+  leafValue?: (observation: Observation, rootActor: Player) => number;
+  firstPlayValue?: 'zero' | 'parent';
+  profile?: ProbeProfile;
 }
 
 /**
  * 仅供CLI研究的均匀先验PUCT；完整命令为一条决策边，规则随机结果为抽样机会子节点。
  * 回报始终存根操作者视角，选择时由当前实际操作者决定最大/最小，不逐命令机械翻转。
- * 非终局深度边界估值固定0，只是未知叶端的估计，不产生训练标签或平局记录。
+ * 默认非终局估值0；可注入根操作者视角的有界估计作受控实验，均不产生训练价值标签。
+ * 可延迟首次新叶的枚举至第二次访问；不裁剪根命令域。profile只累计耗时，不影响选招预算。
+ * firstPlayValue可让未访问边继承父节点估计；避免绝对优势局面中用0低估所有未试动作。
  * 不连接实局、不写文件、不修改输入；非法转移、未支持局面、取消或枚举超限时整个探针暂停。
  * ponytail: 首轮同步CPU、无网络/重用跨决策树；测得收益后再接批量网络与异步取消。
  */
@@ -87,6 +101,23 @@ export function search(observation: Observation, options: ProbeOptions) {
   const random = simulationRandomSource(options.sampleSeed);
   const rootActor = decisionOwner(observation);
   const root: Node = { observation, actor: rootActor, visits: 0 };
+  const measure = <T>(key: 'enumerationMs' | 'transitionMs' | 'leafMs', action: () => T): T => {
+    if (!options.profile) return action();
+    const started = performance.now();
+    try {
+      return action();
+    } finally {
+      options.profile[key] += performance.now() - started;
+    }
+  };
+  const estimate = (o: Observation) => {
+    if (options.profile) options.profile.leafCalls++;
+    return measure('leafMs', () => {
+      const value = options.leafValue?.(o, rootActor) ?? 0;
+      ensure(Number.isFinite(value) && Math.abs(value) <= 1, '叶端估计须为[-1,1]有限数。');
+      return value;
+    });
+  };
   const stats = {
     simulations: 0,
     transitions: 0,
@@ -100,7 +131,9 @@ export function search(observation: Observation, options: ProbeOptions) {
     networkCalls: 0,
   };
   const expand = (node: Node) => {
-    const result = commands(node.observation, options.maxActionNodes);
+    const result = measure('enumerationMs', () =>
+      commands(node.observation, options.maxActionNodes),
+    );
     stats.actionNodes += result.nodes;
     stats.expanded++;
     ensure(result.commands.length > 0, '非终局没有完整命令。');
@@ -125,24 +158,36 @@ export function search(observation: Observation, options: ProbeOptions) {
     }
     if (depth >= options.horizon || windowBoundary(node.observation)) {
       stats.cutoffLeaves++;
-      return 0;
+      return estimate(node.observation);
     }
     if (!node.edges) {
+      if (!node.evaluated) {
+        node.evaluated = true;
+        if (!options.deferExpansion) expand(node);
+        stats.expansionLeaves++;
+        node.initialValue = estimate(node.observation);
+        return node.initialValue;
+      }
       expand(node);
-      stats.expansionLeaves++;
-      return 0;
     }
     const sign = node.actor === rootActor ? 1 : -1;
     const score = (edge: Edge) =>
-      sign * (edge.visits ? edge.total / edge.visits : 0) +
+      sign *
+        (edge.visits
+          ? edge.total / edge.visits
+          : options.firstPlayValue === 'parent'
+            ? (node.initialValue ?? 0)
+            : 0) +
       ((1.5 / node.edges!.length) * Math.sqrt(node.visits + 1)) / (edge.visits + 1);
-    const edge = node.edges.reduce((best, item) => (score(item) > score(best) ? item : best));
+    const edge = node.edges!.reduce((best, item) => (score(item) > score(best) ? item : best));
     stats.transitions++;
-    const next = sampleTrainingTransition(
-      node.observation,
-      node.actor,
-      edge.command,
-      Math.floor(random() * 4294967296),
+    const next = measure('transitionMs', () =>
+      sampleTrainingTransition(
+        node.observation,
+        node.actor,
+        edge.command,
+        Math.floor(random() * 4294967296),
+      ),
     );
     const actor = decisionOwner(next);
     if (actor === node.actor) stats.sameActorEdges++;
@@ -164,6 +209,7 @@ export function search(observation: Observation, options: ProbeOptions) {
     checkPosition(observation);
     ensure(!observation.winner, '终局不搜索。');
     ensure(!windowBoundary(observation), '搜索根须位于play或强制反应窗口。');
+    if (options.firstPlayValue === 'parent') root.initialValue = estimate(observation);
     expand(root);
     const baseline = root.edges![0].command;
     for (let i = 0; i < options.simulations; i++) {
