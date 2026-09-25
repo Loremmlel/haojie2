@@ -16,6 +16,41 @@ from .model import NETWORK_VERSION, ModelConfig, PolicyValueNet
 from .runtime import Trainer, checkpoint_config, resolve_device, synchronize
 
 
+def initialize_weights(
+    trainer: Trainer, path: Path, metadata: dict, validation_groups: list[str] | None = None
+) -> None:
+    """新一轮数据只继承同规则/编码的权重；优化器与步数重置，并记录父检查点谱系。"""
+    if trainer.steps or trainer.updates or trainer.optimizer.state:
+        raise ValueError("权重初始化仅允许用于尚未开始的新一轮训练")
+    config = checkpoint_config(path)
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    previous = payload["metadata"]
+    if config != trainer.model.config or any(
+        previous.get(key) != metadata.get(key)
+        for key in ("ruleset", "encoding", "schema", "synthetic")
+    ):
+        raise ValueError("初始化检查点的网络、规则或编码与新数据不一致")
+    if metadata.get("synthetic") is False and not metadata.get("schema"):
+        raise ValueError("真实数据的权重初始化必须提供完整编码schema")
+    seen_groups = set(previous.get("seen_training_groups", previous.get("groups", []))) | set(
+        metadata.get("groups", [])
+    )
+    if seen_groups & set(validation_groups or []):
+        raise ValueError("新验证族已参与当前或祖先模型训练，拒绝验证泄漏")
+    if not all(torch.isfinite(value).all() for value in payload["model"].values()):
+        raise ValueError("初始化检查点包含非有限参数")
+    trainer.model.load_state_dict(payload["model"])
+    with path.open("rb") as source:
+        digest = hashlib.file_digest(source, "sha256").hexdigest()
+    metadata["initialized_from"] = {
+        "checkpoint_sha256": digest,
+        "parent_updates": payload["updates"],
+        "optimizer": "fresh AdamW",
+    }
+    if seen_groups:
+        metadata["seen_training_groups"] = sorted(seen_groups)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     inputs = parser.add_mutually_exclusive_group(required=True)
@@ -30,7 +65,11 @@ def main():
     parser.add_argument("--seed", type=int, default=20260922)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--tiny", action="store_true")
-    parser.add_argument("--resume", type=Path)
+    continuation = parser.add_mutually_exclusive_group()
+    continuation.add_argument("--resume", type=Path)
+    continuation.add_argument(
+        "--initialize-from", type=Path, help="新一轮数据继承同规则权重，重置优化器并记录谱系"
+    )
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--validation", type=Path)
     parser.add_argument("--report", type=Path)
@@ -55,8 +94,8 @@ def main():
     torch.set_num_interop_threads(1)
     torch.manual_seed(args.seed)
     config = (
-        checkpoint_config(args.resume)
-        if args.resume
+        checkpoint_config(args.resume or args.initialize_from)
+        if args.resume or args.initialize_from
         else ModelConfig.tiny()
         if args.tiny
         else ModelConfig()
@@ -108,7 +147,23 @@ def main():
         value_weight=args.value_weight,
     )
     if args.resume:
+        # 同数据续训保留已记录的初始化来源，其余元数据仍由restore严格比较。
+        previous = torch.load(args.resume, map_location="cpu", weights_only=True)["metadata"]
+        for key in ("initialized_from", "seen_training_groups"):
+            if key in previous:
+                metadata[key] = previous[key]
         trainer.restore(args.resume, metadata)
+    elif args.initialize_from:
+        initialize_weights(
+            trainer,
+            args.initialize_from,
+            metadata,
+            validation_metadata.get("groups", []) if validation_metadata else [],
+        )
+    if validation_metadata and set(metadata.get("seen_training_groups", [])) & set(
+        validation_metadata.get("groups", [])
+    ):
+        raise ValueError("验证族已参与祖先模型训练")
 
     baselines = value_baselines(dataset, records) if dataset is not None else None
 

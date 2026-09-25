@@ -1,6 +1,6 @@
 # PyTorch训练子项目
 
-Python 3.12独立环境，与TypeScript规则代码同仓库维护。当前实现约11.70M参数的实体Transformer、候选评分/价值头、共享TypeScript公开状态编码和动作分解、教师数据准备、整局验证划分、张量训练与续训，以及CPU/XPU精度基准。网络CLI已能完成完整对局，浏览器已验收本地HTTP前向；MCTS和单HTML模型部署尚未接入。训练loss与教师拟合率没有对作者胜率含义。
+Python 3.12独立环境，与TypeScript规则代码同仓库维护。当前实现约11.70M参数的实体Transformer、候选评分/价值头、共享TypeScript公开状态编码和动作分解、教师数据准备、整局验证划分、张量训练与续训，以及CPU/XPU精度基准。网络CLI已能完成完整对局，研究入口支持教师候选域上的网络叶值PUCT；浏览器已验收本地HTTP前向，单HTML模型部署尚未接入。训练loss与教师拟合率没有对作者胜率含义。
 
 当前阶段与实际实验记录维护在[训练进度](../docs/ai/TRAINING-PROGRESS.md)。
 
@@ -118,6 +118,12 @@ training/.venv/Scripts/python.exe -X utf8 -m haojie_training.train --synthetic -
 
 检查点保存模型配置、权重、优化器、缩放器、步数、训练随机状态和数据来源；拒绝无意覆盖、数据/精度/结构混用。完成训练且数值检查通过后，用临时文件替换检查点。Ctrl+C保留已有检查点，不保存可能中断在优化器内部的状态。本轮未实现自动定时检查点。
 
+分轮自对弈使用新数据时，显式选择`--initialize-from 父检查点`，与`--resume`互斥。它只继承同规则、完整编码schema和网络配置的权重；Adam、步数和训练随机状态重新开始，父文件保持只读，新检查点记录父SHA／父更新数及历代已见训练族。当前验证族与任何祖先训练族相交会拒绝。之后对同一轮数据继续训练仍用`--resume`，保持原有严格数据／精度／目标检查和初始化谱系。
+
+```powershell
+training/.venv/Scripts/python.exe -X utf8 -m haojie_training.train --data artifacts/training/new-round/train.pt --validation artifacts/training/new-round/validation.pt --initialize-from artifacts/training/previous-round/model.pt --device cuda --precision bf16 --batch-size 16 --steps 256 --value-weight 1 --checkpoint artifacts/training/new-round/model.pt --report artifacts/training/new-round/train-report.json
+```
+
 ### 价值目标诊断与消融
 
 `train --value-weight`控制价值MSE在总损失中的权重，默认1保持原训练行为；0只用于策略消融，所得价值头不能用于搜索。权重保存在检查点和报告中，续训不得更换目标权重，旧检查点按1读取。比较时保持数据文件、整种子族划分、初始化种子、学习率、批量及更新次数相同。
@@ -233,7 +239,21 @@ training/.venv/Scripts/python.exe -X utf8 scripts/training/search/bootstrap/veri
 
 `--search-policy`只编码真实搜索样本。联合访问分布沿实际落子命令的分步解码路径投影，在每个前缀按到达概率归一；其它未经过的前缀不另造训练例。根价值仅监督一次，真实终局按操作者赋值，截断/中断没有价值标签。软分布直接通过管道写入`.pt`，不落大型JSON中间数组；原one-hot教师流程保持，搜索轨迹若未显式指定此选项会被拒绝。原反事实纠错的零价值遮罩不变。
 
-新自对弈种子族另立训练/验证集合，原固定验证族不挪用；整族隔离继续由prepare检查。当前采样与训练通路验收不等于棋力提升，网络反馈到下一轮搜索尚未实现；发行模型需独立对战验收后另行决定。
+新自对弈种子族另立训练/验证集合，原固定验证族不挪用；整族隔离继续由prepare检查。当前采样与训练通路验收不等于棋力提升，发行模型需独立对战验收后另行决定。
+
+### 网络叶值与新一轮数据
+
+为`gate.ts`提供第三个检查点参数会运行真实网络叶值的战术验收。随后`sample.ts --checkpoint 检查点 --gate 门槛目录`启用同一网络；默认采样仍不调用网络。`--evaluation-seeds 1 --games 4`指定先用第一族换边评测两局，再用后两个不同种子自对弈，评测局继续拒绝进入训练。
+
+```powershell
+node --import tsx scripts/training/search/bootstrap/gate.ts artifacts/training/your-neural-gate artifacts/training/previous-round/model.pt
+node --import tsx scripts/training/search/bootstrap/sample.ts --output artifacts/training/your-neural-games --seed 2026093001 --games 4 --evaluation-seeds 1 --workers 4 --checkpoint artifacts/training/previous-round/model.pt --gate artifacts/training/your-neural-gate
+node --import tsx scripts/training/search/bootstrap/audit.ts artifacts/training/your-neural-games
+```
+
+网络只接收八项公开根张量，当前操作者价值转换为搜索根视角，固定缩放0.25；真正终局保留±1／0。每决策最多16次网络查询，调用、缓存和模型SHA独立记录；未知召唤窗口估计仍为0，不能当作平局标签。教师仍提供候选和范围外回退，网络策略logit没有用作搜索先验。这是受限的教师辅助价值迭代入口，不能称作全域或无教师的AlphaZero。
+
+新轨迹按同样`--search-policy`编码，manifest保留每局父模型SHA；随后用`train --initialize-from`在新数据上建立下一代。首次完整回接的固定协议与结果见[网络叶值实验](../docs/ai/experiments/search/VALUE-CYCLE-2026-09-25.md)，`value-cycle/round_two.py`仅执行该协议的两步回流验收，不是生产训练步数建议。
 
 ```powershell
 training/.venv/Scripts/python.exe -m unittest discover -s training/tests -v

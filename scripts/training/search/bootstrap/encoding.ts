@@ -84,6 +84,9 @@ export async function* encodeSearchFile(path: string) {
         seed: r.seed,
         source: 'search-selfplay',
         policy_source: 'teacher-assisted-conditional-visits-v1',
+        ...(r.valueModelSha256
+          ? { value_model_sha256: r.valueModelSha256, neural_leaf_scale: r.neuralLeafScale }
+          : {}),
       };
     } else if (r.type === 'sample') {
       if (r.policyMode !== 'search') {

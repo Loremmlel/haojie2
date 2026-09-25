@@ -1,5 +1,7 @@
 """验证填充/候选语义、未决价值遮罩、真实优化更新和检查点续训。"""
 
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +12,7 @@ from haojie_training.data import FORMAT, load_dataset, synthetic_batch, validate
 from haojie_training.evaluate import value_baselines, value_diagnostics
 from haojie_training.model import ModelConfig, PolicyValueNet, policy_value_loss
 from haojie_training.runtime import Trainer
+from haojie_training.train import initialize_weights
 
 
 class TrainingTests(unittest.TestCase):
@@ -21,6 +24,82 @@ class TrainingTests(unittest.TestCase):
         torch.manual_seed(7)
         self.config = ModelConfig.tiny()
         self.batch = synthetic_batch(self.config, 3, 8, 6)
+
+    def test_new_generation_transfers_weights_but_not_optimizer_or_data_identity(self):
+        previous = Trainer(PolicyValueNet(self.config), torch.device("cpu"))
+        previous.step(self.batch)
+        metadata = {
+            "synthetic": True,
+            "ruleset": "test-only",
+            "encoding": "test-v1",
+            "dataset_sha256": "old",
+            "groups": ["old-train"],
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "parent.pt"
+            previous.save(path, metadata)
+            current = Trainer(PolicyValueNet(self.config), torch.device("cpu"))
+            new_metadata = {**metadata, "dataset_sha256": "new", "groups": ["new-train"]}
+            initialize_weights(current, path, new_metadata)
+            for old, new in zip(previous.model.parameters(), current.model.parameters()):
+                torch.testing.assert_close(old, new, atol=0, rtol=0)
+            self.assertEqual(current.updates, 0)
+            self.assertFalse(current.optimizer.state)
+            self.assertEqual(new_metadata["dataset_sha256"], "new")
+            self.assertEqual(new_metadata["initialized_from"]["parent_updates"], 1)
+            self.assertEqual(new_metadata["seen_training_groups"], ["new-train", "old-train"])
+            with self.assertRaisesRegex(ValueError, "验证泄漏"):
+                initialize_weights(current, path, new_metadata, ["old-train"])
+            with self.assertRaisesRegex(ValueError, "不一致"):
+                initialize_weights(current, path, {**new_metadata, "ruleset": "changed"})
+            current.step(self.batch)
+            with self.assertRaisesRegex(ValueError, "尚未开始"):
+                initialize_weights(current, path, new_metadata)
+
+    def test_initialized_generation_can_resume_through_cli_with_lineage_intact(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            parent, child = root / "parent.pt", root / "child.pt"
+            base = [
+                sys.executable,
+                "-m",
+                "haojie_training.train",
+                "--synthetic",
+                "--tiny",
+                "--device",
+                "cpu",
+                "--threads",
+                "2",
+                "--steps",
+                "1",
+                "--batch-size",
+                "2",
+                "--entities",
+                "3",
+                "--actions",
+                "3",
+            ]
+
+            def run(arguments):
+                subprocess.run(
+                    [*base, *arguments],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+
+            run(["--seed", "7", "--checkpoint", str(parent)])
+            run(["--seed", "8", "--initialize-from", str(parent), "--checkpoint", str(child)])
+            initialized = torch.load(child, map_location="cpu", weights_only=True)
+            self.assertEqual(initialized["updates"], 1)
+            self.assertEqual(initialized["metadata"]["seed"], 8)
+            origin = initialized["metadata"]["initialized_from"]
+            self.assertEqual(origin["parent_updates"], 1)
+            run(["--seed", "8", "--resume", str(child), "--checkpoint", str(child)])
+            resumed = torch.load(child, map_location="cpu", weights_only=True)
+            self.assertEqual(resumed["updates"], 2)
+            self.assertEqual(resumed["metadata"]["initialized_from"], origin)
 
     def test_masks_and_value_perspective_boundary(self):
         model = PolicyValueNet(self.config).eval()

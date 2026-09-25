@@ -8,7 +8,8 @@ import { setImmediate } from 'node:timers/promises';
 import { TrainingEnvironment } from '../../../../src/match/training';
 import { decisionOwner, fingerprint, hash } from '../../../../src/ai/observation';
 import { decide } from '../../../../src/ai/planning/search';
-import { bootstrapDecision } from './policy';
+import { bootstrapDecision, bootstrapValueDecision } from './policy';
+import { openValueModel } from '../value-cycle/model';
 import { recordHeader, readTrainingRecords } from '../../records/replay';
 import { withRecordOutput, hashRecordFile } from '../../records/io';
 import { encodingSourceHash } from '../../encode';
@@ -20,6 +21,7 @@ interface Job {
   primary: Player;
   kind: 'evaluation' | 'selfplay';
   output: string;
+  checkpoint?: string;
 }
 const digest = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
@@ -38,118 +40,137 @@ async function run(job: Job) {
   const work = { teacher: 0, simulations: 0, transitions: 0 };
   const started = performance.now();
   const gameId = `bootstrap-v1:${job.kind}:${job.seed}:${job.primary}`;
-  await withRecordOutput(path, async (emit) => {
-    await emit({
-      type: 'game',
-      game: job.game,
-      gameId,
-      ...recordHeader(env),
-      source: 'teacher',
-      seed: job.seed,
-      rules: 'classic',
-      primaryPlayer: job.primary,
-      policyKind: 'teacher-assisted-restricted-puct-v1',
-      experimentKind: job.kind,
-      policyTarget:
-        'conditional candidate visits; null on fallback/opponent; not full legal domain',
-      budget: { outerSimulations: 16, teacherWorkPerCall: 40, teacherCallsMax: 17 },
-      actualTeacherWorkSafetyCap: 256,
-    });
-    let interrupted: string | null = null,
-      error: string | null = null;
-    while (!env.status().terminated && !env.status().truncated) {
-      if (cancellation.signal.aborted) {
-        interrupted = 'cancelled';
-        break;
-      }
-      const observation = env.observation(),
-        actor = decisionOwner(observation);
-      const index = env.status().commands;
-      const searchSeed = hash(`bootstrap-experiment:2026092851:${fingerprint(observation)}`);
-      const before = fingerprint(observation);
-      let result;
-      const begin = performance.now();
-      try {
-        if (job.kind === 'selfplay' || actor === job.primary)
-          result = bootstrapDecision(observation, searchSeed);
-        else {
-          const d = decide(observation, actor, 'easy', { simulations: 40, mode: 'work' });
-          assert.ok(
-            d.command && Number.isSafeInteger(d.stats.simulations) && d.stats.simulations <= 256,
-          );
-          result = {
-            command: d.command,
-            mode: 'opponent',
-            policy: null,
-            stats: {
-              teacherCalls: 1,
-              teacherWork: d.stats.simulations,
-              searchSimulations: 0,
-              searchTransitions: 0,
-              rolloutTransitions: 0,
-            },
-          };
-        }
-        await setImmediate();
+  const learned = job.checkpoint
+    ? await openValueModel(job.checkpoint, cancellation.signal)
+    : undefined;
+  try {
+    await withRecordOutput(path, async (emit) => {
+      await emit({
+        type: 'game',
+        game: job.game,
+        gameId,
+        ...recordHeader(env),
+        source: 'teacher',
+        seed: job.seed,
+        rules: 'classic',
+        primaryPlayer: job.primary,
+        policyKind: 'teacher-assisted-restricted-puct-v1',
+        experimentKind: job.kind,
+        policyTarget:
+          'conditional candidate visits; null on fallback/opponent; not full legal domain',
+        budget: { outerSimulations: 16, teacherWorkPerCall: 40, teacherCallsMax: 17 },
+        actualTeacherWorkSafetyCap: 256,
+        ...(learned
+          ? { valueModelSha256: learned.model.ready.checkpoint_sha256, neuralLeafScale: 0.25 }
+          : {}),
+      });
+      let interrupted: string | null = null,
+        error: string | null = null;
+      while (!env.status().terminated && !env.status().truncated) {
         if (cancellation.signal.aborted) {
           interrupted = 'cancelled';
           break;
         }
-        env.step(actor, result.command);
-      } catch (e) {
-        interrupted = 'decision-or-command-error';
-        error = String(e);
-        break;
-      }
-      const mode = result.mode === 'teacher-fallback' ? `fallback:${result.reason}` : result.mode;
-      counts[mode] = (counts[mode] ?? 0) + 1;
-      work.teacher += result.stats.teacherWork;
-      work.simulations += result.stats.searchSimulations;
-      work.transitions += result.stats.searchTransitions + result.stats.rolloutTransitions;
-      await emit({
-        type: 'sample',
-        game: job.game,
-        index,
-        actor,
-        before,
-        command: result.command,
-        after: fingerprint(env.observation()),
-        searchSeed,
-        policyMode: mode,
-        searchPolicy: result.policy,
-        searchStats: result.stats,
-        elapsedMs: performance.now() - begin,
-      });
-      if (env.status().commands % 50 === 0)
-        process.send?.({
-          progress: {
-            game: job.game,
-            commands: env.status().commands,
-            ply: env.status().ply,
-            counts,
-          },
+        const observation = env.observation(),
+          actor = decisionOwner(observation);
+        const index = env.status().commands;
+        const searchSeed = hash(`bootstrap-experiment:2026092851:${fingerprint(observation)}`);
+        const before = fingerprint(observation);
+        let result;
+        const begin = performance.now();
+        try {
+          if (job.kind === 'selfplay' || actor === job.primary)
+            result = learned
+              ? await bootstrapValueDecision(
+                  observation,
+                  searchSeed,
+                  learned.value,
+                  cancellation.signal,
+                )
+              : bootstrapDecision(observation, searchSeed);
+          else {
+            const d = decide(observation, actor, 'easy', { simulations: 40, mode: 'work' });
+            assert.ok(
+              d.command && Number.isSafeInteger(d.stats.simulations) && d.stats.simulations <= 256,
+            );
+            result = {
+              command: d.command,
+              mode: 'opponent',
+              policy: null,
+              stats: {
+                teacherCalls: 1,
+                teacherWork: d.stats.simulations,
+                searchSimulations: 0,
+                searchTransitions: 0,
+                rolloutTransitions: 0,
+              },
+            };
+          }
+          await setImmediate();
+          if (cancellation.signal.aborted) {
+            interrupted = 'cancelled';
+            break;
+          }
+          env.step(actor, result.command);
+        } catch (e) {
+          interrupted = 'decision-or-command-error';
+          error = String(e);
+          break;
+        }
+        const mode = result.mode === 'teacher-fallback' ? `fallback:${result.reason}` : result.mode;
+        counts[mode] = (counts[mode] ?? 0) + 1;
+        work.teacher += result.stats.teacherWork;
+        work.simulations += result.stats.searchSimulations;
+        work.transitions += result.stats.searchTransitions + result.stats.rolloutTransitions;
+        await emit({
+          type: 'sample',
+          game: job.game,
+          index,
+          actor,
+          before,
+          command: result.command,
+          after: fingerprint(env.observation()),
+          searchSeed,
+          policyMode: mode,
+          searchPolicy: result.policy,
+          searchStats: result.stats,
+          valueStats: 'valueStats' in result ? result.valueStats : null,
+          elapsedMs: performance.now() - begin,
         });
-    }
-    await emit({
-      type: 'outcome',
-      game: job.game,
-      gameId,
-      ...env.status(),
-      interrupted,
-      error,
-      after: fingerprint(env.observation()),
+        if (env.status().commands % 50 === 0)
+          process.send?.({
+            progress: {
+              game: job.game,
+              commands: env.status().commands,
+              ply: env.status().ply,
+              counts,
+            },
+          });
+      }
+      await emit({
+        type: 'outcome',
+        game: job.game,
+        gameId,
+        ...env.status(),
+        interrupted,
+        error,
+        after: fingerprint(env.observation()),
+      });
+      if (error) throw new Error(error);
     });
-    if (error) throw new Error(error);
-  });
-  return {
-    ...job,
-    output: path,
-    sha256: await hashRecordFile(path),
-    ...env.status(),
-    counts,
-    work,
-    elapsedMs: performance.now() - started,
-  };
+    return {
+      ...job,
+      output: path,
+      sha256: await hashRecordFile(path),
+      ...env.status(),
+      counts,
+      work,
+      elapsedMs: performance.now() - started,
+      ...(learned ? { model: learned.model.ready, inference: learned.model.totals } : {}),
+    };
+  } finally {
+    learned?.model.close();
+  }
 }
 
 if (process.argv.includes('--worker')) {

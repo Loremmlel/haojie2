@@ -85,16 +85,61 @@ export interface ProbeOptions {
   coverRoot?: boolean;
 }
 
+interface LeafRequest {
+  observation: Observation;
+  rootActor: Player;
+  remainingCommands: number;
+}
+
+/** 同一个搜索状态机的同步入口；保留原调用方及抽样顺序，不经过异步重搜。 */
+export function search(observation: Observation, options: ProbeOptions) {
+  const run = searchSteps(observation, options);
+  let step = run.next();
+  while (!step.done) {
+    try {
+      const q = step.value;
+      step = run.next(options.leafValue?.(q.observation, q.rootActor, q.remainingCommands) ?? 0);
+    } catch (error) {
+      step = run.throw(error);
+    }
+  }
+  return step.value;
+}
+
+/** 等待外部叶值时不继续消耗模拟预算；异常或取消沿同一状态机返回明确暂停。 */
+export async function searchAsync(
+  observation: Observation,
+  options: Omit<ProbeOptions, 'leafValue'> & {
+    leafValue: (
+      observation: Observation,
+      rootActor: Player,
+      remainingCommands: number,
+    ) => Promise<number>;
+  },
+) {
+  const run = searchSteps(observation, options);
+  let step = run.next();
+  while (!step.done) {
+    try {
+      const q = step.value;
+      step = run.next(await options.leafValue(q.observation, q.rootActor, q.remainingCommands));
+    } catch (error) {
+      step = run.throw(error);
+    }
+  }
+  return step.value;
+}
+
 /**
  * 仅供CLI研究的均匀先验PUCT；完整命令为一条决策边，规则随机结果为抽样机会子节点。
  * 回报始终存根操作者视角，选择时由当前实际操作者决定最大/最小，不逐命令机械翻转。
  * 默认非终局估值0；可注入根操作者视角的有界估计作受控实验，均不产生训练价值标签。
- * 可延迟首次新叶的枚举至第二次访问；不裁剪根命令域。profile只累计耗时，不影响选招预算。
+ * 可延迟首次新叶的枚举至第二次访问；默认完整根域，外部候选子集必须单独标明。
  * firstPlayValue可让未访问边继承父节点估计；避免绝对优势局面中用0低估所有未试动作。
  * 不连接实局、不写文件、不修改输入；非法转移、未支持局面、取消或枚举超限时整个探针暂停。
- * ponytail: 首轮同步CPU、无网络/重用跨决策树；测得收益后再接批量网络与异步取消。
+ * 同步和异步入口只负责提供叶值；共享本状态机，避免两份搜索实现漂移。
  */
-export function search(observation: Observation, options: ProbeOptions) {
+function* searchSteps(observation: Observation, options: Omit<ProbeOptions, 'leafValue'>) {
   ensure(
     Number.isSafeInteger(options.simulations) && options.simulations >= 0,
     '模拟数须为非负整数。',
@@ -113,13 +158,24 @@ export function search(observation: Observation, options: ProbeOptions) {
       options.profile[key] += performance.now() - started;
     }
   };
-  const estimate = (o: Observation, depth: number) => {
+  const estimate = function* (
+    o: Observation,
+    depth: number,
+  ): Generator<LeafRequest, number, number> {
     if (options.profile) options.profile.leafCalls++;
-    return measure('leafMs', () => {
-      const value = options.leafValue?.(o, rootActor, Math.max(0, options.horizon - depth)) ?? 0;
+    const started = options.profile ? performance.now() : 0;
+    try {
+      const value = yield {
+        observation: o,
+        rootActor,
+        remainingCommands: Math.max(0, options.horizon - depth),
+      };
+      ensure(!options.signal?.aborted, '搜索已取消。');
       ensure(Number.isFinite(value) && Math.abs(value) <= 1, '叶端估计须为[-1,1]有限数。');
       return value;
-    });
+    } finally {
+      if (options.profile) options.profile.leafMs += performance.now() - started;
+    }
   };
   const stats = {
     simulations: 0,
@@ -160,7 +216,7 @@ export function search(observation: Observation, options: ProbeOptions) {
     }
     node.edges = ordered.map((command) => ({ command, visits: 0, total: 0, children: new Map() }));
   };
-  const visit = (node: Node, depth: number): number => {
+  const visit = function* (node: Node, depth: number): Generator<LeafRequest, number, number> {
     ensure(!options.signal?.aborted, '搜索已取消。');
     checkPosition(node.observation);
     const ended = terminalValue(node.observation, rootActor);
@@ -170,14 +226,14 @@ export function search(observation: Observation, options: ProbeOptions) {
     }
     if (depth >= options.horizon || windowBoundary(node.observation)) {
       stats.cutoffLeaves++;
-      return estimate(node.observation, depth);
+      return yield* estimate(node.observation, depth);
     }
     if (!node.edges) {
       if (!node.evaluated) {
         node.evaluated = true;
         if (!options.deferExpansion) expand(node);
         stats.expansionLeaves++;
-        node.initialValue = estimate(node.observation, depth);
+        node.initialValue = yield* estimate(node.observation, depth);
         return node.initialValue;
       }
       expand(node);
@@ -212,7 +268,7 @@ export function search(observation: Observation, options: ProbeOptions) {
       child = { observation: next, actor, visits: 0 };
       edge.children.set(key, child);
     }
-    const value = visit(child, depth + 1);
+    const value = yield* visit(child, depth + 1);
     edge.visits++;
     edge.total += value;
     node.visits++;
@@ -223,11 +279,11 @@ export function search(observation: Observation, options: ProbeOptions) {
     checkPosition(observation);
     ensure(!observation.winner, '终局不搜索。');
     ensure(!windowBoundary(observation), '搜索根须位于play或强制反应窗口。');
-    if (options.firstPlayValue === 'parent') root.initialValue = estimate(observation, 0);
+    if (options.firstPlayValue === 'parent') root.initialValue = yield* estimate(observation, 0);
     expand(root);
     const baseline = root.edges![0].command;
     for (let i = 0; i < options.simulations; i++) {
-      visit(root, 0);
+      yield* visit(root, 0);
       stats.simulations++;
     }
     const edges = root.edges!.map((edge) => ({
