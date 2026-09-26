@@ -112,8 +112,10 @@ export async function* readTrainingRecords(path: string): AsyncGenerator<any> {
     assert.equal(row.index, env.status().commands, '命令序号不连续。');
     assert.ok(row.actor === 1 || row.actor === 2, '操作者无效。');
     const observation = env.observation(row.actor);
-    if (header.source !== 'saved-game')
-      assert.equal(row.actor, decisionOwner(observation), '教师/网络操作者不匹配。');
+    // 教师旧协议按主决策方出手；新神经策略还可合法暗选或回合外巨大化。
+    // 实际权限仍由下面的 env.step / actorCommandError 逐条裁定，不信任记录声称的席位。
+    if (header.source === 'teacher')
+      assert.equal(row.actor, decisionOwner(observation), '教师操作者不匹配。');
     assert.equal(row.before, fingerprint(observation), '命令前指纹不匹配。');
     if (commandRow) {
       env.step(row.actor, row.command);

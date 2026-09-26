@@ -17,6 +17,7 @@ import { allPieces, canDeployKind, hasTrait } from '../core/traits';
 import { withRandomSource, type RandomSource } from '../core/random';
 import { synthesize } from '../setup/synthesis';
 import { normalizeLegacyGuards } from '../core/protection';
+import { clonePosition } from '../core/clone';
 import { definition, isStored } from '../catalog';
 import { chargeAction, craft, equip, reroll, useSkill, cast } from './abilities';
 import { findTarget, performAttack, pruneSiphons, resolution } from './combat';
@@ -95,7 +96,7 @@ function transition<S extends GamePosition>(
     !transit || c.type === 'react' || (c.type === 'move' && c.unitId === transit.id),
     '冲撞移动正在经过其他占位，必须先完成弹出或回到空地。',
   );
-  const s = structuredClone(previous);
+  const s = clonePosition(previous);
   normalizeLegacyGuards(s);
   s.events = [];
   return withRandomSource(s, randomSource, () => {
