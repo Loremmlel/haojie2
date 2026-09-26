@@ -83,6 +83,8 @@ export interface ProbeOptions {
   /** 实验候选子集，保留调用方顺序；不是全合法域，成本由提供方单列。 */
   candidateCommands?: (observation: Observation) => Command[];
   coverRoot?: boolean;
+  /** 候选已按教师偏好排序时，访问数相同保留顺序，不放大未校准的微小估值差。 */
+  rootTieBreak?: 'value' | 'candidate-order';
 }
 
 interface LeafRequest {
@@ -294,7 +296,9 @@ function* searchSteps(observation: Observation, options: Omit<ProbeOptions, 'lea
     }));
     const selected = edges.reduce((best, edge) =>
       edge.visits > best.visits ||
-      (edge.visits === best.visits && (edge.value ?? -Infinity) > (best.value ?? -Infinity))
+      (options.rootTieBreak !== 'candidate-order' &&
+        edge.visits === best.visits &&
+        (edge.value ?? -Infinity) > (best.value ?? -Infinity))
         ? edge
         : best,
     );

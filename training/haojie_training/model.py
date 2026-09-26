@@ -108,6 +108,7 @@ class PolicyValueNet(nn.Module):
         context = x[:, :1].expand(-1, action_count, -1)
         sources = x.gather(1, (batch["sources"] + 1).unsqueeze(-1).expand(-1, -1, x.shape[-1]))
         targets = x.gather(1, (batch["targets"] + 1).unsqueeze(-1).expand(-1, -1, x.shape[-1]))
+        targets = self.target_context(batch, x, targets)
         # 候选先独立提取非线性特征，避免坐标差异被共享上下文淹没；评分保持FP32，
         # 防止BF16在较大logit附近把相邻落点量化成相同分数。实体主干仍使用所选AMP。
         with torch.autocast(x.device.type, enabled=False):
@@ -118,6 +119,10 @@ class PolicyValueNet(nn.Module):
             logits = self.policy(action_context).squeeze(-1)
         logits = logits.masked_fill(~batch["candidate_mask"], -1e9)
         return logits, self.value(x[:, 0]).squeeze(-1).float()
+
+    def target_context(self, batch: dict[str, Tensor], entities: Tensor, targets: Tensor) -> Tensor:
+        """默认使用显式目标实体；实验可在此补充候选位置上下文，不复制整个前向实现。"""
+        return targets
 
 
 def policy_value_loss(

@@ -117,6 +117,8 @@ function finish(ctx: Context, result: ReturnType<typeof search>) {
   stats.searchSimulations = result.stats.simulations;
   ensure(stats.searchTransitions + stats.rolloutTransitions <= 32, '搜索转移超出上限。');
   if (result.status === 'paused') {
+    if (result.reason === '网络叶值未覆盖当前阶段。')
+      return fallbackResult(ctx, 'uncovered-value-phase');
     if (!result.reason.includes('回合外巨大化')) throw new Error(result.reason);
     return fallbackResult(ctx, 'descendant-u7');
   }
@@ -152,7 +154,8 @@ export function bootstrapDecision(observation: Observation, sampleSeed: number) 
 
 /**
  * 将外部根视角叶值接入相同搜索；保留真实终局优先及所有原有教师/转移预算。
- * 新召唤窗口没有本轮价值训练覆盖，仍返回未知零估计；模型只估计play及强制反应。
+ * 新召唤窗口没有价值训练覆盖时，整个比较回退教师且不产生访问标签；未知不能充当零。
+ * 根访问数打平时保留教师候选顺序，不能用微小网络误差宣称发现更优动作。
  * 每决策至多16次值查询，公开局面缓存仅活到该决策结束；取消后不得落子。
  */
 export async function bootstrapValueDecision(
@@ -161,17 +164,39 @@ export async function bootstrapValueDecision(
   value: (observation: Observation, root: Player) => Promise<number>,
   signal?: AbortSignal,
 ) {
+  ensure(!signal?.aborted, '搜索已取消。');
   const ctx = context(observation, sampleSeed);
   const valueStats = { calls: 0, cacheHits: 0, min: 0, max: 0 };
   if (ctx.fallback) return { ...fallbackResult(ctx, ctx.fallback), valueStats };
+  // 根含end时已知候选会跨入未训练窗口，直接使用同预算的纯终局搜索。
+  // 它能保留两步必杀，但没有有效神经排序，不能把这类访问分布再喂回网络。
+  if (ctx.base.candidates.some((command) => command.type === 'end')) {
+    const result = finish(
+      ctx,
+      search(observation, {
+        ...options(ctx, sampleSeed),
+        signal,
+        leafValue: (o, root, remaining) => rollout(ctx, o, root, remaining).value ?? 0,
+      }),
+    );
+    if (result.mode === 'teacher-fallback') return { ...result, valueStats };
+    return {
+      ...result,
+      mode: 'terminal-search' as const,
+      reason: 'uncovered-value-phase',
+      policy: null,
+      valueStats,
+    };
+  }
   const cache = new Map<string, number>();
   const result = await searchAsync(observation, {
     ...options(ctx, sampleSeed),
+    rootTieBreak: 'candidate-order',
     signal,
     leafValue: async (o, root, remaining) => {
       const leaf = rollout(ctx, o, root, remaining);
       if (leaf.value !== null) return leaf.value;
-      if (windowBoundary(leaf.observation)) return 0;
+      if (windowBoundary(leaf.observation)) throw new Error('网络叶值未覆盖当前阶段。');
       const key = JSON.stringify(leaf.observation);
       const saved = cache.get(key);
       if (saved !== undefined) {

@@ -198,6 +198,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const { values } = parseArgs({
     options: {
       checkpoint: { type: 'string' },
+      'inference-module': { type: 'string' },
       output: { type: 'string' },
       python: {
         type: 'string',
@@ -267,6 +268,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       policy = await PythonPolicy.start({
         python: values.python!,
         checkpoint: values.checkpoint!,
+        module: values['inference-module'],
         device: values.device!,
         precision: values.precision!,
         threads: numeric('threads'),
@@ -291,6 +293,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     commit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
     sourceSha256,
     experimentSourceSha256,
+    inferenceModule: values['inference-module'] ?? 'haojie_training.inference',
     schema: ENCODING_SCHEMA,
     runtime: { node: process.version, cpu: cpus()[0].model, ramBytes: totalmem() },
     model: policy?.ready ?? null,

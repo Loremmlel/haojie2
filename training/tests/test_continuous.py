@@ -9,13 +9,61 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import torch
+
+from haojie_training.data import load_dataset, synthetic_batch
+from haojie_training.model import ModelConfig
+
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts/training/search/continuous"
 sys.path.insert(0, str(SCRIPTS))
+from dataset import combine, save_split  # noqa: E402
 from run import choose  # noqa: E402
 from runtime import Stages, read  # noqa: E402
 
 
 class ContinuousTests(unittest.TestCase):
+    def test_history_pool_preserves_parameter_prefixes_and_masks_value(self):
+        config = ModelConfig.tiny()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            specification = {}
+            for split in ("train", "validation"):
+                folder = root / split
+                folder.mkdir()
+                batch = synthetic_batch(config, 2, 3, 4)
+                batch["value"] = torch.tensor([1.0, 0.0])
+                batch["value_mask"] = torch.tensor([True, False])
+                records = [
+                    {
+                        "group": split,
+                        "game_id": split,
+                        "index": 0,
+                        "step": step,
+                        "actor": 1,
+                        "command": "deploy",
+                        "stage": stage,
+                    }
+                    for step, stage in enumerate(("action", "point"))
+                ]
+                metadata = {
+                    "ruleset": "test",
+                    "encoding": "test",
+                    "schema": {},
+                    "source_sha256": "same",
+                    "synthetic": True,
+                }
+                save_split(folder, "decisions", [batch], metadata, records)
+                specification[split] = [str(folder / "decisions.pt")]
+            output = root / "combined"
+            output.mkdir()
+            report = combine(specification, output)
+            for split in ("train", "validation"):
+                data, metadata = load_dataset(output / f"{split}.pt", config)
+                self.assertEqual([r["step"] for r in metadata["records"]], [0, 1])
+                self.assertEqual(report["splits"][split]["examples"], 2)
+                self.assertEqual(report["splits"][split]["value_labels"], 1)
+                torch.testing.assert_close(data["value_mask"], torch.tensor([True, False]))
+
     def test_completed_stage_reuses_outputs_and_rejects_tampering(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -77,6 +125,10 @@ class ContinuousTests(unittest.TestCase):
             choose([*winning[:4], result(winner=2), result(winner=2), *winning[6:]], 2)["accepted"]
         )
         self.assertFalse(choose(winning[:3], 2)["accepted"])
+        self.assertFalse(
+            choose([*winning[:4], *([result(winner=2)] * 4)], 2)["accepted"],
+            "候选和父代都输给教师，不能仅靠打败弱父代晋升",
+        )
         self.assertIsNone(
             choose([result(terminated=False), *winning[1:]], 2)["candidate_vs_parent_score"]
         )

@@ -36,7 +36,10 @@ def encoded_rows(path: Path, node: str, search_policy: bool = False):
     if first_line is None:
         raise ValueError("训练记录为空")
     first = json.loads(first_line)
-    if first.get("policyKind") == "teacher-assisted-restricted-puct-v1" and not search_policy:
+    if (
+        str(first.get("policyKind", "")).startswith("teacher-assisted-restricted-puct-")
+        and not search_policy
+    ):
         raise ValueError("搜索轨迹必须显式使用--search-policy，不能降为教师one-hot标签")
     command = [
         node,

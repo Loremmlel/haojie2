@@ -40,11 +40,13 @@ class PreparationTests(unittest.TestCase):
     def test_search_records_require_explicit_soft_policy_route(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "search.jsonl"
-            source.write_text(
-                json.dumps({"policyKind": "teacher-assisted-restricted-puct-v1"}), encoding="utf-8"
-            )
-            with self.assertRaisesRegex(ValueError, "search-policy"):
-                list(encoded_rows(source, "node"))
+            for version in ("v1", "v2"):
+                source.write_text(
+                    json.dumps({"policyKind": f"teacher-assisted-restricted-puct-{version}"}),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "search-policy"):
+                    list(encoded_rows(source, "node"))
 
     def test_padding_and_batch_crop_preserve_local_pointers(self):
         config = ModelConfig.tiny()

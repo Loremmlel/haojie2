@@ -62,7 +62,7 @@ async function run(job: Job) {
         seed: job.seed,
         rules: 'classic',
         primaryPlayer: job.primary,
-        policyKind: 'teacher-assisted-restricted-puct-v1',
+        policyKind: 'teacher-assisted-restricted-puct-v2',
         experimentKind: job.kind,
         policyTarget:
           'conditional candidate visits; null on fallback/opponent; not full legal domain',

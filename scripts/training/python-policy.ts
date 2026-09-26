@@ -13,6 +13,8 @@ export interface PolicyProcessOptions {
   threads: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  /** 显式研究入口；默认仍是拒绝实验检查点的正式推理模块。 */
+  module?: string;
 }
 type Reply = Record<string, any>;
 
@@ -39,7 +41,7 @@ export class PythonPolicy {
         'utf8',
         '-u',
         '-m',
-        'haojie_training.inference',
+        options.module ?? 'haojie_training.inference',
         '--checkpoint',
         options.checkpoint,
         '--device',

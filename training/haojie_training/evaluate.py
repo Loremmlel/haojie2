@@ -61,7 +61,62 @@ def value_diagnostics(predictions, dataset, records, baselines):
         ]
         result["games"] = len(games)
         result["game_macro_mse"] = float(torch.stack(errors).mean()) if errors else None
+        rows = []
+        for game, indices in games.items():
+            winners = {
+                "draw"
+                if targets[i] == 0
+                else str(records[i]["actor"] if targets[i] > 0 else 3 - records[i]["actor"])
+                for i in indices
+            }
+            if len(winners) != 1:
+                raise ValueError("同一对局的根收益相互矛盾")
+            rows.append(
+                {
+                    "game_id": game,
+                    "group": records[indices[0]].get("group", game),
+                    "winner": winners.pop(),
+                    "labels": len(indices),
+                    "model_mse": float((predictions[indices] - targets[indices]).square().mean()),
+                    "zero_mse": float(targets[indices].square().mean()),
+                    "train_actor_mean_mse": float(
+                        (seat_prediction[indices] - targets[indices]).square().mean()
+                    ),
+                }
+            )
+        result["per_game"] = rows
+        result["by_winner"] = {}
+        for winner in ("1", "2", "draw"):
+            selected = [r for r in rows if r["winner"] == winner]
+            result["by_winner"][winner] = {
+                "games": len(selected),
+                "groups": len({r["group"] for r in selected}),
+                **(
+                    {
+                        key: sum(r[key] for r in selected) / len(selected)
+                        for key in ("model_mse", "zero_mse", "train_actor_mean_mse")
+                    }
+                    if selected
+                    else {}
+                ),
+            }
     return result
+
+
+def value_quality(diagnostics, minimum_games=4):
+    """价值接入的必要门槛，不代替实战：两种胜方分别有独立族且优于常数/席位基线。"""
+    reasons = []
+    for winner in ("1", "2"):
+        row = diagnostics.get("by_winner", {}).get(winner, {})
+        if row.get("games", 0) < minimum_games or row.get("groups", 0) < minimum_games:
+            reasons.append(f"胜方{winner}不足{minimum_games}个独立验证族")
+        elif not row["model_mse"] < min(row["zero_mse"], row["train_actor_mean_mse"]):
+            reasons.append(f"胜方{winner}的按局误差未优于零/席位基线")
+    for actor in ("1", "2"):
+        row = diagnostics.get("by_actor", {}).get(actor, {})
+        if not row.get("wins") or not row.get("losses"):
+            reasons.append(f"席位{actor}的验证缺少胜或负标签")
+    return {"passed": not reasons, "reasons": reasons, "minimum_groups_per_winner": minimum_games}
 
 
 @torch.inference_mode()
@@ -71,6 +126,8 @@ def evaluate(model, dataset, device, precision, batch_size, records=None, baseli
     nll = correct = choices = choice_correct = roots = root_correct = known = squared = 0
     size = len(dataset["value"])
     predictions = []
+    hits = []
+    losses = []
     try:
         for start in range(0, size, batch_size):
             end = min(size, start + batch_size)
@@ -80,6 +137,8 @@ def evaluate(model, dataset, device, precision, batch_size, records=None, baseli
                 logits, value = model(batch)
             predictions.append(value.cpu())
             hit = logits.argmax(1) == batch["policy"].argmax(1)
+            hits.extend(hit.cpu().tolist())
+            losses.extend((-(batch["policy"] * logits.log_softmax(1)).sum(1)).cpu().tolist())
             multiple = batch["candidate_mask"].sum(1) > 1
             nll += float(-(batch["policy"] * logits.log_softmax(1)).sum())
             correct += int(hit.sum())
@@ -95,6 +154,34 @@ def evaluate(model, dataset, device, precision, batch_size, records=None, baseli
                 root_correct += int((hit & root).sum())
     finally:
         model.train(was_training)
+    policy_details = {}
+    if records is not None:
+        stages, commands, command_stages = {}, {}, {}
+        for i, r in enumerate(records):
+            stages.setdefault(r["stage"], []).append(i)
+            command_stages.setdefault(f"{r['command']}:{r['stage']}", []).append(i)
+            commands.setdefault((r["game_id"], r["index"]), []).append(i)
+        policy_details = {
+            "by_stage": {
+                stage: {
+                    "examples": len(indices),
+                    "accuracy": sum(hits[i] for i in indices) / len(indices),
+                    "nll": sum(losses[i] for i in indices) / len(indices),
+                }
+                for stage, indices in stages.items()
+            },
+            "teacher_path_accuracy": sum(all(hits[i] for i in ids) for ids in commands.values())
+            / len(commands),
+            "teacher_path_commands": len(commands),
+            "by_command_stage": {
+                stage: {
+                    "examples": len(indices),
+                    "accuracy": sum(hits[i] for i in indices) / len(indices),
+                    "nll": sum(losses[i] for i in indices) / len(indices),
+                }
+                for stage, indices in command_stages.items()
+            },
+        }
     return {
         "examples": size,
         "policy_loss": nll / size,
@@ -105,6 +192,7 @@ def evaluate(model, dataset, device, precision, batch_size, records=None, baseli
         "root_accuracy": root_correct / roots if roots else None,
         "value_labels": known,
         "value_mse": squared / known if known else None,
+        **policy_details,
         "value_diagnostics": value_diagnostics(
             torch.cat(predictions),
             dataset,

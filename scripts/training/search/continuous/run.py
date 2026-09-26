@@ -43,8 +43,7 @@ def choose(results, pairs):
         if not items or any(not r["terminated"] or r["truncated"] for r in items):
             return None
         return sum(
-            0.5 if r["winner"] == "draw" else int(r["winner"] == r["primary"])
-            for r in items
+            0.5 if r["winner"] == "draw" else int(r["winner"] == r["primary"]) for r in items
         )
 
     parent = results[: pairs * 2]
@@ -56,7 +55,7 @@ def choose(results, pairs):
     accepted = (
         complete
         and score(parent) >= pairs * 1.5
-        and score(candidate_teacher) >= score(parent_teacher)
+        and score(candidate_teacher) >= max(1, score(parent_teacher))
     )
     return {
         "accepted": accepted,
@@ -65,9 +64,8 @@ def choose(results, pairs):
         "candidate_vs_parent_games": len(parent),
         "candidate_vs_teacher_score": score(candidate_teacher),
         "parent_vs_teacher_score": score(parent_teacher),
-        "reason": "开发筛选通过"
-        if accepted
-        else "结果不充分或未达到预定门槛，保留父模型",
+        "minimum_teacher_score": 1,
+        "reason": "开发筛选通过" if accepted else "结果不充分或未达到预定门槛，保留父模型",
         "statistical_strength_claim": False,
     }
 
@@ -245,6 +243,26 @@ class Experiment:
         c = self.config
         checkpoint = Path(c["checkpoint"]).resolve()
         pool = []
+        self.status(phase="initial-value-validation", champion=str(checkpoint))
+        initial_data = self.data(
+            "initial-dataset",
+            "combine",
+            {
+                "train": c["base_train"],
+                "validation": c["validation"],
+            },
+        )
+        quality = self.data(
+            "initial-value-validation",
+            "qualify",
+            {
+                "checkpoint": str(checkpoint),
+                "train": str(initial_data / "train.pt"),
+                "validation": str(initial_data / "validation.pt"),
+            },
+        )
+        if not read(quality / "manifest.json")["passed"]:
+            raise ValueError("初始价值模型未通过跨胜方泛化门槛，禁止启动自对弈长跑")
         self.status(phase="initial-gate", champion=str(checkpoint))
         self.gate("initial-gate", checkpoint)
         limits = {"maxCommands": c["max_commands"], "maxPlies": c["max_plies"]}
@@ -278,7 +296,7 @@ class Experiment:
                     ),
                     enumerate(games),
                 )
-                pool.append([str(path / "roots.pt") for path in encoded])
+                pool.append([str(path / "decisions.pt") for path in encoded])
                 pool = pool[-c["pool_rounds"] :]
                 self.status(phase="dataset")
                 data = self.data(
@@ -353,8 +371,20 @@ class Experiment:
                     },
                 )
                 assert read(health / "manifest.json")["passed"]
+                quality = self.data(
+                    f"{prefix}/value-validation",
+                    "qualify",
+                    {
+                        "checkpoint": str(candidate),
+                        "train": str(data / "train.pt"),
+                        "validation": str(data / "validation.pt"),
+                    },
+                )
                 self.status(phase="candidate-gate")
-                gate_passed = self.gate(f"{prefix}/gate", candidate, required=False)
+                value_passed = read(quality / "manifest.json")["passed"]
+                gate_passed = value_passed and self.gate(
+                    f"{prefix}/gate", candidate, required=False
+                )
                 self.status(phase="evaluation")
                 evaluations = []
                 for pair in range(c["evaluation_pairs"]):
@@ -383,9 +413,7 @@ class Experiment:
                 evaluated = (
                     self.parallel(
                         workers,
-                        lambda item: self.game(
-                            f"{prefix}/evaluation-{item[0]:02d}", item[1]
-                        ),
+                        lambda item: self.game(f"{prefix}/evaluation-{item[0]:02d}", item[1]),
                         enumerate(evaluations),
                     )
                     if gate_passed
@@ -393,8 +421,11 @@ class Experiment:
                 )
                 results = [read(path / "result.json") for path in evaluated]
                 selection = choose(results, c["evaluation_pairs"])
-                selection["tactical_gate_passed"] = gate_passed
-                if not gate_passed:
+                selection["value_gate_passed"] = value_passed
+                selection["tactical_gate_passed"] = gate_passed if value_passed else None
+                if not value_passed:
+                    selection["reason"] = "跨胜方价值泛化门槛未通过，跳过对战并保留父模型"
+                elif not gate_passed:
                     selection["reason"] = "战术门槛未通过，跳过对战并保留父模型"
                 report = {
                     "round": number,

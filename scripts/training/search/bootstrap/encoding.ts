@@ -74,7 +74,11 @@ export async function* encodeSearchFile(path: string) {
   for await (const r of readTrainingRecords(path)) {
     if (r.type === 'game') {
       assert.equal(r.experimentKind, 'selfplay', '评测种子不能进入搜索训练编码');
-      assert.equal(r.policyKind, 'teacher-assisted-restricted-puct-v1');
+      assert.ok(
+        ['teacher-assisted-restricted-puct-v1', 'teacher-assisted-restricted-puct-v2'].includes(
+          r.policyKind,
+        ),
+      );
       yield {
         type: 'game',
         game: r.game,

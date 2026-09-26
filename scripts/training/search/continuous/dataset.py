@@ -1,4 +1,4 @@
-"""连续实验的数据边界：复用重放编码，缓存逐局根分片，再组合有界历史池和固定验证族。"""
+"""连续实验的数据边界：复用重放编码，保留完整命令前缀，再组合历史池和固定验证族。"""
 
 import argparse
 import hashlib
@@ -15,8 +15,8 @@ from haojie_training.data import (
     load_dataset,
     select_batch,
 )
+from haojie_training.evaluate import evaluate, validate_split, value_baselines, value_quality
 from haojie_training.model import ModelConfig, PolicyValueNet
-from haojie_training.evaluate import evaluate
 from haojie_training.prepare import load_file
 
 
@@ -31,9 +31,7 @@ def save_split(output, name, chunks, metadata, records):
     known = 0
     for batch in chunks:
         file = f"{name}-{len(shards):05d}.pt"
-        torch.save(
-            {"format": FORMAT, "metadata": metadata, "tensors": batch}, output / file
-        )
+        torch.save({"format": FORMAT, "metadata": metadata, "tensors": batch}, output / file)
         shards.append(
             {
                 "file": file,
@@ -76,11 +74,8 @@ def encode(path, output):
             assert float(example["value"]) == (
                 outcome["returns"][str(row["actor"])] if known else 0
             )
-            if row["step"] == 0:
-                examples.append(example)
-                records.append(
-                    {**row, "game_id": identity, "group": game["metadata"]["group"]}
-                )
+            examples.append(example)
+            records.append({**row, "game_id": identity, "group": game["metadata"]["group"]})
     metadata = {
         "synthetic": False,
         "ruleset": header["ruleset"],
@@ -92,17 +87,14 @@ def encode(path, output):
     }
     result = save_split(
         output,
-        "roots",
-        (
-            collate_examples(examples[i : i + 256], config)
-            for i in range(0, len(examples), 256)
-        ),
+        "decisions",
+        (collate_examples(examples[i : i + 256], config) for i in range(0, len(examples), 256)),
         metadata,
         records,
     )
     return {
         "source": source,
-        "roots": result,
+        "decisions": result,
         "games": [{**g["metadata"], **g["outcome"]} for g in games.values()],
     }
 
@@ -110,8 +102,7 @@ def encode(path, output):
 def combine(spec, output):
     config = ModelConfig()
     inputs = {
-        split: [load_dataset(Path(p), config) for p in paths]
-        for split, paths in spec.items()
+        split: [load_dataset(Path(p), config) for p in paths] for split, paths in spec.items()
     }
     reference = inputs["train"][0][1]
     sources = [
@@ -122,9 +113,7 @@ def combine(spec, output):
     metadata = {k: reference[k] for k in ("synthetic", "ruleset", "encoding", "schema")}
     # 这里只组合已经验证的同编码张量；各源原始指纹保留，组合摘要不冒充引擎源码哈希。
     metadata.update(
-        source_sha256=hashlib.sha256(
-            json.dumps(sources, sort_keys=True).encode()
-        ).hexdigest(),
+        source_sha256=hashlib.sha256(json.dumps(sources, sort_keys=True).encode()).hexdigest(),
         tensor_sources=sources,
         policy_source="teacher-assisted-conditional-visits-v1",
     )
@@ -141,11 +130,8 @@ def combine(spec, output):
             indices = []
             for i, record in enumerate(meta["records"]):
                 if record["step"] != 0:
-                    assert (
-                        not bool(data["value_mask"][i]) and float(data["value"][i]) == 0
-                    )
-                    continue
-                identity = (record["game_id"], record["index"])
+                    assert not bool(data["value_mask"][i]) and float(data["value"][i]) == 0
+                identity = (record["game_id"], record["index"], record["step"])
                 if identity in seen:
                     raise ValueError("历史池重复根决策")
                 seen.add(identity)
@@ -153,11 +139,7 @@ def combine(spec, output):
                 split_records[split].append(record)
             selected[split].append((data, indices))
     groups = {s: {r["group"] for r in rows} for s, rows in split_records.items()}
-    if (
-        not groups["train"]
-        or not groups["validation"]
-        or groups["train"] & groups["validation"]
-    ):
+    if not groups["train"] or not groups["validation"] or groups["train"] & groups["validation"]:
         raise ValueError("训练池与固定验证族为空或交叉")
     report = {"tensor_sources": sources, "splits": {}}
     for split, pairs in selected.items():
@@ -176,9 +158,7 @@ def check(spec):
     report = json.loads(Path(spec["report"]).read_text(encoding="utf-8"))
     payload = torch.load(spec["checkpoint"], map_location="cpu", weights_only=True)
     assert report["steps"] == report["updates"] == payload["updates"] == spec["steps"]
-    assert (
-        report["health"]["finite_parameters"] and report["health"]["finite_gradients"]
-    )
+    assert report["health"]["finite_parameters"] and report["health"]["finite_gradients"]
     assert all(torch.isfinite(v).all() for v in payload["model"].values())
     assert all(
         not isinstance(v, torch.Tensor) or torch.isfinite(v).all()
@@ -219,9 +199,66 @@ def check(spec):
     }
 
 
+def qualify(spec):
+    """长跑前重算全验证集，旧战术题或有限数值不能代替真实价值泛化。"""
+    payload = torch.load(spec["checkpoint"], map_location="cpu", weights_only=True)
+    config = ModelConfig(**payload["config"])
+    data, metadata = load_dataset(Path(spec["validation"]), config)
+    train, train_metadata = load_dataset(Path(spec["train"]), config)
+    validate_split(train_metadata, metadata)
+    if any(
+        payload["metadata"].get(key) != metadata.get(key)
+        for key in ("ruleset", "encoding", "schema", "synthetic")
+    ):
+        raise ValueError("检查点与价值验证集的规则或编码不一致")
+    if not all(torch.isfinite(value).all() for value in payload["model"].values()):
+        raise ValueError("价值模型包含非有限参数")
+    seen = set(
+        payload["metadata"].get("seen_training_groups", payload["metadata"].get("groups", []))
+    )
+    if not seen or seen & set(metadata["groups"]):
+        raise ValueError("价值验证族缺少可核验谱系或已经参与训练")
+    # 覆盖不足直接拒绝，避免对单胜方大库做无意义的完整前向。
+    from haojie_training.evaluate import value_diagnostics
+
+    coverage = value_diagnostics(
+        torch.zeros_like(data["value"]),
+        data,
+        metadata["records"],
+        value_baselines(train, train_metadata["records"]),
+    )
+    if any(coverage["by_winner"][w]["groups"] < 4 for w in ("1", "2")):
+        return {
+            "passed": False,
+            "quality": value_quality(coverage),
+            "coverage": coverage,
+            "checkpoint_sha256": digest(spec["checkpoint"]),
+        }
+    model = PolicyValueNet(config).eval()
+    model.load_state_dict(payload["model"])
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    metrics = evaluate(
+        model.to(device),
+        data,
+        device,
+        "fp32",
+        16,
+        metadata["records"],
+        value_baselines(train, train_metadata["records"]),
+    )
+    quality = value_quality(metrics["value_diagnostics"])
+    return {
+        "passed": quality["passed"],
+        "quality": quality,
+        "metrics": metrics,
+        "checkpoint_sha256": digest(spec["checkpoint"]),
+        "precision": "fp32",
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["encode", "combine", "check"])
+    parser.add_argument("mode", choices=["encode", "combine", "check", "qualify"])
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
@@ -233,7 +270,9 @@ def main():
         else (
             combine(json.loads(args.input.read_text(encoding="utf-8")), args.output)
             if args.mode == "combine"
-            else check(json.loads(args.input.read_text(encoding="utf-8")))
+            else (qualify if args.mode == "qualify" else check)(
+                json.loads(args.input.read_text(encoding="utf-8"))
+            )
         )
     )
     (args.output / "manifest.json").write_text(

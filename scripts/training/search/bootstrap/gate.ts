@@ -131,8 +131,9 @@ try {
     fixtureTotal: fixtures.length,
     naturalWins: natural.filter((r) => r.value === 1).length,
     supportedNaturalWins: natural.filter(
-      (r) => r.steps[0].result.mode === 'search' && r.value === 1,
+      (r) => ['search', 'terminal-search'].includes(r.steps[0].result.mode) && r.value === 1,
     ).length,
+    terminalOnlyPaths: natural.filter((r) => r.steps[0].result.mode === 'terminal-search').length,
     naturalTotal: natural.length,
     fallbackPaths: natural.filter((r) => r.steps[0].result.mode !== 'search').length,
     maxCommands: Math.max(...natural.map((r) => r.steps.length)),

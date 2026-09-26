@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import inspect
 import json
 import sys
 import time
@@ -50,7 +51,8 @@ def emit(value):
     print(json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")), flush=True)
 
 
-def main():
+def main(load_checkpoint=None):
+    """共用JSONL边界；研究入口可显式注入加载器，正式入口继续拒绝实验检查点。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--device", choices=["cpu", "xpu", "cuda"], default="cpu")
@@ -63,13 +65,18 @@ def main():
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
     device = resolve_device(args.device)
-    config = checkpoint_config(args.checkpoint)
-    payload = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    metadata = payload["metadata"]
+    if load_checkpoint is None:
+        config = checkpoint_config(args.checkpoint)
+        payload = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+        metadata = payload["metadata"]
+        model = PolicyValueNet(config)
+        model.load_state_dict(payload["model"])
+        network = NETWORK_VERSION
+    else:
+        config, model, metadata, network = load_checkpoint(args.checkpoint)
     if metadata.get("synthetic") is not False:
         parser.error("实局推理需要真实编码数据的检查点")
-    model = PolicyValueNet(config).to(device).eval()
-    model.load_state_dict(payload["model"])
+    model = model.to(device).eval()
     with args.checkpoint.open("rb") as source:
         digest = hashlib.file_digest(source, "sha256").hexdigest()
     synchronize(device)
@@ -77,7 +84,13 @@ def main():
         {
             "type": "ready",
             "format": "haojie-policy-jsonl-v1",
-            "network": NETWORK_VERSION,
+            "network": network,
+            "model_source_sha256": hashlib.sha256(
+                Path(inspect.getfile(type(model))).read_bytes()
+            ).hexdigest(),
+            "loader_source_sha256": hashlib.sha256(
+                Path(inspect.getfile(load_checkpoint or main)).read_bytes()
+            ).hexdigest(),
             "config": asdict(config),
             "ruleset": metadata["ruleset"],
             "encoding": metadata["encoding"],

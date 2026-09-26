@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 
 from haojie_training.data import FORMAT, load_dataset, synthetic_batch, validate_batch
-from haojie_training.evaluate import value_baselines, value_diagnostics
+from haojie_training.evaluate import value_baselines, value_diagnostics, value_quality
 from haojie_training.model import ModelConfig, PolicyValueNet, policy_value_loss
 from haojie_training.runtime import Trainer
 from haojie_training.train import initialize_weights
@@ -221,6 +221,29 @@ class TrainingTests(unittest.TestCase):
         self.assertEqual(result["overall"]["model_mse"], 3)
         self.assertEqual(result["game_macro_mse"], 3.25)
         self.assertEqual(result["by_actor"]["2"]["labels"], 1)
+
+    def test_value_gate_rejects_perfect_single_winner_and_seat_shortcut(self):
+        records = [
+            {"game_id": f"g{i}", "group": f"seed{i}", "actor": actor}
+            for i in range(8)
+            for actor in (1, 2)
+        ]
+        only_p2 = torch.tensor([-1.0, 1.0] * 8)
+        data = {"value": only_p2, "value_mask": torch.ones(16, dtype=torch.bool)}
+        baseline = {"mean": 0.0, "by_actor": {"1": -1.0, "2": 1.0}}
+        report = value_diagnostics(only_p2, data, records, baseline)
+        self.assertEqual(report["game_macro_mse"], 0)
+        self.assertFalse(value_quality(report)["passed"])
+        data["value"] = torch.tensor([1.0, -1.0] * 4 + [-1.0, 1.0] * 4)
+        report = value_diagnostics(only_p2, data, records, baseline)
+        self.assertFalse(value_quality(report)["passed"])
+        report = value_diagnostics(
+            data["value"] * 0.5, data, records, {"mean": 0.0, "by_actor": {}}
+        )
+        self.assertTrue(value_quality(report)["passed"])
+        records[1]["actor"] = 1
+        with self.assertRaisesRegex(ValueError, "收益相互矛盾"):
+            value_diagnostics(only_p2, data, records, baseline)
 
 
 if __name__ == "__main__":
