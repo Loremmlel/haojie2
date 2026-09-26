@@ -95,12 +95,13 @@ class PolicyValueNet(nn.Module):
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         entities = self.entity_projection(batch["entities"]) + self.kind_embedding(batch["kinds"])
+        entities = self.entity_context(batch, entities)
         global_token = self.global_projection(batch["globals"]).unsqueeze(1)
         x = torch.cat((global_token, entities), dim=1)
         valid = torch.cat(
             (torch.ones_like(batch["entity_mask"][:, :1]), batch["entity_mask"]), dim=1
         )
-        allowed = valid[:, None, None, :]
+        allowed = self.attention_mask(batch, valid)
         for block in self.blocks:
             x = block(x, allowed)
         x = self.norm(x)
@@ -119,6 +120,14 @@ class PolicyValueNet(nn.Module):
             logits = self.policy(action_context).squeeze(-1)
         logits = logits.masked_fill(~batch["candidate_mask"], -1e9)
         return logits, self.value(x[:, 0]).squeeze(-1).float()
+
+    def entity_context(self, batch: dict[str, Tensor], entities: Tensor) -> Tensor:
+        """默认保持原实体投影；研究模型可展开已有公开字段，不更改旧检查点参数。"""
+        return entities
+
+    def attention_mask(self, batch: dict[str, Tensor], valid: Tensor) -> Tensor:
+        """默认仅遮罩填充键；研究模型的关系偏置仍须保留同一填充边界。"""
+        return valid[:, None, None, :]
 
     def target_context(self, batch: dict[str, Tensor], entities: Tensor, targets: Tensor) -> Tensor:
         """默认使用显式目标实体；实验可在此补充候选位置上下文，不复制整个前向实现。"""

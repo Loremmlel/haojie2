@@ -16,6 +16,8 @@ import {
 } from '../../src/ai/training/decoder';
 import { decisionOwner, fingerprint } from '../../src/ai/observation';
 import { ENCODING_SCHEMA } from '../../src/ai/training/encoding/schema';
+import { encodeDecision } from '../../src/ai/training/encoding/decision';
+import { TrainingActionTree } from '../../src/ai/training/action-tree';
 import type { Difficulty } from '../../src/ai/types';
 import { PythonPolicy } from './python-policy';
 import { encodingSourceHash } from './encode';
@@ -39,6 +41,7 @@ export async function runNeuralMatches(
   options: NeuralMatchOptions,
   evaluate: PolicyEvaluator,
   emit: (row: any) => Promise<void>,
+  decode: typeof decodeCommand = decodeCommand,
 ) {
   if (!Number.isSafeInteger(options.games) || options.games < 1)
     throw new Error('games必须是正整数');
@@ -104,7 +107,7 @@ export async function runNeuralMatches(
       let decoded, command;
       try {
         if (network) {
-          decoded = await decodeCommand(observation, actor, evaluate, options);
+          decoded = await decode(observation, actor, evaluate, options);
           if (decoded.status !== 'command') {
             interrupted = decoded.reason!;
             await emit({
@@ -173,7 +176,12 @@ export async function runNeuralMatches(
         after: fingerprint(env.observation()),
         command,
         ...(decoded ? { decoded } : {}),
-        timing: { observationMs, decisionMs, stepMs, totalMs: decisionMs + stepMs },
+        timing: {
+          observationMs,
+          decisionMs,
+          stepMs,
+          totalMs: decisionMs + stepMs,
+        },
       });
     }
     const outcome = {
@@ -199,6 +207,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     options: {
       checkpoint: { type: 'string' },
       'inference-module': { type: 'string' },
+      decoder: { type: 'string', default: 'greedy' },
+      'search-simulations': { type: 'string', default: '16' },
+      'value-certificate': { type: 'string' },
       output: { type: 'string' },
       python: {
         type: 'string',
@@ -224,6 +235,22 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     },
   });
   if (!values.checkpoint || !values.output) throw new Error('请提供--checkpoint和新的--output目录');
+  if (!['greedy', 'beam', 'mcts', 'gumbel', 'value-mcts', 'value-gumbel'].includes(values.decoder!))
+    throw new Error('--decoder无效');
+  const usesValue = values.decoder!.startsWith('value-');
+  const valueCertificate = values['value-certificate']
+    ? JSON.parse(readFileSync(values['value-certificate'], 'utf8'))
+    : null;
+  if (
+    usesValue &&
+    (!valueCertificate?.passed ||
+      !valueCertificate.policy_unchanged ||
+      valueCertificate.checkpoint_sha256 !==
+        createHash('sha256').update(readFileSync(values.checkpoint)).digest('hex') ||
+      !Array.isArray(valueCertificate.covered_phases) ||
+      !valueCertificate.covered_phases.includes('play'))
+  )
+    throw new Error('研究价值搜索须提供与检查点匹配、通过分组校准的证书');
   if (existsSync(values.output)) throw new Error('输出目录已存在；请保留旧实验并使用新目录');
   const numeric = (key: keyof typeof values) => {
     const value = Number(values[key]);
@@ -262,6 +289,50 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   ])
     sources.update(path).update(readFileSync(path, 'utf8').replaceAll('\r\n', '\n'));
   const experimentSourceSha256 = sources.digest('hex');
+  const decoderSources = Object.fromEntries(
+    ['beam', 'search'].map((name) => {
+      const path = `scripts/training/improvement/${name}.ts`;
+      return [path, createHash('sha256').update(readFileSync(path)).digest('hex')];
+    }),
+  );
+  const searchSummary = {
+    decisions: 0,
+    searched: 0,
+    fallbacks: {} as Record<string, number>,
+    simulations: 0,
+    transitions: 0,
+    terminalLeaves: 0,
+    unknownLeaves: 0,
+    valueCalls: 0,
+    changedFromBeam: 0,
+  };
+  const decode: typeof decodeCommand =
+    values.decoder === 'greedy'
+      ? decodeCommand
+      : values.decoder === 'beam'
+        ? (await import('./improvement/beam')).beamDecode
+        : (observation, actor, evaluate, limits) =>
+            import('./improvement/search').then(({ policySearch }) =>
+              policySearch(observation, actor, evaluate, {
+                ...limits,
+                simulations: numeric('search-simulations'),
+                mode: values.decoder!.replace('value-', '') as 'mcts' | 'gumbel',
+                ...(usesValue
+                  ? {
+                      valuePhases: valueCertificate.covered_phases,
+                      leafValue: async (leaf, root) => {
+                        const side = decisionOwner(leaf);
+                        const node = new TrainingActionTree(leaf, side).node();
+                        const predicted = await evaluate(
+                          encodeDecision(leaf, side, node),
+                          limits?.signal,
+                        );
+                        return predicted.value * (side === root ? 1 : -1);
+                      },
+                    }
+                  : {}),
+              }),
+            );
   let failure: string | null = null;
   try {
     await withRecordOutput(tracePath, async (emit) => {
@@ -275,10 +346,32 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         timeoutMs: numeric('timeout-ms'),
         signal: cancellation.signal,
       });
-      await runNeuralMatches(options, policy.evaluate, async (row) => {
-        await emit(row);
-        if (row.type === 'outcome') console.error(JSON.stringify(row));
-      });
+      await runNeuralMatches(
+        options,
+        policy.evaluate,
+        async (row) => {
+          await emit(row);
+          if (row.type === 'decision' && row.decoded?.search) {
+            const search = row.decoded.search;
+            searchSummary.decisions++;
+            if (search.fallback)
+              searchSummary.fallbacks[search.fallback] =
+                (searchSummary.fallbacks[search.fallback] ?? 0) + 1;
+            else searchSummary.searched++;
+            for (const key of [
+              'simulations',
+              'transitions',
+              'terminalLeaves',
+              'unknownLeaves',
+              'valueCalls',
+            ] as const)
+              searchSummary[key] += search.stats[key];
+            searchSummary.changedFromBeam += Number(search.changedFromBeam);
+          }
+          if (row.type === 'outcome') console.error(JSON.stringify(row));
+        },
+        decode,
+      );
     });
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
@@ -290,12 +383,30 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     format: 'haojie-neural-match-v1',
     started,
     options: recordOptions,
-    commit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+    commit: execFileSync('git', ['rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+    }).trim(),
     sourceSha256,
     experimentSourceSha256,
+    decoder: values.decoder,
+    decoderSources,
+    searchSimulations: numeric('search-simulations'),
+    searchSummary,
+    valueCertificate: usesValue
+      ? {
+          path: values['value-certificate'],
+          sha256: createHash('sha256')
+            .update(readFileSync(values['value-certificate']!))
+            .digest('hex'),
+        }
+      : null,
     inferenceModule: values['inference-module'] ?? 'haojie_training.inference',
     schema: ENCODING_SCHEMA,
-    runtime: { node: process.version, cpu: cpus()[0].model, ramBytes: totalmem() },
+    runtime: {
+      node: process.version,
+      cpu: cpus()[0].model,
+      ramBytes: totalmem(),
+    },
     model: policy?.ready ?? null,
     startupMs: policy?.startupMs ?? null,
     inference: policy?.totals ?? null,
