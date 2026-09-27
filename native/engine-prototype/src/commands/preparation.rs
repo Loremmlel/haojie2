@@ -519,7 +519,7 @@ pub fn apply(
             _ => {}
         }
     }
-    let mut s = previous.clone();
+    let mut s = previous.fork();
     normalize_guards(&mut s);
     s.events.clear();
     let mut ctx = Resolution {

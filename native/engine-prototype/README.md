@@ -23,33 +23,36 @@ node --import tsx scripts/training/native/sampling/complete.ts --references arti
 
 图鉴、战斗参数、普通/终极/神龛抽取池和合成配方由 TS 初始化注入，不在 Rust 手工维护第二份数值表。下表路径相对各自的引擎目录。
 
-| Rust                      | TS 参照                                                      | 约束                                                        |
-| ------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------- |
-| `model.rs`                | `types.ts`、`core/traits.ts`、`core/state.ts`                | 热点字段有类型，其余 JSON 字段保留；相同 PRNG               |
-| `core/geometry.rs`        | `core/geometry.ts`                                           | 邻居和路径顺序、叠放、地标层、2×2、部署行、入射方向         |
-| `core/stats.rs`           | `core/state.ts`、`core/traits.ts`                            | 属性、独立蓄力、光环、虹吸刷新                              |
-| `core/resolution.rs`      | `core/state.ts`、`core/protection.ts`、`core/event-facts.ts` | 保护来源、事件因果/坐标/身份快照、衍生物                    |
-| `commands/movement.rs`    | `commands/game.ts`、`commands/movement.ts`                   | 阶段、移动、完整操作预算、举旗                              |
-| `commands/combat.rs`      | `commands/combat.ts`、`core/attack-profile.ts`               | 路径/穿透、逐目标攻击、随机边界、反击、攻击后被动           |
-| `commands/damage.rs`      | `commands/combat.ts`、`setup/shrines.ts`                     | 逐份伤害、保护/免疫、死亡/人头、强夺、反应排队              |
-| `commands/reactions.rs`   | `commands/movement.ts`、`commands/combat.ts`                 | 冲撞、弹出、小屋/王城、死后射击、反射、牵引、结束后切回合   |
-| `commands/preparation.rs` | `core/state.ts`、`setup/summoning.ts`、`setup/shrines.ts`    | 抽牌/整批克隆/改判、部署/装备/光环、费用和 RNG 原子性       |
-| `commands/lifecycle.rs`   | `commands/lifecycle.ts`                                      | 实际和个人时钟、结束效果、火焰/冰层、持续虹吸、下一召唤窗口 |
-| `commands/abilities.rs`   | `commands/abilities.ts`                                      | 全部主动技能、继承能力独立次数、巨大化与复活                |
-| `commands/spells.rs`      | `commands/abilities.ts`、`commands/combat.ts`                | 法术参数校验、反制顺序、基地来源、延迟效果                  |
-| `setup/synthesis.rs`      | `setup/synthesis.ts`                                         | 合成材料与落点原子移除，移除不当死亡                        |
-| `setup/shrines.rs`        | `setup/shrines.ts`                                           | 暗选、时钟快照、玉碎、强夺、地标重建                        |
-| `setup/runtime.rs`        | `commands/game.ts`、`ai/observation.ts`                      | 原生开局，公开观察显式白名单，暗选按观察方脱敏              |
-| `training/actions.rs`     | `commands/options.ts`、`ai/training/queries.ts`              | 公开动作说明、操作者权限、预检；全部参数域不做评分裁剪      |
-| `training/tree.rs`        | `ai/training/action-tree.ts`                                 | 惰性节点、选材/路径/方向顺序、合法叶子与回溯                |
-| `training/encoding.rs`    | `ai/training/encoding/`                                      | 词表、实体/引用顺序、存在掩码、未知字段报错                 |
-| `training/policy.rs`      | `scripts/training/economics/policy.ts`                       | 固定小网络、Float32 写回、独立策略随机流                    |
-| `training/sampler.rs`     | `scripts/training/economics/sample.ts`、`run.ts`             | 4096节点预算、可选回合外干预、自然终局与截断                |
-| `main.rs`                 | 实验驱动                                                     | 常驻 JSONL 协议、失败回滚、修订号，不是联网鉴权入口         |
+| Rust                         | TS 参照                                                      | 约束                                                                        |
+| ---------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| `model.rs`                   | `types.ts`、`core/traits.ts`、`core/state.ts`                | 热点字段有类型，其余 JSON 字段保留；相同 PRNG                               |
+| `model.rs`、`core/shared.rs` | `core/branch.ts`、`core/clone.ts`                            | 实体/顶层字段写时复制；小型核心容器即时隔离；规则快照与正式成功结果独立拥有 |
+| `core/geometry.rs`           | `core/geometry.ts`                                           | 邻居和路径顺序、叠放、地标层、2×2、部署行、入射方向                         |
+| `core/stats.rs`              | `core/state.ts`、`core/traits.ts`                            | 属性、独立蓄力、光环、虹吸刷新                                              |
+| `core/resolution.rs`         | `core/state.ts`、`core/protection.ts`、`core/event-facts.ts` | 保护来源、事件因果/坐标/身份快照、衍生物                                    |
+| `commands/movement.rs`       | `commands/game.ts`、`commands/movement.ts`                   | 阶段、移动、完整操作预算、举旗                                              |
+| `commands/combat.rs`         | `commands/combat.ts`、`core/attack-profile.ts`               | 路径/穿透、逐目标攻击、随机边界、反击、攻击后被动                           |
+| `commands/damage.rs`         | `commands/combat.ts`、`setup/shrines.ts`                     | 逐份伤害、保护/免疫、死亡/人头、强夺、反应排队                              |
+| `commands/reactions.rs`      | `commands/movement.ts`、`commands/combat.ts`                 | 冲撞、弹出、小屋/王城、死后射击、反射、牵引、结束后切回合                   |
+| `commands/preparation.rs`    | `core/state.ts`、`setup/summoning.ts`、`setup/shrines.ts`    | 抽牌/整批克隆/改判、部署/装备/光环、费用和 RNG 原子性                       |
+| `commands/lifecycle.rs`      | `commands/lifecycle.ts`                                      | 实际和个人时钟、结束效果、火焰/冰层、持续虹吸、下一召唤窗口                 |
+| `commands/abilities.rs`      | `commands/abilities.ts`                                      | 全部主动技能、继承能力独立次数、巨大化与复活                                |
+| `commands/spells.rs`         | `commands/abilities.ts`、`commands/combat.ts`                | 法术参数校验、反制顺序、基地来源、延迟效果                                  |
+| `setup/synthesis.rs`         | `setup/synthesis.ts`                                         | 合成材料与落点原子移除，移除不当死亡                                        |
+| `setup/shrines.rs`           | `setup/shrines.ts`                                           | 暗选、时钟快照、玉碎、强夺、地标重建                                        |
+| `setup/runtime.rs`           | `commands/game.ts`、`ai/observation.ts`                      | 原生开局，公开观察显式白名单，暗选按观察方脱敏                              |
+| `training/actions.rs`        | `commands/options.ts`、`ai/training/queries.ts`              | 公开动作说明、操作者权限、预检；全部参数域不做评分裁剪                      |
+| `training/tree.rs`           | `ai/training/action-tree.ts`                                 | 惰性节点、选材/路径/方向顺序、合法叶子与回溯                                |
+| `training/encoding.rs`       | `ai/training/encoding/`                                      | 词表、实体/引用顺序、存在掩码、未知字段报错                                 |
+| `training/policy.rs`         | `scripts/training/economics/policy.ts`                       | 固定小网络、Float32 写回、独立策略随机流                                    |
+| `training/sampler.rs`        | `scripts/training/economics/sample.ts`、`run.ts`             | 4096节点预算、可选回合外干预、自然终局与截断                                |
+| `main.rs`                    | 实验驱动                                                     | 常驻 JSONL 协议、失败回滚、修订号，不是联网鉴权入口                         |
 
 `movement_stats` 是 `getStats` 的移动依赖投影，省去移动入口不读取的攻击属性计算；因此收益不全来自语言。按 ID 查询目标时两端均只包装命中项。修改 TS 规则须同时维护对应 Rust 模块并重跑差分，不在 Rust 引入另一套 AI 评分。
 
-TS 已有的攻击、部署、时钟、钩子、献祭、复活和小屋只读预检也已移植：先拒绝明显非法参数，再复制局面执行完整预检。目标/落点准备与正式结算共用函数；小屋落点仅在同一公开局面树内缓存。Rust 用 `Rc<Node>` 复用不可变节点，编码借用树的公开局面及棋子，避免重复反序列化；这些对应 TS 原有的对象引用语义，不改变候选范围或策略。
+TS 已有的攻击、部署、时钟、钩子、献祭、复活和小屋只读预检也已移植：先拒绝明显非法参数，再创建内部状态分支执行完整预检。目标/落点准备与正式结算共用函数；小屋落点仅在同一公开局面树内缓存。Rust 用 `Rc<Node>` 复用不可变节点，编码借用树的公开局面及棋子，避免重复反序列化；这些对应 TS 原有的对象引用语义，不改变候选范围或策略。
+
+TS 生产引擎与本原型已统一采用状态分支算法。只有 `State::fork` / `Unit::fork` / `ValueMap::fork` 创建共享分支；普通 `Clone` 仍生成独立快照，不能为单端提速改成浅复制。每个实体、每个局面扩展字段分别作为写入隔离单元；`turns / bases / deployRows / pending / siphons / events` 在创建分支时立即复制。规则内部快照继续深复制，正式成功由 `transition` 导出独立状态；预检和失败直接丢弃分支。TS 用写入拦截，Rust 用引用计数和可变借用实现同一流程。算法映射、原型计时与生产接入验收见[状态分支记录](../../docs/ai/performance/STATE-SHARING-2026-09-27.md)，Node 性能下降不构成保留算法分叉的理由。
 
 ## 协议与信任边界
 

@@ -314,7 +314,7 @@ pub fn sync_banners(s: &mut State, catalog: &Catalog) {
                 u.extra.insert("overMaxFromBanner".into(), json!(true));
             }
         }
-        if u.hp <= u.max_hp {
+        if u.hp <= u.max_hp && u.extra.contains_key("overMaxFromBanner") {
             u.extra.remove("overMaxFromBanner");
         }
     }
@@ -324,7 +324,7 @@ pub fn sync_banners(s: &mut State, catalog: &Catalog) {
 pub fn apply(previous: &State, c: &Command, catalog: &Catalog) -> Result<State, Failure> {
     stage(previous, c, catalog)?;
     let p = prepare(previous, c, catalog)?;
-    let mut s = previous.clone();
+    let mut s = previous.fork();
     s.events.clear();
     if c.kind == "finish-mode" {
         let u = s.unit_mut(c.unit_id.as_deref().unwrap()).unwrap();

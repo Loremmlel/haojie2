@@ -1,4 +1,5 @@
 import { chargeFor, consumeCharge, attackChargeKind } from '../core/traits';
+import { cloneRuleData } from '../core/clone';
 import {
   abilityKinds,
   allPieces,
@@ -181,7 +182,7 @@ export function kill(
     demolish(s, u);
     return;
   }
-  const snap = structuredClone(u);
+  const snap = cloneRuleData(u);
   const inheritor = source.unit && s.units.find((v) => v.id === source.unit!.id);
   if (
     inheritor &&
@@ -227,7 +228,7 @@ export function kill(
       s.pending.push({
         kind: 'hut-spawn',
         owner: city.owner,
-        source: structuredClone(city),
+        source: cloneRuleData(city),
         amount: 0,
       });
   syncBanners(s);
@@ -325,7 +326,7 @@ export function kill(
         s.pending.push({
           kind: 'hut-spawn',
           owner: hut.owner,
-          source: structuredClone(hut),
+          source: cloneRuleData(hut),
           amount: 0,
         });
       }
@@ -440,7 +441,7 @@ export function damage(
   }
   if (u.hp <= u.maxHp) delete u.overMaxFromBanner;
   if (loss > 0 && !u.silenced && hasTrait(u, 'u10')) u.attackBonus += 15;
-  const snap = structuredClone(u);
+  const snap = cloneRuleData(u);
   const origin = source.base
     ? targetById(s, `base-${source.base}`)
     : source.unit
@@ -1014,7 +1015,7 @@ function resolveAttack(
       s.pending.push({
         kind: 'hit-pull',
         owner: u.owner,
-        source: structuredClone(u),
+        source: cloneRuleData(u),
         targetId: victim.id,
         amount: 0,
       });

@@ -385,10 +385,10 @@ pub fn perform(
         }
         if u.has("s12") && s.random(ctx.preview)? < 3.0 / 5.0 && alive(s, &u.id) {
             let current = s.unit_mut(&u.id).unwrap();
-            current.extra.insert(
-                "extraOperations".into(),
-                json!(extra_number(current, "extraOperations") + 1.0),
-            );
+            let extra_operations = extra_number(current, "extraOperations") + 1.0;
+            current
+                .extra
+                .insert("extraOperations".into(), json!(extra_operations));
             let actor = current.actor_event();
             ctx.emit(
                 s,
@@ -873,7 +873,7 @@ pub fn apply(
             &crate::reactions::hut_points(previous, r, catalog),
         )?;
     }
-    let mut s = previous.clone();
+    let mut s = previous.fork();
     s.events.clear();
     normalize_guards(&mut s);
     let mut ctx = Resolution {

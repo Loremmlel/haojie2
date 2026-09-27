@@ -115,7 +115,7 @@ pub fn move_runner(
         u.moves > 0.0 && distance(u.at(), to) == 1.0 && can_enter(previous, &u, to, catalog),
         "每次沿四向移动一格，不能越界或使大体型重叠。",
     )?;
-    let mut s = previous.clone();
+    let mut s = previous.fork();
     normalize_guards(&mut s);
     s.events.clear();
     let mut ctx = Resolution {

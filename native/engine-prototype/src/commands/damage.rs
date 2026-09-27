@@ -441,24 +441,18 @@ pub fn kill(
                     k.max_hp += 10.0;
                 }
                 1 => {
-                    k.extra.insert(
-                        "attackBonus".into(),
-                        json!(extra_number(k, "attackBonus") + 5.0),
-                    );
+                    let bonus = extra_number(k, "attackBonus") + 5.0;
+                    k.extra.insert("attackBonus".into(), json!(bonus));
                 }
                 _ => {
-                    k.extra.insert(
-                        "rangeBonus".into(),
-                        json!(extra_number(k, "rangeBonus") + 1.0),
-                    );
+                    let bonus = extra_number(k, "rangeBonus") + 1.0;
+                    k.extra.insert("rangeBonus".into(), json!(bonus));
                 }
             }
         }
         if k.has("u8") && kills == 5.0 {
-            k.extra.insert(
-                "rangeBonus".into(),
-                json!(extra_number(k, "rangeBonus") + 1.0),
-            );
+            let bonus = extra_number(k, "rangeBonus") + 1.0;
+            k.extra.insert("rangeBonus".into(), json!(bonus));
         }
         if k.has("u23") {
             let now = s.ply + killer.offset;
@@ -704,10 +698,8 @@ pub fn damage(
         v.extra.remove("overMaxFromBanner");
     }
     if loss > 0.0 && !v.silenced && v.has("u10") {
-        v.extra.insert(
-            "attackBonus".into(),
-            json!(extra_number(v, "attackBonus") + 15.0),
-        );
+        let bonus = extra_number(v, "attackBonus") + 15.0;
+        v.extra.insert("attackBonus".into(), json!(bonus));
     }
     let snap = v.clone();
     let origin = source

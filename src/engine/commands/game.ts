@@ -19,6 +19,7 @@ import { withRandomSource, type RandomSource } from '../core/random';
 import { synthesize } from '../setup/synthesis';
 import { normalizeLegacyGuards } from '../core/protection';
 import { clonePosition } from '../core/clone';
+import { forkPosition } from '../core/branch';
 import { definition, isStored } from '../catalog';
 import {
   chargeAction,
@@ -153,7 +154,7 @@ export function createGame(seed = 20260907, mode: 'classic' | 'shrine' = 'classi
   return s;
 }
 /**
- * 在副本上执行一次完整命令，包括同步触发的反应和回合切换。
+ * 在内部状态分支上执行一次完整命令，包括同步触发的反应和回合切换。
  * 任意校验失败直接抛出 RuleError；原局面的卡牌、人头和随机状态保持不变。
  * preview 仅供预检阻止未知随机结果，不能将预检副本作为权威局面提交。
  */
@@ -212,10 +213,10 @@ function transition<S extends GamePosition>(
       '先完成回合开始的召唤选择，再进入行动阶段。',
     );
   if (preview) prepareInspection(s, c, queries);
-  s = clonePosition(previous);
+  s = forkPosition(previous);
   normalizeLegacyGuards(s);
   s.events = [];
-  return withRandomSource(s, randomSource, () => {
+  const next = withRandomSource(s, randomSource, () => {
     const ctx = resolution();
     switch (c.type) {
       case 'synthesize':
@@ -344,6 +345,8 @@ function transition<S extends GamePosition>(
     }
     return s;
   });
+  // 正式成功结果导出独立纯数据；预检和失败都丢弃分支，与 Rust 一致。
+  return preview ? next : clonePosition(next);
 }
 function hasRandomState(s: GamePosition): s is GameState {
   return 'seed' in s && typeof s.seed === 'number' && 'rng' in s && typeof s.rng === 'number';

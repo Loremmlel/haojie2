@@ -1,4 +1,5 @@
 /** 神龛模式、地标及光环的规则实现，不包含渲染器或 AI 策略。 */
+import { cloneRuleData } from '../core/clone';
 import { summonPool } from './summoning';
 import { definition, SHRINE_POOL, SUMMON_POOL, ULTIMATE_POOL } from '../catalog';
 import {
@@ -129,7 +130,7 @@ export function syncBanners(s: GamePosition) {
       u.bannerHp = next;
       if (u.hp > u.maxHp) u.overMaxFromBanner = true;
     }
-    if (u.hp <= u.maxHp) delete u.overMaxFromBanner;
+    if (u.hp <= u.maxHp && Object.hasOwn(u, 'overMaxFromBanner')) delete u.overMaxFromBanner;
   }
 }
 export function onLandmarkDeployment(s: GamePosition, u: Unit) {
@@ -359,13 +360,13 @@ export function captureClockFrame(s: GamePosition) {
   const f = s.clockFrames[s.active];
   if (f.current) f.previous = f.current;
   else delete f.previous;
-  f.current = { ply: s.ply, turns: { ...s.turns }, units: structuredClone(s.units) };
+  f.current = { ply: s.ply, turns: { ...s.turns }, units: cloneRuleData(s.units) };
 }
 function restoredUnit(s: GamePosition, u: Unit): Unit {
   const frame = s.clockFrames?.[s.active].previous;
   const old = frame?.units.find((v) => v.id === u.id);
   if (old && frame) {
-    const restored = structuredClone(old),
+    const restored = cloneRuleData(old),
       shift = s.ply - frame.ply;
     restored.born += s.turns[restored.owner] - frame.turns[restored.owner];
     restored.effects = restored.effects.map((e) => ({
@@ -481,7 +482,7 @@ export function shatter(s: GamePosition, c: Command, ctx: Resolution) {
   );
   ensure(attackPath(s, u, t, getStats(s, u).range), '玉碎目标不在攻击范围内。');
   const amount = Math.max(0, Math.ceil((getStats(s, u).attack + u.hp) / 10) * 5),
-    source = structuredClone(u);
+    source = cloneRuleData(u);
   kill(s, u, { owner: u.owner, unit: source, kind: 'sacrifice', ignoreHead: true }, ctx);
   damage(s, t, amount, { owner: source.owner, unit: source, kind: 'skill' }, ctx);
   emit(s, { type: 'skill', from: source, to: t, owner: source.owner, text: '玉碎' });

@@ -98,9 +98,9 @@ pub fn begin(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<(
     for old in s.units.clone() {
         let ply = s.ply;
         let u = s.unit_mut(&old.id).unwrap();
-        u.effects.retain(|e| {
-            number(&e["until"]) > ply + if e["global"] == true { 0.0 } else { u.offset }
-        });
+        let offset = u.offset;
+        u.effects
+            .retain(|e| number(&e["until"]) > ply + if e["global"] == true { 0.0 } else { offset });
         let u = u.clone();
         if u.extra.get("expiresAt").is_some_and(|v| number(v) <= ply) {
             kill(s, &u, &Source::effect(0, "expire"), catalog, ctx)?;

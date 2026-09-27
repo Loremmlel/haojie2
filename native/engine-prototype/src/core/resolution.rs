@@ -109,8 +109,8 @@ pub fn reset_unit(ply: f64, u: &mut Unit) {
     u.bonus_sequence = false;
     u.extra.insert("attacked".into(), json!([]));
     u.extra.insert("weaponFirstUsed".into(), json!(false));
-    u.extra
-        .insert("readyCharge".into(), u.extra["charge"].clone());
+    let charge = u.extra["charge"].clone();
+    u.extra.insert("readyCharge".into(), charge);
     if u.extra.contains_key("extraOperations") {
         u.extra.insert("extraOperations".into(), json!(0));
     }
@@ -123,8 +123,9 @@ pub fn reset_unit(ply: f64, u: &mut Unit) {
             reserve["readyCharge"] = reserve["charge"].clone();
         }
     }
+    let offset = u.offset;
     u.effects
-        .retain(|e| number(&e["until"]) > ply + if e["global"] == true { 0.0 } else { u.offset });
+        .retain(|e| number(&e["until"]) > ply + if e["global"] == true { 0.0 } else { offset });
 }
 pub fn active_target(s: &State, t: &Target) -> Target {
     s.unit(&t.id).map(Target::from).unwrap_or_else(|| t.clone())
@@ -167,12 +168,13 @@ pub fn normalize_guards(s: &mut State) {
     for u in &mut s.units {
         if u.extra.get("guardUsed") == Some(&json!(true)) && !u.extra.contains_key("guardSourceIds")
         {
+            let owner = u.owner;
             u.extra.insert(
                 "guardSourceIds".into(),
                 json!(
                     guards
                         .iter()
-                        .filter(|(o, _)| *o == u.owner)
+                        .filter(|(o, _)| *o == owner)
                         .map(|(_, id)| id)
                         .collect::<Vec<_>>()
                 ),

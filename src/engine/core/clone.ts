@@ -2,13 +2,19 @@ import type { GamePosition } from '../types';
 
 const unsupported = Symbol('non-data position');
 
+/** 导出独立局面，内部规则草稿不会泄露到会话、Worker 或存档。 */
+export function clonePosition<S extends GamePosition>(position: S): S {
+  return cloneRuleData(position);
+}
+
 /**
- * 复制引擎已构造的纯数据局面；不删字段，不共享可变子对象，不修改输入。
+ * 复制引擎已构造的纯数据或内部草稿；不删字段，不共享可变子对象，不修改输入。
+ * 规则快照也走此入口，避免将内部 Proxy 交给原生 structuredClone。
  * 普通对象与数组走轻量路径，保留 undefined、稀疏数组及重复引用/环的关系。
  * 若扩展字段出现非普通对象，整份回退 structuredClone，避免跨类型引用被拆散。
  * 这不是存档校验器；不接受带访问器或自定义数组属性的非数据模型。
  */
-export function clonePosition<S extends GamePosition>(position: S): S {
+export function cloneRuleData<T>(value: T): T {
   const seen = new Map<object, object>();
   const copy = (value: any): any => {
     if (value === null || typeof value !== 'object') {
@@ -36,9 +42,9 @@ export function clonePosition<S extends GamePosition>(position: S): S {
     return result;
   };
   try {
-    return copy(position);
+    return copy(value);
   } catch (error) {
     if (error !== unsupported) throw error;
-    return structuredClone(position);
+    return structuredClone(value);
   }
 }

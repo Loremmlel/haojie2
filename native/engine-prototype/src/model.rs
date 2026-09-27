@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
 
 pub const RULESET: &str = "3.0-feedback5-live-deployment-2026-09-23";
 pub const PROTOCOL: &str = "haojie-native-engine-v4";
@@ -102,10 +103,31 @@ impl Catalog {
     }
 }
 
-/// 已移植规则的核心字段建类型，其余字段无损保留；不能把此类型当作完整规则实现。
+/// 单个实体是分支复制单元；可变借用隔离完整实体，普通 Clone 保持规则快照独立。
+#[derive(Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct Unit(Rc<UnitData>);
+impl Clone for Unit {
+    fn clone(&self) -> Self {
+        Self(Rc::new((*self.0).clone()))
+    }
+}
+impl Deref for Unit {
+    type Target = UnitData;
+    fn deref(&self) -> &UnitData {
+        &self.0
+    }
+}
+impl DerefMut for Unit {
+    fn deref_mut(&mut self) -> &mut UnitData {
+        Rc::make_mut(&mut self.0)
+    }
+}
+
+/// 核心字段建类型，其余字段无损保留；只接受入口已校验的规范实体。
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Unit {
+pub struct UnitData {
     pub id: String,
     pub kind: Kind,
     pub owner: usize,
@@ -129,6 +151,10 @@ pub struct Unit {
     pub extra: Map<String, Value>,
 }
 impl Unit {
+    // 只有局面分支共享实体；规则快照继续使用拥有型复制，与 TS 一致。
+    pub fn fork(&self) -> Self {
+        Self(Rc::clone(&self.0))
+    }
     pub fn kinds(&self) -> Vec<Kind> {
         let mut result = vec![self.kind.clone()];
         if let Some(traits) = self.extra.get("traits").and_then(Value::as_array) {
@@ -206,9 +232,33 @@ pub struct State {
     pub bases: Value,
     pub serial: u64,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: crate::shared::ValueMap,
 }
 impl State {
+    /// 与 TS forkPosition 相同：实体和扩展字段按需复制，小型核心容器立即隔离。
+    /// 分支只用于同步结算；预检/失败丢弃，正式成功由 transition 导出独立快照。
+    pub fn fork(&self) -> Self {
+        Self {
+            version: self.version,
+            ply: self.ply,
+            active: self.active,
+            phase: self.phase.clone(),
+            summon_slots: self.summon_slots,
+            turns: self.turns.clone(),
+            units: self.units.iter().map(Unit::fork).collect(),
+            landmarks: self
+                .landmarks
+                .as_ref()
+                .map(|values| values.iter().map(Unit::fork).collect()),
+            pending: self.pending.clone(),
+            siphons: self.siphons.clone(),
+            events: self.events.clone(),
+            deploy_rows: self.deploy_rows.clone(),
+            bases: self.bases.clone(),
+            serial: self.serial,
+            extra: self.extra.fork(),
+        }
+    }
     pub fn unit(&self, id: &str) -> Option<&Unit> {
         self.pieces().find(|u| u.id == id)
     }

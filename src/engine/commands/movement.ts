@@ -1,4 +1,5 @@
 import { chargeFor, consumeCharge, moveChargeKind, hasTrait, isLandmark } from '../core/traits';
+import { cloneRuleData } from '../core/clone';
 import { landmarkAt } from '../setup/shrines';
 import { hitPullDestination, hutSpawnPoints } from './reactions';
 import { protectedEffect } from './combat';
@@ -152,7 +153,7 @@ function resolveMove(
     if (t) damage(s, t, 30, { owner: u.owner, unit: u, kind: 'collision' }, ctx);
     if (!alive(s, u)) return;
     if (hasTrait(u, 'u12') && t) {
-      s.pending.unshift({ kind: 'bounce', owner: u.owner, source: structuredClone(u), amount: 30 });
+      s.pending.unshift({ kind: 'bounce', owner: u.owner, source: cloneRuleData(u), amount: 30 });
     } else
       ensure(
         emptyFor(s, u) || (u.moves > 0 && reachableExit(s, u, u.moves)),
@@ -239,7 +240,7 @@ export function react(s: GamePosition, c: Command, ctx: Resolution) {
       s.pending.unshift({
         kind: 'bounce',
         owner: u.owner,
-        source: structuredClone(u),
+        source: cloneRuleData(u),
         amount: 30,
       });
     } else if (u.moves === 0) {

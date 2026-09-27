@@ -27,6 +27,8 @@ mod resolution;
 mod runtime;
 #[path = "training/sampler.rs"]
 mod sampler;
+#[path = "core/shared.rs"]
+mod shared;
 #[path = "setup/shrines.rs"]
 mod shrines;
 #[path = "commands/spells.rs"]
@@ -47,7 +49,7 @@ use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
 fn transition(s: &State, c: &Command, catalog: &Catalog, preview: bool) -> Result<State, Failure> {
-    match c.kind.as_str() {
+    let next = match c.kind.as_str() {
         "attack" | "react" => combat::apply(s, c, catalog, preview),
         "move"
             if s.unit(c.unit_id.as_deref().unwrap_or(""))
@@ -58,7 +60,9 @@ fn transition(s: &State, c: &Command, catalog: &Catalog, preview: bool) -> Resul
         "move" | "finish-mode" => movement::apply(s, c, catalog),
         _ if COMMANDS.contains(&c.kind.as_str()) => preparation::apply(s, c, catalog, preview),
         _ => Err(Failure::Unsupported("command-kind")),
-    }
+    }?;
+    // 与 TS 同样只让正式成功结果导出拥有型快照；预检结果由调用方丢弃。
+    Ok(if preview { next } else { next.clone() })
 }
 
 #[derive(Deserialize)]

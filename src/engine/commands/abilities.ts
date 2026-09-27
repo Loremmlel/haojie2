@@ -1,3 +1,4 @@
+import { cloneRuleData } from '../core/clone';
 import {
   withAbilityCharge,
   abilityKinds,
@@ -282,7 +283,7 @@ export function prepareSkillInspection(s: GamePosition, c: Command) {
     kind = c.ability ?? raw.kind;
   if (kind !== 'u19' && kind !== 7 && kind !== 14) return;
   ensure(hasTrait(raw, kind), '该棋子没有选定的技能。');
-  const u = structuredClone(raw);
+  const u = cloneRuleData(raw);
   const view = {
     ...s,
     units: s.units.map((v) => (v.id === u.id ? u : v)),
