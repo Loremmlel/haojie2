@@ -1,8 +1,8 @@
-# Rust 训练引擎原型
+# Rust 训练引擎
 
-目标、覆盖、实测及后续计划统一维护在 [RUST-PROTOTYPE.md](../../docs/ai/performance/RUST-PROTOTYPE.md)。这是有显式能力边界的训练侧原型，尚不能独立跑一局游戏。浏览器仍调用 TS。
+目标、验证证据、性能和后续计划统一维护在 [RUST-PROTOTYPE.md](../../docs/ai/performance/RUST-PROTOTYPE.md)。当前实现完整规则命令、原生开局、驻留对局和公开观察。浏览器继续使用 TS；候选生成、编码、选招和小网络仍共用 TS，不能把规则内核的倍率称作完整训练倍率。
 
-在仓库根目录运行（已验证 Rust 1.98.1、Node 22.23.2）：
+在仓库根目录运行（本机 Windows、Rust 1.98.1、Node 22.23.2）：
 
 ```powershell
 cargo build --manifest-path native/engine-prototype/Cargo.toml --target-dir artifacts/native-target --release --locked
@@ -10,42 +10,59 @@ cargo test --manifest-path native/engine-prototype/Cargo.toml --target-dir artif
 cargo clippy --manifest-path native/engine-prototype/Cargo.toml --target-dir artifacts/native-target --all-targets --locked -- -D warnings
 cargo fmt --manifest-path native/engine-prototype/Cargo.toml --check
 node --import tsx scripts/training/native/validate.ts --fixtures-only --output artifacts/training/rust-fixtures-new
-node --import tsx scripts/training/native/validate.ts --output artifacts/training/rust-full-new
-node --import tsx scripts/training/native/validate.ts --all-workers --output artifacts/training/rust-expanded-new
+node --import tsx scripts/training/native/validate.ts --all-workers --output artifacts/training/rust-full-new
+node --import tsx scripts/training/native/sample-benchmark.ts --commands 1000 --output artifacts/training/rust-sampler-new
 ```
 
-输出目录必须不存在。默认回放使用本机已有的 `economics-20260926` 四份 `worker-0.jsonl.gz` 原始轨迹，`--all-workers` 扩大到四组各8份、共32份；它们不跟踪进 Git。专项和驻留协议验证不依赖这些数据。Linux/macOS 可用 `--executable artifacts/native-target/release/haojie-engine-prototype` 指定无扩展名程序；尚未实测这些平台。构建目录显式放入已忽略的 `artifacts/`，不要把 Cargo 产物提交到源码目录。
+输出目录必须不存在。验证默认读取本机 `economics-20260926` 的四份 `worker-0.jsonl.gz` 原始轨迹，`--all-workers` 扩大到四组各8份、共32份；这些数据不跟踪进 Git。专项和驻留协议验证不依赖历史数据。Linux/macOS 可通过 `--executable` 指定无扩展名程序，尚未实测这些平台。Cargo 产物放入已忽略的 `artifacts/`。
 
 ## 维护对应关系
 
-| Rust            | TS 参照                                                                     | 约束                                                                       |
-| --------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `model.rs`      | `types.ts`、`core/traits.ts`、`core/state.ts` 的 PRNG                       | 热点字段有类型，其余 JSON 字段完整保留；图鉴及 `COMBAT_RULES` 只从 TS 接收 |
-| `geometry.rs`   | `core/geometry.ts` 非部署落位、移动和攻击路径、部署行                       | 相同邻居顺序、克隆叠放、地标层、2×2、分数上限与入射方向                    |
-| `movement.rs`   | `commands/game.ts`、`commands/movement.ts`、`setup/shrines.ts`              | 阶段检查、移动、操作预算、收尾、举旗刷新                                   |
-| `stats.rs`      | `core/state.ts`、`core/traits.ts`、`commands/combat.ts` 的虹吸刷新          | 完整属性、独立蓄力、光环、虹吸连线是否仍有效                               |
-| `combat.rs`     | `commands/combat.ts`、`core/attack-profile.ts`、`commands/game.ts` 攻击分支 | 目标准备、攻击随机分界、攻击后效果、反击、攻击操作记账                     |
-| `damage.rs`     | `commands/combat.ts`、`setup/shrines.ts` 伤害和死亡钩子                     | 伤害包、免伤、名刀、反伤、人头、死亡反应队列；未移植能力明确拒绝           |
-| `resolution.rs` | `core/state.ts`、`core/protection.ts`、`core/event-facts.ts`                | 事件因果范围、序号、身份/坐标快照、保护来源与衍生物创建                    |
-| `reactions.rs`  | `commands/movement.ts`、`commands/combat.ts`                                | 冲撞、弹出、小屋/王城、死后射击、反射、命中牵引                            |
-| `main.rs`       | 实验驱动                                                                    | JSONL 常驻进程、单局驻留与修订号，不是生产或联网入口                       |
+图鉴、战斗参数、普通/终极/神龛抽取池和合成配方由 TS 初始化注入，不在 Rust 手工维护第二份数值表。下表路径相对各自的引擎目录。
 
-`movement_stats` 是 `getStats` 的移动依赖投影，省去本切片不读取的攻击属性计算；因此倍率包含这项成本变化，不能称作纯语言收益。改动对应 TS 规则时须同时维护此映射并重新运行差分；没有另外一套 AI 评分或策略。
+| Rust                      | TS 参照                                                      | 约束                                                        |
+| ------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------- |
+| `model.rs`                | `types.ts`、`core/traits.ts`、`core/state.ts`                | 热点字段有类型，其余 JSON 字段保留；相同 PRNG               |
+| `core/geometry.rs`        | `core/geometry.ts`                                           | 邻居和路径顺序、叠放、地标层、2×2、部署行、入射方向         |
+| `core/stats.rs`           | `core/state.ts`、`core/traits.ts`                            | 属性、独立蓄力、光环、虹吸刷新                              |
+| `core/resolution.rs`      | `core/state.ts`、`core/protection.ts`、`core/event-facts.ts` | 保护来源、事件因果/坐标/身份快照、衍生物                    |
+| `commands/movement.rs`    | `commands/game.ts`、`commands/movement.ts`                   | 阶段、移动、完整操作预算、举旗                              |
+| `commands/combat.rs`      | `commands/combat.ts`、`core/attack-profile.ts`               | 路径/穿透、逐目标攻击、随机边界、反击、攻击后被动           |
+| `commands/damage.rs`      | `commands/combat.ts`、`setup/shrines.ts`                     | 逐份伤害、保护/免疫、死亡/人头、强夺、反应排队              |
+| `commands/reactions.rs`   | `commands/movement.ts`、`commands/combat.ts`                 | 冲撞、弹出、小屋/王城、死后射击、反射、牵引、结束后切回合   |
+| `commands/preparation.rs` | `core/state.ts`、`setup/summoning.ts`、`setup/shrines.ts`    | 抽牌/整批克隆/改判、部署/装备/光环、费用和 RNG 原子性       |
+| `commands/lifecycle.rs`   | `commands/lifecycle.ts`                                      | 实际和个人时钟、结束效果、火焰/冰层、持续虹吸、下一召唤窗口 |
+| `commands/abilities.rs`   | `commands/abilities.ts`                                      | 全部主动技能、继承能力独立次数、巨大化与复活                |
+| `commands/spells.rs`      | `commands/abilities.ts`、`commands/combat.ts`                | 法术参数校验、反制顺序、基地来源、延迟效果                  |
+| `setup/synthesis.rs`      | `setup/synthesis.ts`                                         | 合成材料与落点原子移除，移除不当死亡                        |
+| `setup/shrines.rs`        | `setup/shrines.ts`                                           | 暗选、时钟快照、玉碎、强夺、地标重建                        |
+| `setup/runtime.rs`        | `commands/game.ts`、`ai/observation.ts`                      | 原生开局，公开观察显式白名单，暗选按观察方脱敏              |
+| `main.rs`                 | 实验驱动                                                     | 常驻 JSONL 协议、失败回滚、修订号，不是联网鉴权入口         |
 
-## 协议
+`movement_stats` 是 `getStats` 的移动依赖投影，省去移动入口不读取的攻击属性计算；因此收益不全来自语言。按 ID 查询目标时两端均只包装命中项。修改 TS 规则须同时维护对应 Rust 模块并重跑差分，不在 Rust 引入另一套 AI 评分。
 
-stdin/stdout 每行一个 JSON，stdout 不混日志。第一个请求必须为 `{op:"init", protocol:"haojie-native-engine-v2", ruleset, catalog, combat}`；规则版本与 TS `RULESET_ID` 一致，`combat` 为 TS 的 `COMBAT_RULES`。只接受正式 TS 引擎重建、可 JSON 序列化的规范局面和已解析命令，不替代 `parseSession` / `parseCommand`，不支持 JS 的环、共享引用或 `undefined` 属性身份。
+## 协议与信任边界
 
-- `run`：`jobs: [{state, probes: Command[], command?: Command}]`。返回各预检结果及可选命令的完整新状态。
-- `load`：只加载验证过的 jobs，供后续核心计时使用。
-- `bench`：对加载的 jobs 重复 `repeats` 次，返回内部耗时；不含解析与通信，报告中单列。
-- `reset`：`{state}` 原子替换驻留局面，返回递增的 `revision`。验证失败保留旧局面和修订号。
-- `step`：`{revision, commands, trace?, clearHistory?}`。只提交成功命令，修订号逐条增加；遇到首个非法/未支持命令停止，保留成功前缀。整批解析错误或过期修订号不会执行任何命令。默认只返回每条结果；`trace:true` 额外返回清理前完整状态用于差分，`clearHistory:true` 在每条成功命令后清理事件和日志，与训练环境一致。
-- `export`：返回 `{revision,state}`。它保存权威规则状态，不是 AI 的公开观察。
-- 规则拒绝为 `invalid`，未移植为 `unsupported`，只读预检抵达随机边界为 `uncertain`，协议错误为 `error`。进程不会回调 TS；驱动遇协议错误失败，60秒超时会终止子进程。预期的错误可以在验证驱动中捕获，随后检查状态未变。
+stdin/stdout 每行一个 JSON，stdout 不混日志。先调用 `{op:"init", protocol:"haojie-native-engine-v4", ruleset, catalog, combat, summonPools, recipes}`。字段分别来自 TS `RULESET_ID / CATALOG / COMBAT_RULES / SYNTHESIS_RECIPES`；`summonPools` 包含 `normal / ultimate / shrine`。拒绝旧协议和不完整初始化，不静默补数值。握手返回完整命令清单及 `completeEngine:true`；它表示实现范围，不是所有规则组合都已穷尽证明。
 
-真实轨迹仍从种子＋命令经共享读取器校验后重建，只在内存传送临时局面。产物保存源码/可执行文件指纹、冻结运行器、计数与报告；不生成逐步 Observation 训练文件。随机伤害、免疫等使用与 TS 相同的 xorshift32、分界及消耗顺序；预检不得消费正式 RNG。权威状态只供规则执行/差分，不能直接传给未来的网络或搜索。
+只接受正式 TS 引擎重建或原生创建的规范局面和已解析命令，不替代 `parseSession / parseCommand`。权威状态和正式 seed/rng 只用于规则结算与重放，不能送入策略。JSON 表示不保留 JS 环、共享引用或 `undefined` 属性身份。
 
-当前支持移动/收尾、非穿透攻击、伤害/死亡和部分反应链。召唤、部署、法术、技能命令、充能、回合切换、合成与神龛暗选尚未移植；攻击中的穿透/显式路径、击退、处决、策反、强夺、保护塔及部分入场/跨回合反应仍会返回 `unsupported`。任意深度遇到这些分支，都丢弃当前命令的副本，包括已经产生的伤害、事件、序号与 RNG 消耗。它们是覆盖缺口，不能当作非法候选裁掉。
+- `create`：`{seed, rules:"classic"|"shrine", clearHistory?}` 原生创建新局，返回递增 `revision` 和当前决策方的公开 `observation`。
+- `observe`：`{viewer?:1|2}` 返回公开白名单，不含 seed/rng、日志、事件；未共同揭示时只包含观察方自己的神龛选择。
+- `run`：`{jobs:[{state, probes:Command[], command?:Command}]}` 返回预检和可选命令的完整结果，用于独立差分。
+- `load / bench`：加载验证工作集后内部重复计算；内部计时不含解析与通信，必须单列。
+- `reset`：`{state}` 原子替换驻留局面，递增修订号；失败保留旧局面。
+- `step`：`{revision, commands, trace?, clearHistory?, observe?}` 逐条提交成功命令并递增修订号。遇首个失败停止并保留成功前缀；整批解析错误或过期修订号不执行。`trace` 返回清理前的逐步状态供差分；`clearHistory` 在每步成功后清理事件/日志；`observe` 在批次结束后返回决策方公开观察。
+- `export`：返回 `{revision,state}`，仅供差分和权威持久化，不能当公开观察。
 
-连续段从真实轨迹中相邻的成功命令形成，不越过缺口；每段最多64条，仅从 worker-0 的长度至少2的段中均匀选8段/组。扩展回放不改变计时集。驻留计时分别报告批次执行，以及加载＋执行＋最终导出的完整通信成本；没有候选生成、选招或模型推理，不代表完整采样经济性。
+规则拒绝为 `invalid`；只读预检抵达随机边界为 `uncertain`。未知命令、非规范状态或未知反应仍可返回 `unsupported`，完整引擎验收遇到它直接失败，不跳过样本。协议错误返回 `error`；客户端60秒超时终止子进程，没有 TS 回退。单条失败丢弃命令副本，费用、事件、序号和 RNG 都不提交。
+
+## 验证与计时
+
+`validate.ts` 先保存运行器、全部依赖及 Rust 源码指纹和可执行文件，再运行该冻结二进制。专项比较全部117格、错误原因、随机边界和完整结算；真实记录通过共享读取器校验后重建。每条命令独立比较完整状态，另从每局开局在 Rust 连续推进，每64条核对驻留终态，不能通过每步重置掩盖漂移。对来源中的真实终局另保存整局回放计时；原来中断的记录仍为 unknown。
+
+核心微基准、32段连续命令和完整终局回放分别计时。驻留总时间包含加载、命令通信和最终导出；这些工作量不包含选招或网络。每组先预热，三轮交错，报告中位数。不同阶段连续段长度变化时不能直接相除归因于优化。
+
+`sample-benchmark.ts` 使用完全相同的 TS 公开动作树、编码和随机初始化小网络，只切换权威环境；包括每步 JSON IPC、公开观察、选招和记录指纹。进程启动及静态表初始化在计时前，创建新局在计时内；文件压缩和差分审计在计时后。两种规则各预热一次、三轮交错，核对所有选中命令、最终权威局面及双方观察。达到命令/ply上限仍为截断，不填胜负标签，也不外推终局吞吐或30天训练成本。
+
+正式保存的对照轨迹使用 TS 记录协议并经过共享读取器校验。Rust JSON 对象键序不同，不能直接将其字符串哈希写成旧格式 Observation 指纹；当前混合采样仅用于验证/测速，尚未作为训练数据生产入口。全原生候选/编码、批量模型调用、搜索用可枚举随机源和长期并行经济性仍需另行验收。

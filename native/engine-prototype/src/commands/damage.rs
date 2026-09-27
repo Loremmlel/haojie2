@@ -15,6 +15,16 @@ pub struct Source {
     pub modified: bool,
 }
 impl Source {
+    pub fn effect(owner: usize, kind: &'static str) -> Self {
+        Self {
+            owner,
+            unit: None,
+            kind,
+            path: vec![],
+            credit_friendly: false,
+            modified: false,
+        }
+    }
     pub fn new(u: &Unit, kind: &'static str) -> Self {
         Self {
             owner: u.owner,
@@ -31,6 +41,79 @@ pub fn alive(s: &State, id: &str) -> bool {
         || s.landmarks()
             .iter()
             .any(|u| u.id == id && !u.extra.contains_key("dormantSince"))
+}
+pub fn lower_max(
+    s: &mut State,
+    id: &str,
+    amount: f64,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+) -> Result<(), Failure> {
+    let Some(u) = s.unit_mut(id) else {
+        return Ok(());
+    };
+    u.max_hp = (u.max_hp - amount).max(0.0);
+    u.hp = u.hp.min(u.max_hp);
+    if u.hp <= 0.0 {
+        let u = u.clone();
+        kill(s, &u, &Source::effect(u.owner, "sacrifice"), catalog, ctx)?;
+    }
+    Ok(())
+}
+pub fn freeze(
+    s: &mut State,
+    t: &Target,
+    source: &Source,
+    extra: f64,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+) -> Result<(), Failure> {
+    if t.unit.is_none()
+        || !alive(s, &t.id)
+        || s.unit(&t.id).is_some_and(|u| u.weapon("u28"))
+        || protected(s, t, source, catalog, ctx)?
+    {
+        return Ok(());
+    }
+    s.unit_mut(&t.id)
+        .unwrap()
+        .effects
+        .retain(|e| e["type"] != "freeze");
+    crate::resolution::add_effect(
+        s,
+        &t.id,
+        "freeze",
+        source.owner,
+        4.0,
+        Some(5.0 + extra),
+        source.unit.as_ref().map(|u| u.id.as_str()),
+        false,
+    );
+    ctx.emit(s,json!({"type":"shield","to":t.actor(),"owner":source.owner,"action":"freeze","stage":"trigger","text":"冰冻 · 无法行动"}),None);
+    Ok(())
+}
+/// 先固定覆盖格，再逐包结算；死亡不能改变后续伤害包的枚举。
+pub fn area_damage(
+    s: &mut State,
+    victims: &[Target],
+    amount: impl Fn(crate::model::Point) -> f64,
+    source: &Source,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+) -> Result<(), Failure> {
+    let mut packets = vec![];
+    for t in victims {
+        for p in t.footprint() {
+            let v = amount(p);
+            if v > 0.0 {
+                packets.push((t, v));
+            }
+        }
+    }
+    for (t, v) in packets {
+        damage(s, t, v, source, catalog, ctx)?;
+    }
+    Ok(())
 }
 fn effects(s: &State, t: &Target) -> Vec<Value> {
     t.unit
@@ -73,6 +156,10 @@ pub fn protected(
     if !["spell", "skill"].contains(&source.kind) {
         return Ok(false);
     }
+    let key = format!("{}:{}:{}", ctx.token, source.owner, t.id);
+    if let Some(blocked) = ctx.protection.get(&key) {
+        return Ok(*blocked);
+    }
     let tower = s
         .units
         .iter()
@@ -83,9 +170,11 @@ pub fn protected(
                 && attack_path(s, v, &t, stats(s, v, catalog).range, None, false).is_some()
         })
         .cloned();
-    if tower.is_some() {
-        // 多包法术需要 token/protection 缓存；当前只对单次攻击附带技能开放后续扩展。
-        return Err(Failure::Unsupported("protection-tower"));
+    ctx.protection.insert(key, tower.is_some());
+    if let Some(tower) = tower {
+        ctx.emit(s,json!({"type":"shield","to":t.actor(),"from":tower.actor_event(),"owner":t.owner,"action":"ward","stage":"blocked","text":"免疫塔"}),None);
+        lower_max(s, &tower.id, 15.0, catalog, ctx)?;
+        return Ok(true);
     }
     Ok(false)
 }
@@ -173,7 +262,7 @@ pub fn heal(
 }
 
 /// 死亡沿用 TS 顺序：快照、装备、移除、历史、因果事件、人头与反应队列。
-/// 未移植的强夺/金晔入场不会提交半次死亡；外层复制保证失败原子性。
+/// 强夺可转移装备，但死亡反应必须保留转移前快照；外层复制保证失败原子性。
 pub fn kill(
     s: &mut State,
     victim: &Unit,
@@ -184,7 +273,7 @@ pub fn kill(
     if !alive(s, &victim.id) {
         return Ok(());
     }
-    let u = s
+    let mut u = s
         .units
         .iter()
         .chain(s.landmarks().iter())
@@ -209,20 +298,21 @@ pub fn kill(
         return Ok(());
     }
     // TS 的击杀奖励与强夺只查普通棋子层，不能把独立地标层一并纳入。
+    let snap = u.clone();
     if let Some(killer) = source
         .unit
         .as_ref()
         .and_then(|u| s.units.iter().find(|v| v.id == u.id))
     {
-        if killer.id != u.id && !killer.silenced && killer.has("s5") {
-            return Err(Failure::Unsupported("ability-steal"));
-        }
         let id = killer.id.clone();
         if killer.id != u.id && u.side() == 3 - source.owner && killer.weapon("s15") {
             s.unit_mut(&id)
                 .unwrap()
                 .extra
                 .insert("bladeQualified".into(), json!(true));
+        }
+        if source.owner != 0 && source.kind != "expire" {
+            crate::shrines::steal(s, &id, &mut u, catalog, ctx);
         }
     }
     for k in &u.equipment {
@@ -313,7 +403,11 @@ pub fn kill(
     }
     let enabled = !u.silenced;
     let deny = enabled && u.has("20") && s.random(ctx.preview)? < 0.5;
-    let enemy = u.side() != 0 && source.owner != u.owner;
+    let enemy = u.side() != 0
+        && source.owner != 0
+        && source.owner != u.owner
+        && source.kind != "sacrifice"
+        && source.kind != "expire";
     if u.side() != 0 && (enemy || (source.credit_friendly && source.owner == u.owner)) && !deny {
         let p = source.owner.to_string();
         let heads = s.extra.get_mut("heads").unwrap();
@@ -383,11 +477,15 @@ pub fn kill(
             bonus[&p] = json!(number(&bonus[&p]) + 1.0);
         }
         if u.has("12") {
+            let start = s.events.len();
             add_unit(s, "grave", u.owner, u.at(), catalog, ctx)?;
+            if let Some(event) = s.events[start..].iter_mut().find(|e| e["type"] == "spawn") {
+                event["subject"] = u.actor_event();
+            }
         }
         if u.has("2") {
             s.pending
-                .push(json!({"kind":"death-shot","owner":u.owner,"source":u,"amount":20}));
+                .push(json!({"kind":"death-shot","owner":u.owner,"source":snap,"amount":20}));
         }
         if u.has("sage") || u.has("u21") {
             let friends: Vec<_> = s
@@ -405,9 +503,9 @@ pub fn kill(
                 for v in &friends {
                     if attack_path(
                         s,
-                        &u,
+                        &snap,
                         &Target::from(v),
-                        stats(s, &u, catalog).range,
+                        stats(s, &snap, catalog).range,
                         None,
                         false,
                     )
@@ -420,13 +518,20 @@ pub fn kill(
         }
         if u.has("20")
             && !deny
-            && source.kind != "reflect"
+            && !["sacrifice", "expire", "reflect"].contains(&source.kind)
             && let Some(t) = source
                 .unit
                 .as_ref()
                 .and_then(|origin| find_target(s, &origin.id).filter(|t| t.id != u.id))
+                .or_else(|| {
+                    if source.kind == "spell" {
+                        find_target(s, &format!("base-{}", source.owner))
+                    } else {
+                        None
+                    }
+                })
         {
-            damage(s, &t, 20.0, &Source::new(&u, "reflect"), catalog, ctx)?;
+            damage(s, &t, 20.0, &Source::new(&snap, "reflect"), catalog, ctx)?;
         }
     }
     let huts: Vec<_> = s
@@ -605,7 +710,17 @@ pub fn damage(
         );
     }
     let snap = v.clone();
-    let origin = source.unit.as_ref().and_then(|u| find_target(s, &u.id));
+    let origin = source
+        .unit
+        .as_ref()
+        .and_then(|u| find_target(s, &u.id))
+        .or_else(|| {
+            if source.kind == "spell" {
+                find_target(s, &format!("base-{}", source.owner))
+            } else {
+                None
+            }
+        });
     if snap.hp <= 0.0 {
         kill(s, &snap, source, catalog, ctx)?;
     }

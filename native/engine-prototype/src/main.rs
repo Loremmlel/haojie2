@@ -1,13 +1,34 @@
+#[path = "commands/abilities.rs"]
+mod abilities;
+#[path = "commands/combat.rs"]
 mod combat;
+#[path = "commands/damage.rs"]
 mod damage;
+#[path = "core/geometry.rs"]
 mod geometry;
+#[path = "commands/lifecycle.rs"]
+mod lifecycle;
 mod model;
+#[path = "commands/movement.rs"]
 mod movement;
+#[path = "commands/preparation.rs"]
+mod preparation;
+#[path = "commands/reactions.rs"]
 mod reactions;
+#[path = "core/resolution.rs"]
 mod resolution;
+#[path = "setup/runtime.rs"]
+mod runtime;
+#[path = "setup/shrines.rs"]
+mod shrines;
+#[path = "commands/spells.rs"]
+mod spells;
+#[path = "core/stats.rs"]
 mod stats;
+#[path = "setup/synthesis.rs"]
+mod synthesis;
 
-use model::{Catalog, Command, Definition, Failure, PROTOCOL, RULESET, State};
+use model::{COMMANDS, Catalog, Command, Definition, Failure, PROTOCOL, RULESET, State};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -25,6 +46,7 @@ fn transition(s: &State, c: &Command, catalog: &Catalog, preview: bool) -> Resul
             reactions::move_runner(s, c, catalog, preview)
         }
         "move" | "finish-mode" => movement::apply(s, c, catalog),
+        _ if COMMANDS.contains(&c.kind.as_str()) => preparation::apply(s, c, catalog, preview),
         _ => Err(Failure::Unsupported("command-kind")),
     }
 }
@@ -47,7 +69,7 @@ struct ResultState {
     #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<State>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<&'static str>,
+    message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
 }
@@ -61,6 +83,12 @@ impl ResultState {
                 reason: None,
             },
             Err(Failure::Invalid(m)) => Self {
+                status: "invalid",
+                state: None,
+                message: Some(m.into()),
+                reason: None,
+            },
+            Err(Failure::InvalidOwned(m)) => Self {
                 status: "invalid",
                 state: None,
                 message: Some(m),
@@ -170,6 +198,8 @@ fn handle(
             for path in [
                 "/accumulator/attack",
                 "/accumulator/range",
+                "/accumulator/max",
+                "/goldSpellChance",
                 "/sageAuraAttack",
                 "/littleGoldImmunity",
                 "/kingAttackImmunity",
@@ -186,14 +216,54 @@ fn handle(
                 "/vampire/base",
                 "/vampire/perKill",
                 "/minerBaseDamage",
+                "/sacrificeMaxHpCost",
+                "/giantAreaDamage",
+                "/firelord/radius",
+                "/firelord/damage",
+                "/firelord/splash",
+                "/archmageCounterChance",
+                "/archmageCounterHealth",
             ] {
                 if !combat.pointer(path).is_some_and(Value::is_number) {
                     return Err(format!("missing combat rule: {path}"));
                 }
             }
-            *catalog = Some(Catalog { entries, combat });
+            let pools: BTreeMap<String, Vec<model::Kind>> =
+                serde_json::from_value(request["summonPools"].take()).map_err(|e| e.to_string())?;
+            for name in ["normal", "ultimate", "shrine"] {
+                if !pools.get(name).is_some_and(|pool| {
+                    !pool.is_empty() && pool.iter().all(|k| entries.contains_key(&k.key()))
+                }) {
+                    return Err(format!("invalid summon pool: {name}"));
+                }
+            }
+            if pools["shrine"].len() < 3 {
+                return Err("shrine pool requires at least 3 entries".into());
+            }
+            let recipes: Vec<Value> =
+                serde_json::from_value(request["recipes"].take()).map_err(|e| e.to_string())?;
+            if recipes.is_empty()
+                || recipes.iter().any(|r| {
+                    r["id"].as_str().is_none_or(str::is_empty)
+                        || !r["source"]
+                            .as_str()
+                            .is_some_and(|s| ["board", "hand"].contains(&s))
+                        || ["material", "result"].iter().any(|k| {
+                            serde_json::from_value::<model::Kind>(r[k].clone())
+                                .map_or(true, |k| !entries.contains_key(&k.key()))
+                        })
+                })
+            {
+                return Err("invalid synthesis recipes".into());
+            }
+            *catalog = Some(Catalog {
+                entries,
+                combat,
+                pools,
+                recipes,
+            });
             Ok(
-                json!({"protocol":PROTOCOL,"ruleset":RULESET,"commands":["move","finish-mode","attack","react"],"completeEngine":false}),
+                json!({"protocol":PROTOCOL,"ruleset":RULESET,"commands":COMMANDS,"completeEngine":true}),
             )
         }
         "run" | "load" => {
@@ -211,6 +281,36 @@ fn handle(
                 )
                 .map_err(|e| e.to_string())
             }
+        }
+        "create" => {
+            let catalog = catalog.as_ref().ok_or("initialize first")?;
+            let seed = request["seed"]
+                .as_f64()
+                .filter(|v| v.is_finite() && v.fract() == 0.0 && v.abs() <= 9007199254740991.0)
+                .ok_or("seed must be a safe integer")?;
+            let rules = request["rules"].as_str().unwrap_or("classic");
+            if !["classic", "shrine"].contains(&rules) {
+                return Err("unknown rules mode".into());
+            }
+            let mut state = runtime::create(seed as i64 as u32, rules == "shrine", catalog)?;
+            if request["clearHistory"] == true {
+                state.events.clear();
+                state.extra.insert("log".into(), json!([]));
+            }
+            let observation = runtime::observe(&state, runtime::viewer(&state))?;
+            resident.state = Some(state);
+            resident.revision += 1;
+            Ok(json!({"revision":resident.revision,"observation":observation}))
+        }
+        "observe" => {
+            let state = resident.state.as_ref().ok_or("reset first")?;
+            let viewer = request
+                .get("viewer")
+                .map(|v| v.as_u64().ok_or("invalid viewer"))
+                .transpose()?
+                .map(|v| v as usize)
+                .unwrap_or_else(|| runtime::viewer(state));
+            runtime::observe(state, viewer)
         }
         "bench" => {
             let catalog = catalog.as_ref().ok_or("initialize first")?;
@@ -277,7 +377,12 @@ fn handle(
                     }
                 }
             }
-            Ok(json!({"revision":resident.revision,"results":results}))
+            let mut response = json!({"revision":resident.revision,"results":results});
+            if request["observe"] == true {
+                let state = resident.state.as_ref().unwrap();
+                response["observation"] = runtime::observe(state, runtime::viewer(state))?;
+            }
+            Ok(response)
         }
         _ => Err("unknown operation".into()),
     }
@@ -309,8 +414,9 @@ mod tests {
         let mut loaded = vec![];
         let mut resident = Resident::default();
         let mut init = json!({"op":"init","protocol":PROTOCOL,"ruleset":"old","catalog":[{"id":1,"name":"test","tier":"normal","attack":1,"health":1,"range":1,"actions":1,"move":2}],
-            "combat":{"accumulator":{"attack":1,"range":1},"sageAuraAttack":1,"littleGoldImmunity":0.5,"kingAttackImmunity":1,"frontDamageCap":1,"slayerReflectRate":0.5,"catapultMarkDamage":1,
-                "charger":{"heavyChance":0.1,"criticalChance":0.2,"heavyBonus":1,"bonus":1},"superCritical":{"lethalChance":0.1,"doubleChance":0.2,"lethalDamage":1},"vampire":{"base":0.2,"perKill":0.2},"minerBaseDamage":1}});
+            "summonPools":{"normal":[1],"ultimate":[1],"shrine":[1,1,1]},"recipes":[{"id":"test","material":1,"result":1,"source":"board"}],
+            "combat":{"accumulator":{"attack":1,"range":1,"max":4},"goldSpellChance":0.5,"sageAuraAttack":1,"littleGoldImmunity":0.5,"kingAttackImmunity":1,"frontDamageCap":1,"slayerReflectRate":0.5,"catapultMarkDamage":1,
+                "charger":{"heavyChance":0.1,"criticalChance":0.2,"heavyBonus":1,"bonus":1},"superCritical":{"lethalChance":0.1,"doubleChance":0.2,"lethalDamage":1},"vampire":{"base":0.2,"perKill":0.2},"minerBaseDamage":1,"sacrificeMaxHpCost":20,"giantAreaDamage":20,"firelord":{"radius":5,"damage":40,"splash":20},"archmageCounterChance":0.5,"archmageCounterHealth":10}});
         assert!(handle(init.clone(), &mut catalog, &mut loaded, &mut resident).is_err());
         assert!(catalog.is_none());
         init["ruleset"] = json!(RULESET);
@@ -320,7 +426,7 @@ mod tests {
         init["protocol"] = json!(PROTOCOL);
         assert_eq!(
             handle(init.clone(), &mut catalog, &mut loaded, &mut resident).unwrap()["completeEngine"],
-            false
+            true
         );
         assert!(handle(init, &mut catalog, &mut loaded, &mut resident).is_err());
         assert!(

@@ -42,6 +42,7 @@ import {
   occupants,
   ring,
   targets,
+  targetById,
   topTarget,
 } from '../core/geometry';
 import {
@@ -134,8 +135,8 @@ export function useSkill(s: GamePosition, c: Command, ctx: Resolution) {
           ? [point(c.x, c.y)]
           : undefined;
   const linkIds = new Set(s.siphons.map((l) => l.id));
-  const endpointA = c.targetId ? targets(s).find((t) => t.id === c.targetId) : undefined;
-  const endpointB = c.secondId ? targets(s).find((t) => t.id === c.secondId) : undefined;
+  const endpointA = c.targetId ? targetById(s, c.targetId) : undefined;
+  const endpointB = c.secondId ? targetById(s, c.secondId) : undefined;
   return withEventFacts(
     s,
     {
@@ -547,7 +548,7 @@ export function cast(s: GamePosition, c: Command, ctx: Resolution) {
       : kind === 'u9'
         ? ALL_CELLS.filter((p) => (c.mode === 'row' ? p.y === c.row : p.x === c.column))
         : undefined;
-  const target = c.targetId ? targets(s).find((t) => t.id === c.targetId) : undefined;
+  const target = c.targetId ? targetById(s, c.targetId) : undefined;
   return withEventFacts(
     s,
     {

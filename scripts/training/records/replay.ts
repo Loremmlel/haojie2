@@ -8,7 +8,7 @@ import { readRecordLines } from './io';
 
 export const TRAINING_RECORD_FORMAT = 'haojie-training-record-v1';
 
-export function recordHeader(env: TrainingEnvironment) {
+export function recordHeader(env: Pick<TrainingEnvironment, 'limits'>) {
   return {
     format: TRAINING_RECORD_FORMAT,
     ruleset: HAOJIE_RULESET,
@@ -61,8 +61,15 @@ export async function* readTrainingRecords(path: string): AsyncGenerator<any> {
           Number.isSafeInteger(row.limits?.[key]) && row.limits[key] > 0,
           '缺少实际训练上限。',
         );
-      const limits = { maxCommands: row.limits.maxCommands, maxPlies: row.limits.maxPlies };
-      env = new TrainingEnvironment({ seed: row.seed, rules: row.rules, ...limits });
+      const limits = {
+        maxCommands: row.limits.maxCommands,
+        maxPlies: row.limits.maxPlies,
+      };
+      env = new TrainingEnvironment({
+        seed: row.seed,
+        rules: row.rules,
+        ...limits,
+      });
       assert.ok(row.rules === 'classic' || row.rules === 'shrine', '未知规则模式。');
       assert.ok(Number.isSafeInteger(row.seed), '缺少复现种子。');
       if (row.source === 'saved-game') {

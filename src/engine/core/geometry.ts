@@ -49,6 +49,14 @@ export function targets(s: GamePosition): Target[] {
     ...([1, 2] as Player[]).map((p) => ({ id: `base-${p}`, owner: p, ...basePoint(p) })),
   ];
 }
+/** 按普通棋子、有效地标、基地的原顺序定位，只为命中目标创建包装；unit 保持原引用。 */
+export function targetById(s: GamePosition, id?: string): Target | undefined {
+  const unit =
+    s.units.find((u) => u.id === id) ?? s.landmarks?.find((u) => u.id === id && liveLandmark(u));
+  if (unit) return { id: unit.id, owner: unit.owner, x: unit.x, y: unit.y, unit };
+  const owner = id === 'base-1' ? 1 : id === 'base-2' ? 2 : undefined;
+  return owner ? { id: `base-${owner}`, owner, ...basePoint(owner) } : undefined;
+}
 export function targetAt(s: GamePosition, p: Point): Target | undefined {
   return targets(s).find((t) => (t.unit ? covers(t.unit, p) : equal(t, p)));
 }

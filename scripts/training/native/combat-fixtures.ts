@@ -11,12 +11,22 @@ export function combatFixtures(): { name: string; job: Job }[] {
     const ids = [target.id, u.id, 'base-1', 'base-2', 'missing'];
     const probes: Command[] = ids.flatMap((targetId) =>
       [undefined, 'heal', 'damage'].map(
-        (mode): Command => ({ type: 'attack', unitId: u.id, targetId, ...(mode ? { mode } : {}) }),
+        (mode): Command => ({
+          type: 'attack',
+          unitId: u.id,
+          targetId,
+          ...(mode ? { mode } : {}),
+        }),
       ),
     );
     probes.push(
       ...(['up', 'down', 'left', 'right'] as const).map(
-        (direction): Command => ({ type: 'attack', unitId: u.id, targetId: target.id, direction }),
+        (direction): Command => ({
+          type: 'attack',
+          unitId: u.id,
+          targetId: target.id,
+          direction,
+        }),
       ),
     );
     cases.push({ name, job: { state, probes } });
@@ -115,7 +125,14 @@ export function combatFixtures(): { name: string; job: Job }[] {
     }
     if (name === 'mark')
       victim.effects = [
-        { type: 'mark', from: 0, until: 99, owner: 1, sourceId: u.id, global: true },
+        {
+          type: 'mark',
+          from: 0,
+          until: 99,
+          owner: 1,
+          sourceId: u.id,
+          global: true,
+        },
         { type: 'mark', from: 0, until: 99, owner: 1, global: true },
       ];
     if (name.startsWith('death-')) add(s, name === 'death-hut' ? 'u22' : 'citadel', 2, 3, 7);
@@ -163,11 +180,21 @@ export function combatFixtures(): { name: string; job: Job }[] {
     if (name === 'hut-sacrifice') {
       const hut = add(s, 'u22', 1, 3, 6);
       hut.hp = hut.maxHp = 10;
-      s.pending = [{ kind: 'hut-spawn', owner: 1, source: structuredClone(hut), amount: 0 }];
+      s.pending = [
+        {
+          kind: 'hut-spawn',
+          owner: 1,
+          source: structuredClone(hut),
+          amount: 0,
+        },
+      ];
     }
     push(name, s, u, victim);
     if (s.pending.length)
-      cases.push({ name: `${name}-queued`, job: { state: s, probes: reactionProbes(s) } });
+      cases.push({
+        name: `${name}-queued`,
+        job: { state: s, probes: reactionProbes(s) },
+      });
   }
   // 真实回放发现：致死后 TS 仍产生标记施加事件，不能使用旧满血快照跳过它。
   for (const victimKind of [12, 14, 's8'] as const) {
@@ -190,7 +217,11 @@ export function combatFixtures(): { name: string; job: Job }[] {
     const victim = add(s, 14, 2, 4, 6);
     victim.hp = 1;
     push('landmark-kill-no-unit-reward', s, u, victim);
-    cases.at(-1)!.job.command = { type: 'attack', unitId: u.id, targetId: victim.id };
+    cases.at(-1)!.job.command = {
+      type: 'attack',
+      unitId: u.id,
+      targetId: victim.id,
+    };
   }
   for (const kind of [1, 'u1', 'u8'] as const)
     for (let seed = 1; seed <= 48; seed++) {

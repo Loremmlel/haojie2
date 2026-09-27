@@ -165,7 +165,7 @@ pub fn move_runner(
 }
 
 /// 从权威队首反应读取来源和固定目标，不信任命令替换目标；修改外层命令副本。
-/// 小屋/死亡射击/弹出可继续排队，涉及尚未移植的回合切换时整条命令拒绝。
+/// 小屋/死亡射击/弹出可继续排队；结束效果的最后一个反应完成后才切换实际回合。
 pub fn react(
     s: &mut State,
     c: &Command,
@@ -357,7 +357,7 @@ pub fn react(
         && number(&s.bases["1"]) > 0.0
         && number(&s.bases["2"]) > 0.0
     {
-        return Err(Failure::Unsupported("reaction-turn-switch"));
+        crate::lifecycle::switch(s, catalog, ctx)?;
     }
     Ok(())
 }

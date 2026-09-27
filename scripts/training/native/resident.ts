@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { applyCommand } from '../../../src/engine/commands/game';
+import { applyCommand, createGame } from '../../../src/engine/commands/game';
+import { observe } from '../../../src/ai/observation';
 import { RuleError } from '../../../src/engine/core/state';
 import { add, fixture } from '../../../tests/helpers';
 import type { Command, GameState } from '../../../src/engine/types';
@@ -27,7 +28,10 @@ function referenceWindow(window: CommandWindow, trace: boolean, clearHistory = t
   const results = [];
   for (const command of window.commands) {
     state = applyCommand(state, command);
-    results.push({ status: 'available', ...(trace ? { state: canonical(state) } : {}) });
+    results.push({
+      status: 'available',
+      ...(trace ? { state: canonical(state) } : {}),
+    });
     if (clearHistory) {
       state.events = [];
       state.log = [];
@@ -38,6 +42,39 @@ function referenceWindow(window: CommandWindow, trace: boolean, clearHistory = t
 
 /** 已成功的前缀可以提交；失败命令及其后续不执行，包含 RNG、序号和事件的整局保持不变。 */
 export async function validateResidentProtocol(client: Client) {
+  for (const seed of [0, 1, 19, -1, 0xffffffff]) {
+    for (const rules of ['classic', 'shrine'] as const) {
+      let expected = createGame(seed, rules);
+      let created = await client.request({ op: 'create', seed, rules });
+      assert.deepEqual((await client.request({ op: 'export' })).state, canonical(expected));
+      for (const viewer of [1, 2] as const)
+        assert.deepEqual(
+          await client.request({ op: 'observe', viewer }),
+          canonical(observe(expected, viewer)),
+        );
+      if (rules === 'shrine') {
+        const command: Command = {
+          type: 'choose-shrine',
+          player: 1,
+          shrineKind: expected.shrineDraft!.offers[1][0],
+          parity: 'odd',
+        };
+        expected = applyCommand(expected, command);
+        created = await client.request({
+          op: 'step',
+          revision: created.revision,
+          commands: [command],
+          observe: true,
+        });
+        assert.deepEqual(created.observation, canonical(observe(expected)));
+        for (const viewer of [1, 2] as const)
+          assert.deepEqual(
+            await client.request({ op: 'observe', viewer }),
+            canonical(observe(expected, viewer)),
+          );
+      }
+    }
+  }
   const state = fixture(),
     first = add(state, 26, 1, 4, 6),
     second = add(state, 26, 1, 5, 7),
@@ -48,7 +85,13 @@ export async function validateResidentProtocol(client: Client) {
     unitId: u.id,
     targetId: target.id,
   }));
-  const window = { state, commands, source: 'resident-contract', game: 0, start: 0 };
+  const window = {
+    state,
+    commands,
+    source: 'resident-contract',
+    game: 0,
+    start: 0,
+  };
   for (const clearHistory of [false, true]) {
     const { revision } = await client.request({ op: 'reset', state });
     const expected = referenceWindow(window, true, clearHistory);
@@ -61,7 +104,10 @@ export async function validateResidentProtocol(client: Client) {
     });
     assert.equal(result.revision, revision + 2);
     assert.deepEqual(result.results, canonical(expected.results));
-    const snapshot = { revision: result.revision, state: canonical(expected.state) };
+    const snapshot = {
+      revision: result.revision,
+      state: canonical(expected.state),
+    };
     assert.deepEqual(await client.request({ op: 'export' }), snapshot);
     await assert.rejects(client.request({ op: 'step', revision, commands }), /stale revision/);
     assert.deepEqual(await client.request({ op: 'export' }), snapshot);
@@ -71,8 +117,15 @@ export async function validateResidentProtocol(client: Client) {
   const { revision } = await client.request({ op: 'reset', state });
   // 整个命令数组先解析，末项结构错误不能提交前一项。
   await assert.rejects(client.request({ op: 'step', revision, commands: [commands[0], {}] }));
-  assert.deepEqual(await client.request({ op: 'export' }), { revision, state: canonical(state) });
-  const invalid: Command = { type: 'attack', unitId: 'missing', targetId: target.id };
+  assert.deepEqual(await client.request({ op: 'export' }), {
+    revision,
+    state: canonical(state),
+  });
+  const invalid: Command = {
+    type: 'attack',
+    unitId: 'missing',
+    targetId: target.id,
+  };
   const afterFirst = applyCommand(state, commands[0]);
   let message = '';
   try {
@@ -110,42 +163,90 @@ export async function validateResidentProtocol(client: Client) {
     canonical(applyCommand(afterFirst, commands[1])),
   );
 
-  // 暴击已消耗随机数并造成伤害后，未移植的策反被动拒绝整条命令。
+  // 暴击和策反均消耗正式随机数；驻留命令的状态与 TS 完整一致。
   const randomState = fixture(),
     attacker = add(randomState, 'u1', 1, 4, 6),
     victim = add(randomState, 14, 2, 4, 7);
   attacker.traits = ['s3'];
   victim.hp = victim.maxHp = 1e9;
-  const attack: Command = { type: 'attack', unitId: attacker.id, targetId: victim.id };
+  const attack: Command = {
+    type: 'attack',
+    unitId: attacker.id,
+    targetId: victim.id,
+  };
   assert.notEqual(applyCommand(randomState, attack).rng, randomState.rng);
   const loaded = await client.request({ op: 'reset', state: randomState });
-  const refused = await client.request({
+  const resolved = await client.request({
     op: 'step',
     revision: loaded.revision,
-    commands: [attack, attack],
+    commands: [attack],
   });
-  assert.deepEqual(refused, {
-    revision: loaded.revision,
-    results: [{ status: 'unsupported', reason: 'shrine-conversion' }],
+  assert.deepEqual(resolved, {
+    revision: loaded.revision + 1,
+    results: [{ status: 'available' }],
   });
   assert.deepEqual(await client.request({ op: 'export' }), {
-    revision: loaded.revision,
-    state: canonical(randomState),
+    revision: loaded.revision + 1,
+    state: canonical(applyCommand(randomState, attack)),
   });
+  // 召唤可能先支付人头，或老千K先掷候选数量，再发现自选不合法；失败必须全部回滚。
+  for (const shrine of [false, true]) {
+    const summoning = fixture();
+    summoning.phase = 'summon';
+    summoning.summonSlots = 2;
+    if (shrine) {
+      summoning.mode = 'shrine';
+      summoning.regularSummons = 2;
+      summoning.auras = { 1: [{ kind: 's13' }], 2: [] };
+    }
+    const command: Command = {
+      type: 'summon',
+      ultimate: true,
+      chosenKind: 'u25',
+    };
+    assert.throws(() => applyCommand(summoning, command), /牢千K/);
+    const { revision } = await client.request({
+      op: 'reset',
+      state: summoning,
+    });
+    const result = await client.request({
+      op: 'step',
+      revision,
+      commands: [command, { type: 'summon' }],
+    });
+    assert.deepEqual(result, {
+      revision,
+      results: [
+        {
+          status: 'invalid',
+          message: '本回合牢千K自选召唤已使用，或尚未获得光环。',
+        },
+      ],
+    });
+    assert.deepEqual(await client.request({ op: 'export' }), {
+      revision,
+      state: canonical(summoning),
+    });
+  }
   return {
+    nativeCreationAndPrivateObservations: true,
     clearHistoryBothModes: true,
     staleRevisionRejected: true,
     malformedResetAndBatchAtomic: true,
     invalidStopsAtSuccessfulPrefix: true,
     resumeAfterFailure: true,
-    unsupportedRollsBackRngAndDamage: true,
+    randomAttackAndPassivesEquivalent: true,
+    invalidSummonRollsBackPaymentAndRng: true,
   };
 }
 
-/** 只验证真实记录中连续且全部受支持的命令段，不能跨过未移植命令拼接成整局。 */
+/** 逐命令比较连续轨迹的事件及终态；不能跳过命令或在中途重置以掩盖状态漂移。 */
 export async function validateWindow(client: Client, window: CommandWindow) {
   const before = JSON.stringify(window);
-  const { revision } = await client.request({ op: 'reset', state: window.state });
+  const { revision } = await client.request({
+    op: 'reset',
+    state: window.state,
+  });
   const expected = referenceWindow(window, true);
   const actual = await client.request({
     op: 'step',
@@ -177,7 +278,10 @@ export async function benchmarkWindows(client: Client, windows: CommandWindow[])
     let stepMs = 0;
     const start = performance.now();
     for (const window of windows) {
-      const { revision } = await client.request({ op: 'reset', state: window.state });
+      const { revision } = await client.request({
+        op: 'reset',
+        state: window.state,
+      });
       const stepStart = performance.now();
       const result = await client.request({
         op: 'step',
@@ -203,8 +307,12 @@ export async function benchmarkWindows(client: Client, windows: CommandWindow[])
   runTs(false);
   runTs(true);
   await runRust();
-  const rounds: { tsPlainMs: number; tsJsonMs: number; rustStepMs: number; rustTotalMs: number }[] =
-    [];
+  const rounds: {
+    tsPlainMs: number;
+    tsJsonMs: number;
+    rustStepMs: number;
+    rustTotalMs: number;
+  }[] = [];
   for (let round = 0; round < 3; round++) {
     let tsPlainMs = 0,
       tsJsonMs = 0,
@@ -220,7 +328,12 @@ export async function benchmarkWindows(client: Client, windows: CommandWindow[])
       rust = await runRust();
       ts();
     }
-    rounds.push({ tsPlainMs, tsJsonMs, rustStepMs: rust.stepMs, rustTotalMs: rust.totalMs });
+    rounds.push({
+      tsPlainMs,
+      tsJsonMs,
+      rustStepMs: rust.stepMs,
+      rustTotalMs: rust.totalMs,
+    });
   }
   const median = (key: keyof (typeof rounds)[number]) =>
     rounds.map((r) => r[key]).sort((a, b) => a - b)[1];

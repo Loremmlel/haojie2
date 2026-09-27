@@ -41,6 +41,7 @@ import {
   other,
   ring,
   targets,
+  targetById,
   topTarget,
 } from '../core/geometry';
 import {
@@ -79,7 +80,7 @@ export const alive = (s: GamePosition, u: Unit) =>
   s.units.some((v) => v.id === u.id) ||
   !!s.landmarks?.some((v) => v.id === u.id && v.dormantSince === undefined);
 export function findTarget(s: GamePosition, id?: string): Target {
-  const t = targets(s).find((t) => t.id === id);
+  const t = targetById(s, id);
   ensure(t, '请选择有效的目标。');
   return t;
 }
@@ -441,9 +442,9 @@ export function damage(
   if (loss > 0 && !u.silenced && hasTrait(u, 'u10')) u.attackBonus += 15;
   const snap = structuredClone(u);
   const origin = source.base
-    ? targets(s).find((t) => t.id === `base-${source.base}`)
+    ? targetById(s, `base-${source.base}`)
     : source.unit
-      ? targets(s).find((t) => t.id === source.unit!.id)
+      ? targetById(s, source.unit.id)
       : undefined;
   if (u.hp <= 0) kill(s, u, source, ctx);
   if (
@@ -1023,8 +1024,8 @@ function resolveAttack(
 export function pruneSiphons(s: GamePosition) {
   s.siphons = s.siphons.filter((l) => {
     const u = s.units.find((v) => v.id === l.sourceId),
-      a = targets(s).find((t) => t.id === l.fromId),
-      b = targets(s).find((t) => t.id === l.toId);
+      a = targetById(s, l.fromId),
+      b = targetById(s, l.toId);
     return (
       u &&
       passive(s, u) &&

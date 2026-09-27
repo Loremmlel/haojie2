@@ -24,6 +24,71 @@ pub fn covers(u: &Unit, p: Point) -> bool {
     let dy = p.y - u.y;
     dx.fract() == 0.0 && dy.fract() == 0.0 && dx >= 0.0 && dy >= 0.0 && dx < u.size && dy < u.size
 }
+pub fn ring(u: &Unit, points: &[Point]) -> bool {
+    let own = cells(u, u.at());
+    own.iter().any(|a| {
+        points
+            .iter()
+            .any(|b| (a.x - b.x).abs().max((a.y - b.y).abs()) == 1.0)
+    }) && !own.iter().any(|a| points.contains(a))
+}
+pub fn square(u: &Unit, p: Point) -> bool {
+    inside(p) && (p.x - u.x).abs() <= 5.0 && (p.y - u.y).abs() <= 5.0
+}
+pub fn point_target(p: Point) -> Target {
+    Target {
+        id: String::new(),
+        owner: 0,
+        at: p,
+        unit: None,
+    }
+}
+pub fn valid_attack_route(u: &Unit, path: &[Point], limit: f64) -> bool {
+    if path.is_empty()
+        || path.len() as f64 > (limit + 1.0).min(117.0)
+        || path.iter().any(|p| !inside(*p))
+        || !covers(u, path[0])
+    {
+        return false;
+    }
+    for i in 1..path.len() {
+        if path[..i].contains(&path[i])
+            || distance(path[i - 1], path[i]) != 1.0
+            || covers(u, path[i])
+            || (i < path.len() - 1 && path[i] == base_point(3 - u.owner))
+        {
+            return false;
+        }
+    }
+    true
+}
+pub fn piercing_targets(
+    s: &State,
+    u: &Unit,
+    path: &[Point],
+    catalog: &Catalog,
+) -> Vec<(Target, Vec<Point>)> {
+    let available: Vec<_> = targets(s)
+        .into_iter()
+        .filter(|t| {
+            t.id != u.id
+                && t.unit.as_ref().map(Unit::side).unwrap_or(t.owner) != u.owner
+                && (top_target(s, t, catalog)
+                    || t.unit
+                        .as_ref()
+                        .is_some_and(|v| catalog[&v.kind.key()].landmark.is_some()))
+        })
+        .collect();
+    let mut hits: Vec<(Target, Vec<Point>)> = vec![];
+    for i in 1..path.len() {
+        for t in &available {
+            if !hits.iter().any(|(v, _)| v.id == t.id) && t.footprint().contains(&path[i]) {
+                hits.push((t.clone(), path[..=i].to_vec()));
+            }
+        }
+    }
+    hits
+}
 
 #[derive(Clone)]
 pub struct Target {
@@ -48,7 +113,11 @@ impl Target {
             .unwrap_or_else(|| vec![self.at])
     }
     pub fn actor(&self) -> serde_json::Value {
-        self.unit.as_ref().map(Unit::actor_event).unwrap_or_else(||serde_json::json!({"id":self.id,"owner":self.owner,"x":self.at.x,"y":self.at.y,"size":1}))
+        let mut actor = serde_json::json!({"id":self.id,"owner":self.owner,"x":self.at.x,"y":self.at.y,"size":self.unit.as_ref().map(|u|u.size).unwrap_or(1.0)});
+        if let Some(u) = &self.unit {
+            actor["kind"] = serde_json::json!(u.kind);
+        }
+        actor
     }
 }
 pub fn targets(s: &State) -> Vec<Target> {
@@ -255,18 +324,59 @@ pub fn deployment_rows(s: &State, owner: usize) -> Vec<usize> {
         .collect()
 }
 
-/// 与 TS placement 的非部署分支一致；地标单独占层，克隆和禁区按原数组判定。
+/// 与 TS placement 共用部署/移动判定顺序；地标单独占层，克隆和禁区按原数组判定。
 pub fn can_place(s: &State, u: &Unit, at: Point, catalog: &Catalog) -> bool {
+    placement(s, u, at, catalog, false)
+}
+pub fn can_deploy(s: &State, u: &Unit, at: Point, catalog: &Catalog) -> bool {
+    placement(s, u, at, catalog, true)
+}
+fn placement(s: &State, u: &Unit, at: Point, catalog: &Catalog, deployment: bool) -> bool {
     let footprint = cells(u, at);
     if footprint.iter().any(|&p| !inside(p) || base(p)) {
         return false;
     }
-    if catalog[&u.kind.key()].landmark.is_some() {
-        return u.at() == at;
+    if let Some(rule) = &catalog[&u.kind.key()].landmark {
+        if !deployment {
+            return u.at() == at;
+        }
+        let square = rule
+            .get("allowed")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                a.iter().any(|p| {
+                    crate::model::number(&p["x"]) == at.x && crate::model::number(&p["y"]) == at.y
+                })
+            })
+            .unwrap_or((6.0..=8.0).contains(&at.y));
+        if !square || s.landmarks().iter().any(|l| l.at() == at) {
+            return false;
+        }
+        let over: Vec<_> = s.units.iter().filter(|v| covers(v, at)).collect();
+        return over.len() <= 1 && over.iter().all(|v| v.side() == u.owner);
+    }
+    let rows = if deployment {
+        deployment_rows(s, u.owner)
+    } else {
+        vec![]
+    };
+    if deployment
+        && !u.has("u27")
+        && footprint.iter().any(|p| {
+            !rows.contains(&(p.y as usize))
+                && !s
+                    .landmarks()
+                    .iter()
+                    .any(|l| l.at() == *p && l.live() && l.side() == u.owner)
+        })
+    {
+        return false;
     }
     for &p in &footprint {
-        if s.landmarks().iter().any(|l| l.at() == p)
-            && (u.size > 1.0 || s.units.iter().any(|v| v.id != u.id && covers(v, p)))
+        if let Some(l) = s.landmarks().iter().find(|l| l.at() == p)
+            && (u.size > 1.0
+                || (deployment && l.live() && l.side() != u.owner)
+                || s.units.iter().any(|v| v.id != u.id && covers(v, p)))
         {
             return false;
         }

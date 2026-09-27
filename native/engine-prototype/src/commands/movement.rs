@@ -1,6 +1,6 @@
 use crate::geometry::{can_place, cells, deployment_rows, distance, empty_for, movement_path};
 use crate::model::{
-    Catalog, Command, Failure, Kind, Point, State, Unit, ensure, extra_number, number,
+    COMMANDS, Catalog, Command, Failure, Kind, Point, State, Unit, ensure, extra_number, number,
 };
 use serde_json::{Value, json};
 
@@ -72,7 +72,7 @@ pub fn movement_stats(s: &State, u: &Unit, catalog: &Catalog) -> (bool, f64, f64
     (locked, left, movement)
 }
 pub fn stage(s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
-    if !["move", "finish-mode", "attack", "react"].contains(&c.kind.as_str()) {
+    if !COMMANDS.contains(&c.kind.as_str()) {
         return Err(Failure::Unsupported("command-kind"));
     }
     ensure(
@@ -102,26 +102,52 @@ pub fn stage(s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
             || transit.is_none_or(|u| c.kind == "move" && c.unit_id.as_deref() == Some(&u.id)),
         "冲撞移动正在经过其他占位，必须先完成弹出或回到空地。",
     )?;
-    ensure(s.phase != "shrine-draft", "请先秘密选择神龛。")?;
+    let giant = c.kind == "skill"
+        && c.ability
+            .as_ref()
+            .or_else(|| s.unit(c.unit_id.as_deref().unwrap_or("")).map(|u| &u.kind))
+            .is_some_and(|k| k.is("u7"));
     ensure(
-        s.phase != "shrine-setup",
+        s.phase != "shrine-draft" || c.kind == "choose-shrine",
+        "请先秘密选择神龛。",
+    )?;
+    ensure(
+        s.phase != "shrine-setup"
+            || ["deploy", "equip", "activate-aura", "finish-shrine-setup"]
+                .contains(&c.kind.as_str()),
         "第0回合仅能部署、装备、启用或储存神龛。",
     )?;
     ensure(
-        !s.extra.get("summonOffer").is_some_and(|v| !v.is_null()),
+        !s.extra.get("summonOffer").is_some_and(|v| !v.is_null()) || c.kind == "choose-summons",
         "请先从候选召唤中选出两个结果。",
     )?;
     ensure(
-        s.phase != "synthesis" || c.kind == "react",
+        s.phase != "synthesis"
+            || giant
+            || ["react", "skip-synthesis", "synthesize", "craft"].contains(&c.kind.as_str()),
         "请先选择合成，或跳过合成进入召唤。",
     )?;
     ensure(
-        s.phase == "play" || c.kind == "react",
+        giant
+            || s.phase == "play"
+            || s.phase == "shrine-setup"
+            || [
+                "activate-aura",
+                "extra-summon",
+                "choose-summons",
+                "summon",
+                "begin",
+                "reroll",
+                "react",
+                "skip-synthesis",
+                "choose-shrine",
+                "finish-shrine-setup",
+                "synthesize",
+                "craft",
+            ]
+            .contains(&c.kind.as_str()),
         "先完成回合开始的召唤选择，再进入行动阶段。",
     )?;
-    if number(&s.bases["1"]) <= 0.0 || number(&s.bases["2"]) <= 0.0 {
-        return Err(Failure::Unsupported("terminal-base"));
-    }
     Ok(())
 }
 pub fn actor<'a>(s: &'a State, c: &Command, catalog: &Catalog) -> Result<&'a Unit, Failure> {
@@ -148,12 +174,8 @@ fn prepare(s: &State, c: &Command, catalog: &Catalog) -> Result<Prepared, Failur
             !u.runner() || empty_for(s, u, catalog),
             "必须先移到空地，不能结束在另一个棋子、地标或基地内。",
         )?;
-        // 地标攻击收尾不产生事件；首版不对地标命令做局部结算。
-        if catalog[&u.kind.key()].landmark.is_some() {
-            return Err(Failure::Unsupported("landmark-finish"));
-        }
         return Ok(Prepared {
-            index: s.units.iter().position(|v| v.id == u.id).unwrap(),
+            index: s.units.iter().position(|v| v.id == u.id).unwrap_or(0),
             to: u.at(),
             starting: false,
             charge: None,
@@ -228,6 +250,26 @@ pub fn finish(u: &mut Unit) {
     u.shots = 0.0;
     u.moves = 0.0;
 }
+pub fn choose_skill(s: &mut State, id: &str, catalog: &Catalog) -> Result<(), Failure> {
+    let u = s
+        .unit(id)
+        .ok_or(Failure::Invalid("请选择仍在场上的随从。"))?;
+    ensure(
+        u.mode == "none" || u.mode == "skill",
+        "本回合已选择另一操作模式，剩余攻击不能换成移动或技能。",
+    )?;
+    if u.mode == "none" {
+        ensure(
+            crate::stats::stats(s, u, catalog).operations_left > 0.0,
+            "本回合操作已用完。",
+        )?;
+        let u = s.unit_mut(id).unwrap();
+        u.mode = "skill".into();
+        u.shots = 0.0;
+        u.moves = 0.0;
+    }
+    Ok(())
+}
 pub fn consume(u: &mut Unit, kind: &Kind, catalog: &Catalog) {
     if *kind == u.kind {
         u.extra.insert("charge".into(), json!(0));
@@ -284,14 +326,15 @@ pub fn apply(previous: &State, c: &Command, catalog: &Catalog) -> Result<State, 
     let p = prepare(previous, c, catalog)?;
     let mut s = previous.clone();
     s.events.clear();
-    let u = &mut s.units[p.index];
     if c.kind == "finish-mode" {
+        let u = s.unit_mut(c.unit_id.as_deref().unwrap()).unwrap();
         let was_move = u.mode == "move";
         finish(u);
         if was_move && u.weapon("u16") {
             u.bonus_attacks += 1.0;
         }
     } else {
+        let u = &mut s.units[p.index];
         let from = u.at();
         let actor = u.actor_event();
         if p.starting {
@@ -320,5 +363,6 @@ pub fn apply(previous: &State, c: &Command, catalog: &Catalog) -> Result<State, 
         }
     }
     sync(&mut s, catalog);
+    crate::resolution::terminal(&mut s, &mut crate::resolution::Resolution::default());
     Ok(s)
 }

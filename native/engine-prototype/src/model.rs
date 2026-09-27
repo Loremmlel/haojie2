@@ -4,7 +4,32 @@ use std::collections::BTreeMap;
 use std::ops::Deref;
 
 pub const RULESET: &str = "3.0-feedback5-live-deployment-2026-09-23";
-pub const PROTOCOL: &str = "haojie-native-engine-v2";
+pub const PROTOCOL: &str = "haojie-native-engine-v4";
+pub const COMMANDS: &[&str] = &[
+    "move",
+    "finish-mode",
+    "attack",
+    "react",
+    "summon",
+    "extra-summon",
+    "choose-summons",
+    "deploy",
+    "charge",
+    "equip",
+    "activate-aura",
+    "reroll",
+    "begin",
+    "skip-synthesis",
+    "end",
+    "synthesize",
+    "craft",
+    "choose-shrine",
+    "finish-shrine-setup",
+    "skill",
+    "cast",
+    "clock",
+    "shatter",
+];
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
@@ -47,10 +72,18 @@ pub struct Definition {
     #[serde(rename = "move")]
     pub movement: f64,
     pub landmark: Option<Value>,
+    pub size: Option<f64>,
+    pub spell: Option<f64>,
+    pub skill: Option<String>,
+    pub weapon: Option<f64>,
+    #[serde(default)]
+    pub aura: bool,
 }
 pub struct Catalog {
     pub entries: BTreeMap<String, Definition>,
     pub combat: Value,
+    pub pools: BTreeMap<String, Vec<Kind>>,
+    pub recipes: Vec<Value>,
 }
 impl Deref for Catalog {
     type Target = BTreeMap<String, Definition>;
@@ -67,7 +100,7 @@ impl Catalog {
     }
 }
 
-/// 只对移动用到的字段建类型；其余字段无损保留，不能把此类型当作完整规则实现。
+/// 已移植规则的核心字段建类型，其余字段无损保留；不能把此类型当作完整规则实现。
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Unit {
@@ -248,11 +281,29 @@ pub struct Command {
     pub direction: Option<String>,
     pub mode: Option<String>,
     pub path: Option<Vec<Point>>,
+    pub card_id: Option<String>,
+    pub ability: Option<Kind>,
+    pub chosen_kind: Option<Kind>,
+    pub ultimate: Option<bool>,
+    pub charge: Option<bool>,
+    pub offer_indices: Option<Vec<f64>>,
+    pub player: Option<usize>,
+    pub shrine_kind: Option<Kind>,
+    pub parity: Option<String>,
+    pub recipe_id: Option<String>,
+    pub material_ids: Option<Vec<String>>,
+    pub second_id: Option<String>,
+    pub death_id: Option<String>,
+    pub column: Option<f64>,
+    pub row: Option<f64>,
+    pub card_ids: Option<Vec<String>>,
+    pub sacrifice_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
 pub enum Failure {
     Invalid(&'static str),
+    InvalidOwned(String),
     Unsupported(&'static str),
     Uncertain,
 }
@@ -260,6 +311,7 @@ impl Failure {
     pub fn value(&self) -> Value {
         match self {
             Self::Invalid(message) => json!({"status":"invalid", "message":message}),
+            Self::InvalidOwned(message) => json!({"status":"invalid", "message":message}),
             Self::Unsupported(reason) => json!({"status":"unsupported", "reason":reason}),
             Self::Uncertain => json!({"status":"uncertain"}),
         }

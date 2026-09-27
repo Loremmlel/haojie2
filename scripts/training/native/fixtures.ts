@@ -104,7 +104,9 @@ export function fixtures(): { name: string; job: Job }[] {
     }
     if (name === 'inherited') {
       u.traits = [3, 13];
-      u.abilityCharges = { 3: { charge: 2, readyCharge: 1, chargeType: 'move', lastCharge: 3 } };
+      u.abilityCharges = {
+        3: { charge: 2, readyCharge: 1, chargeType: 'move', lastCharge: 3 },
+      };
     }
     if (name === 'giant' || name === 'giant-continuing') {
       u.size = 2;
@@ -129,7 +131,12 @@ export function fixtures(): { name: string; job: Job }[] {
       add(s, 3, 1, 2, 6);
     }
     if (name === 'pending')
-      s.pending.push({ kind: 'death-shot', source: structuredClone(u), owner: 1, amount: 0 });
+      s.pending.push({
+        kind: 'death-shot',
+        source: structuredClone(u),
+        owner: 1,
+        amount: 0,
+      });
     if (name === 'synthesis') s.phase = 'synthesis';
     if (name === 'transit') {
       const runner = add(s, 'u12p', 1, 4, 7);
@@ -137,7 +144,15 @@ export function fixtures(): { name: string; job: Job }[] {
       runner.moves = 2;
     }
     if (name === 'siphon')
-      s.siphons = [{ id: 'link', sourceId: u.id, owner: 1, fromId: 'base-1', toId: 'base-2' }];
+      s.siphons = [
+        {
+          id: 'link',
+          sourceId: u.id,
+          owner: 1,
+          fromId: 'base-1',
+          toId: 'base-2',
+        },
+      ];
     if (name.startsWith('finish')) {
       u.mode = 'attack';
       u.shots = 1;

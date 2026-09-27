@@ -29,6 +29,7 @@ import {
   refreshDeployment,
   ring,
   targets,
+  targetById,
 } from '../core/geometry';
 import {
   activeEffect,
@@ -110,7 +111,7 @@ export function beginTurn(s: GamePosition, ctx: Resolution) {
           action: 'storm',
           stage: 'trigger',
           ability: 'u9',
-          actor: eventActor(targets(s).find((t) => t.id === `base-${h.owner}`)),
+          actor: eventActor(targetById(s, `base-${h.owner}`)),
           area: ALL_CELLS.filter((p) => (h.axis === 'row' ? p.y === h.line : p.x === h.line)),
         },
         () => {
@@ -180,8 +181,8 @@ export function endTurn(s: GamePosition, ctx: Resolution) {
   pruneSiphons(s);
   for (const link of [...s.siphons]) {
     const source = s.units.find((u) => u.id === link.sourceId),
-      from = targets(s).find((t) => t.id === link.fromId),
-      to = targets(s).find((t) => t.id === link.toId);
+      from = targetById(s, link.fromId),
+      to = targetById(s, link.toId);
     if (!source || !from || !to) continue;
     ctx.token++;
     withEventFacts(

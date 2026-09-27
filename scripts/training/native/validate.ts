@@ -13,6 +13,8 @@ import { readTrainingRecords } from '../records/replay';
 import { nativeClient } from './client';
 import { fixtures, moveProbes } from './fixtures';
 import { combatFixtures, reactionProbes } from './combat-fixtures';
+import { preparationFixtures } from './preparation-fixtures';
+import { completeFixtures } from './complete-fixtures';
 import {
   benchmarkWindows,
   validateResidentProtocol,
@@ -31,6 +33,7 @@ const { values } = parseArgs({
       default: 'artifacts/native-target/release/haojie-engine-prototype.exe',
     },
     'fixtures-only': { type: 'boolean', default: false },
+    match: { type: 'string' },
     'all-workers': { type: 'boolean', default: false },
   },
 });
@@ -38,7 +41,9 @@ assert.ok(values.output, '需要全新的 --output 产物目录');
 const output = resolve(values.output);
 mkdirSync(output, { recursive: false });
 const save = (name: string, data: unknown) =>
-  writeFileSync(join(output, name), JSON.stringify(data, null, 2), { flag: 'wx' });
+  writeFileSync(join(output, name), JSON.stringify(data, null, 2), {
+    flag: 'wx',
+  });
 const digest = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 const canonical = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const frozen = await build({
@@ -50,20 +55,29 @@ const frozen = await build({
   write: false,
   metafile: true,
 });
-writeFileSync(join(output, 'runner.mjs'), frozen.outputFiles[0].contents, { flag: 'wx' });
+writeFileSync(join(output, 'runner.mjs'), frozen.outputFiles[0].contents, {
+  flag: 'wx',
+});
 copyFileSync(values.executable, join(output, 'engine.exe'));
 const nativePaths = [
   'Cargo.toml',
   'Cargo.lock',
   'src/main.rs',
   'src/model.rs',
-  'src/geometry.rs',
-  'src/movement.rs',
-  'src/stats.rs',
-  'src/resolution.rs',
-  'src/damage.rs',
-  'src/combat.rs',
-  'src/reactions.rs',
+  'src/core/geometry.rs',
+  'src/commands/movement.rs',
+  'src/core/stats.rs',
+  'src/core/resolution.rs',
+  'src/commands/damage.rs',
+  'src/commands/combat.rs',
+  'src/commands/reactions.rs',
+  'src/commands/preparation.rs',
+  'src/commands/lifecycle.rs',
+  'src/commands/abilities.rs',
+  'src/commands/spells.rs',
+  'src/setup/shrines.rs',
+  'src/setup/synthesis.rs',
+  'src/setup/runtime.rs',
 ].map((p) => `native/engine-prototype/${p}`);
 save('manifest.json', {
   head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
@@ -80,7 +94,7 @@ save('manifest.json', {
   executableSha256: digest(readFileSync(values.executable)),
 });
 
-const client = await nativeClient(resolve(values.executable));
+const client = await nativeClient(join(output, 'engine.exe'));
 const counts = {
   successfulCommands: 0,
   invalidCommands: 0,
@@ -90,25 +104,7 @@ const counts = {
 };
 const unsupported = (result: any) => {
   if (result.status !== 'unsupported') return false;
-  assert.ok(
-    [
-      'command-kind',
-      'terminal-base',
-      'landmark-finish',
-      'piercing-attack',
-      'piercing-path',
-      'ability-steal',
-      'landmark-deployment',
-      'protection-tower',
-      'execution',
-      'conversion',
-      'shrine-conversion',
-      'knockback',
-      'reaction-turn-switch',
-    ].includes(result.reason),
-  );
-  counts.unsupported[result.reason] = (counts.unsupported[result.reason] ?? 0) + 1;
-  return true;
+  assert.fail(`完整引擎不能跳过规则：${JSON.stringify(result)}`);
 };
 function applyResult(s: GameState, c: Command) {
   try {
@@ -163,7 +159,12 @@ async function compare(jobs: Job[], label: string) {
 
 try {
   save('resident-contract.json', await validateResidentProtocol(client));
-  const special = [...fixtures(), ...combatFixtures()];
+  const special = [
+    ...fixtures(),
+    ...combatFixtures(),
+    ...preparationFixtures(),
+    ...completeFixtures(),
+  ].filter(({ name }) => !values.match || name.includes(values.match));
   for (const { name, job } of special) {
     const [result] = await compare([job], name);
     // 所有可用落点都执行并比较完整状态；非法命令也经正式入口检查原子性。
@@ -210,15 +211,21 @@ try {
     const selected: { source: string; index: number; job: Job }[] = [];
     const attacks: { source: string; index: number; job: Job }[] = [];
     const windows: CommandWindow[] = [];
+    const terminalGames: CommandWindow[] = [];
     const sources = ['classic-tiny', 'shrine-tiny', 'classic-uniform', 'shrine-uniform'];
     const files = sources.flatMap((group) =>
-      Array.from({ length: values['all-workers'] ? 8 : 1 }, (_, worker) => ({ group, worker })),
+      Array.from({ length: values['all-workers'] ? 8 : 1 }, (_, worker) => ({
+        group,
+        worker,
+      })),
     );
     for (const { group, worker } of files) {
       const source = `${group}/worker-${worker}`;
       const path = `artifacts/training/economics-20260926/${source}.jsonl.gz`;
       let state: GameState | undefined;
       let game = -1;
+      let completeWindow: CommandWindow | undefined;
+      let residentRevision = 0;
       let total = 0,
         eligible = 0,
         supported = 0;
@@ -233,6 +240,23 @@ try {
       const flush = async () => {
         if (!chunk.length) return;
         const results = await compare(chunk, `${source}:${total}`);
+        // 常驻局面从开局推进至记录末尾，每64条仅比较终态；独立差分已逐步比较全部事件。
+        const continued = await client.request({
+          op: 'step',
+          revision: residentRevision,
+          commands: chunk.map((job) => job.command),
+          clearHistory: true,
+        });
+        assert.ok(
+          continued.results.every((r: any) => r.status === 'available'),
+          `${source}: 连续整局出现拒绝 ${JSON.stringify(continued.results)}`,
+        );
+        residentRevision = continued.revision;
+        assert.deepEqual(
+          (await client.request({ op: 'export' })).state,
+          canonical(state),
+          `${source}:${total}: 连续整局终态不同`,
+        );
         for (const [i, result] of results.entries()) {
           if (result.result.status === 'available') {
             supported++;
@@ -273,16 +297,23 @@ try {
       };
       for await (const row of readTrainingRecords(path)) {
         if (row.type === 'game') {
+          await flush();
           assert.equal(row.source, 'neural');
           game = row.game;
           state = createGame(row.seed, row.rules);
           state.events = [];
           state.log = [];
+          residentRevision = (await client.request({ op: 'reset', state })).revision;
+          completeWindow = { source, game, start: 0, state, commands: [] };
         } else if (row.type === 'decision') {
           assert.ok(state);
-          const tally = (byCommand[row.command.type] ??= { total: 0, supported: 0 });
+          const tally = (byCommand[row.command.type] ??= {
+            total: 0,
+            supported: 0,
+          });
           tally.total++;
-          if (['move', 'finish-mode', 'attack', 'react'].includes(row.command.type)) {
+          completeWindow!.commands.push(row.command);
+          if (client.commands.includes(row.command.type)) {
             eligible++;
             chunk.push({ state, command: row.command, probes: [] });
             indices.push({ index: row.index, game });
@@ -293,6 +324,8 @@ try {
           total++;
           if (chunk.length >= 64) await flush();
         } else if (row.type === 'outcome') {
+          await flush();
+          if (row.terminated) terminalGames.push(completeWindow!);
           outcomes.push({
             game: row.game,
             terminated: row.terminated,
@@ -309,7 +342,10 @@ try {
         assert.ok(attackRoots.length >= 8, `真实攻击样本不足：${source}`);
         for (let i = 0; i < 8; i++) {
           const root = roots[Math.floor(((i + 0.5) * roots.length) / 8)];
-          const job = { ...root.job, probes: moveProbes(root.job.command!.unitId!) };
+          const job = {
+            ...root.job,
+            probes: moveProbes(root.job.command!.unitId!),
+          };
           // 性能集不混入未支持分支，计数单独保留，不能用 TS 回退掩盖。
           const [answer] = await compare([job], `${source}-queries-${i}`);
           assert.ok(answer.inspections.every((p: any) => p.status !== 'unsupported'));
@@ -350,11 +386,17 @@ try {
       selected: selected.map(({ source, index }) => ({ source, index })),
       attacks: attacks.map(({ source, index }) => ({ source, index })),
       residentWindows: windows.map(windowIdentity),
+      continuousReplayAllCommands: true,
+      terminalGames: terminalGames.map(windowIdentity),
       inputUnchanged: true,
       fullStatesEqual: true,
     });
     const jobs = selected.map((s) => s.job);
-    const steps = jobs.map(({ state, command }) => ({ state, command, probes: [] }));
+    const steps = jobs.map(({ state, command }) => ({
+      state,
+      command,
+      probes: [],
+    }));
     const timings: any[] = [];
     const clock = (run: () => unknown) => {
       const start = performance.now();
@@ -431,14 +473,24 @@ try {
       console.log(JSON.stringify(result));
     }
     const resident = await benchmarkWindows(client, windows);
+    const completeGames = terminalGames.length
+      ? await benchmarkWindows(client, terminalGames)
+      : null;
+    save('complete-games.json', {
+      games: terminalGames.map(windowIdentity),
+      benchmark: completeGames,
+      includesSelection: false,
+    });
     console.log(JSON.stringify(resident));
     save('benchmark.json', {
       timings,
       resident,
+      completeGames,
+      completeRuleEngine: true,
       completeSelfPlay: false,
       gpuTrainingIncluded: false,
       totalEconomicsPassed: false,
-      note: '单步和查询为固定移动切片，连续段只含当前支持的移动/攻击/反应，不是完整采样；移动入口投影属性，收益不全归于语言。',
+      note: '全部命令均原生执行；连续段与真实终局回放单列加载、执行、导出的通信成本。这里不含选招、编码或模型推理；完整采样另由 sample-benchmark.ts 测量。移动入口投影属性，收益不全归于语言。',
     });
   }
 } finally {

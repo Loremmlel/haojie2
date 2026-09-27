@@ -13,6 +13,8 @@ import { trainingPosition } from '../../../src/ai/training/queries';
 import { allPieces, hasTrait } from '../../../src/engine/core/traits';
 import type { Player } from '../../../src/engine/types';
 import { TrainingEnvironment } from '../../../src/match/training';
+import type { TrainingOptions, TrainingStatus } from '../../../src/match/training';
+import type { Observation } from '../../../src/ai/types';
 import { withRecordOutput, hashRecordFile } from '../records/io';
 import { readTrainingRecords, recordHeader } from '../records/replay';
 import { TinyPolicy, randomStream } from './policy';
@@ -27,10 +29,26 @@ export interface Options {
   seed: number;
   maxCommands: number;
   maxPlies: number;
+  games?: number;
+}
+
+/** 选招与编码共用原采样循环；后端只负责权威规则执行和脱敏观察。 */
+export interface SamplingEnvironment {
+  limits(): { maxCommands: number; maxPlies: number };
+  status(): TrainingStatus;
+  observation(viewer?: Player): Observation | Promise<Observation>;
+  step(actor: Player, input: unknown): TrainingStatus | Promise<TrainingStatus>;
 }
 
 /** 单进程真实自然开局；全部成功命令持久化，未知终局不填收益，异常不吞掉。 */
-export async function sampleWorker(options: Options, emit: (row: unknown) => Promise<void>) {
+export async function sampleWorker(
+  options: Options,
+  emit: (row: unknown) => Promise<void>,
+  makeEnvironment: (
+    options: TrainingOptions,
+  ) => SamplingEnvironment | Promise<SamplingEnvironment> = (options) =>
+    new TrainingEnvironment(options),
+) {
   const started = performance.now();
   const deadline = started + options.seconds * 1000;
   const policySeed = [73129, 95267, 117101][options.worker % 3];
@@ -43,12 +61,16 @@ export async function sampleWorker(options: Options, emit: (row: unknown) => Pro
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   try {
-    for (let localGame = 0; !stopped && performance.now() < deadline; localGame++) {
+    for (
+      let localGame = 0;
+      localGame < (options.games ?? Infinity) && !stopped && performance.now() < deadline;
+      localGame++
+    ) {
       const game = localGame * options.workers + options.worker;
       const seed = options.seed + game;
       const samplerSeed = (0x6ab921d3 + Math.imul(game + 1, 2654435761)) >>> 0;
       const random = randomStream(samplerSeed);
-      const env = new TrainingEnvironment({
+      const env = await makeEnvironment({
         seed,
         rules: options.rules,
         ...{
@@ -83,10 +105,10 @@ export async function sampleWorker(options: Options, emit: (row: unknown) => Pro
         }
         let actor = env.status().toPlay!;
         let start = performance.now();
-        let observation = env.observation(actor);
+        let observation = await env.observation(actor);
         if (observation.phase === 'shrine-draft' && observation.shrineDraft?.committed[actor]) {
           actor = (3 - actor) as Player;
-          observation = env.observation(actor);
+          observation = await env.observation(actor);
         }
         metrics.observationMs += performance.now() - start;
         try {
@@ -103,7 +125,7 @@ export async function sampleWorker(options: Options, emit: (row: unknown) => Pro
           metrics.treeMs += performance.now() - start;
           if (offTurn) {
             start = performance.now();
-            const interruptObservation = env.observation(other);
+            const interruptObservation = await env.observation(other);
             metrics.observationMs += performance.now() - start;
             selected = sampleCommand(interruptObservation, other, policy, random, metrics, true);
             if (selected.command) {
@@ -124,7 +146,7 @@ export async function sampleWorker(options: Options, emit: (row: unknown) => Pro
           metrics.recordMs += performance.now() - start;
           const index = env.status().commands;
           start = performance.now();
-          env.step(actor, selected.command);
+          await env.step(actor, selected.command);
           metrics.stepMs += performance.now() - start;
           commandTypes[selected.command.type] = (commandTypes[selected.command.type] ?? 0) + 1;
           start = performance.now();
@@ -135,7 +157,7 @@ export async function sampleWorker(options: Options, emit: (row: unknown) => Pro
             actor,
             command: selected.command,
             before,
-            after: fingerprint(env.observation()),
+            after: fingerprint(await env.observation()),
             source: options.policy,
           });
           metrics.recordMs += performance.now() - start;
@@ -147,7 +169,7 @@ export async function sampleWorker(options: Options, emit: (row: unknown) => Pro
             game,
             index: env.status().commands,
             actor,
-            before: fingerprint(env.observation(actor)),
+            before: fingerprint(await env.observation(actor)),
             error,
           });
           break;
@@ -161,7 +183,7 @@ export async function sampleWorker(options: Options, emit: (row: unknown) => Pro
         seed,
         ...env.status(),
         interrupted,
-        after: fingerprint(env.observation()),
+        after: fingerprint(await env.observation()),
         elapsedMs: performance.now() - gameStart,
         metrics,
         commandTypes,
@@ -270,7 +292,9 @@ async function main() {
     const report = await withRecordOutput(`${prefix}.jsonl.gz`, (emit) =>
       sampleWorker(options, emit),
     );
-    writeFileSync(`${prefix}.json`, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
+    writeFileSync(`${prefix}.json`, JSON.stringify(report, null, 2) + '\n', {
+      flag: 'wx',
+    });
     return;
   }
   mkdirSync(directory, { recursive: false });
@@ -278,7 +302,9 @@ async function main() {
   const manifest = {
     options,
     source,
-    commit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+    commit: execFileSync('git', ['rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+    }).trim(),
     startedAt: new Date().toISOString(),
     cpu: cpus().map((c) => c.model),
     totalmem: totalmem(),
@@ -328,7 +354,9 @@ async function main() {
       const timeout = setTimeout(() => child.kill(), (options.seconds + 120) * 1000);
       try {
         const [code, signal] = await once(child, 'close');
-        writeFileSync(join(directory, `worker-${worker}.log`), log, { flag: 'wx' });
+        writeFileSync(join(directory, `worker-${worker}.log`), log, {
+          flag: 'wx',
+        });
         return { worker, pid: child.pid, code, signal };
       } finally {
         clearTimeout(timeout);

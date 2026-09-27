@@ -10,7 +10,7 @@ import {
   inside,
   occupants,
   other,
-  targets,
+  targetById,
   topTarget,
 } from '../core/geometry';
 import {
@@ -474,7 +474,7 @@ export function shatter(s: GamePosition, c: Command, ctx: Resolution) {
   const u = actor(s, c.unitId);
   ensure(canShatter(s, u), '玉碎只对所选奇偶编号的友方随从开放。');
   chooseMode(s, u, 'skill');
-  const t = targets(s).find((v) => v.id === c.targetId);
+  const t = targetById(s, c.targetId);
   ensure(
     t && (t.unit ? allegiance(s, t.unit) : t.owner) === other(u.owner) && topTarget(s, t),
     '玉碎需要一个敌方目标。',

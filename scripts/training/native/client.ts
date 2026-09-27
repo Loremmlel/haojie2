@@ -1,13 +1,24 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { CATALOG, COMBAT_RULES, RULESET_ID } from '../../../src/engine/catalog';
+import { SYNTHESIS_RECIPES } from '../../../src/engine/setup/synthesis';
+import {
+  CATALOG,
+  COMBAT_RULES,
+  RULESET_ID,
+  SUMMON_POOL,
+  ULTIMATE_POOL,
+  SHRINE_POOL,
+} from '../../../src/engine/catalog';
 
-export const protocol = 'haojie-native-engine-v2';
+export const protocol = 'haojie-native-engine-v4';
 
 /** 实验用常驻进程，一次一个请求；超时或异常直接失败，禁止隐式回退到 TS。 */
 export async function nativeClient(executable: string) {
-  const child = spawn(executable, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  const child = spawn(executable, [], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
   let stderr = '';
   let failure: Error | undefined;
   child.stderr.on('data', (chunk) => {
@@ -51,6 +62,7 @@ export async function nativeClient(executable: string) {
     child.stdin.end();
     child.kill();
   };
+  let commands: string[];
   try {
     const hello = await request({
       op: 'init',
@@ -58,13 +70,23 @@ export async function nativeClient(executable: string) {
       ruleset: RULESET_ID,
       catalog: CATALOG,
       combat: COMBAT_RULES,
+      summonPools: {
+        normal: SUMMON_POOL,
+        ultimate: ULTIMATE_POOL,
+        shrine: SHRINE_POOL,
+      },
+      recipes: SYNTHESIS_RECIPES,
     });
     assert.equal(hello.protocol, protocol);
     assert.equal(hello.ruleset, RULESET_ID);
-    assert.equal(hello.completeEngine, false);
+    assert.equal(hello.completeEngine, true);
+    assert.ok(
+      Array.isArray(hello.commands) && hello.commands.every((c: unknown) => typeof c === 'string'),
+    );
+    commands = hello.commands;
   } catch (error) {
     close();
     throw error;
   }
-  return { request, close };
+  return { request, close, commands };
 }
