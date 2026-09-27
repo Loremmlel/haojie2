@@ -181,7 +181,7 @@ export function useSkill(s: GamePosition, c: Command, ctx: Resolution) {
     },
   );
 }
-function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
+function beginSkill(s: GamePosition, c: Command) {
   const raw = findUnit(s, c.unitId),
     kind = c.ability ?? raw.kind,
     free = kind === 'u7';
@@ -192,23 +192,115 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
   if (kind === 'u14') ensure(u.freeUsed !== s.ply, '本回合已经使用虹吸。');
   if (!free) chooseMode(s, u, 'skill');
   else ensure(u.freeUsed !== now(s, u), '本回合免费技能已使用。');
-  const range = getStats(s, u).range,
-    source: Source = { owner: u.owner, unit: u, kind: 'skill' };
-  const friendly = (id?: string) => {
-    const v = findUnit(s, id);
-    ensure(allegiance(s, v) === u.owner, '请选择友方随从。');
-    ensure(attackPath(s, u, asTarget(v), range), '目标不在技能范围内。');
-    return v;
+  return { u, kind, free, range: getStats(s, u).range };
+}
+/** 复活的记录与落点验证只读；正式效果在全部条件通过后才创建棋子和支付上限。 */
+function prepareRevival(s: GamePosition, u: Unit, c: Command, range: number) {
+  const record = s.deaths.find((r) => r.id === c.deathId);
+  ensure(
+    record &&
+      record.kind !== 'grave' &&
+      record.owner === u.owner &&
+      !record.revived &&
+      record.ply < s.ply &&
+      record.ply >= s.ply - 4,
+    '只能选择前两个己方回合窗口内尚未复活的友方阵亡记录。',
+  );
+  const to = point(c.x, c.y),
+    ghost = template(record.kind, u.owner, s.turns[u.owner], to);
+  ensure(canPlace(s, ghost, to) && attackPath(s, u, to, range), '复活位置须在射程内合法空格。');
+  return { record, to };
+}
+function skillFriend(s: GamePosition, u: Unit, id: string | undefined, range: number) {
+  const v = findUnit(s, id);
+  ensure(allegiance(s, v) === u.owner, '请选择友方随从。');
+  ensure(attackPath(s, u, asTarget(v), range), '目标不在技能范围内。');
+  return v;
+}
+function skillEnemy(
+  s: GamePosition,
+  u: Unit,
+  id: string | undefined,
+  range: number,
+  global = false,
+) {
+  const t = findTarget(s, id);
+  ensure(
+    t.unit && !isLandmark(t.unit) && allegiance(s, t.unit) !== u.owner && topTarget(s, t),
+    '请选择敌方或中立的栈顶随从。',
+  );
+  ensure(global || attackPath(s, u, t, range), '目标不在技能射程内。');
+  return t;
+}
+function prepareHook(s: GamePosition, u: Unit, c: Command, range: number) {
+  const t = skillEnemy(s, u, c.targetId, range),
+    to = point(c.x, c.y);
+  ensure(!isHookImmune(t.unit!), '大肉比不能被钩子牵引。');
+  ensure(
+    !equal(t, to) &&
+      canPlace(s, t.unit!, to) &&
+      attackPath(s, u, asTarget({ ...t.unit!, ...to }), range),
+    '牵引落点必须合法且在钩子射程内。',
+  );
+  return { t, to };
+}
+function prepareSacrifice(s: GamePosition, u: Unit, c: Command, range: number) {
+  const victim = skillFriend(s, u, c.targetId, range);
+  ensure(victim.id !== u.id && victim.kind !== 'u25', '不可献祭自身或克隆军团。');
+  ensure(
+    u.maxHp >= COMBAT_RULES.sacrificeMaxHpCost,
+    `生命上限不足${COMBAT_RULES.sacrificeMaxHpCost}。`,
+  );
+  const sameKind = victim.kind === 14,
+    summonOnly = c.mode === 'summon';
+  ensure(!summonOnly || sameKind, '只有献祭另一枚献祭炮才能直接换取召唤。');
+  ensure(
+    summonOnly || (Number.isInteger(c.column) && c.column! >= 1 && c.column! <= 9),
+    '请选择一列。',
+  );
+  const candidates = targets(s).filter(
+    (t) =>
+      (t.unit ? allegiance(s, t.unit) : t.owner) !== u.owner &&
+      (t.unit ? cells(t.unit) : [t]).some(
+        (p) => p.x === c.column && (u.owner === 1 ? p.y >= u.y : p.y <= u.y),
+      ) &&
+      attackPath(s, u, t, range) &&
+      topTarget(s, t),
+  );
+  candidates.sort((a, b) => (u.owner === 1 ? a.y - b.y : b.y - a.y));
+  const t = candidates[0];
+  ensure(t || sameKind, '这一列没有射程内的敌方目标。');
+  return { victim, sameKind, summonOnly, t, amount: getStats(s, victim).attack };
+}
+/**
+ * 对大参数域技能仅复制施法者进行模式/继承资源投影。
+ * 其余局面只读；复用正式技能入口和准备条件，不执行效果，也不消费正式随机数。
+ */
+export function prepareSkillInspection(s: GamePosition, c: Command) {
+  const raw = findUnit(s, c.unitId),
+    kind = c.ability ?? raw.kind;
+  if (kind !== 'u19' && kind !== 7 && kind !== 14) return;
+  ensure(hasTrait(raw, kind), '该棋子没有选定的技能。');
+  const u = structuredClone(raw);
+  const view = {
+    ...s,
+    units: s.units.map((v) => (v.id === u.id ? u : v)),
+    ...(s.landmarks ? { landmarks: s.landmarks.map((v) => (v.id === u.id ? u : v)) } : {}),
   };
-  const enemy = (id?: string, global = false) => {
-    const t = findTarget(s, id);
-    ensure(
-      t.unit && !isLandmark(t.unit) && allegiance(s, t.unit) !== u.owner && topTarget(s, t),
-      '请选择敌方或中立的栈顶随从。',
-    );
-    ensure(global || attackPath(s, u, t, range), '目标不在技能射程内。');
-    return t;
-  };
+  if (kind !== u.kind) {
+    u.onceUsed = u.abilityUsage?.[kind]?.once ?? false;
+    u.freeUsed = u.abilityUsage?.[kind]?.free ?? -1;
+  }
+  withAbilityCharge(u, kind, () => {
+    const prepared = beginSkill(view, c);
+    if (kind === 'u19') prepareRevival(view, prepared.u, c, prepared.range);
+    else if (kind === 7) prepareHook(view, prepared.u, c, prepared.range);
+    else prepareSacrifice(view, prepared.u, c, prepared.range);
+  });
+}
+function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
+  const { u, kind, free, range } = beginSkill(s, c);
+  const source: Source = { owner: u.owner, unit: u, kind: 'skill' };
   switch (kind) {
     case 5: {
       const victims = targets(s).filter(
@@ -230,15 +322,7 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
           addEffect(s, friend, 'attack', u.owner, 2, 2, 10, u.id);
       break;
     case 7: {
-      const t = enemy(c.targetId),
-        to = point(c.x, c.y);
-      ensure(!isHookImmune(t.unit!), '大肉比不能被钩子牵引。');
-      ensure(
-        !equal(t, to) &&
-          canPlace(s, t.unit!, to) &&
-          attackPath(s, u, asTarget({ ...t.unit!, ...to }), range),
-        '牵引落点必须合法且在钩子射程内。',
-      );
+      const { t, to } = prepareHook(s, u, c, range);
       if (!protectedEffect(s, t, source, ctx)) {
         emit(s, { type: 'move', stage: 'trigger', from: t, to, unitId: t.id, owner: t.owner });
         Object.assign(t.unit!, to);
@@ -246,32 +330,7 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
       break;
     }
     case 14: {
-      const victim = friendly(c.targetId);
-      ensure(victim.id !== u.id && victim.kind !== 'u25', '不可献祭自身或克隆军团。');
-      ensure(
-        u.maxHp >= COMBAT_RULES.sacrificeMaxHpCost,
-        `生命上限不足${COMBAT_RULES.sacrificeMaxHpCost}。`,
-      );
-      const sameKind = victim.kind === 14;
-      const summonOnly = c.mode === 'summon';
-      ensure(!summonOnly || sameKind, '只有献祭另一枚献祭炮才能直接换取召唤。');
-      ensure(
-        summonOnly || (Number.isInteger(c.column) && c.column! >= 1 && c.column! <= 9),
-        '请选择一列。',
-      );
-      const candidates = targets(s).filter(
-        (t) =>
-          (t.unit ? allegiance(s, t.unit) : t.owner) !== u.owner &&
-          (t.unit ? cells(t.unit) : [t]).some(
-            (p) => p.x === c.column && (u.owner === 1 ? p.y >= u.y : p.y <= u.y),
-          ) &&
-          attackPath(s, u, t, range) &&
-          topTarget(s, t),
-      );
-      candidates.sort((a, b) => (u.owner === 1 ? a.y - b.y : b.y - a.y));
-      const t = candidates[0];
-      ensure(t || sameKind, '这一列没有射程内的敌方目标。');
-      const amount = getStats(s, victim).attack;
+      const { victim, sameKind, summonOnly, t, amount } = prepareSacrifice(s, u, c, range);
       lowerMax(s, u, COMBAT_RULES.sacrificeMaxHpCost, ctx);
       kill(s, victim, { owner: u.owner, unit: u, kind: 'sacrifice' }, ctx);
       if (t && !summonOnly) damage(s, t, amount, source, ctx);
@@ -397,19 +456,7 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
     case 'u19': {
       // 最后一次复活可以耗尽施法者剩余生命上限（25 → 5 → 0）。
       // 先验证全部条件；lowerMax 将献祭归属记为己方。
-      const record = s.deaths.find((r) => r.id === c.deathId);
-      ensure(
-        record &&
-          record.kind !== 'grave' &&
-          record.owner === u.owner &&
-          !record.revived &&
-          record.ply < s.ply &&
-          record.ply >= s.ply - 4,
-        '只能选择前两个己方回合窗口内尚未复活的友方阵亡记录。',
-      );
-      const to = point(c.x, c.y),
-        ghost = template(record.kind, u.owner, s.turns[u.owner], to);
-      ensure(canPlace(s, ghost, to) && attackPath(s, u, to, range), '复活位置须在射程内合法空格。');
+      const { record, to } = prepareRevival(s, u, c, range);
       addUnit(
         s,
         record.kind,
@@ -422,7 +469,7 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
       break;
     }
     case 'u21': {
-      const v = friendly(c.targetId);
+      const v = skillFriend(s, u, c.targetId, range);
       addEffect(s, v, 'attack', u.owner, 2, 2, 10, u.id);
       break;
     }
@@ -431,7 +478,7 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
         u.hookReadyAt !== undefined && u.hookReadyAt <= now(s, u) && u.hookExpiresAt! > now(s, u),
         '仅击杀后的下个己方回合可使用超级钩子。',
       );
-      const t = enemy(c.targetId, true),
+      const t = skillEnemy(s, u, c.targetId, range, true),
         v = t.unit!,
         to = { x: u.x, y: u.owner === 1 ? u.y + u.size : u.y - v.size };
       ensure(!isHookImmune(v), '大肉比不能被钩子牵引。');

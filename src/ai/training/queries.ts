@@ -5,7 +5,7 @@ import {
   unitActions,
   type ActionSpec,
 } from '../../engine/commands/options';
-import { inspectCommand } from '../../engine/commands/game';
+import { createCommandInspector } from '../../engine/commands/game';
 import { actorCommandError, parseCommand } from '../../engine/online/authority';
 import {
   ALL_CELLS,
@@ -34,12 +34,19 @@ export function trainingPosition(observation: Observation): GamePosition {
 
 /** available/uncertain 都只是公开可尝试提示；uncertain 停在随机边界，绝不偷看实局抽牌。 */
 export function inspectTrainingCommand(observation: Observation, actor: Player, input: unknown) {
+  return createTrainingInspector(observation, actor)(input);
+}
+/** 同一不可变观察的查询批次；仍逐条校验命令与操作者，不把预检结果当作权威结果。 */
+export function createTrainingInspector(observation: Observation, actor: Player) {
   const s = trainingPosition(observation);
-  const command = parseCommand(input);
-  const error = actorCommandError(s, actor, command);
-  return error
-    ? { status: 'invalid' as const, message: error }
-    : inspectCommand(s, command.type === 'choose-shrine' ? { ...command, player: actor } : command);
+  const inspect = createCommandInspector(s);
+  return (input: unknown) => {
+    const command = parseCommand(input);
+    const error = actorCommandError(s, actor, command);
+    return error
+      ? { status: 'invalid' as const, message: error }
+      : inspect(command.type === 'choose-shrine' ? { ...command, player: actor } : command);
+  };
 }
 
 export interface TrainingAction extends ActionSpec {

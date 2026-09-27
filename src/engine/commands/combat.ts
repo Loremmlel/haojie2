@@ -62,6 +62,7 @@ import {
   passive,
   random,
   resetUnit,
+  RuleError,
 } from '../core/state';
 import type { Effect, GamePosition, Player, Point, Source, Target, Unit } from '../types';
 export interface Resolution {
@@ -483,8 +484,20 @@ export function damage(
   ) {
     const pair = `${u.id}>${origin.id}`;
     if (!ctx.retaliations.has(pair) && attackPath(s, u, origin, getStats(s, u).range)) {
-      ctx.retaliations.add(pair);
-      performAttack(s, u, origin, ctx, { reactive: true, forceHostile: true });
+      const options = { reactive: true, forceHostile: true };
+      // 自动反击仍遵守普通攻击的目标与路径资格；不可攻击的来源不能中断原伤害。
+      // 只捕获无副作用的准备阶段，结算中的异常不能吞掉或留下半次反击。
+      let available = true;
+      try {
+        prepareAttack(s, u, origin, options);
+      } catch (error) {
+        if (!(error instanceof RuleError)) throw error;
+        available = false;
+      }
+      if (available) {
+        ctx.retaliations.add(pair);
+        performAttack(s, u, origin, ctx, options);
+      }
     }
   }
   return loss;
@@ -603,6 +616,32 @@ export function performAttack(
   ctx = resolution(),
   options: AttackOptions = {},
 ) {
+  const prepared = prepareAttack(s, u, t, options);
+  const hits = options.hits ?? [];
+  prepared.options.hits = hits;
+  const result = withEventFacts(
+    s,
+    {
+      action: prepared.options.mode === 'heal' ? 'mend' : 'attack',
+      actor: eventActor(u),
+      subject: eventActor(t),
+    },
+    () => resolveAttack(s, u, t, ctx, prepared),
+  );
+  // 每次完整攻击只清空一次蓄力，包括免疫、处决和穿透齐射。
+  // 非法攻击会在到达此处前抛出异常，不会消耗蓄力。
+  if (!options.noPierce) {
+    if (hasTrait(u, 15)) consumeCharge(u, 15);
+    const charged = attackChargeKind(u);
+    if (charged !== undefined) consumeCharge(u, charged);
+  }
+  if (!options.noPierce && !options.reactive && !u.silenced) {
+    applyAttackPassives(s, u, t, ctx, hits);
+  }
+  return result;
+}
+/** 只读验证一次攻击并计算路径；不消耗资源、随机数或修改事件，可供正式结算与预检共用。 */
+export function prepareAttack(s: GamePosition, u: Unit, t: Target, options: AttackOptions = {}) {
   const ally = t.unit ? allegiance(s, t.unit) === u.owner : t.owner === u.owner;
   const healing =
     !options.forceHostile &&
@@ -620,71 +659,53 @@ export function performAttack(
     options.mode !== 'heal' || healingAttack(u) || definition(u.kind).attack < 0,
     '该棋子不能选择治疗。',
   );
-  const hits = options.hits ?? [];
-
-  const result = withEventFacts(
-    s,
-    {
-      action: healing ? 'mend' : 'attack',
-      actor: eventActor(u),
-      subject: eventActor(t),
-    },
-    () => resolveAttack(s, u, t, ctx, { ...options, hits, mode: healing ? 'heal' : 'damage' }),
-  );
-  // 每次完整攻击只清空一次蓄力，包括免疫、处决和穿透齐射。
-  // 非法攻击会在到达此处前抛出异常，不会消耗蓄力。
-  if (!options.noPierce) {
-    if (hasTrait(u, 15)) consumeCharge(u, 15);
-    const charged = attackChargeKind(u);
-    if (charged !== undefined) consumeCharge(u, charged);
-  }
-  if (!options.noPierce && !options.reactive && !u.silenced) {
-    if (hasTrait(u, 's3')) {
-      const convert = random(s, [0, 1 / 3, 1]) < 1 / 3;
-      const victim = t.unit;
-      if (
-        convert &&
-        !refusesConversion(u) &&
-        victim &&
-        alive(s, victim) &&
-        allegiance(s, victim) === other(u.owner) &&
-        !isShrine(victim) &&
-        hits.some((h) => h.id === victim.id && h.actual > 0) &&
-        !protectedEffect(s, asTarget(victim), { owner: u.owner, unit: u, kind: 'skill' }, ctx)
-      ) {
-        victim.owner = u.owner;
-        victim.offset = 0;
-        victim.born = s.turns[u.owner] - (hasTrait(victim, 23) ? 1 : 0);
-        victim.effects = [];
-        resetUnit(s, victim);
-        victim.operations = 1;
-        emit(s, {
-          type: 'skill',
-          to: victim,
-          owner: u.owner,
-          action: 'conversion',
-          text: 'CX · 策反',
-        });
-      }
-      if (random(s, [0, 1 / 4, 1]) < 1 / 4) {
-        s.summonSlots++;
-        emit(s, { type: 'summon', owner: u.owner, text: 'CX · 本回合额外召唤+1' });
-      }
-    }
-    if (hasTrait(u, 's12') && random(s, [0, 3 / 5, 1]) < 3 / 5 && alive(s, u)) {
-      u.extraOperations = (u.extraOperations ?? 0) + 1;
-      emit(s, { type: 'skill', to: u, owner: u.owner, text: '先攻 · 额外完整操作+1' });
-    }
-  }
-  return result;
+  return attackGeometry(s, u, t, { ...options, mode: healing ? 'heal' : 'damage' });
 }
-function resolveAttack(
+function applyAttackPassives(
   s: GamePosition,
   u: Unit,
   t: Target,
   ctx: Resolution,
-  options: AttackOptions,
+  hits: { id: string; actual: number }[],
 ) {
+  if (hasTrait(u, 's3')) {
+    const convert = random(s, [0, 1 / 3, 1]) < 1 / 3;
+    const victim = t.unit;
+    if (
+      convert &&
+      !refusesConversion(u) &&
+      victim &&
+      alive(s, victim) &&
+      allegiance(s, victim) === other(u.owner) &&
+      !isShrine(victim) &&
+      hits.some((h) => h.id === victim.id && h.actual > 0) &&
+      !protectedEffect(s, asTarget(victim), { owner: u.owner, unit: u, kind: 'skill' }, ctx)
+    ) {
+      victim.owner = u.owner;
+      victim.offset = 0;
+      victim.born = s.turns[u.owner] - (hasTrait(victim, 23) ? 1 : 0);
+      victim.effects = [];
+      resetUnit(s, victim);
+      victim.operations = 1;
+      emit(s, {
+        type: 'skill',
+        to: victim,
+        owner: u.owner,
+        action: 'conversion',
+        text: 'CX · 策反',
+      });
+    }
+    if (random(s, [0, 1 / 4, 1]) < 1 / 4) {
+      s.summonSlots++;
+      emit(s, { type: 'summon', owner: u.owner, text: 'CX · 本回合额外召唤+1' });
+    }
+  }
+  if (hasTrait(u, 's12') && random(s, [0, 3 / 5, 1]) < 3 / 5 && alive(s, u)) {
+    u.extraOperations = (u.extraOperations ?? 0) + 1;
+    emit(s, { type: 'skill', to: u, owner: u.owner, text: '先攻 · 额外完整操作+1' });
+  }
+}
+function attackGeometry(s: GamePosition, u: Unit, t: Target, options: AttackOptions) {
   const ally = t.unit ? allegiance(s, t.unit) === u.owner : t.owner === u.owner;
   ensure(
     !ally ||
@@ -762,6 +783,16 @@ function resolveAttack(
     }
   } else path = attackPath(s, u, t, limit, options.direction, canPierce);
   ensure(path, '目标不在射程内，或所选攻击路径被阻挡。');
+  return { ally, stats, canPierce, path, options };
+}
+function resolveAttack(
+  s: GamePosition,
+  u: Unit,
+  t: Target,
+  ctx: Resolution,
+  prepared: ReturnType<typeof prepareAttack>,
+) {
+  const { ally, stats, canPierce, path, options } = prepared;
   if (canPierce && !options.noPierce && path.length > 1) {
     const victims = piercingTargets(s, u, path);
     for (const { target: victim, path: prefix } of victims)

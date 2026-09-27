@@ -225,6 +225,8 @@ function movement(
     }));
     return path.slice(1).every((p) => place(u, p)) ? path : null;
   }
+  // 原广搜在分数上限时仍能走到 ceil(limit)；下界剪枝须保留这个边界。
+  if (distance(u, to) > Math.max(0, Math.ceil(limit))) return null;
   const queue: Point[][] = [[{ x: u.x, y: u.y }]],
     seen = new Set([key(u)]);
   for (let i = 0; i < queue.length; i++) {
@@ -248,21 +250,26 @@ export function attackPath(
   direction?: AttackDirection,
   pierce = false,
 ): Point[] | null {
+  const t = 'id' in target ? target : undefined,
+    ends = t?.unit ? cells(t.unit) : [target],
+    starts = cells(u);
+  if (
+    ends.every((to) => starts.every((from) => distance(from, to) > Math.max(0, Math.ceil(limit))))
+  )
+    return null;
   if (direction !== undefined)
     return (
       attackRoutes(s, u, target, limit, pierce).find((r) => r.direction === direction)?.path ?? null
     );
-  const t = 'id' in target ? target : undefined,
-    ends = t?.unit ? cells(t.unit) : [target],
-    blocked = new Set<string>();
+  const blocked = new Set<string>();
   for (const v of allPieces(s))
     if (!pierce && v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
       for (const p of cells(v)) blocked.add(key(p));
   // 攻击叠放目标时，同一目标格的其他成员不算中途阻挡。
   for (const end of ends) blocked.delete(key(end));
   if (t?.id !== `base-${other(u.owner)}`) blocked.add(key(basePoint(other(u.owner))));
-  const queue = cells(u).map((p) => [p]),
-    seen = new Set(cells(u).map(key));
+  const queue = starts.map((p) => [p]),
+    seen = new Set(starts.map(key));
   let fallback: Point[] | null = null;
   for (let i = 0; i < queue.length; i++) {
     const path = queue[i],
@@ -334,16 +341,22 @@ export function attackRoutes(
   pierce = false,
 ): AttackRoute[] {
   const t = 'id' in target ? target : undefined,
-    ends = new Set((t?.unit ? cells(t.unit) : [target]).map(key)),
+    endCells = t?.unit ? cells(t.unit) : [target],
+    starts = cells(u);
+  if (
+    endCells.every((to) =>
+      starts.every((from) => distance(from, to) > Math.max(0, Math.ceil(limit))),
+    )
+  )
+    return [];
+  const ends = new Set(endCells.map(key)),
     blocked = new Set<string>();
   for (const v of allPieces(s))
     if (!pierce && v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
       for (const p of cells(v)) blocked.add(key(p));
   for (const end of ends) blocked.delete(end);
   if (t?.id !== `base-${other(u.owner)}`) blocked.add(key(basePoint(other(u.owner))));
-  const queue = cells(u)
-      .filter((p) => !ends.has(key(p)))
-      .map((p) => [p]),
+  const queue = starts.filter((p) => !ends.has(key(p))).map((p) => [p]),
     seen = new Set(queue.map((p) => key(p[0]))),
     result = new Map<AttackDirection, Point[]>();
   for (let i = 0; i < queue.length && result.size < 4; i++) {

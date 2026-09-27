@@ -341,6 +341,28 @@ test('U18 ignores attacks <=10, retaliates after real damage, does not loop fore
   assert.equal(unit(s, a.id).hp, 35);
   assert.equal(unit(s, b.id).hp, 35);
 });
+test('厚脸皮之王受到持续伤害时，不对栈内不可攻击的来源反击，也不中断回合结束', () => {
+  const s = fixture();
+  const cover = add(s, 'u25', 1, 2, 4);
+  const source = add(s, 'u25', 1, 2, 4);
+  const king = add(s, 'u18', 2, 2, 7);
+  king.effects.push({
+    type: 'burn',
+    owner: 1,
+    sourceId: source.id,
+    from: 0,
+    until: 100,
+    amount: 5,
+  });
+  const before = structuredClone(s);
+  const next = applyCommand(s, { type: 'end' });
+  assert.equal(next.active, 2);
+  assert.equal(unit(next, king.id).hp, king.hp - 5);
+  assert.equal(unit(next, source.id).hp, source.hp);
+  assert.equal(unit(next, cover.id).hp, cover.hp);
+  assert.ok(!next.events.some((e) => e.type === 'attack' && e.unitId === king.id));
+  assert.deepEqual(s, before);
+});
 test('U19 revives a recent allied original with no equipment/buffs and spends20 cap', () => {
   let s = fixture();
   const mage = add(s, 'u19', 1, 3, 4),

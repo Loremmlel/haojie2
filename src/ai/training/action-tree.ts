@@ -18,7 +18,7 @@ import type { SelectionStep } from '../../engine/commands/options';
 import type { Command, Player } from '../../engine/types';
 import type { Observation } from '../types';
 import {
-  inspectTrainingCommand,
+  createTrainingInspector,
   trainingActionSpace,
   trainingPosition,
   type TrainingAction,
@@ -90,11 +90,13 @@ export class TrainingActionTree {
   readonly position;
   readonly actions: TrainingAction[];
   readonly #nodes = new Map<string, ActionNode>();
+  readonly #inspect;
   constructor(
     readonly observation: Observation,
     readonly actor: Player,
   ) {
     this.position = trainingPosition(observation);
+    this.#inspect = createTrainingInspector(observation, actor);
     this.actions = trainingActionSpace(observation, actor).actions;
   }
 
@@ -120,7 +122,7 @@ export class TrainingActionTree {
     prefix = this.#prepare(prefix);
     if (prefix.steps.length)
       return { key, command: prefix.command, next: prefix, subject, status: 'parameter' };
-    const result = inspectTrainingCommand(this.observation, this.actor, prefix.command);
+    const result = this.#inspect(prefix.command);
     return result.status === 'invalid'
       ? null
       : { key, command: prefix.command, subject, status: result.status };
@@ -256,10 +258,7 @@ export class TrainingActionTree {
   /** 教师标签只用于查找目标分支，不改变候选集合；未知动作明确报错。 */
   trace(input: unknown): { node: ActionNode; selected: number }[] {
     const target = canonicalTrainingCommand(this.observation, this.actor, input);
-    ensure(
-      inspectTrainingCommand(this.observation, this.actor, target).status !== 'invalid',
-      '教师命令未通过公开预检。',
-    );
+    ensure(this.#inspect(target).status !== 'invalid', '教师命令未通过公开预检。');
     const visit = (cursor: number[]): { node: ActionNode; selected: number }[] | null => {
       const node = this.node(cursor);
       const options = node.choices

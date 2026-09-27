@@ -15,13 +15,24 @@ export function clonePosition<S extends GamePosition>(position: S): S {
       if (typeof value === 'function' || typeof value === 'symbol') throw unsupported;
       return value;
     }
-    if (seen.has(value)) return seen.get(value);
+    const previous = seen.get(value);
+    if (previous !== undefined) return previous;
     const array = Array.isArray(value);
-    const prototype = Object.getPrototypeOf(value);
-    if (!array && prototype !== Object.prototype && prototype !== null) throw unsupported;
+    if (!array) {
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null) throw unsupported;
+    }
     const result = array ? value.slice() : { ...value };
     seen.set(value, result);
-    for (const key of Object.keys(result)) result[key] = copy(result[key]);
+    // 浅复制已保留所有标量；只递归子对象，避免再次写入棋子的每个标量字段。
+    const child = (key: string | number) => {
+      const item = result[key];
+      if (item !== null && typeof item === 'object') result[key] = copy(item);
+      else if (typeof item === 'function' || typeof item === 'symbol') throw unsupported;
+    };
+    if (array) {
+      for (let i = 0; i < result.length; i++) child(i);
+    } else for (const key of Object.keys(result)) child(key);
     return result;
   };
   try {

@@ -36,7 +36,7 @@ import {
   point,
   template,
 } from '../core/state';
-import type { Command, GamePosition, Point, Unit } from '../types';
+import type { Command, GamePosition, Point, Reaction, Unit } from '../types';
 export function emptyFor(s: GamePosition, u: Unit, p: Point = u) {
   return (
     canPlace(s, u, p) &&
@@ -66,14 +66,19 @@ function reachableExit(s: GamePosition, u: Unit, steps: number) {
 }
 export function moveUnit(s: GamePosition, c: Command, ctx: Resolution) {
   const u = findUnit(s, c.unitId);
+  const prepared = prepareMove(s, c);
   return withEventFacts(
     s,
     { actor: eventActor(u), ...(isRunner(u) ? { action: 'rush' as const } : {}) },
-    () => resolveMove(s, c, ctx),
+    () => resolveMove(s, c, ctx, prepared),
   );
 }
-function resolveMove(s: GamePosition, c: Command, ctx: Resolution) {
-  const u = actor(s, c.unitId),
+/**
+ * 共用移动准备：只在浅副本上投影模式预算，路径/占位读取原局面；失败不修改输入。
+ * 冲撞后的死亡、弹出和可返回空地检查仍由实际结算完成，不能把准备通过当作命令通过。
+ */
+export function prepareMove(s: GamePosition, c: Command) {
+  const u = { ...actor(s, c.unitId) },
     to = point(c.x, c.y),
     starting = u.mode === 'none';
   ensure(!isLandmark(u), '地标不能移动。');
@@ -87,12 +92,54 @@ function resolveMove(s: GamePosition, c: Command, ctx: Resolution) {
         '需要在回合开始已有1层移动蓄力。',
       );
       u.moves = 5;
-      consumeCharge(u, charged!);
     }
     ensure(
       u.moves > 0 && distance(u, to) === 1 && canEnter(s, u, to),
       '每次沿四向移动一格，不能越界或使大体型重叠。',
     );
+    return { to, starting, charged, moves: u.moves, path: undefined };
+  }
+  let limit = getStats(s, u).move;
+  if (u.size > 1) {
+    if (starting) {
+      if (charged !== undefined) {
+        ensure(
+          reserve && reserve.readyCharge >= 1 && reserve.chargeType === 'move',
+          '分数移动须先蓄力。',
+        );
+        if (limit % 1) limit *= 2;
+      }
+      u.moves = Math.floor(limit);
+    }
+    ensure(
+      u.moves > 0 && distance(u, to) === 1 && canPlace(s, u, to),
+      '2×2每次整体向一个方向移动一小格，四格均须合法且不能重叠。',
+    );
+    return { to, starting, charged, moves: u.moves, path: [{ x: u.x, y: u.y }, to] };
+  }
+  if (charged !== undefined) {
+    ensure(
+      reserve && reserve.readyCharge >= 1 && reserve.chargeType === 'move',
+      '分数移动需要在回合开始已有1层移动蓄力。',
+    );
+    if (limit % 1) limit *= 2;
+  }
+  const path = movementPath(s, u, to, limit, hasTrait(u, 13) && !u.silenced);
+  ensure(path, '移动距离、路径、占位或独行侠禁区不合法。');
+  return { to, starting, charged, moves: u.moves, path };
+}
+function resolveMove(
+  s: GamePosition,
+  c: Command,
+  ctx: Resolution,
+  prepared: ReturnType<typeof prepareMove>,
+) {
+  const u = findUnit(s, c.unitId);
+  const { to, starting, charged, moves, path } = prepared;
+  chooseMode(s, u, 'move');
+  if (isRunner(u)) {
+    u.moves = moves;
+    if (starting) consumeCharge(u, charged!);
     const t = targets(s).find(
       (t) =>
         t.id !== u.id &&
@@ -117,23 +164,8 @@ function resolveMove(s: GamePosition, c: Command, ctx: Resolution) {
     }
     return;
   }
-  let limit = getStats(s, u).move;
   if (u.size > 1) {
-    if (starting) {
-      if (charged !== undefined) {
-        ensure(
-          reserve && reserve.readyCharge >= 1 && reserve.chargeType === 'move',
-          '分数移动须先蓄力。',
-        );
-        if (limit % 1) limit *= 2;
-      }
-      u.moves = Math.floor(limit);
-    }
-    ensure(
-      u.moves > 0 && distance(u, to) === 1 && canPlace(s, u, to),
-      '2×2每次整体向一个方向移动一小格，四格均须合法且不能重叠。',
-    );
-    const path = [{ x: u.x, y: u.y }, to];
+    u.moves = moves;
     emit(s, { type: 'move', from: u, to, path, unitId: u.id, owner: u.owner });
     Object.assign(u, to);
     if (starting && charged !== undefined) consumeCharge(u, charged);
@@ -144,15 +176,6 @@ function resolveMove(s: GamePosition, c: Command, ctx: Resolution) {
     }
     return;
   }
-  if (charged !== undefined) {
-    ensure(
-      reserve && reserve.readyCharge >= 1 && reserve.chargeType === 'move',
-      '分数移动需要在回合开始已有1层移动蓄力。',
-    );
-    if (limit % 1) limit *= 2;
-  }
-  const path = movementPath(s, u, to, limit, hasTrait(u, 13) && !u.silenced);
-  ensure(path, '移动距离、路径、占位或独行侠禁区不合法。');
   emit(s, { type: 'move', from: u, to, path, unitId: u.id, owner: u.owner });
   Object.assign(u, to);
   if (charged !== undefined) consumeCharge(u, charged);
@@ -169,6 +192,27 @@ export function finishMode(s: GamePosition, c: Command) {
   const wasMove = u.mode === 'move';
   finishOperation(u);
   if (wasMove && hasWeapon(u, 'u16')) u.bonusAttacks++;
+}
+/** 只读准备小屋反应；批量预检可传入同一局面已算出的落点，不消费队列或生命上限。 */
+export function prepareHutSpawn(
+  s: GamePosition,
+  r: Reaction,
+  c: Command,
+  destinations = hutSpawnPoints(s, r),
+) {
+  const hut = s.units.find((u) => u.id === r.source.id);
+  if (!hut || !destinations.length) return {};
+  if (c.x === undefined) {
+    ensure(!hasTrait(hut, 'citadel'), '王城死亡召唤必须选择合法落点。');
+    return { hut };
+  }
+  const to = point(c.x, c.y);
+  ensure(
+    destinations.some((p) => equal(p, to)),
+    '小屋召唤须在其范围内的合法空地。',
+  );
+  ensure(hut.maxHp >= 10, '小屋生命上限不足。');
+  return { hut, to };
 }
 export function react(s: GamePosition, c: Command, ctx: Resolution) {
   const r = s.pending.shift();
@@ -232,20 +276,12 @@ export function react(s: GamePosition, c: Command, ctx: Resolution) {
     return;
   }
   if (r.kind === 'hut-spawn') {
-    const hut = s.units.find((u) => u.id === r.source.id);
-    const destinations = hutSpawnPoints(s, r);
-    if (!hut || !destinations.length) return;
-    if (c.x === undefined) {
-      ensure(!hasTrait(hut, 'citadel'), '王城死亡召唤必须选择合法落点。');
+    const { hut, to } = prepareHutSpawn(s, r, c);
+    if (!hut) return;
+    if (!to) {
       emit(s, { type: 'skill', owner: r.owner, text: '放弃召唤' });
       return;
     }
-    const to = point(c.x, c.y);
-    ensure(
-      destinations.some((p) => equal(p, to)),
-      '小屋召唤须在其范围内的合法空地。',
-    );
-    ensure(hut.maxHp >= 10, '小屋生命上限不足。');
     addUnit(s, 20, r.owner, to);
     lowerMax(s, hut, 10, ctx);
     return;

@@ -429,6 +429,24 @@ export function canRestoreClock(s: GamePosition, u: Unit): boolean {
   }
 }
 export function clockRestore(s: GamePosition, c: Command, ctx: Resolution) {
+  const { a, u, restored } = prepareClockRestore(s, c);
+  a.usedPly = s.ply;
+  if (!protectedEffect(s, asTarget(u), { owner: s.active, kind: 'skill' }, ctx)) {
+    s.units[s.units.findIndex((v) => v.id === u.id)] = restored;
+    syncBanners(s);
+    emit(s, {
+      type: 'skill',
+      from: u,
+      to: restored,
+      unitId: u.id,
+      owner: s.active,
+      action: 'clock',
+      text: '时钟 · 状态复原',
+    });
+  }
+}
+/** 只读检查时钟资格和恢复落位；只构造独立目标副本，不修改光环次数或原局面。 */
+export function prepareClockRestore(s: GamePosition, c: Command) {
   const a = aura(s, s.active, 's10');
   ensure(s.phase === 'play' && a && a.usedPly !== s.ply, '时钟每个实际己方回合只能使用一次。');
   const u = findUnit(s, c.targetId);
@@ -445,20 +463,7 @@ export function clockRestore(s: GamePosition, c: Command, ctx: Resolution) {
       '原神龛武器已经转移，不能通过时钟复制。',
     );
   }
-  a.usedPly = s.ply;
-  if (!protectedEffect(s, asTarget(u), { owner: s.active, kind: 'skill' }, ctx)) {
-    s.units[s.units.findIndex((v) => v.id === u.id)] = restored;
-    syncBanners(s);
-    emit(s, {
-      type: 'skill',
-      from: u,
-      to: restored,
-      unitId: u.id,
-      owner: s.active,
-      action: 'clock',
-      text: '时钟 · 状态复原',
-    });
-  }
+  return { a, u, restored };
 }
 export function canShatter(s: GamePosition, u: Unit): boolean {
   const a = aura(s, u.owner, 's9'),
