@@ -306,6 +306,100 @@ pub fn neighbors(p: Point) -> impl Iterator<Item = Point> {
     .into_iter()
     .filter(|p| inside(*p))
 }
+pub fn all_cells() -> impl Iterator<Item = Point> {
+    (1..=13).flat_map(|y| {
+        (1..=9).map(move |x| Point {
+            x: x as f64,
+            y: y as f64,
+        })
+    })
+}
+/// 按 BFS 首次到达顺序保留每个入射方向，与 TS attackRoutes 的 Map 插入顺序一致。
+pub fn attack_routes(s: &State, u: &Unit, t: &Target, limit: f64, pierce: bool) -> Vec<String> {
+    let ends = t.footprint();
+    let starts = cells(u, u.at());
+    if ends.iter().all(|&to| {
+        starts
+            .iter()
+            .all(|&from| distance(from, to) > limit.ceil().max(0.0))
+    }) {
+        return vec![];
+    }
+    let mut blocked = [false; 117];
+    for v in s.pieces() {
+        if !pierce && v.id != u.id && v.id != t.id && v.side() != u.owner {
+            for p in cells(v, v.at()) {
+                blocked[index(p)] = true;
+            }
+        }
+    }
+    for &p in &ends {
+        blocked[index(p)] = false;
+    }
+    if t.id != format!("base-{}", 3 - u.owner) {
+        blocked[index(base_point(3 - u.owner))] = true;
+    }
+    let mut queue: Vec<Vec<Point>> = starts
+        .into_iter()
+        .filter(|p| !ends.contains(p))
+        .map(|p| vec![p])
+        .collect();
+    let mut seen = [false; 117];
+    for path in &queue {
+        seen[index(path[0])] = true;
+    }
+    let mut result = vec![];
+    let mut i = 0;
+    while i < queue.len() && result.len() < 4 {
+        let path = queue[i].clone();
+        i += 1;
+        if (path.len() - 1) as f64 >= limit {
+            continue;
+        }
+        for p in neighbors(*path.last().unwrap()) {
+            if blocked[index(p)] {
+                continue;
+            }
+            let mut next = path.clone();
+            next.push(p);
+            if ends.contains(&p) {
+                let d = direction(&next).to_string();
+                if !result.contains(&d) {
+                    result.push(d);
+                }
+            } else if !seen[index(p)] {
+                seen[index(p)] = true;
+                queue.push(next);
+            }
+        }
+    }
+    result
+}
+pub fn expansion_anchors(s: &State, u: &Unit, catalog: &Catalog) -> Vec<Point> {
+    if u.size != 1.0 || catalog[&u.kind.key()].landmark.is_some() {
+        return vec![];
+    }
+    let mut giant = u.clone();
+    giant.size = 2.0;
+    [
+        u.at(),
+        Point {
+            x: u.x - 1.0,
+            y: u.y,
+        },
+        Point {
+            x: u.x,
+            y: u.y - 1.0,
+        },
+        Point {
+            x: u.x - 1.0,
+            y: u.y - 1.0,
+        },
+    ]
+    .into_iter()
+    .filter(|p| can_place(s, &giant, *p, catalog))
+    .collect()
+}
 pub fn deployment_rows(s: &State, owner: usize) -> Vec<usize> {
     let mut counts = [0_i32; 14];
     for u in &s.units {

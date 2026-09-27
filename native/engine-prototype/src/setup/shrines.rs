@@ -282,12 +282,8 @@ fn restored(s: &State, u: &Unit, catalog: &Catalog) -> Result<Unit, Failure> {
     }
     Ok(v)
 }
-pub fn clock(
-    s: &mut State,
-    c: &Command,
-    catalog: &Catalog,
-    ctx: &mut Resolution,
-) -> Result<(), Failure> {
+/// 与 TS prepareClockRestore 相同的只读准备；预检和正式结算共用，不支付光环次数。
+pub fn prepare_clock(s: &State, c: &Command, catalog: &Catalog) -> Result<(Unit, Unit), Failure> {
     let a = s
         .extra
         .get("auras")
@@ -336,6 +332,15 @@ pub fn clock(
             )?;
         }
     }
+    Ok((u, restored))
+}
+pub fn clock(
+    s: &mut State,
+    c: &Command,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+) -> Result<(), Failure> {
+    let (u, restored) = prepare_clock(s, c, catalog)?;
     s.extra.get_mut("auras").unwrap()[s.active.to_string()]
         .as_array_mut()
         .unwrap()

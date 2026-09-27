@@ -5,7 +5,7 @@ use crate::preparation::{hand, hand_mut, kind};
 use crate::resolution::{Resolution, deploy_unit, template};
 use serde_json::{Value, json};
 
-fn materials(s: &State, recipe: &Value) -> Vec<String> {
+pub fn materials(s: &State, recipe: &Value) -> Vec<String> {
     if recipe["id"] == "laoqian" && s.aura(s.active, "laoqian") {
         return vec![];
     }
@@ -29,6 +29,35 @@ fn materials(s: &State, recipe: &Value) -> Vec<String> {
 }
 pub fn available(s: &State, catalog: &Catalog) -> bool {
     catalog.recipes.iter().any(|r| materials(s, r).len() >= 3)
+}
+/// 与规则结算共用材料资格和部署几何；这里只返回材料移除后的落点，不修改输入。
+pub fn destinations(s: &State, recipe: &Value, ids: &[String], catalog: &Catalog) -> Vec<Point> {
+    let valid = materials(s, recipe);
+    if ids.len() != 3
+        || ids.iter().collect::<std::collections::HashSet<_>>().len() != 3
+        || ids.iter().any(|id| !valid.contains(id))
+    {
+        return vec![];
+    }
+    let mut view = s.clone();
+    if recipe["source"] == "board" {
+        view.units.retain(|u| !ids.contains(&u.id));
+    }
+    let result = kind(&recipe["result"]).key();
+    if catalog[&result].aura {
+        return vec![];
+    }
+    let ghost = template(
+        s,
+        &result,
+        s.active,
+        Point { x: 0.0, y: 0.0 },
+        "preview",
+        catalog,
+    );
+    crate::geometry::all_cells()
+        .filter(|p| can_deploy(&view, &ghost, *p, catalog))
+        .collect()
 }
 pub fn synthesize(
     s: &mut State,

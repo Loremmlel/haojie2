@@ -13,7 +13,7 @@ struct Prepared {
     path: Vec<Point>,
 }
 
-fn charge_kind(u: &Unit, catalog: &Catalog) -> Option<Kind> {
+pub fn charge_kind(u: &Unit, catalog: &Catalog) -> Option<Kind> {
     let native = std::iter::once(u.kind.clone());
     let inherited = u
         .extra

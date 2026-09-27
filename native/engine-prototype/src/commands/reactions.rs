@@ -7,7 +7,7 @@ use crate::model::{Catalog, Command, Failure, Point, State, Unit, ensure, number
 use crate::movement::{actor, consume, finish, movement_stats, reserve, stage, sync};
 use crate::resolution::{Resolution, add_unit, normalize_guards, template, terminal};
 use crate::stats::stats;
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn point(c: &Command) -> Result<Point, Failure> {
     let (Some(x), Some(y)) = (c.x, c.y) else {
@@ -164,6 +164,54 @@ pub fn move_runner(
     Ok(s)
 }
 
+/// 与 TS hutSpawnPoints 共用规则顺序；同一公开局面的参数树可复用落点结果。
+pub fn hut_points(s: &State, r: &Value, catalog: &Catalog) -> Vec<Point> {
+    let Some(hut) = s.units.iter().find(|u| r["source"]["id"] == u.id) else {
+        return vec![];
+    };
+    let owner = number(&r["owner"]) as usize;
+    if hut.silenced || hut.owner != owner || hut.max_hp < 10.0 {
+        return vec![];
+    }
+    let ghost = template(s, "20", owner, Point { x: 1.0, y: 1.0 }, "preview", catalog);
+    let range = stats(s, hut, catalog).range;
+    crate::geometry::all_cells()
+        .filter(|p| {
+            can_place(s, &ghost, *p, catalog)
+                && attack_path(
+                    s,
+                    hut,
+                    &crate::geometry::point_target(*p),
+                    range,
+                    None,
+                    false,
+                )
+                .is_some()
+        })
+        .collect()
+}
+pub fn prepare_hut(
+    s: &State,
+    r: &Value,
+    c: &Command,
+    destinations: &[Point],
+) -> Result<(), Failure> {
+    let Some(hut) = s.units.iter().find(|u| r["source"]["id"] == u.id) else {
+        return Ok(());
+    };
+    if destinations.is_empty() {
+        return Ok(());
+    }
+    if c.x.is_none() {
+        return ensure(!hut.has("citadel"), "王城死亡召唤必须选择合法落点。");
+    }
+    let to = point(c)?;
+    ensure(
+        destinations.contains(&to),
+        "小屋召唤须在其范围内的合法空地。",
+    )?;
+    ensure(hut.max_hp >= 10.0, "小屋生命上限不足。")
+}
 /// 从权威队首反应读取来源和固定目标，不信任命令替换目标；修改外层命令副本。
 /// 小屋/死亡射击/弹出可继续排队；结束效果的最后一个反应完成后才切换实际回合。
 pub fn react(
@@ -241,59 +289,26 @@ pub fn react(
             }
         }
         "hut-spawn" => {
-            if let Some(hut) = s.unit(&source.id).cloned() {
-                let ghost = template(s, "20", owner, Point { x: 1.0, y: 1.0 }, "preview", catalog);
-                let destinations: Vec<_> =
-                    if !hut.silenced && hut.owner == owner && hut.max_hp >= 10.0 {
-                        (0..117)
-                            .map(|i| Point {
-                                x: (i % 9 + 1) as f64,
-                                y: (i / 9 + 1) as f64,
-                            })
-                            .filter(|&p| {
-                                can_place(s, &ghost, p, catalog)
-                                    && attack_path(
-                                        s,
-                                        &hut,
-                                        &Target {
-                                            id: "".into(),
-                                            owner: 0,
-                                            at: p,
-                                            unit: None,
-                                        },
-                                        stats(s, &hut, catalog).range,
-                                        None,
-                                        false,
-                                    )
-                                    .is_some()
-                            })
-                            .collect()
-                    } else {
-                        vec![]
-                    };
-                if !destinations.is_empty() {
-                    if c.x.is_none() {
-                        ensure(!hut.has("citadel"), "王城死亡召唤必须选择合法落点。")?;
-                        ctx.emit(
-                            s,
-                            json!({"type":"skill","owner":owner,"text":"放弃召唤"}),
-                            None,
-                        );
-                    } else {
-                        let to = point(c)?;
-                        ensure(
-                            destinations.contains(&to),
-                            "小屋召唤须在其范围内的合法空地。",
-                        )?;
-                        ensure(hut.max_hp >= 10.0, "小屋生命上限不足。")?;
-                        add_unit(s, "20", owner, to, catalog, ctx)?;
-                        let u = s.unit_mut(&hut.id).unwrap();
-                        u.max_hp = (u.max_hp - 10.0).max(0.0);
-                        u.hp = u.hp.min(u.max_hp);
-                        let u = u.clone();
-                        if u.hp <= 0.0 {
-                            kill(s, &u, &Source::new(&u, "sacrifice"), catalog, ctx)?;
-                        }
+            let destinations = hut_points(s, &r, catalog);
+            prepare_hut(s, &r, c, &destinations)?;
+            if let Some(hut) = s.unit(&source.id).cloned()
+                && !destinations.is_empty()
+            {
+                if c.x.is_none() {
+                    ctx.emit(
+                        s,
+                        json!({"type":"skill","owner":owner,"text":"放弃召唤"}),
+                        None,
+                    );
+                } else {
+                    let to = point(c)?;
+                    add_unit(s, "20", owner, to, catalog, ctx)?;
+                    let u = s.unit_mut(&hut.id).unwrap();
+                    u.max_hp = (u.max_hp - 10.0).max(0.0);
+                    u.hp = u.hp.min(u.max_hp);
+                    let u = u.clone();
+                    if u.hp <= 0.0 {
+                        kill(s, &u, &Source::new(&u, "sacrifice"), catalog, ctx)?;
                     }
                 }
             }

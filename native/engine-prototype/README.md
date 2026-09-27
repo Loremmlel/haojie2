@@ -1,6 +1,6 @@
 # Rust 训练引擎
 
-目标、验证证据、性能和后续计划统一维护在 [RUST-PROTOTYPE.md](../../docs/ai/performance/RUST-PROTOTYPE.md)。当前实现完整规则命令、原生开局、驻留对局和公开观察。浏览器继续使用 TS；候选生成、编码、选招和小网络仍共用 TS，不能把规则内核的倍率称作完整训练倍率。
+目标、验证证据、性能和后续计划统一维护在 [RUST-PROTOTYPE.md](../../docs/ai/performance/RUST-PROTOTYPE.md)。当前实现完整规则、公开动作树、实体编码及经济性实验的小网络连续采样。浏览器继续使用 TS。原生策略尚未训练，不把采样吞吐当作棋力或完整训练倍率。
 
 在仓库根目录运行（本机 Windows、Rust 1.98.1、Node 22.23.2）：
 
@@ -12,6 +12,9 @@ cargo fmt --manifest-path native/engine-prototype/Cargo.toml --check
 node --import tsx scripts/training/native/validate.ts --fixtures-only --output artifacts/training/rust-fixtures-new
 node --import tsx scripts/training/native/validate.ts --all-workers --output artifacts/training/rust-full-new
 node --import tsx scripts/training/native/sample-benchmark.ts --commands 1000 --output artifacts/training/rust-sampler-new
+node --import tsx scripts/training/native/sampling/validate.ts --output artifacts/training/rust-tree-new
+node --import tsx scripts/training/native/sampling/benchmark.ts --commands 1000 --output artifacts/training/rust-native-sampler-new
+node --import tsx scripts/training/native/sampling/complete.ts --references artifacts/training/rust-fresh-games-20260927 --output artifacts/training/rust-native-complete-new
 ```
 
 输出目录必须不存在。验证默认读取本机 `economics-20260926` 的四份 `worker-0.jsonl.gz` 原始轨迹，`--all-workers` 扩大到四组各8份、共32份；这些数据不跟踪进 Git。专项和驻留协议验证不依赖历史数据。Linux/macOS 可通过 `--executable` 指定无扩展名程序，尚未实测这些平台。Cargo 产物放入已忽略的 `artifacts/`。
@@ -37,13 +40,22 @@ node --import tsx scripts/training/native/sample-benchmark.ts --commands 1000 --
 | `setup/synthesis.rs`      | `setup/synthesis.ts`                                         | 合成材料与落点原子移除，移除不当死亡                        |
 | `setup/shrines.rs`        | `setup/shrines.ts`                                           | 暗选、时钟快照、玉碎、强夺、地标重建                        |
 | `setup/runtime.rs`        | `commands/game.ts`、`ai/observation.ts`                      | 原生开局，公开观察显式白名单，暗选按观察方脱敏              |
+| `training/actions.rs`     | `commands/options.ts`、`ai/training/queries.ts`              | 公开动作说明、操作者权限、预检；全部参数域不做评分裁剪      |
+| `training/tree.rs`        | `ai/training/action-tree.ts`                                 | 惰性节点、选材/路径/方向顺序、合法叶子与回溯                |
+| `training/encoding.rs`    | `ai/training/encoding/`                                      | 词表、实体/引用顺序、存在掩码、未知字段报错                 |
+| `training/policy.rs`      | `scripts/training/economics/policy.ts`                       | 固定小网络、Float32 写回、独立策略随机流                    |
+| `training/sampler.rs`     | `scripts/training/economics/sample.ts`、`run.ts`             | 4096节点预算、可选回合外干预、自然终局与截断                |
 | `main.rs`                 | 实验驱动                                                     | 常驻 JSONL 协议、失败回滚、修订号，不是联网鉴权入口         |
 
 `movement_stats` 是 `getStats` 的移动依赖投影，省去移动入口不读取的攻击属性计算；因此收益不全来自语言。按 ID 查询目标时两端均只包装命中项。修改 TS 规则须同时维护对应 Rust 模块并重跑差分，不在 Rust 引入另一套 AI 评分。
 
+TS 已有的攻击、部署、时钟、钩子、献祭、复活和小屋只读预检也已移植：先拒绝明显非法参数，再复制局面执行完整预检。目标/落点准备与正式结算共用函数；小屋落点仅在同一公开局面树内缓存。Rust 用 `Rc<Node>` 复用不可变节点，编码借用树的公开局面及棋子，避免重复反序列化；这些对应 TS 原有的对象引用语义，不改变候选范围或策略。
+
 ## 协议与信任边界
 
 stdin/stdout 每行一个 JSON，stdout 不混日志。先调用 `{op:"init", protocol:"haojie-native-engine-v4", ruleset, catalog, combat, summonPools, recipes}`。字段分别来自 TS `RULESET_ID / CATALOG / COMBAT_RULES / SYNTHESIS_RECIPES`；`summonPools` 包含 `normal / ultimate / shrine`。拒绝旧协议和不完整初始化，不静默补数值。握手返回完整命令清单及 `completeEngine:true`；它表示实现范围，不是所有规则组合都已穷尽证明。
+
+动作树/采样扩展在同一初始化额外接收 `encoding:{...ENCODING_SCHEMA, decision_stages:DECISION_STAGES}`。旧规则请求保持 v4 兼容；原生采样拒绝未提供或结构不符的编码词表。印刷属性的可选字段保留原始存在性，不能把缺失 `mage/aura` 补成 false 后送入旧模型。`serde_json` 开启 `preserve_order` 并锁定依赖；编码枚举对象键时仍遵守 JS 数字键优先、其余键按插入顺序的规则。
 
 只接受正式 TS 引擎重建或原生创建的规范局面和已解析命令，不替代 `parseSession / parseCommand`。权威状态和正式 seed/rng 只用于规则结算与重放，不能送入策略。JSON 表示不保留 JS 环、共享引用或 `undefined` 属性身份。
 
@@ -54,8 +66,10 @@ stdin/stdout 每行一个 JSON，stdout 不混日志。先调用 `{op:"init", pr
 - `reset`：`{state}` 原子替换驻留局面，递增修订号；失败保留旧局面。
 - `step`：`{revision, commands, trace?, clearHistory?, observe?}` 逐条提交成功命令并递增修订号。遇首个失败停止并保留成功前缀；整批解析错误或过期修订号不执行。`trace` 返回清理前的逐步状态供差分；`clearHistory` 在每步成功后清理事件/日志；`observe` 在批次结束后返回决策方公开观察。
 - `export`：返回 `{revision,state}`，仅供差分和权威持久化，不能当公开观察。
+- `training-nodes`：`{observation,actor,cursors,encode?}`，返回惰性节点；开启 `encode` 同时返回实体/候选张量和固定 TinyPolicy 的 logits，空分支返回 null。此入口用于逐项跨语言验证。
+- `sample-game`：`{seed,rules,maxCommands,maxPlies,policy?:"tiny"|"uniform",policySeed?,samplerSeed?}`。原生进程内部连续采样，返回实际命令、状态、分项计数及验收用完整终态/双方公开观察。与 `reset/step` 驻留会话独立；计数或回合截断时收益为 null，异常保留成功前缀并报告。正式种子只交给权威开局，树/编码器只接收脱敏观察，策略随机流独立。宿主取消时终止此独立进程，不在候选选择中读墙钟。
 
-规则拒绝为 `invalid`；只读预检抵达随机边界为 `uncertain`。未知命令、非规范状态或未知反应仍可返回 `unsupported`，完整引擎验收遇到它直接失败，不跳过样本。协议错误返回 `error`；客户端60秒超时终止子进程，没有 TS 回退。单条失败丢弃命令副本，费用、事件、序号和 RNG 都不提交。
+规则拒绝为 `invalid`；只读预检抵达随机边界为 `uncertain`。未知命令、非规范状态或未知反应仍可返回 `unsupported`，完整引擎验收遇到它直接失败，不跳过样本。协议错误返回 `error`；客户端默认60秒超时，完整采样验收显式设为600秒，超时终止子进程，没有 TS 回退。单条失败丢弃命令副本，费用、事件、序号和 RNG 都不提交。
 
 ## 验证与计时
 
@@ -65,4 +79,6 @@ stdin/stdout 每行一个 JSON，stdout 不混日志。先调用 `{op:"init", pr
 
 `sample-benchmark.ts` 使用完全相同的 TS 公开动作树、编码和随机初始化小网络，只切换权威环境；包括每步 JSON IPC、公开观察、选招和记录指纹。进程启动及静态表初始化在计时前，创建新局在计时内；文件压缩和差分审计在计时后。两种规则各预热一次、三轮交错，核对所有选中命令、最终权威局面及双方观察。达到命令/ply上限仍为截断，不填胜负标签，也不外推终局吞吐或30天训练成本。
 
-正式保存的对照轨迹使用 TS 记录协议并经过共享读取器校验。Rust JSON 对象键序不同，不能直接将其字符串哈希写成旧格式 Observation 指纹；当前混合采样仅用于验证/测速，尚未作为训练数据生产入口。全原生候选/编码、批量模型调用、搜索用可枚举随机源和长期并行经济性仍需另行验收。
+`sampling/validate.ts` 对专项的双方视角比较根节点、第一层参数和合法命令的完整深层路径，并核对编码及网络输出。`sampling/benchmark.ts` 在同一批次内完成原生采样，与 TS 原算法预热后交错测量，逐命令和工作量计数必须相等。两端均暂存诊断命令，计时不含记录指纹、压缩或验收重放；Rust 的一批 IPC 和终态导出计入总时间。`sampling/complete.ts` 从种子独立采样到终局，再与先前保存的 TS 选招完整轨迹比较；参照命令不会送入原生选择器，此工具不报告加速倍率。
+
+正式保存的对照轨迹使用 TS 记录协议并经过共享读取器校验。即使保留 JSON 插入顺序，Rust 状态重建的键序仍不能冒充旧格式 Observation 指纹。当前通过计时外的 TS 重放生成并审核 `.jsonl.gz`；它是可验证的兼容出口，仍有额外成本。正式模型批量推理、搜索用可枚举随机源、生产记录性能和长期并行经济性需继续验收。

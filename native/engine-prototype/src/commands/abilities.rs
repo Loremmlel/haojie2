@@ -76,6 +76,169 @@ fn delayed_attack(s: &mut State, v: &Unit, owner: usize, source: &str) {
     e["from"] = json!(number(&e["from"]) + 2.0);
     e["until"] = json!(number(&e["until"]) + 2.0);
 }
+fn prepare_hook(
+    s: &State,
+    u: &Unit,
+    c: &Command,
+    range: f64,
+    catalog: &Catalog,
+) -> Result<(Target, Point), Failure> {
+    let t = enemy(s, u, c.target_id.as_deref(), range, false, catalog)?;
+    let to = point(c)?;
+    let v = t.unit.as_ref().unwrap();
+    ensure(!v.has("5"), "大肉比不能被钩子牵引。")?;
+    let mut moved = v.clone();
+    moved.x = to.x;
+    moved.y = to.y;
+    ensure(
+        t.at != to
+            && can_place(s, v, to, catalog)
+            && attack_path(s, u, &Target::from(&moved), range, None, false).is_some(),
+        "牵引落点必须合法且在钩子射程内。",
+    )?;
+    Ok((t, to))
+}
+struct Sacrifice {
+    victim: Unit,
+    same: bool,
+    summon: bool,
+    target: Option<Target>,
+    amount: f64,
+}
+fn prepare_sacrifice(
+    s: &State,
+    u: &Unit,
+    c: &Command,
+    range: f64,
+    catalog: &Catalog,
+) -> Result<Sacrifice, Failure> {
+    let v = friend(s, u, c.target_id.as_deref(), range)?;
+    ensure(
+        v.id != u.id && !v.kind.is("u25"),
+        "不可献祭自身或克隆军团。",
+    )?;
+    if u.max_hp < catalog.rule("/sacrificeMaxHpCost") {
+        return Err(Failure::InvalidOwned(format!(
+            "生命上限不足{}。",
+            catalog.rule("/sacrificeMaxHpCost")
+        )));
+    }
+    let same = v.kind.is("14");
+    let summon = c.mode.as_deref() == Some("summon");
+    ensure(!summon || same, "只有献祭另一枚献祭炮才能直接换取召唤。")?;
+    ensure(
+        summon
+            || c.column
+                .is_some_and(|x| x.fract() == 0.0 && (1.0..=9.0).contains(&x)),
+        "请选择一列。",
+    )?;
+    let mut choices: Vec<_> = targets(s)
+        .into_iter()
+        .filter(|t| {
+            t.unit.as_ref().map(Unit::side).unwrap_or(t.owner) != u.owner
+                && t.footprint().iter().any(|p| {
+                    Some(p.x) == c.column && if u.owner == 1 { p.y >= u.y } else { p.y <= u.y }
+                })
+                && attack_path(s, u, t, range, None, false).is_some()
+                && top_target(s, t, catalog)
+        })
+        .collect();
+    choices.sort_by(|a, b| {
+        if u.owner == 1 {
+            a.at.y.total_cmp(&b.at.y)
+        } else {
+            b.at.y.total_cmp(&a.at.y)
+        }
+    });
+    ensure(!choices.is_empty() || same, "这一列没有射程内的敌方目标。")?;
+    Ok(Sacrifice {
+        amount: stats(s, &v, catalog).attack,
+        victim: v,
+        same,
+        summon,
+        target: choices.into_iter().next(),
+    })
+}
+fn prepare_revival(
+    s: &State,
+    u: &Unit,
+    c: &Command,
+    range: f64,
+    catalog: &Catalog,
+) -> Result<(Value, Point), Failure> {
+    let record = s.extra["deaths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"].as_str() == c.death_id.as_deref());
+    ensure(
+        record.is_some_and(|r| {
+            r["kind"] != "grave"
+                && number(&r["owner"]) == u.owner as f64
+                && r["revived"] != true
+                && number(&r["ply"]) < s.ply
+                && number(&r["ply"]) >= s.ply - 4.0
+        }),
+        "只能选择前两个己方回合窗口内尚未复活的友方阵亡记录。",
+    )?;
+    let record = record.unwrap();
+    let to = point(c)?;
+    let key = crate::preparation::kind(&record["kind"]).key();
+    let ghost = template(s, &key, u.owner, to, "preview", catalog);
+    ensure(
+        can_place(s, &ghost, to, catalog)
+            && attack_path(s, u, &point_target(to), range, None, false).is_some(),
+        "复活位置须在射程内合法空格。",
+    )?;
+    Ok((record.clone(), to))
+}
+/// 对应 TS prepareSkillInspection：只投影施法者资源与操作，不复制全局、不执行技能效果。
+/// 大参数域共用正式入口的目标/几何准备；预检通过后仍由完整副本继续结算到随机边界。
+pub fn prepare_inspection(s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
+    let raw = unit(s, c.unit_id.as_deref())?;
+    let k = c.ability.as_ref().unwrap_or(&raw.kind);
+    let key = k.key();
+    if !["u19", "7", "14"].contains(&key.as_str()) {
+        return Ok(());
+    }
+    ensure(raw.has(&key), "该棋子没有选定的技能。")?;
+    let mut u = actor(s, c, catalog)?.clone();
+    if *k != u.kind {
+        u.extra
+            .extend(reserve(&raw, k, catalog).as_object().unwrap().clone());
+    }
+    ensure(!u.silenced, "沉默已移除此随从的技能。")?;
+    ensure(
+        !s.effect(&u, "freeze") && !s.effect(&u, "stun"),
+        "冻结或眩晕中不能施放技能。",
+    )?;
+    ensure(
+        u.mode == "none" || u.mode == "skill",
+        "本回合已选择另一操作模式，剩余攻击不能换成移动或技能。",
+    )?;
+    if u.mode == "none" {
+        ensure(
+            stats(s, &u, catalog).operations_left > 0.0,
+            "本回合操作已用完。",
+        )?;
+        u.mode = "skill".into();
+        u.shots = 0.0;
+        u.moves = 0.0;
+    }
+    let range = stats(s, &u, catalog).range;
+    match key.as_str() {
+        "u19" => {
+            prepare_revival(s, &u, c, range, catalog)?;
+        }
+        "7" => {
+            prepare_hook(s, &u, c, range, catalog)?;
+        }
+        _ => {
+            prepare_sacrifice(s, &u, c, range, catalog)?;
+        }
+    }
+    Ok(())
+}
 pub fn skill(
     s: &mut State,
     c: &Command,
@@ -256,72 +419,26 @@ fn resolve_skill(
             }
         }
         "7" => {
-            let t = enemy(s, &u, c.target_id.as_deref(), range, false, catalog)?;
-            let to = point(c)?;
-            let v = t.unit.as_ref().unwrap();
-            ensure(!v.has("5"), "大肉比不能被钩子牵引。")?;
-            let mut moved = v.clone();
-            moved.x = to.x;
-            moved.y = to.y;
-            ensure(
-                t.at != to
-                    && can_place(s, v, to, catalog)
-                    && attack_path(s, &u, &Target::from(&moved), range, None, false).is_some(),
-                "牵引落点必须合法且在钩子射程内。",
-            )?;
+            let (t, to) = prepare_hook(s, &u, c, range, catalog)?;
             if !protected(s, &t, &source, catalog, ctx)? {
                 ctx.emit(s,json!({"type":"move","stage":"trigger","from":t.actor(),"to":to,"unitId":t.id,"owner":t.owner}),None);
                 move_to(s, &t.id, to);
             }
         }
         "14" => {
-            let v = friend(s, &u, c.target_id.as_deref(), range)?;
-            ensure(
-                v.id != u.id && !v.kind.is("u25"),
-                "不可献祭自身或克隆军团。",
-            )?;
-            if u.max_hp < catalog.rule("/sacrificeMaxHpCost") {
-                return Err(Failure::InvalidOwned(format!(
-                    "生命上限不足{}。",
-                    catalog.rule("/sacrificeMaxHpCost")
-                )));
-            }
-            let same = v.kind.is("14");
-            let summon = c.mode.as_deref() == Some("summon");
-            ensure(!summon || same, "只有献祭另一枚献祭炮才能直接换取召唤。")?;
-            ensure(
-                summon
-                    || c.column
-                        .is_some_and(|x| x.fract() == 0.0 && (1.0..=9.0).contains(&x)),
-                "请选择一列。",
-            )?;
-            let mut choices: Vec<_> = targets(s)
-                .into_iter()
-                .filter(|t| {
-                    t.unit.as_ref().map(Unit::side).unwrap_or(t.owner) != u.owner
-                        && t.footprint().iter().any(|p| {
-                            Some(p.x) == c.column
-                                && if u.owner == 1 { p.y >= u.y } else { p.y <= u.y }
-                        })
-                        && attack_path(s, &u, t, range, None, false).is_some()
-                        && top_target(s, t, catalog)
-                })
-                .collect();
-            choices.sort_by(|a, b| {
-                if u.owner == 1 {
-                    a.at.y.total_cmp(&b.at.y)
-                } else {
-                    b.at.y.total_cmp(&a.at.y)
-                }
-            });
-            ensure(!choices.is_empty() || same, "这一列没有射程内的敌方目标。")?;
-            let amount = stats(s, &v, catalog).attack;
+            let Sacrifice {
+                victim: v,
+                same,
+                summon,
+                target,
+                amount,
+            } = prepare_sacrifice(s, &u, c, range, catalog)?;
             lower_max(s, &u.id, catalog.rule("/sacrificeMaxHpCost"), catalog, ctx)?;
             let mut sacrifice = source.clone();
             sacrifice.kind = "sacrifice";
             kill(s, &v, &sacrifice, catalog, ctx)?;
-            if !summon && let Some(t) = choices.first() {
-                damage(s, t, amount, &source, catalog, ctx)?;
+            if !summon && let Some(t) = target {
+                damage(s, &t, amount, &source, catalog, ctx)?;
             }
             if same {
                 s.summon_slots += 1.0;
@@ -496,31 +613,8 @@ fn resolve_skill(
             }
         }
         "u19" => {
-            let record = s.extra["deaths"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|r| r["id"].as_str() == c.death_id.as_deref())
-                .cloned();
-            ensure(
-                record.as_ref().is_some_and(|r| {
-                    r["kind"] != "grave"
-                        && number(&r["owner"]) == u.owner as f64
-                        && r["revived"] != true
-                        && number(&r["ply"]) < s.ply
-                        && number(&r["ply"]) >= s.ply - 4.0
-                }),
-                "只能选择前两个己方回合窗口内尚未复活的友方阵亡记录。",
-            )?;
-            let record = record.unwrap();
-            let to = point(c)?;
+            let (record, to) = prepare_revival(s, &u, c, range, catalog)?;
             let key = crate::preparation::kind(&record["kind"]).key();
-            let ghost = template(s, &key, u.owner, to, "preview", catalog);
-            ensure(
-                can_place(s, &ghost, to, catalog)
-                    && attack_path(s, &u, &point_target(to), range, None, false).is_some(),
-                "复活位置须在射程内合法空格。",
-            )?;
             let group = if key == "u25" {
                 let id = format!("revived-group{}", s.serial);
                 s.serial += 1;

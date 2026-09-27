@@ -84,6 +84,8 @@ pub struct Catalog {
     pub combat: Value,
     pub pools: BTreeMap<String, Vec<Kind>>,
     pub recipes: Vec<Value>,
+    pub printed: Vec<Value>,
+    pub encoding: Value,
 }
 impl Deref for Catalog {
     type Target = BTreeMap<String, Definition>;

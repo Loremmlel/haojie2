@@ -78,6 +78,11 @@ const nativePaths = [
   'src/setup/shrines.rs',
   'src/setup/synthesis.rs',
   'src/setup/runtime.rs',
+  'src/training/actions.rs',
+  'src/training/tree.rs',
+  'src/training/encoding.rs',
+  'src/training/policy.rs',
+  'src/training/sampler.rs',
 ].map((p) => `native/engine-prototype/${p}`);
 save('manifest.json', {
   head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),

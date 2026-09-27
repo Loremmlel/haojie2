@@ -25,7 +25,7 @@ struct Prepared {
     path: Vec<crate::model::Point>,
     can_pierce: bool,
 }
-fn healing_attack(u: &Unit, catalog: &Catalog) -> bool {
+pub fn healing_attack(u: &Unit, catalog: &Catalog) -> bool {
     catalog[&u.kind.key()].attack < 0.0
         || u.signed()
         || (!u.silenced && u.any(&["2", "u21", "s14"]))
@@ -787,6 +787,54 @@ pub fn retaliate(
     ctx.retaliations.insert(pair);
     perform(s, u, t, &options, catalog, ctx)
 }
+/// 只投影攻击者的本次操作；与 TS chooseMode + attackTarget 的预检边界相同。
+fn command_attack(s: &State, c: &Command, catalog: &Catalog) -> Result<(Unit, Target), Failure> {
+    let mut u = actor(s, c, catalog)?.clone();
+    let computed = stats(s, &u, catalog);
+    ensure(
+        u.mode == "none" || u.mode == "attack",
+        "本回合已选择另一操作模式，剩余攻击不能换成移动或技能。",
+    )?;
+    if u.mode == "none" {
+        if computed.operations_left <= 0.0 && u.bonus_attacks > 0.0 {
+            u.bonus_attacks -= 1.0;
+            u.bonus_sequence = true;
+        } else {
+            ensure(computed.operations_left > 0.0, "本回合操作已用完。")?;
+        }
+        u.mode = "attack".into();
+        u.shots = 0.0;
+        u.moves = 0.0;
+    }
+    ensure(
+        stats(s, &u, catalog).remaining > 0.0,
+        "本次攻击操作次数已用完。",
+    )?;
+    if let Some(path) = &c.path {
+        ensure(
+            u.weapon("u28")
+                && crate::geometry::valid_attack_route(&u, path, stats(s, &u, catalog).range),
+            "所选穿透路径不合法。",
+        )?;
+    }
+    let t = c
+        .target_id
+        .as_deref()
+        .and_then(|id| find_target(s, id))
+        .or_else(|| {
+            if c.target_id.is_none() {
+                c.path.as_ref().and_then(|path| {
+                    crate::geometry::piercing_targets(s, &u, path, catalog)
+                        .last()
+                        .map(|(t, _)| t.clone())
+                })
+            } else {
+                None
+            }
+        })
+        .ok_or(Failure::Invalid("请选择有效的目标。"))?;
+    Ok((u, t))
+}
 /// 只接受经 TS 重建的规范局面；阶段校验后复制，反应/攻击失败均不提交副本。
 /// 成功后统一刷新保护、光环、虹吸与部署行，再检查终局，不驱动 UI 或选招。
 pub fn apply(
@@ -796,6 +844,35 @@ pub fn apply(
     preview: bool,
 ) -> Result<State, Failure> {
     stage(previous, c, catalog)?;
+    if preview && c.kind == "attack" {
+        let (u, t) = command_attack(previous, c, catalog)?;
+        prepare(
+            previous,
+            &u,
+            &t,
+            &Options {
+                mode: c.mode.clone(),
+                direction: c.direction.clone(),
+                path: c.path.clone(),
+                ..Default::default()
+            },
+            catalog,
+        )?;
+    }
+    if preview
+        && c.kind == "react"
+        && let Some(r) = previous
+            .pending
+            .first()
+            .filter(|r| r["kind"] == "hut-spawn")
+    {
+        crate::reactions::prepare_hut(
+            previous,
+            r,
+            c,
+            &crate::reactions::hut_points(previous, r, catalog),
+        )?;
+    }
     let mut s = previous.clone();
     s.events.clear();
     normalize_guards(&mut s);
@@ -806,50 +883,7 @@ pub fn apply(
     if c.kind == "react" {
         crate::reactions::react(&mut s, c, catalog, &mut ctx)?;
     } else {
-        let mut u = actor(&s, c, catalog)?.clone();
-        let computed = stats(&s, &u, catalog);
-        ensure(
-            u.mode == "none" || u.mode == "attack",
-            "本回合已选择另一操作模式，剩余攻击不能换成移动或技能。",
-        )?;
-        if u.mode == "none" {
-            if computed.operations_left <= 0.0 && u.bonus_attacks > 0.0 {
-                u.bonus_attacks -= 1.0;
-                u.bonus_sequence = true;
-            } else {
-                ensure(computed.operations_left > 0.0, "本回合操作已用完。")?;
-            }
-            u.mode = "attack".into();
-            u.shots = 0.0;
-            u.moves = 0.0;
-        }
-        ensure(
-            stats(&s, &u, catalog).remaining > 0.0,
-            "本次攻击操作次数已用完。",
-        )?;
-        if let Some(path) = &c.path {
-            ensure(
-                u.weapon("u28")
-                    && crate::geometry::valid_attack_route(&u, path, stats(&s, &u, catalog).range),
-                "所选穿透路径不合法。",
-            )?;
-        }
-        let t = c
-            .target_id
-            .as_deref()
-            .and_then(|id| find_target(&s, id))
-            .or_else(|| {
-                if c.target_id.is_none() {
-                    c.path.as_ref().and_then(|path| {
-                        crate::geometry::piercing_targets(&s, &u, path, catalog)
-                            .last()
-                            .map(|(t, _)| t.clone())
-                    })
-                } else {
-                    None
-                }
-            })
-            .ok_or(Failure::Invalid("请选择有效的目标。"))?;
+        let (u, t) = command_attack(&s, c, catalog)?;
         let mut hit_ids = vec![t.id.clone()];
         if u.piercing() && c.mode.as_deref() != Some("heal") {
             let path = c

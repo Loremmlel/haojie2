@@ -202,12 +202,8 @@ fn choose_summons(s: &mut State, c: &Command, ctx: &mut Resolution) -> Result<()
     );
     Ok(())
 }
-fn deploy(
-    s: &mut State,
-    c: &Command,
-    catalog: &Catalog,
-    ctx: &mut Resolution,
-) -> Result<(), Failure> {
+/// 对应 TS prepareDeploy；先只读检查部署域，通过后才复制和模拟完整结算。
+fn prepare_deploy(s: &State, c: &Command, catalog: &Catalog) -> Result<(Value, Point), Failure> {
     let card = card(s, c)
         .filter(|v| {
             let d = &catalog[&kind(&v["kind"]).key()];
@@ -225,6 +221,16 @@ fn deploy(
         can_deploy(s, &ghost, at, catalog),
         "非法部署：检查行权限、占位、基地与独行侠禁区。",
     )?;
+    Ok((card, at))
+}
+fn deploy(
+    s: &mut State,
+    c: &Command,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+) -> Result<(), Failure> {
+    let (card, at) = prepare_deploy(s, c, catalog)?;
+    let k = kind(&card["kind"]).key();
     deploy_unit(
         s,
         &k,
@@ -499,6 +505,20 @@ pub fn apply(
     preview: bool,
 ) -> Result<State, Failure> {
     stage(previous, c, catalog)?;
+    if preview {
+        match c.kind.as_str() {
+            "deploy" => {
+                prepare_deploy(previous, c, catalog)?;
+            }
+            "clock" => {
+                crate::shrines::prepare_clock(previous, c, catalog)?;
+            }
+            "skill" => {
+                crate::abilities::prepare_inspection(previous, c, catalog)?;
+            }
+            _ => {}
+        }
+    }
     let mut s = previous.clone();
     normalize_guards(&mut s);
     s.events.clear();

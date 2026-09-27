@@ -1,9 +1,13 @@
 #[path = "commands/abilities.rs"]
 mod abilities;
+#[path = "training/actions.rs"]
+mod actions;
 #[path = "commands/combat.rs"]
 mod combat;
 #[path = "commands/damage.rs"]
 mod damage;
+#[path = "training/encoding.rs"]
+mod encoding;
 #[path = "core/geometry.rs"]
 mod geometry;
 #[path = "commands/lifecycle.rs"]
@@ -11,6 +15,8 @@ mod lifecycle;
 mod model;
 #[path = "commands/movement.rs"]
 mod movement;
+#[path = "training/policy.rs"]
+mod policy;
 #[path = "commands/preparation.rs"]
 mod preparation;
 #[path = "commands/reactions.rs"]
@@ -19,6 +25,8 @@ mod reactions;
 mod resolution;
 #[path = "setup/runtime.rs"]
 mod runtime;
+#[path = "training/sampler.rs"]
+mod sampler;
 #[path = "setup/shrines.rs"]
 mod shrines;
 #[path = "commands/spells.rs"]
@@ -27,6 +35,8 @@ mod spells;
 mod stats;
 #[path = "setup/synthesis.rs"]
 mod synthesis;
+#[path = "training/tree.rs"]
+mod tree;
 
 use model::{COMMANDS, Catalog, Command, Definition, Failure, PROTOCOL, RULESET, State};
 use serde::{Deserialize, Serialize};
@@ -183,6 +193,8 @@ fn handle(
             if catalog.is_some() {
                 return Err("already initialized".into());
             }
+            let printed: Vec<Value> =
+                serde_json::from_value(request["catalog"].clone()).map_err(|e| e.to_string())?;
             let definitions: Vec<Definition> =
                 serde_json::from_value(request["catalog"].take()).map_err(|e| e.to_string())?;
             let mut entries = BTreeMap::new();
@@ -256,15 +268,46 @@ fn handle(
             {
                 return Err("invalid synthesis recipes".into());
             }
+            let encoding = request["encoding"].take();
+            if !encoding.is_null() {
+                encoding::validate_schema(&encoding)?;
+            }
             *catalog = Some(Catalog {
                 entries,
                 combat,
                 pools,
                 recipes,
+                printed,
+                encoding,
             });
             Ok(
                 json!({"protocol":PROTOCOL,"ruleset":RULESET,"commands":COMMANDS,"completeEngine":true}),
             )
+        }
+        "sample-game" => sampler::game(&request, catalog.as_ref().ok_or("initialize first")?),
+        "training-nodes" => {
+            let catalog = catalog.as_ref().ok_or("initialize first")?;
+            let actor = request["actor"].as_u64().ok_or("actor required")? as usize;
+            let cursors: Vec<Vec<usize>> =
+                serde_json::from_value(request["cursors"].take()).map_err(|e| e.to_string())?;
+            let mut tree = tree::Tree::new(&request["observation"], actor, catalog)?;
+            let policy = policy::TinyPolicy::new(73129);
+            let mut nodes = vec![];
+            let mut encoded = vec![];
+            let mut logits = vec![];
+            for cursor in cursors {
+                let node = tree.node(&cursor)?;
+                if request["encode"] == true && !node.choices.is_empty() {
+                    let input = encoding::encode(&tree, &node)?;
+                    logits.push(json!(policy.logits(&input)));
+                    encoded.push(json!(input));
+                } else if request["encode"] == true {
+                    logits.push(Value::Null);
+                    encoded.push(Value::Null);
+                }
+                nodes.push(node.wire());
+            }
+            Ok(json!({"nodes":nodes,"encoded":encoded,"logits":logits}))
         }
         "run" | "load" => {
             let catalog = catalog.as_ref().ok_or("initialize first")?;

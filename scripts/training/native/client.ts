@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { SYNTHESIS_RECIPES } from '../../../src/engine/setup/synthesis';
+import { ENCODING_SCHEMA } from '../../../src/ai/training/encoding/schema';
+import { DECISION_STAGES } from '../../../src/ai/training/encoding/decision';
 import {
   CATALOG,
   COMBAT_RULES,
@@ -14,7 +16,7 @@ import {
 export const protocol = 'haojie-native-engine-v4';
 
 /** 实验用常驻进程，一次一个请求；超时或异常直接失败，禁止隐式回退到 TS。 */
-export async function nativeClient(executable: string) {
+export async function nativeClient(executable: string, timeoutMs = 60_000) {
   const child = spawn(executable, [], {
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
@@ -49,8 +51,8 @@ export async function nativeClient(executable: string) {
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             child.kill();
-            reject(new Error('Rust 请求超过60秒'));
-          }, 60_000);
+            reject(new Error(`Rust 请求超过${timeoutMs / 1000}秒`));
+          }, timeoutMs);
         }),
       ]);
     } finally {
@@ -76,6 +78,7 @@ export async function nativeClient(executable: string) {
         shrine: SHRINE_POOL,
       },
       recipes: SYNTHESIS_RECIPES,
+      encoding: { ...ENCODING_SCHEMA, decision_stages: DECISION_STAGES },
     });
     assert.equal(hello.protocol, protocol);
     assert.equal(hello.ruleset, RULESET_ID);

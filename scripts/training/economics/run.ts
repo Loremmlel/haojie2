@@ -40,7 +40,11 @@ export interface SamplingEnvironment {
   step(actor: Player, input: unknown): TrainingStatus | Promise<TrainingStatus>;
 }
 
-/** 单进程真实自然开局；全部成功命令持久化，未知终局不填收益，异常不吞掉。 */
+/**
+ * 单进程真实自然开局；全部成功命令交给调用者，未知终局不填收益，异常不吞掉。
+ * 默认输出可重放训练记录；commands 只供原生性能对照，显式改用诊断格式且不计算指纹。
+ * 诊断命令必须经过共享引擎重放与正式记录读取器审核后，才可进入训练数据。
+ */
 export async function sampleWorker(
   options: Options,
   emit: (row: unknown) => Promise<void>,
@@ -48,6 +52,7 @@ export async function sampleWorker(
     options: TrainingOptions,
   ) => SamplingEnvironment | Promise<SamplingEnvironment> = (options) =>
     new TrainingEnvironment(options),
+  recordMode: 'replayable' | 'commands' = 'replayable',
 ) {
   const started = performance.now();
   const deadline = started + options.seconds * 1000;
@@ -83,7 +88,9 @@ export async function sampleWorker(
       const commandTypes: Record<string, number> = {};
       await emit({
         type: 'game',
-        ...recordHeader(env),
+        ...(recordMode === 'replayable'
+          ? recordHeader(env)
+          : { format: 'haojie-sampling-diagnostic-v1', limits: env.limits() }),
         game,
         gameId: `economics:${options.rules}:${options.policy}:${seed}`,
         source: 'neural',
@@ -142,7 +149,7 @@ export async function sampleWorker(
           }
           assert.ok(selected.command, selected.error ?? '常规决策不能pass');
           start = performance.now();
-          const before = fingerprint(observation);
+          const before = recordMode === 'replayable' ? fingerprint(observation) : undefined;
           metrics.recordMs += performance.now() - start;
           const index = env.status().commands;
           start = performance.now();
@@ -157,7 +164,7 @@ export async function sampleWorker(
             actor,
             command: selected.command,
             before,
-            after: fingerprint(await env.observation()),
+            after: recordMode === 'replayable' ? fingerprint(await env.observation()) : undefined,
             source: options.policy,
           });
           metrics.recordMs += performance.now() - start;
@@ -169,7 +176,8 @@ export async function sampleWorker(
             game,
             index: env.status().commands,
             actor,
-            before: fingerprint(await env.observation(actor)),
+            before:
+              recordMode === 'replayable' ? fingerprint(await env.observation(actor)) : undefined,
             error,
           });
           break;
@@ -183,7 +191,7 @@ export async function sampleWorker(
         seed,
         ...env.status(),
         interrupted,
-        after: fingerprint(await env.observation()),
+        after: recordMode === 'replayable' ? fingerprint(await env.observation()) : undefined,
         elapsedMs: performance.now() - gameStart,
         metrics,
         commandTypes,
