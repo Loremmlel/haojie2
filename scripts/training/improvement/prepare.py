@@ -10,9 +10,7 @@ from pathlib import Path
 import torch
 from haojie_training.data import collate_examples
 from haojie_training.model import ModelConfig
-from haojie_training.prepare import ROOT, load_file, tensor_example
-
-from scripts.training.search.continuous.dataset import digest, save_split
+from haojie_training.prepare import ROOT, digest, load_file, save_split, tensor_example
 
 
 def experimental_file(path, config, value_only=False):

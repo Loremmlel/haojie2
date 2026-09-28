@@ -9,55 +9,13 @@ from pathlib import Path
 import torch
 
 from haojie_training.data import (
-    FORMAT,
-    SHARD_FORMAT,
     collate_examples,
     load_dataset,
     select_batch,
 )
 from haojie_training.evaluate import evaluate, validate_split, value_baselines, value_quality
 from haojie_training.model import ModelConfig, PolicyValueNet
-from haojie_training.prepare import load_file
-
-
-def digest(path):
-    with Path(path).open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
-
-
-def save_split(output, name, chunks, metadata, records):
-    """逐块落盘；源张量只读，分片身份与索引使用同一份来源摘要。"""
-    shards = []
-    known = 0
-    for batch in chunks:
-        file = f"{name}-{len(shards):05d}.pt"
-        torch.save({"format": FORMAT, "metadata": metadata, "tensors": batch}, output / file)
-        shards.append(
-            {
-                "file": file,
-                "sha256": digest(output / file),
-                "examples": len(batch["value"]),
-            }
-        )
-        known += int(batch["value_mask"].sum())
-    if not shards:
-        raise ValueError("没有实际搜索根，不能把空数据标记为训练完成")
-    meta = {
-        **metadata,
-        "records": records,
-        "groups": sorted({r["group"] for r in records}),
-        "game_ids": sorted({r["game_id"] for r in records}),
-    }
-    torch.save(
-        {"format": SHARD_FORMAT, "metadata": meta, "shards": shards},
-        output / f"{name}.pt",
-    )
-    return {
-        "groups": meta["groups"],
-        "examples": len(records),
-        "value_labels": known,
-        "shards": len(shards),
-    }
+from haojie_training.prepare import digest, load_file, save_split
 
 
 def encode(path, output):

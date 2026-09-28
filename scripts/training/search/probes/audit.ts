@@ -3,11 +3,11 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { positions } from './positions';
-import { reference } from './reference';
-import { search } from './puct';
-import { encodingSourceHash } from '../encode';
-import { inspectTrainingCommand } from '../../../src/ai/training/queries';
+import { positions } from '../positions';
+import { reference } from '../reference';
+import { search } from '../puct';
+import { encodingSourceHash } from '../../encode';
+import { inspectTrainingCommand } from '../../../../src/ai/training/queries';
 
 const { values } = parseArgs({ options: { input: { type: 'string' } } });
 assert.ok(values.input, '指定--input目录');
@@ -175,7 +175,7 @@ const report = {
       referenceValue,
       referenceBest,
     })),
-  auditScriptSha256: digest('scripts/training/search/audit.ts'),
+  auditScriptSha256: digest('scripts/training/search/probes/audit.ts'),
 };
 writeFileSync(resolve(directory, 'audit.json'), JSON.stringify(report, null, 2), { flag: 'wx' });
 console.log(JSON.stringify(report));

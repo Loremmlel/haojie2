@@ -4,12 +4,12 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { positions } from './positions';
-import { reference } from './reference';
-import { search } from './puct';
-import { encodingSourceHash } from '../encode';
-import { RULESET_ID } from '../../../src/engine/catalog';
-import { HAOJIE_RULESET } from '../../../src/engine/online/player-view';
+import { positions } from '../positions';
+import { reference } from '../reference';
+import { search } from '../puct';
+import { encodingSourceHash } from '../../encode';
+import { RULESET_ID } from '../../../../src/engine/catalog';
+import { HAOJIE_RULESET } from '../../../../src/engine/online/player-view';
 
 /** 独立开发探针，不采集训练标签；协议先落盘，预算/种子固定，不按中途结果挑局面。 */
 export function main(output: string) {
@@ -18,9 +18,12 @@ export function main(output: string) {
   const write = (name: string, data: unknown) =>
     writeFileSync(resolve(output, name), JSON.stringify(data, null, 2), { flag: 'wx' });
   const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
-  const files = ['puct.ts', 'positions.ts', 'reference.ts', 'probe.ts'].map(
-    (f) => `scripts/training/search/${f}`,
-  );
+  const files = [
+    'scripts/training/search/puct.ts',
+    'scripts/training/search/positions.ts',
+    'scripts/training/search/reference.ts',
+    'scripts/training/search/probes/probe.ts',
+  ];
   const hashes = Object.fromEntries(files.map((f) => [f, hash(readFileSync(f))]));
   const source = encodingSourceHash();
   const cases = positions();

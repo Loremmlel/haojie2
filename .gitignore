@@ -1,6 +1,7 @@
 node_modules/
 dist/
 artifacts/
+/native/engine-prototype/target/
 *.tsbuildinfo
 .DS_Store
 .venv/

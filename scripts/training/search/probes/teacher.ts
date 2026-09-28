@@ -3,10 +3,10 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { positions } from './positions';
-import { encodingSourceHash } from '../encode';
-import { decide } from '../../../src/ai/planning/search';
-import { TrainingActionTree } from '../../../src/ai/training/action-tree';
+import { positions } from '../positions';
+import { encodingSourceHash } from '../../encode';
+import { decide } from '../../../../src/ai/planning/search';
+import { TrainingActionTree } from '../../../../src/ai/training/action-tree';
 
 /** 主探针之后追加的探索性教师参照；使用原30局面，不据教师表现重选题或调搜索参数。 */
 const { values } = parseArgs({ options: { input: { type: 'string' } } });
@@ -28,7 +28,7 @@ writeFileSync(
       configs,
       sourceSha256: protocol.sourceSha256,
       baseProtocolSha256: digest(readFileSync(resolve(directory, 'protocol.json'))),
-      scriptSha256: digest(readFileSync('scripts/training/search/teacher.ts')),
+      scriptSha256: digest(readFileSync('scripts/training/search/probes/teacher.ts')),
     },
     null,
     2,

@@ -7,6 +7,7 @@ const excluded = new Set([
   'node_modules',
   'dist',
   'artifacts',
+  'target',
   '.venv',
   '__pycache__',
   '.ruff_cache',
