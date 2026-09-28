@@ -40,7 +40,7 @@ const sourceFiles = [
   'scripts/training/improvement/search.ts',
   'scripts/training/improvement/model.py',
   'scripts/training/search/puct.ts',
-  'scripts/training/search/recovery/spatial.py',
+  'training/haojie_training/research/spatial.py',
   'scripts/training/python-policy.ts',
   'training/haojie_training/model.py',
   'training/haojie_training/inference.py',

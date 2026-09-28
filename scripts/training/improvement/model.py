@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from scripts.training.search.recovery.spatial import SpatialPolicyNet
+from haojie_training.research.spatial import SpatialPolicyNet
 
 FEATURES = ("absolute", "relative", "relations", "fields", "candidate")
 ARMS = ("spatial", *FEATURES, "combined", "capacity")

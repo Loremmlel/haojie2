@@ -74,7 +74,7 @@ def main():
         [
             *Path(__file__).parent.glob("*.py"),
             *Path("training/haojie_training").glob("*.py"),
-            Path("scripts/training/search/recovery/spatial.py"),
+            Path("training/haojie_training/research/spatial.py"),
         ]
     )
     source_hashes = {str(p.resolve().relative_to(root)): digest(p) for p in sources}

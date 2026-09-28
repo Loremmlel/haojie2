@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from spatial import SpatialPolicyNet
+from haojie_training.research.spatial import SpatialPolicyNet
 
 from haojie_training.data import load_dataset, sample_indices, select_batch
 from haojie_training.evaluate import evaluate, validate_split, value_baselines

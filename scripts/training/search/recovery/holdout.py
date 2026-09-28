@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import torch
-from spatial import SpatialPolicyNet
+from haojie_training.research.spatial import SpatialPolicyNet
 
 from haojie_training.data import collate_examples, load_dataset, select_batch
 from haojie_training.evaluate import evaluate

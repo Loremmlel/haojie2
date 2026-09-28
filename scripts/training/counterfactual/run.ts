@@ -88,7 +88,7 @@ if (process.argv.includes('--worker')) {
     'scripts/training/search/puct.ts',
     'scripts/training/improvement/model.py',
     'scripts/training/improvement/serve.py',
-    'scripts/training/search/recovery/spatial.py',
+    'training/haojie_training/research/spatial.py',
     'training/haojie_training/model.py',
     'training/haojie_training/inference.py',
     'training/haojie_training/data.py',

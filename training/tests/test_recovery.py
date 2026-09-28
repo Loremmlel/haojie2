@@ -1,6 +1,5 @@
 """空间试验只改变候选上下文，保持公开输入、填充遮罩及实验检查点隔离。"""
 
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,8 +10,7 @@ from haojie_training.data import synthetic_batch
 from haojie_training.model import ModelConfig
 from haojie_training.runtime import checkpoint_config
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/training/search/recovery"))
-from spatial import SpatialPolicyNet  # noqa: E402
+from haojie_training.research.spatial import SpatialPolicyNet
 
 
 class RecoveryTests(unittest.TestCase):

@@ -9,7 +9,7 @@ import torch
 from haojie_training.inference import main
 from haojie_training.model import ModelConfig, PolicyValueNet
 
-from .spatial import SpatialPolicyNet
+from haojie_training.research.spatial import SpatialPolicyNet
 
 
 def digest(path):

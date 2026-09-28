@@ -15,7 +15,7 @@ from scripts.training.improvement.model import (  # noqa: E402
     relation_edges,
 )
 from scripts.training.improvement.value.train import features  # noqa: E402
-from scripts.training.search.recovery.spatial import SpatialPolicyNet  # noqa: E402
+from haojie_training.research.spatial import SpatialPolicyNet  # noqa: E402
 
 
 class ImprovementTests(unittest.TestCase):
