@@ -2,7 +2,7 @@
 
 Python 3.12独立环境，与TypeScript规则代码同仓库维护。当前实现约11.70M参数的实体Transformer、候选评分/价值头、共享TypeScript公开状态编码和动作分解、教师数据准备、整局验证划分、张量训练与续训，以及CPU/XPU精度基准。网络CLI已能完成完整对局，研究入口支持教师候选域上的网络叶值PUCT；浏览器已验收本地HTTP前向，单HTML模型部署尚未接入。训练loss与教师拟合率没有对作者胜率含义。
 
-当前阶段与实际实验记录维护在[训练进度](../docs/ai/TRAINING-PROGRESS.md)。
+当前阶段见[唯一状态入口](../docs/ai/STATUS.md)；原始实验记录见[历史进度](../docs/ai/history/TRAINING-PROGRESS.md)。
 
 ## 安装与检查
 
@@ -87,7 +87,7 @@ npm run train:selfplay:parallel -- --games 40 --seed 2026092421 --workers 6 --ru
 
 预算审计从每局/实际回合/操作者的首个非缓存、多候选play位置中，按公开指纹哈希选样；要求至少4个场上棋子。对每个选中位置重新比较medium/320、hard/800、hard/1600，并重复决策核对确定性；不继承原局的缓存或预算历史。`changedHardBudgetCommands`只是换招数量，不能当作1600更强的证据。
 
-混合教师文件默认编码双方实际动作。向prepare传`--teacher-difficulty hard`可只保留hard方完整命令的全部分步标签；manifest逐局记录保留/排除的命令数，种子族划分仍保持完整。教师来源缺失或筛选后出现空局会报错。筛选不会把medium的动作改成hard答案。终局价值反映原混合对手续局，不能解释为对统一强对手的胜率。大批采样及训练仍按[训练进度](../docs/ai/TRAINING-PROGRESS.md)的分阶段门槛推进。
+混合教师文件默认编码双方实际动作。向prepare传`--teacher-difficulty hard`可只保留hard方完整命令的全部分步标签；manifest逐局记录保留/排除的命令数，种子族划分仍保持完整。教师来源缺失或筛选后出现空局会报错。筛选不会把medium的动作改成hard答案。终局价值反映原混合对手续局，不能解释为对统一强对手的胜率。大批采样及训练必须先核对[当前状态](../docs/ai/STATUS.md)和适用实验协议，历史计划不自动授权扩量。
 
 ### 学生局面教师重标
 
@@ -168,7 +168,7 @@ training/.venv/Scripts/python.exe -X utf8 -m haojie_training.benchmark --devices
 
 报告检查实际矩阵输出dtype、权重变化、参数/梯度/loss有限性、跳过更新数，并在训练前比较相同FP32权重的输出差异。随机模型短测的误差和top1一致率不代表训练收敛或游戏棋力。使用eager模式，没有torch.compile；后续编译优化需分别报告编译成本与稳态速度。
 
-本机Core Ultra 5 225H / Arc 130T的原11.55M骨架测量见[训练性能报告](../docs/ai/TRAINING-PYTORCH-2026-09-22.md)；v2在batch 32、256实体、117候选下的新版对照见[训练进度](../docs/ai/TRAINING-PROGRESS.md)：CPU FP32约23.93样本/秒，XPU BF16约84.88样本/秒。两次形状/网络不同，不能直接比较绝对吞吐。命令中的8线程来自本机CPU预试，换机器应重新选择。
+本机Core Ultra 5 225H / Arc 130T的原11.55M骨架测量见[训练性能报告](../docs/ai/TRAINING-PYTORCH-2026-09-22.md)；v2在batch 32、256实体、117候选下的新版对照见[历史进度](../docs/ai/history/TRAINING-PROGRESS.md)：CPU FP32约23.93样本/秒，XPU BF16约84.88样本/秒。两次形状/网络不同，不能直接比较绝对吞吐。命令中的8线程来自本机CPU预试，换机器应重新选择。
 
 ## 浏览器推理验收
 
@@ -184,7 +184,7 @@ npm run bench:training:browser -- --data artifacts/training/pilot-20260922/brows
 
 所有资产由本机服务提供，服务器只允许GET预列路径；不发布目录、不访问CDN。ONNX Runtime Web 1.30.0的`ort.webgpu.bundle.min.mjs`必须配套`ort-wasm-simd-threaded.asyncify.wasm`，不可混用旧JSEP文件。CPU当前用同一运行库的WASM单线程；混合FP16是主干/价值头FP16＋候选评分FP32，外部浮点输入/输出仍为FP32。
 
-实测见[训练进度](../docs/ai/TRAINING-PROGRESS.md#浏览器实测117m模型)。这只是独立开发工具，不进入发行HTML；本次Codex内置浏览器阻止file://，所以记录为本地HTTP。浏览器完整命令解码、MCTS、单HTML内嵌运行库/权重、离线启动和峰值内存另行验收。
+实测见[历史进度](../docs/ai/history/TRAINING-PROGRESS.md#浏览器实测117m模型)。这只是独立开发工具，不进入发行HTML；当次Codex内置浏览器阻止file://，所以记录为本地HTTP。浏览器完整命令解码、MCTS、单HTML内嵌运行库/权重、离线启动和峰值内存另行验收。
 
 ## 网络CLI对战
 

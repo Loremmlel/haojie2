@@ -66,17 +66,17 @@ easy六次错误全部是击杀奶妈后被对方死亡反应致胜；hard正确
 
 ## 审计与复现
 
-[audit.ts](../../../scripts/training/search/audit.ts)完成480条决策审计、30个全宽概率参照重算、30次128预算的命令/根访问/统计逐项确定性复跑。源码和脚本哈希匹配；所选命令公开预检有效；根访问总数等于实际完成模拟数；真实转移计数介于模拟数与其两倍之间；同方/换方转移及终局/截断/新展开叶统计闭合。零网络调用、零训练标签，输入公开观察不变。
+[audit.ts](../../../scripts/training/search/probes/audit.ts)完成480条决策审计、30个全宽概率参照重算、30次128预算的命令/根访问/统计逐项确定性复跑。源码和脚本哈希匹配；所选命令公开预检有效；根访问总数等于实际完成模拟数；真实转移计数介于模拟数与其两倍之间；同方/换方转移及终局/截断/新展开叶统计闭合。零网络调用、零训练标签，输入公开观察不变。
 
 新增2项行为测试覆盖两席位、同方连击、对手反应、真实1/3概率、重复机会采样、0模拟、取消、枚举超限及信息边界。TypeScript与全套369项行为测试通过；新增代码和文档格式、目录组织检查通过。未改引擎、现有AI或页面，未执行浏览器UI验收或升级发行HTML；旧轨迹、随机语义和历史指纹未改写，没有模型训练、发布、提交、推送或自动化。
 
-复现命令（输出必须是新目录）：
+复现命令（输出必须是新目录）：以下为整理后当前版本的新运行；2026-09-25 原产物的脚本路径和哈希以提交 `17da48a` 及当时冻结输入为准，不能用新路径审计旧指纹。下文“下一步”仅是当时方案，现行状态见[状态入口](../STATUS.md)。
 
 ```powershell
 npx tsx --test tests/search/puct.test.ts
-npx tsx scripts/training/search/probe.ts --output artifacts/training/search-probe-new
-npx tsx scripts/training/search/audit.ts --input artifacts/training/search-probe-new
-npx tsx scripts/training/search/teacher.ts --input artifacts/training/search-probe-new
+node --import tsx scripts/training/search/probes/probe.ts --output artifacts/training/search-probe-new
+node --import tsx scripts/training/search/probes/audit.ts --input artifacts/training/search-probe-new
+node --import tsx scripts/training/search/probes/teacher.ts --input artifacts/training/search-probe-new
 ```
 
 ## 下一步

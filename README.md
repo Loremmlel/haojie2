@@ -170,4 +170,4 @@ npm run play:cli -- --new --seed 20260907 --difficulty hard --human 1
 
 支持完整JSON命令、分步AI、网页存档导入、概率/评分trace和确定性命令回放。详见[CLI手册](docs/CLI.md)与[实战改进](docs/ai/AI-IMPROVEMENTS-2026-09-08.md)。三档共享本次危险估计、阵型、终极召唤与战术改进；不以小样本自对弈声称已达到作者级胜率。
 
-训练工具另提供常驻JSONL多环境接口、公开随机模拟、未裁剪动作描述、教师对弈样本和Node吞吐基准。运行`npm run --silent train:serve`、`npm run train:selfplay`或`npm run bench:training`。模型规模、训练路线、协议与边界见[AI训练文档](docs/ai/TRAINING.md)。[Python训练子项目](training/README.md)已提供约11.55M网络骨架、张量训练/续训和CPU/XPU基准；完整游戏编码和浏览器网络尚未接入。
+训练工具另提供常驻JSONL多环境接口、公开随机模拟、未裁剪动作描述、教师对弈样本和Node吞吐基准。运行`npm run --silent train:serve`、`npm run train:selfplay`或`npm run bench:training`。先看[AI/训练当前状态](docs/ai/STATUS.md)，再按用途读[训练接口与路线](docs/ai/TRAINING.md)、[Python训练子项目](training/README.md)或[Rust 引擎入口](native/engine-prototype/README.md)。公开游戏编码、完整规则 Rust 采样和实验性网络 CLI 已实现；神经网络与搜索尚未接入单 HTML 发行版。

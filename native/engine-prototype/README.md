@@ -1,6 +1,6 @@
 # Rust 训练引擎
 
-目标、验证证据、性能和后续计划统一维护在 [RUST-PROTOTYPE.md](../../docs/ai/performance/RUST-PROTOTYPE.md)。当前实现完整规则、公开动作树、实体编码及经济性实验的小网络连续采样。浏览器继续使用 TS。原生策略尚未训练，不把采样吞吐当作棋力或完整训练倍率。
+当前范围和验收入口见[状态入口](../../docs/ai/STATUS.md)；阶段目标、原始验证证据和当时计划保存在 [RUST-PROTOTYPE.md](../../docs/ai/performance/RUST-PROTOTYPE.md)。当前实现完整规则、公开动作树、实体编码及经济性实验的小网络连续采样。浏览器继续使用 TS。原生策略尚未训练，不把采样吞吐当作棋力或完整训练倍率。
 
 在仓库根目录运行（本机 Windows、Rust 1.98.1、Node 22.23.2）：
 
@@ -17,7 +17,7 @@ node --import tsx scripts/training/native/sampling/benchmark.ts --commands 1000 
 node --import tsx scripts/training/native/sampling/complete.ts --references artifacts/training/rust-fresh-games-20260927 --output artifacts/training/rust-native-complete-new
 ```
 
-输出目录必须不存在。验证默认读取本机 `economics-20260926` 的四份 `worker-0.jsonl.gz` 原始轨迹，`--all-workers` 扩大到四组各8份、共32份；这些数据不跟踪进 Git。专项和驻留协议验证不依赖历史数据。Linux/macOS 可通过 `--executable` 指定无扩展名程序，尚未实测这些平台。Cargo 产物放入已忽略的 `artifacts/`。
+输出目录必须不存在。验证默认读取本机 `economics-20260926` 的四份 `worker-0.jsonl.gz` 原始轨迹，`--all-workers` 扩大到四组各8份、共32份；这些数据不跟踪进 Git。专项和驻留协议验证不依赖历史数据。Linux 可通过 `--executable` 指定无扩展名程序；2026-09-28 已在 Linux 通过 1101 规则夹具与 2202 根动作树/编码差分，macOS 尚未实测。推荐将 Cargo 产物放入已忽略的 `artifacts/`；默认 `target/` 也已排除版本管理和维护目录检查。
 
 ## 维护对应关系
 
