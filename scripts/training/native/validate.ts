@@ -67,6 +67,7 @@ const nativePaths = [
   'src/core/geometry.rs',
   'src/core/shared.rs',
   'src/commands/movement.rs',
+  'src/commands/inspection.rs',
   'src/core/stats.rs',
   'src/core/resolution.rs',
   'src/commands/damage.rs',

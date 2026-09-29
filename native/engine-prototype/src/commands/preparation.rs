@@ -2,7 +2,7 @@
 //! 所有支付、随机数和卡牌变化发生在命令副本上；失败或预检遇随机边界时整条命令丢弃。
 use crate::geometry::can_deploy;
 use crate::model::{Catalog, Command, Failure, Kind, Point, State, ensure, extra_number, number};
-use crate::movement::{actor, finish, movement_stats, reserve, stage, sync};
+use crate::movement::{actor, finish, movement_stats, reserve, sync};
 use crate::resolution::{Resolution, deploy_unit, normalize_guards, template, terminal};
 use serde_json::{Value, json};
 
@@ -119,6 +119,13 @@ fn summon(
     catalog: &Catalog,
     ctx: &mut Resolution,
 ) -> Result<(), Failure> {
+    let (shrine, ultimate) = prepare_summon(s, c)?;
+    if !shrine && ultimate {
+        pay(s, 2.0, "终极召唤需要2人头。")?;
+    }
+    summon_prepared(s, c, catalog, ctx, shrine, ultimate)
+}
+pub fn prepare_summon(s: &State, c: &Command) -> Result<(bool, bool), Failure> {
     ensure(
         !s.extra.contains_key("summonOffer"),
         "先从候选召唤中选出两个结果。",
@@ -133,8 +140,21 @@ fn summon(
     }
     let ultimate = shrine || c.ultimate == Some(true);
     if !shrine && ultimate {
-        pay(s, 2.0, "终极召唤需要2人头。")?;
+        ensure(
+            number(&s.extra["heads"][s.active.to_string()]) >= 2.0,
+            "终极召唤需要2人头。",
+        )?;
     }
+    Ok((shrine, ultimate))
+}
+fn summon_prepared(
+    s: &mut State,
+    c: &Command,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+    shrine: bool,
+    ultimate: bool,
+) -> Result<(), Failure> {
     if shrine
         && s.extra.get("regularSummons").and_then(Value::as_f64) == Some(2.0)
         && s.aura(s.active, "s13")
@@ -203,7 +223,11 @@ fn choose_summons(s: &mut State, c: &Command, ctx: &mut Resolution) -> Result<()
     Ok(())
 }
 /// 对应 TS prepareDeploy；先只读检查部署域，通过后才复制和模拟完整结算。
-fn prepare_deploy(s: &State, c: &Command, catalog: &Catalog) -> Result<(Value, Point), Failure> {
+pub fn prepare_deploy(
+    s: &State,
+    c: &Command,
+    catalog: &Catalog,
+) -> Result<(Value, Point), Failure> {
     let card = card(s, c)
         .filter(|v| {
             let d = &catalog[&kind(&v["kind"]).key()];
@@ -244,12 +268,11 @@ fn deploy(
     remove_card(s, &card);
     Ok(())
 }
-fn charge(
-    s: &mut State,
+pub fn prepare_charge(
+    s: &State,
     c: &Command,
     catalog: &Catalog,
-    ctx: &mut Resolution,
-) -> Result<(), Failure> {
+) -> Result<(Kind, Value, f64), Failure> {
     let u = s
         .unit(c.unit_id.as_deref().unwrap_or(""))
         .ok_or(Failure::Invalid("请选择仍在场上的随从。"))?;
@@ -290,14 +313,25 @@ fn charge(
         0.0
     };
     ensure(max > 0.0, "这枚随从没有此类蓄力。")?;
-    let mut r = reserve(u, &k, catalog);
+    let r = reserve(u, &k, catalog);
     let value = number(&r["charge"]);
     ensure(value < max, "该类蓄力已满。")?;
     ensure(
         value == 0.0 || r["chargeType"] == mode,
         "当前蓄力属于另一模式。",
     )?;
-    r["chargeType"] = json!(mode);
+    Ok((k, r, max))
+}
+fn charge(
+    s: &mut State,
+    c: &Command,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+) -> Result<(), Failure> {
+    let (k, mut r, max) = prepare_charge(s, c, catalog)?;
+    let u = s.unit(c.unit_id.as_deref().unwrap()).unwrap();
+    let value = number(&r["charge"]);
+    r["chargeType"] = json!(c.mode.as_deref().unwrap_or(""));
     r["charge"] = json!(value + 1.0);
     r["lastCharge"] = json!(s.ply + u.offset);
     ctx.facts = Some(json!({"action":"charge","actor":u.actor_event()}));
@@ -498,27 +532,43 @@ fn reroll(
     );
     Ok(())
 }
+pub fn prepare_phase(s: &State, command: &str) -> Result<(), Failure> {
+    match command {
+        "begin" => ensure(
+            s.phase == "summon" && s.summon_slots == 0.0,
+            "请先完成所有召唤。",
+        ),
+        "skip-synthesis" => ensure(s.phase == "synthesis", "当前不是合成窗口。"),
+        "finish-shrine-setup" => ensure(s.phase == "shrine-setup", "当前不是神龛入场阶段。"),
+        _ => Ok(()),
+    }
+}
+pub fn prepare_extra(s: &State, c: &Command) -> Result<(bool, f64, &'static str), Failure> {
+    ensure(
+        s.extra.get("mode") == Some(&json!("shrine"))
+            && s.phase == "summon"
+            && !s.extra.contains_key("summonOffer"),
+        "人头额外召唤仅限神龛模式回合开始。",
+    )?;
+    let ultimate = c.ultimate != Some(false);
+    let cost = if ultimate { 3.0 } else { 2.0 };
+    let message = if ultimate {
+        "本次终极召唤需要3人头。"
+    } else {
+        "本次普通召唤需要2人头。"
+    };
+    ensure(
+        number(&s.extra["heads"][s.active.to_string()]) >= cost,
+        message,
+    )?;
+    Ok((ultimate, cost, message))
+}
 pub fn apply(
     previous: &State,
     c: &Command,
     catalog: &Catalog,
     preview: bool,
 ) -> Result<State, Failure> {
-    stage(previous, c, catalog)?;
-    if preview {
-        match c.kind.as_str() {
-            "deploy" => {
-                prepare_deploy(previous, c, catalog)?;
-            }
-            "clock" => {
-                crate::shrines::prepare_clock(previous, c, catalog)?;
-            }
-            "skill" => {
-                crate::abilities::prepare_inspection(previous, c, catalog)?;
-            }
-            _ => {}
-        }
-    }
     let mut s = previous.fork();
     normalize_guards(&mut s);
     s.events.clear();
@@ -541,7 +591,7 @@ pub fn apply(
         }
         "choose-shrine" => crate::shrines::choose(&mut s, c, catalog, &mut ctx)?,
         "finish-shrine-setup" => {
-            ensure(s.phase == "shrine-setup", "当前不是神龛入场阶段。")?;
+            prepare_phase(&s, &c.kind)?;
             s.extra
                 .entry("shrineSetupDone")
                 .or_insert_with(|| json!([]))
@@ -559,22 +609,8 @@ pub fn apply(
         "summon" => summon(&mut s, c, catalog, &mut ctx)?,
         "choose-summons" => choose_summons(&mut s, c, &mut ctx)?,
         "extra-summon" => {
-            ensure(
-                s.extra.get("mode") == Some(&json!("shrine"))
-                    && s.phase == "summon"
-                    && !s.extra.contains_key("summonOffer"),
-                "人头额外召唤仅限神龛模式回合开始。",
-            )?;
-            let ultimate = c.ultimate != Some(false);
-            pay(
-                &mut s,
-                if ultimate { 3.0 } else { 2.0 },
-                if ultimate {
-                    "本次终极召唤需要3人头。"
-                } else {
-                    "本次普通召唤需要2人头。"
-                },
-            )?;
+            let (ultimate, cost, message) = prepare_extra(&s, c)?;
+            pay(&mut s, cost, message)?;
             draw(&mut s, ultimate, c.chosen_kind.as_ref(), catalog, &mut ctx)?;
         }
         "deploy" => deploy(&mut s, c, catalog, &mut ctx)?,
@@ -583,10 +619,7 @@ pub fn apply(
         "activate-aura" => aura(&mut s, c, catalog, &mut ctx)?,
         "reroll" => reroll(&mut s, c, catalog, &mut ctx)?,
         "begin" => {
-            ensure(
-                s.phase == "summon" && s.summon_slots == 0.0,
-                "请先完成所有召唤。",
-            )?;
+            prepare_phase(&s, &c.kind)?;
             s.phase = "play".into();
             ctx.emit(
                 &mut s,
@@ -595,7 +628,7 @@ pub fn apply(
             );
         }
         "skip-synthesis" => {
-            ensure(s.phase == "synthesis", "当前不是合成窗口。")?;
+            prepare_phase(&s, &c.kind)?;
             s.phase = "summon".into();
             ctx.emit(
                 &mut s,

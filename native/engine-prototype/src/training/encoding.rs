@@ -4,7 +4,9 @@ use crate::model::{Catalog, State};
 use crate::tree::{Node, Tree};
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 pub fn validate_schema(s: &Value) -> Result<(), String> {
     if s["encoding"] != "haojie-entities-factorized-v1"
@@ -105,7 +107,7 @@ fn js_keys(v: &Value) -> Vec<String> {
 }
 #[derive(Serialize)]
 pub struct Input {
-    pub entities: Vec<Vec<f64>>,
+    pub entities: Vec<Rc<Vec<f64>>>,
     pub kinds: Vec<usize>,
     pub globals: Vec<f64>,
     pub candidates: Vec<Vec<f64>>,
@@ -118,10 +120,11 @@ struct Encoder<'a> {
     s: &'a State,
     catalog: &'a Catalog,
     viewer: usize,
-    entities: Vec<Vec<f64>>,
+    entities: Vec<Rc<Vec<f64>>>,
     kinds: Vec<usize>,
-    indices: HashMap<String, usize>,
+    indices: Cow<'a, HashMap<String, usize>>,
     identities: HashMap<String, usize>,
+    base_identities: Option<&'a HashMap<String, usize>>,
 }
 impl Encoder<'_> {
     fn vocab(&self, name: &str) -> &[Value] {
@@ -171,7 +174,10 @@ impl Encoder<'_> {
             .as_str()
             .filter(|s| !s.is_empty())
             .ok_or("invalid entity reference")?;
-        let n = self.identities.len() + 1;
+        if let Some(n) = self.base_identities.and_then(|ids| ids.get(id)) {
+            return Ok(*n);
+        }
+        let n = self.base_identities.map_or(0, HashMap::len) + self.identities.len() + 1;
         Ok(*self.identities.entry(id.into()).or_insert(n))
     }
     fn index(&self, v: &Value) -> Result<i32, String> {
@@ -215,14 +221,14 @@ impl Encoder<'_> {
             && let Some(id) = o["id"].as_str()
         {
             let n = self.entities.len();
-            self.indices.entry(id.into()).or_insert(n);
+            self.indices.to_mut().entry(id.into()).or_insert(n);
         }
         self.kinds.push(if o["kind"].is_null() {
             128 + role
         } else {
             self.kind(&o["kind"])?
         });
-        self.entities.push(row);
+        self.entities.push(Rc::new(row));
         Ok(())
     }
     fn printed(&self, k: &Value) -> Result<Vec<Value>, String> {
@@ -328,6 +334,7 @@ impl Encoder<'_> {
             text(&u["id"]).into()
         };
         self.indices
+            .to_mut()
             .entry(text(&u["id"]).into())
             .or_insert(self.entities.len());
         self.add(role,json!({"id":id,"source":if role=="snapshot"{u["id"].clone()}else{Value::Null},"kind":u["kind"],"owner":u["owner"],"parent":parent,"group":u["group"],"order":order}),fields)?;
@@ -444,7 +451,7 @@ impl Encoder<'_> {
 
 /// 只保存公开观察的固定编码，不保存前缀派生身份，也不跨树复用。
 pub struct BaseEncoding {
-    entities: Vec<Vec<f64>>,
+    entities: Vec<Rc<Vec<f64>>>,
     kinds: Vec<usize>,
     indices: HashMap<String, usize>,
     identities: HashMap<String, usize>,
@@ -503,8 +510,9 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
         viewer,
         entities: vec![],
         kinds: vec![],
-        indices: HashMap::new(),
+        indices: Cow::Owned(HashMap::new()),
         identities: HashMap::new(),
+        base_identities: None,
     };
     let sides = [viewer, 3 - viewer];
     let sidekeys = [viewer.to_string(), (3 - viewer).to_string()];
@@ -732,14 +740,20 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
     Ok(BaseEncoding {
         entities: e.entities,
         kinds: e.kinds,
-        indices: e.indices,
+        indices: e.indices.into_owned(),
         identities: e.identities,
         globals,
     })
 }
 
-/// 每个参数节点复制固定张量和身份表，再追加自己的前缀；顺序与单次编码相同。
+/// 默认返回独立行；内部同步采样只借用固定行和索引，前缀身份使用追加映射。
 pub fn encode(tree: &Tree<'_>, node: &Node) -> Result<Input, String> {
+    encode_mode(tree, node, false)
+}
+pub fn encode_sampling(tree: &Tree<'_>, node: &Node) -> Result<Input, String> {
+    encode_mode(tree, node, true)
+}
+fn encode_mode(tree: &Tree<'_>, node: &Node, borrow: bool) -> Result<Input, String> {
     if node.choices.is_empty() {
         return Err("empty action branch requires backtracking".into());
     }
@@ -755,10 +769,26 @@ pub fn encode(tree: &Tree<'_>, node: &Node) -> Result<Input, String> {
         s: &tree.state,
         catalog,
         viewer,
-        entities: base.entities.clone(),
+        entities: if borrow {
+            base.entities.clone()
+        } else {
+            base.entities
+                .iter()
+                .map(|r| Rc::new((**r).clone()))
+                .collect()
+        },
         kinds: base.kinds.clone(),
-        indices: base.indices.clone(),
-        identities: base.identities.clone(),
+        indices: if borrow {
+            Cow::Borrowed(&base.indices)
+        } else {
+            Cow::Owned(base.indices.clone())
+        },
+        identities: if borrow {
+            HashMap::new()
+        } else {
+            base.identities.clone()
+        },
+        base_identities: borrow.then_some(&base.identities),
     };
     let recipes: Vec<Value> = catalog.recipes.iter().map(|r| r["id"].clone()).collect();
     if let Some(c) = &node.prefix {

@@ -1,7 +1,7 @@
 use crate::damage::{Source, alive, damage, heal, protected, set_effects};
 use crate::geometry::{Target, attack_path, find_target, top_target};
 use crate::model::{Catalog, Command, Failure, Kind, State, Unit, ensure, extra_number, number};
-use crate::movement::{actor, consume, finish, reserve, stage, sync};
+use crate::movement::{actor, consume, finish, reserve, sync};
 use crate::resolution::{Resolution, active_target, add_effect, normalize_guards, terminal};
 use crate::stats::{Stats, attack_charge, stats};
 use serde_json::{Value, json};
@@ -788,7 +788,7 @@ pub fn retaliate(
     perform(s, u, t, &options, catalog, ctx)
 }
 /// 只投影攻击者的本次操作；与 TS chooseMode + attackTarget 的预检边界相同。
-fn command_attack(s: &State, c: &Command, catalog: &Catalog) -> Result<(Unit, Target), Failure> {
+pub fn projected_attacker(s: &State, c: &Command, catalog: &Catalog) -> Result<Unit, Failure> {
     let mut u = actor(s, c, catalog)?.clone();
     let computed = stats(s, &u, catalog);
     ensure(
@@ -810,10 +810,13 @@ fn command_attack(s: &State, c: &Command, catalog: &Catalog) -> Result<(Unit, Ta
         stats(s, &u, catalog).remaining > 0.0,
         "本次攻击操作次数已用完。",
     )?;
+    Ok(u)
+}
+fn attack_target(s: &State, c: &Command, u: &Unit, catalog: &Catalog) -> Result<Target, Failure> {
     if let Some(path) = &c.path {
         ensure(
             u.weapon("u28")
-                && crate::geometry::valid_attack_route(&u, path, stats(s, &u, catalog).range),
+                && crate::geometry::valid_attack_route(u, path, stats(s, u, catalog).range),
             "所选穿透路径不合法。",
         )?;
     }
@@ -824,7 +827,7 @@ fn command_attack(s: &State, c: &Command, catalog: &Catalog) -> Result<(Unit, Ta
         .or_else(|| {
             if c.target_id.is_none() {
                 c.path.as_ref().and_then(|path| {
-                    crate::geometry::piercing_targets(s, &u, path, catalog)
+                    crate::geometry::piercing_targets(s, u, path, catalog)
                         .last()
                         .map(|(t, _)| t.clone())
                 })
@@ -833,7 +836,33 @@ fn command_attack(s: &State, c: &Command, catalog: &Catalog) -> Result<(Unit, Ta
             }
         })
         .ok_or(Failure::Invalid("请选择有效的目标。"))?;
+    Ok(t)
+}
+fn command_attack(s: &State, c: &Command, catalog: &Catalog) -> Result<(Unit, Target), Failure> {
+    let u = projected_attacker(s, c, catalog)?;
+    let t = attack_target(s, c, &u, catalog)?;
     Ok((u, t))
+}
+pub fn prepare_inspection(
+    s: &State,
+    c: &Command,
+    u: &Unit,
+    catalog: &Catalog,
+) -> Result<(), Failure> {
+    let t = attack_target(s, c, u, catalog)?;
+    prepare(
+        s,
+        u,
+        &t,
+        &Options {
+            mode: c.mode.clone(),
+            direction: c.direction.clone(),
+            path: c.path.clone(),
+            ..Default::default()
+        },
+        catalog,
+    )
+    .map(|_| ())
 }
 /// 只接受经 TS 重建的规范局面；阶段校验后复制，反应/攻击失败均不提交副本。
 /// 成功后统一刷新保护、光环、虹吸与部署行，再检查终局，不驱动 UI 或选招。
@@ -843,36 +872,6 @@ pub fn apply(
     catalog: &Catalog,
     preview: bool,
 ) -> Result<State, Failure> {
-    stage(previous, c, catalog)?;
-    if preview && c.kind == "attack" {
-        let (u, t) = command_attack(previous, c, catalog)?;
-        prepare(
-            previous,
-            &u,
-            &t,
-            &Options {
-                mode: c.mode.clone(),
-                direction: c.direction.clone(),
-                path: c.path.clone(),
-                ..Default::default()
-            },
-            catalog,
-        )?;
-    }
-    if preview
-        && c.kind == "react"
-        && let Some(r) = previous
-            .pending
-            .first()
-            .filter(|r| r["kind"] == "hut-spawn")
-    {
-        crate::reactions::prepare_hut(
-            previous,
-            r,
-            c,
-            &crate::reactions::hut_points(previous, r, catalog),
-        )?;
-    }
     let mut s = previous.fork();
     s.events.clear();
     normalize_guards(&mut s);

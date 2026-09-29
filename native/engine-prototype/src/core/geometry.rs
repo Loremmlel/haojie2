@@ -90,12 +90,21 @@ pub fn piercing_targets(
     hits
 }
 
-#[derive(Clone)]
 pub struct Target {
     pub id: String,
     pub owner: usize,
     pub at: Point,
     pub unit: Option<Unit>,
+}
+impl Clone for Target {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            owner: self.owner,
+            at: self.at,
+            unit: self.unit.as_ref().map(Unit::fork),
+        }
+    }
 }
 impl Target {
     pub fn from(u: &Unit) -> Self {
@@ -103,7 +112,7 @@ impl Target {
             id: u.id.clone(),
             owner: u.owner,
             at: u.at(),
-            unit: Some(u.clone()),
+            unit: Some(u.fork()),
         }
     }
     pub fn footprint(&self) -> Vec<Point> {
@@ -131,8 +140,8 @@ pub fn targets(s: &State) -> Vec<Target> {
         }))
         .collect()
 }
-/// 单目标查询先借用状态定位，再只复制命中对象；保持普通棋子、地标、基地的查找顺序。
-/// 不能为找一个 ID 构建全盘深拷贝，攻击和每份反伤都会经过此路径。
+/// 当前目标持有只读 Rc 句柄；写入自动分离，规则需要冻结的死亡/反击快照仍由规则入口创建。
+/// 保持普通棋子、地标、基地的查找顺序。
 pub fn find_target(s: &State, id: &str) -> Option<Target> {
     if let Some(unit) = s.unit(id) {
         return Some(Target::from(unit));
@@ -420,12 +429,52 @@ pub fn deployment_rows(s: &State, owner: usize) -> Vec<usize> {
 
 /// 与 TS placement 共用部署/移动判定顺序；地标单独占层，克隆和禁区按原数组判定。
 pub fn can_place(s: &State, u: &Unit, at: Point, catalog: &Catalog) -> bool {
-    placement(s, u, at, catalog, false)
+    placement(s, u, at, catalog, false, None)
 }
 pub fn can_deploy(s: &State, u: &Unit, at: Point, catalog: &Catalog) -> bool {
-    placement(s, u, at, catalog, true)
+    placement(s, u, at, catalog, true, None)
 }
-fn placement(s: &State, u: &Unit, at: Point, catalog: &Catalog, deployment: bool) -> bool {
+/// 与 TS createPlacementQuery 对齐；索引只属于单一不可变观察，不限制每格实体数量。
+pub struct PlacementQuery {
+    occupants: Vec<Vec<usize>>,
+    friends: [Vec<usize>; 3],
+    loners: [Vec<usize>; 3],
+}
+impl PlacementQuery {
+    pub fn new(s: &State) -> Self {
+        let mut q = Self {
+            occupants: vec![vec![]; 117],
+            friends: Default::default(),
+            loners: Default::default(),
+        };
+        for (i, u) in s.units.iter().enumerate() {
+            for p in cells(u, u.at()) {
+                if inside(p) {
+                    q.occupants[index(p)].push(i);
+                }
+            }
+            let side = u.side();
+            if side == 1 || side == 2 {
+                q.friends[side].push(i);
+                if u.has("23") && !u.silenced {
+                    q.loners[side].push(i);
+                }
+            }
+        }
+        q
+    }
+    pub fn can_place(&self, s: &State, u: &Unit, at: Point, catalog: &Catalog) -> bool {
+        placement(s, u, at, catalog, false, Some(self))
+    }
+}
+fn placement(
+    s: &State,
+    u: &Unit,
+    at: Point,
+    catalog: &Catalog,
+    deployment: bool,
+    query: Option<&PlacementQuery>,
+) -> bool {
     let footprint = cells(u, at);
     if footprint.iter().any(|&p| !inside(p) || base(p)) {
         return false;
@@ -475,29 +524,44 @@ fn placement(s: &State, u: &Unit, at: Point, catalog: &Catalog, deployment: bool
             return false;
         }
     }
-    for v in &s.units {
-        if v.id == u.id {
-            continue;
-        }
-        if footprint.iter().any(|&p| covers(v, p))
+    let overlapping = |v: &Unit| {
+        v.id != u.id
+            && footprint.iter().any(|&p| covers(v, p))
             && !(u.kind.is("u25")
                 && v.kind.is("u25")
                 && u.owner == v.owner
                 && u.size == 1.0
                 && v.size == 1.0)
-        {
-            return false;
-        }
-        if v.side() == u.owner
+    };
+    let occupied = if let Some(q) = query {
+        footprint
+            .iter()
+            .flat_map(|p| &q.occupants[index(*p)])
+            .any(|i| overlapping(&s.units[*i]))
+    } else {
+        s.units.iter().any(overlapping)
+    };
+    if occupied {
+        return false;
+    }
+    let isolated = |v: &Unit| {
+        v.id != u.id
+            && v.side() == u.owner
             && ((v.has("23") && !v.silenced) || (u.has("23") && !u.silenced))
             && cells(v, v.at())
                 .iter()
                 .any(|&a| footprint.iter().any(|&b| near(a, b)))
-        {
-            return false;
-        }
+    };
+    !if let Some(q) = query {
+        let indices = if u.has("23") && !u.silenced {
+            &q.friends[u.owner]
+        } else {
+            &q.loners[u.owner]
+        };
+        indices.iter().any(|i| isolated(&s.units[*i]))
+    } else {
+        s.units.iter().any(isolated)
     }
-    true
 }
 pub fn empty_for(s: &State, u: &Unit, catalog: &Catalog) -> bool {
     can_place(s, u, u.at(), catalog)
@@ -516,7 +580,16 @@ pub fn movement_path(
     straight: bool,
     catalog: &Catalog,
 ) -> Option<Vec<Point>> {
-    if !inside(to) || u.at() == to || !can_place(s, u, to, catalog) {
+    movement_with_place(u, to, limit, straight, |p| can_place(s, u, p, catalog))
+}
+pub fn movement_with_place(
+    u: &Unit,
+    to: Point,
+    limit: f64,
+    straight: bool,
+    place: impl Fn(Point) -> bool,
+) -> Option<Vec<Point>> {
+    if !inside(to) || u.at() == to || !place(to) {
         return None;
     }
     if straight {
@@ -539,11 +612,7 @@ pub fn movement_path(
                 y: u.y + dy * i as f64,
             })
             .collect();
-        return path
-            .iter()
-            .skip(1)
-            .all(|&p| can_place(s, u, p, catalog))
-            .then_some(path);
+        return path.iter().skip(1).all(|&p| place(p)).then_some(path);
     }
     if distance(u.at(), to) > limit.ceil().max(0.0) {
         return None;
@@ -559,7 +628,7 @@ pub fn movement_path(
             continue;
         }
         for p in neighbors(*queue[i].last().unwrap()) {
-            if seen[index(p)] || !can_place(s, u, p, catalog) {
+            if seen[index(p)] || !place(p) {
                 continue;
             }
             let mut next = queue[i].clone();

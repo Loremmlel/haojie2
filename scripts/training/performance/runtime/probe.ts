@@ -89,7 +89,11 @@ const built = await build({
                 node.name.getText(ast);
               edits.push({
                 at: node.body.getStart(ast) + 1,
-                text: `const __probeFrame = (globalThis as any).__runtimeProbe.enter(${JSON.stringify(name)}, arguments); try {`,
+                text:
+                  `const __probeFrame = (globalThis as any).__runtimeProbe.enter(${JSON.stringify(name)}, arguments); try {` +
+                  (node.name.getText(ast) === 'positionRows'
+                    ? `if (arguments[1]) { const p=(globalThis as any).__runtimeProbe, base=arguments[1], borrowed=arguments[2]===true; p.count('encoding.fixedRowsCopied',borrowed?0:base.entities.length); p.count('encoding.fixedScalarsCopied',borrowed?0:base.entities.length*64); p.count('encoding.identityEntriesCopied',borrowed?0:base.identities.size); p.count('encoding.indexEntriesCopied',borrowed?0:base.indices.size); }`
+                    : ''),
               });
               edits.push({
                 at: node.body.getEnd() - 1,

@@ -5,7 +5,7 @@ use crate::model::{Catalog, Failure, Point, State, Unit, ensure, number};
 use crate::preparation::{hand, hand_mut, kind};
 use crate::resolution::{Resolution, faction, reset_unit, template};
 use crate::stats::prune_siphons;
-use serde_json::json;
+use serde_json::{Value, json};
 
 pub fn all_cells() -> impl Iterator<Item = Point> {
     (1..=13).flat_map(|y| {
@@ -196,7 +196,7 @@ pub fn switch(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<
     s.ply += 1.0;
     begin(s, catalog, ctx)
 }
-pub fn end(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<(), Failure> {
+pub fn prepare_end(s: &State, catalog: &Catalog) -> Result<Vec<Value>, Failure> {
     ensure(s.phase == "play", "请先完成召唤并进入行动阶段。")?;
     for u in &s.units {
         ensure(
@@ -204,12 +204,12 @@ pub fn end(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<(),
             "冲撞棋子必须离开棋子、地标或基地占位后才能结束回合。",
         )?;
     }
-    for c in hand(s)
+    let discarded = hand(s)
         .iter()
         .filter(|c| !stored(catalog, &kind(&c["kind"]).key()))
         .cloned()
-        .collect::<Vec<_>>()
-    {
+        .collect::<Vec<_>>();
+    for c in &discarded {
         let k = kind(&c["kind"]).key();
         let ghost = template(
             s,
@@ -225,6 +225,12 @@ pub fn end(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<(),
                 catalog[&k].name
             )));
         }
+    }
+    Ok(discarded)
+}
+pub fn end(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<(), Failure> {
+    for c in prepare_end(s, catalog)? {
+        let k = kind(&c["kind"]).key();
         ctx.emit(
             s,
             json!({"type":"skill","owner":s.active,"text":"无处部署"}),

@@ -6,7 +6,12 @@ import { execFileSync } from 'node:child_process';
 import { build } from 'esbuild';
 
 /** 新目录冻结源文件指纹、驱动和可执行文件；基准只运行复制后的二进制。 */
-export async function freeze(entry: string, output: string, executable: string) {
+export async function freeze(
+  entry: string,
+  output: string,
+  executable: string,
+  native = 'native/engine-prototype',
+) {
   mkdirSync(output, { recursive: false });
   const built = await build({
     entryPoints: [entry],
@@ -19,7 +24,6 @@ export async function freeze(entry: string, output: string, executable: string) 
     metafile: true,
   });
   writeFileSync(join(output, 'runner.mjs'), built.outputFiles[0].contents, { flag: 'wx' });
-  const native = 'native/engine-prototype';
   const paths = [
     ...Object.keys(built.metafile.inputs),
     ...readdirSync(join(native, 'src'), { recursive: true })
@@ -38,6 +42,7 @@ export async function freeze(entry: string, output: string, executable: string) 
     head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
     cpu: cpus()[0].model,
     node: process.version,
+    nativeSource: native,
     sources,
     executableSha256: hash(readFileSync(target)),
   });

@@ -1,8 +1,10 @@
 //! 公开动作说明与 TS commands/options、training/queries 对齐；不评分、不裁剪参数域。
+use crate::inspection::Queries;
 use crate::model::{Catalog, Command, Failure, State, Unit, extra_number, number};
 use crate::movement::{charge_kind, reserve};
 use crate::preparation::kind;
 use crate::stats::{attack_charge, stats};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 #[derive(Clone)]
@@ -105,19 +107,26 @@ pub fn inspect(
     actor: usize,
     c: &Value,
     catalog: &Catalog,
+    queries: &mut Queries,
 ) -> Result<&'static str, String> {
     if !permitted(s, actor, c) {
         return Ok("invalid");
     }
-    let c: Command = serde_json::from_value(c.clone()).map_err(|e| e.to_string())?;
-    match crate::transition(s, &c, catalog, true) {
+    let c = Command::deserialize(c).map_err(|e| e.to_string())?;
+    match queries.inspect(s, &c, catalog) {
         Ok(_) => Ok("available"),
         Err(Failure::Uncertain) => Ok("uncertain"),
         Err(Failure::Invalid(_) | Failure::InvalidOwned(_)) => Ok("invalid"),
         Err(Failure::Unsupported(r)) => Err(format!("unsupported training inspection: {r}")),
     }
 }
-fn allowed(s: &State, actor: usize, a: &Action, catalog: &Catalog) -> Result<bool, String> {
+fn allowed(
+    s: &State,
+    actor: usize,
+    a: &Action,
+    catalog: &Catalog,
+    queries: &mut Queries,
+) -> Result<bool, String> {
     if !permitted(s, actor, &a.command) {
         return Ok(false);
     }
@@ -125,7 +134,7 @@ fn allowed(s: &State, actor: usize, a: &Action, catalog: &Catalog) -> Result<boo
         return Ok(true);
     }
     if a.steps.is_empty() {
-        return Ok(inspect(s, actor, &a.command, catalog)? != "invalid");
+        return Ok(inspect(s, actor, &a.command, catalog, queries)? != "invalid");
     }
     let c = &a.command;
     let id = a.id.split(':').next().unwrap();
@@ -500,7 +509,12 @@ fn pool<'a>(s: &State, c: &Value, catalog: &'a Catalog) -> Option<&'a str> {
         _ => None,
     }
 }
-pub fn actions(s: &State, actor: usize, catalog: &Catalog) -> Result<Vec<Action>, String> {
+pub fn actions(
+    s: &State,
+    actor: usize,
+    catalog: &Catalog,
+    queries: &mut Queries,
+) -> Result<Vec<Action>, String> {
     let mut candidates = vec![];
     let simple = |c: Value| action(text(&c["type"]), c.clone(), vec![]);
     if s.extra.contains_key("winner") {
@@ -590,7 +604,7 @@ pub fn actions(s: &State, actor: usize, catalog: &Catalog) -> Result<Vec<Action>
         .any(|a| a["kind"] == "laoqian" && a["usedPly"] != s.ply);
     let mut result = vec![];
     for mut a in candidates {
-        if allowed(s, actor, &a, catalog)? {
+        if allowed(s, actor, &a, catalog, queries)? {
             if can_choose && let Some(p) = pool(s, &a.command, catalog) {
                 a.chosen = catalog.pools[p].iter().map(|k| json!(k)).collect();
             }

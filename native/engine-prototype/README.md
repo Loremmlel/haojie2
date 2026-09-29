@@ -31,6 +31,7 @@ node --import tsx scripts/training/native/sampling/complete.ts --references arti
 | `core/stats.rs`              | `core/state.ts`、`core/traits.ts`                            | 属性、独立蓄力、光环、虹吸刷新                                              |
 | `core/resolution.rs`         | `core/state.ts`、`core/protection.ts`、`core/event-facts.ts` | 保护来源、事件因果/坐标/身份快照、衍生物                                    |
 | `commands/movement.rs`       | `commands/game.ts`、`commands/movement.ts`                   | 阶段、移动、完整操作预算、举旗                                              |
+| `commands/inspection.rs`     | `commands/game.ts`、`commands/preparation.ts`                | 单局面查询生命周期、准备结果复用、共享合法性与随机边界                      |
 | `commands/combat.rs`         | `commands/combat.ts`、`core/attack-profile.ts`               | 路径/穿透、逐目标攻击、随机边界、反击、攻击后被动                           |
 | `commands/damage.rs`         | `commands/combat.ts`、`setup/shrines.ts`                     | 逐份伤害、保护/免疫、死亡/人头、强夺、反应排队                              |
 | `commands/reactions.rs`      | `commands/movement.ts`、`commands/combat.ts`                 | 冲撞、弹出、小屋/王城、死后射击、反射、牵引、结束后切回合                   |
@@ -50,11 +51,11 @@ node --import tsx scripts/training/native/sampling/complete.ts --references arti
 
 `movement_stats` 是 `getStats` 的移动依赖投影，省去移动入口不读取的攻击属性计算；因此收益不全来自语言。按 ID 查询目标时两端均只包装命中项。修改 TS 规则须同时维护对应 Rust 模块并重跑差分，不在 Rust 引入另一套 AI 评分。
 
-2026-09-29 的固定编码复用在两端采用相同流程：每个不可变公开观察/观察方内惰性准备固定实体、身份表和全局字段，各参数节点复制张量与索引表后追加前缀及候选。TS 对应 `createPositionEncoder` / `createDecisionEncoder`，Rust 对应 `Tree.encoding` / `encode_base`；不会复用前缀新注册的身份或网络隐层。候选、回溯、随机消耗及编码协议不变，测量与覆盖边界见[本轮报告](../../docs/ai/performance/ENCODING-REUSE-2026-09-29.md)。移动批量准备仍未接入。
+固定编码的前一轮测量保存在[历史切片](../../docs/ai/performance/ENCODING-REUSE-2026-09-29.md)。本轮进一步区分拥有型编码和同步采样编码：默认 `encode` / `createDecisionEncoder` 仍复制独立张量，`encode_sampling` / `createSamplingEncoder` 借用当前观察的固定行和索引，前缀身份只追加到本节点的局部表。TinyPolicy 每次决策复用相同实体行的 MLP，仍重算掩码池化、全局层和候选层；不适用于注意力模型。Rust 以 Weak 校验 Rc 行身份，避免已释放前缀的地址复用。候选、回溯、随机消耗及编码协议不变，完整测量见[运行架构任务记录](../../docs/ai/performance/runtime/README.md)。
 
-TS 已有的攻击、部署、时钟、钩子、献祭、复活和小屋只读预检也已移植：先拒绝明显非法参数，再创建内部状态分支执行完整预检。目标/落点准备与正式结算共用函数；小屋落点仅在同一公开局面树内缓存。Rust 用 `Rc<Node>` 复用不可变节点，编码借用树的公开局面及棋子，避免重复反序列化；这些对应 TS 原有的对象引用语义，不改变候选范围或策略。
+`commands/inspection.rs::Queries` 对应 TS 的 `inspectionQueries`：绑定单一不可变局面，共享阶段、行动资源、属性、空间占位、技能目标和亡者查询。部署、普通移动、蓄力、结束模式的完整合法性由执行端同一个准备函数决定，预检不再分支结算；冲撞、攻击、技能、反应及随机边界继续执行必要的完整后果。树的实体索引、属性和路径方向也只在本观察内复用，保持原顺序与首个同名实体语义。Rust 用 `Rc<Node>` 复用不可变节点，与 TS 引用对应，不改变候选范围或策略。
 
-TS 生产引擎与本原型已统一采用状态分支算法。只有 `State::fork` / `Unit::fork` / `ValueMap::fork` 创建共享分支；普通 `Clone` 仍生成独立快照，不能为单端提速改成浅复制。每个实体、每个局面扩展字段分别作为写入隔离单元；`turns / bases / deployRows / pending / siphons / events` 在创建分支时立即复制。规则内部快照继续深复制，正式成功由 `transition` 导出独立状态；预检和失败直接丢弃分支。TS 用写入拦截，Rust 用引用计数和可变借用实现同一流程。算法映射、原型计时与生产接入验收见[状态分支记录](../../docs/ai/performance/STATE-SHARING-2026-09-27.md)，Node 性能下降不构成保留算法分叉的理由。
+TS 生产引擎与本原型统一采用状态分支算法。`State::fork` / `Unit::fork` / `ValueMap::fork` 创建共享分支；普通 `Clone` 仍生成独立快照。每个实体、每个局面扩展字段分别作为写入隔离单元；`turns / bases / deployRows / pending / siphons / events` 在创建分支时立即复制。规则内部快照继续深复制，外部 `transition` 导出独立状态；驻留和连续采样用 `apply_runtime` 保留成功分支，预检和失败直接丢弃。TS 的内部提交剥离 Proxy，Rust 以 Rc 写时分离实现相同边界。JS 宿主跨实体别名或环由 TS 沿代理图导出保留，Rust JSON 输入没有这种对象身份。原始映射见[状态分支记录](../../docs/ai/performance/STATE-SHARING-2026-09-27.md)，当前收口与证据见[任务记录](../../docs/ai/performance/runtime/README.md)。
 
 ## 协议与信任边界
 
@@ -72,9 +73,9 @@ stdin/stdout 每行一个 JSON，stdout 不混日志。先调用 `{op:"init", pr
 - `step`：`{revision, commands, trace?, clearHistory?, observe?}` 逐条提交成功命令并递增修订号。遇首个失败停止并保留成功前缀；整批解析错误或过期修订号不执行。`trace` 返回清理前的逐步状态供差分；`clearHistory` 在每步成功后清理事件/日志；`observe` 在批次结束后返回决策方公开观察。
 - `export`：返回 `{revision,state}`，仅供差分和权威持久化，不能当公开观察。
 - `training-nodes`：`{observation,actor,cursors,encode?}`，返回惰性节点；开启 `encode` 同时返回实体/候选张量和固定 TinyPolicy 的 logits，空分支返回 null。此入口用于逐项跨语言验证。
-- `sample-game`：`{seed,rules,maxCommands,maxPlies,policy?:"tiny"|"uniform",policySeed?,samplerSeed?}`。原生进程内部连续采样，返回实际命令、状态、分项计数及验收用完整终态/双方公开观察。与 `reset/step` 驻留会话独立；计数或回合截断时收益为 null，异常保留成功前缀并报告。正式种子只交给权威开局，树/编码器只接收脱敏观察，策略随机流独立。宿主取消时终止此独立进程，不在候选选择中读墙钟。
+- `sample-game`：`{seed,rules,maxCommands,maxPlies,initialState?,policy?:"tiny"|"uniform",policySeed?,samplerSeed?}`。`initialState` 仅供可信宿主导入固定权威起点，否则按种子创建；导入后仍显式构造策略观察。原生进程内部连续采样，返回实际命令、状态、分项计数及验收用完整终态/双方公开观察。与 `reset/step` 驻留会话独立；计数或回合截断时收益为 null，异常保留成功前缀并报告。正式种子只交给权威开局，树/编码器只接收脱敏观察，策略随机流独立。宿主取消时终止此独立进程，不在候选选择中读墙钟。
 
-规则拒绝为 `invalid`；只读预检抵达随机边界为 `uncertain`。未知命令、非规范状态或未知反应仍可返回 `unsupported`，完整引擎验收遇到它直接失败，不跳过样本。协议错误返回 `error`；客户端默认60秒超时，完整采样验收显式设为600秒，超时终止子进程，没有 TS 回退。单条失败丢弃命令副本，费用、事件、序号和 RNG 都不提交。
+规则拒绝为 `invalid`；只读预检抵达随机边界为 `uncertain`。未知命令、非规范状态或未知反应仍可返回 `unsupported`，完整引擎验收遇到它直接失败，不跳过样本。协议错误返回 `error`；客户端默认60秒超时，完整采样验收显式设为900秒，整组两小时保护，超时终止对应子进程，没有 TS 回退。单条失败丢弃命令副本，费用、事件、序号和 RNG 都不提交。
 
 ## 验证与计时
 
@@ -86,4 +87,4 @@ stdin/stdout 每行一个 JSON，stdout 不混日志。先调用 `{op:"init", pr
 
 `sampling/validate.ts` 对专项的双方视角比较根节点、第一层参数和合法命令的完整深层路径，并核对编码及网络输出。`sampling/benchmark.ts` 在同一批次内完成原生采样，与 TS 原算法预热后交错测量，逐命令和工作量计数必须相等。两端均暂存诊断命令，计时不含记录指纹、压缩或验收重放；Rust 的一批 IPC 和终态导出计入总时间。`sampling/complete.ts` 从种子独立采样到终局，再与先前保存的 TS 选招完整轨迹比较；参照命令不会送入原生选择器，此工具不报告加速倍率。
 
-正式保存的对照轨迹使用 TS 记录协议并经过共享读取器校验。即使保留 JSON 插入顺序，Rust 状态重建的键序仍不能冒充旧格式 Observation 指纹。当前通过计时外的 TS 重放生成并审核 `.jsonl.gz`；它是可验证的兼容出口，仍有额外成本。正式模型批量推理、搜索用可枚举随机源、生产记录性能和长期并行经济性需继续验收。
+正式保存的对照轨迹使用 TS 记录协议并经过共享读取器校验。即使保留 JSON 插入顺序，Rust 状态重建的键序仍不能冒充旧格式 Observation 指纹。当前通过 TS 重放生成并审核 `.jsonl.gz`；它是可验证的兼容出口，仍有额外成本。本轮四局成本账将原生采样、正式记录出口和独立复核分别计时，再计算端到端成本；不能只报原生部分。正式模型批量推理、搜索用可枚举随机源和长期并行经济性未由本轮验证。

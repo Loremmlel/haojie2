@@ -13,6 +13,7 @@ const { values } = parseArgs({
     output: { type: 'string' },
     baseline: { type: 'string' },
     candidate: { type: 'string' },
+    original: { type: 'string' },
     api: { type: 'string' },
     workset: { type: 'string' },
     rounds: { type: 'string', default: '5' },
@@ -40,6 +41,7 @@ save('manifest.json', {
   apiSha256: digest(values.api),
   baselineSha256: digest(values.baseline),
   candidateSha256: digest(values.candidate),
+  originalSha256: values.original ? digest(values.original) : undefined,
   clientSha256: digest('scripts/training/native/client.ts'),
 });
 for (const key of ['baseline', 'candidate'] as const)
@@ -130,6 +132,36 @@ try {
     clients[key] = await nativeClient(join(output, `${key}.exe`), 900_000);
     startupMs[key] = performance.now() - t;
   }
+  if (values.original) {
+    const original = await nativeClient(resolve(values.original), 900_000);
+    try {
+      for (const [rules, seed] of [
+        ['classic', 731270001],
+        ['shrine', 741270001],
+      ] as const) {
+        const request = {
+          op: 'sample-game',
+          rules,
+          seed,
+          policy: 'tiny',
+          maxCommands: 32,
+          maxPlies: 500,
+        };
+        const a = await original.request(request);
+        const b = await clients.baseline!.request(request);
+        for (const key of ['commands', 'state', 'observations', 'status', 'error'])
+          assert.deepEqual(a[key], b[key], `旧基线起点适配:${rules}:${key}`);
+        for (const key of workKeys) assert.equal(a.metrics[key], b.metrics[key]);
+      }
+      save('adapter-check.json', {
+        rules: ['classic', 'shrine'],
+        commandsEach: 32,
+        originalEqual: true,
+      });
+    } finally {
+      original.close();
+    }
+  }
   const run = async (label: 'baseline' | 'candidate') => {
     const client = clients[label]!,
       rows = [];
@@ -205,6 +237,32 @@ try {
     elapsedMs: performance.now() - started,
     note: '原生内部计时包含初始局面导入与完整采样；requestMs 另含 JSON 请求/完整终态及双观察导出。逐轮比对冻结 TS 的命令、权威状态、双观察和离散工作量。',
   });
+  // 外部拥有型规则出口单列，加载和结果对照不混进重复执行计时。
+  const jobs = cases.map((row: any, i: number) => {
+    const selected = references[i].commands[0];
+    const command =
+      selected.command.type === 'choose-shrine'
+        ? { ...selected.command, player: selected.actor }
+        : selected.command;
+    return { state: row.state, command, probes: [] };
+  });
+  const publicOld = await clients.baseline!.request({ op: 'run', jobs });
+  const publicNew = await clients.candidate!.request({ op: 'run', jobs });
+  assert.deepEqual(publicNew, publicOld);
+  for (const client of Object.values(clients)) {
+    await client!.request({ op: 'load', jobs });
+    await client!.request({ op: 'bench', repeats: 2 });
+  }
+  const publicRounds = [];
+  for (let round = 0; round < 3; round++) {
+    const pair: any = {};
+    for (const label of round % 2
+      ? (['candidate', 'baseline'] as const)
+      : (['baseline', 'candidate'] as const))
+      pair[label] = await clients[label]!.request({ op: 'bench', repeats: 32 });
+    publicRounds.push(pair);
+  }
+  save('public.json', { cases: jobs.length, repeats: 32, rounds: publicRounds, exactStates: true });
 } catch (error) {
   save('failure.json', { current, error: String(error) });
   throw error;

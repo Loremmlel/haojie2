@@ -38,7 +38,7 @@ enum Selected {
     Empty,
 }
 struct Sampling<'a> {
-    policy: Option<&'a TinyPolicy>,
+    projections: Option<crate::policy::Decision<'a>>,
     random: &'a mut Random,
     metrics: &'a mut Metrics,
     optional: bool,
@@ -69,7 +69,7 @@ impl Sampling<'_> {
             self.metrics.forced += 1;
         } else {
             let t = Instant::now();
-            let mut input = encoding::encode(tree, &node)?;
+            let mut input = encoding::encode_sampling(tree, &node)?;
             if pass {
                 let mut row = vec![0.0; 64];
                 row[63] = 1.0;
@@ -83,7 +83,8 @@ impl Sampling<'_> {
             self.metrics.evaluations += 1;
             let t = Instant::now();
             let logits = self
-                .policy
+                .projections
+                .as_mut()
                 .map(|p| p.logits(&input))
                 .unwrap_or_else(|| vec![0.0; count]);
             self.metrics.inference_ms += ms(t);
@@ -130,11 +131,11 @@ fn sample(
     let mut tree = Tree::new(observation, actor, catalog)?;
     metrics.tree_ms += ms(t);
     Sampling {
-        policy,
         random,
         metrics,
         optional,
         nodes: 0,
+        projections: policy.map(TinyPolicy::decision),
     }
     .visit(&mut tree, &[])
 }
@@ -168,7 +169,12 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
         _ => return Err("invalid policy".into()),
     };
     let start = Instant::now();
-    let mut state = runtime::create(seed, rules == "shrine", catalog)?;
+    // 固定工作集从宿主导入权威起点；策略仍只接收 observe 白名单。
+    let mut state = if let Some(initial) = request.get("initialState") {
+        serde_json::from_value(initial.clone()).map_err(|e| e.to_string())?
+    } else {
+        runtime::create(seed, rules == "shrine", catalog)?
+    };
     state.events.clear();
     state.extra.insert("log".into(), json!([]));
     let initial_ply = state.ply;
@@ -254,7 +260,7 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
             error = Some("selected unauthorized command".into());
             break;
         }
-        match crate::transition(&state, &c, catalog, false) {
+        match crate::apply_runtime(&state, &c, catalog) {
             Ok(mut next) => {
                 next.events.clear();
                 next.extra.insert("log".into(), json!([]));

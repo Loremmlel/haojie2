@@ -4,7 +4,7 @@ use crate::geometry::{
     Target, attack_path, can_place, distance, empty_for, inside, neighbors, targets,
 };
 use crate::model::{Catalog, Command, Failure, Point, State, Unit, ensure, number};
-use crate::movement::{actor, consume, finish, movement_stats, reserve, stage, sync};
+use crate::movement::{consume, finish, sync};
 use crate::resolution::{Resolution, add_unit, normalize_guards, template, terminal};
 use crate::stats::stats;
 use serde_json::{Value, json};
@@ -79,42 +79,16 @@ pub fn move_runner(
     catalog: &Catalog,
     preview: bool,
 ) -> Result<State, Failure> {
-    stage(previous, c, catalog)?;
-    let mut u = actor(previous, c, catalog)?.clone();
-    let to = point(c)?;
-    ensure(catalog[&u.kind.key()].landmark.is_none(), "地标不能移动。")?;
-    let starting = u.mode == "none";
-    ensure(
-        starting || u.mode == "move",
-        "本回合已选择另一操作模式，剩余攻击不能换成移动或技能。",
-    )?;
+    let prepared = crate::movement::prepare_move(previous, c, catalog)?;
+    let to = prepared.to;
+    let starting = prepared.source.starting;
+    let charged = prepared.source.charge;
+    let mut u = prepared.source.unit;
     if starting {
-        ensure(
-            movement_stats(previous, &u, catalog).1 > 0.0,
-            "本回合操作已用完。",
-        )?;
         u.mode = "move".into();
         u.shots = 0.0;
-        u.moves = 0.0;
     }
-    let charged = u
-        .kinds()
-        .into_iter()
-        .find(|k| catalog[&k.key()].movement > 0.0 && catalog[&k.key()].movement.fract() != 0.0);
-    if starting {
-        ensure(
-            charged.as_ref().is_some_and(|k| {
-                let r = reserve(&u, k, catalog);
-                number(&r["readyCharge"]) >= 1.0 && r["chargeType"] == "move"
-            }),
-            "需要在回合开始已有1层移动蓄力。",
-        )?;
-        u.moves = 5.0;
-    }
-    ensure(
-        u.moves > 0.0 && distance(u.at(), to) == 1.0 && can_enter(previous, &u, to, catalog),
-        "每次沿四向移动一格，不能越界或使大体型重叠。",
-    )?;
+    u.moves = prepared.source.moves;
     let mut s = previous.fork();
     normalize_guards(&mut s);
     s.events.clear();

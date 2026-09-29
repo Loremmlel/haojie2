@@ -1,16 +1,20 @@
-use crate::geometry::{can_place, cells, deployment_rows, distance, empty_for, movement_path};
+use crate::geometry::{can_place, cells, deployment_rows, distance, empty_for};
 use crate::model::{
     COMMANDS, Catalog, Command, Failure, Kind, Point, State, Unit, ensure, extra_number, number,
 };
 use serde_json::{Value, json};
 
-struct Prepared {
-    index: usize,
-    to: Point,
-    starting: bool,
-    charge: Option<Kind>,
-    moves: f64,
-    path: Vec<Point>,
+pub struct Prepared {
+    pub to: Point,
+    pub source: MoveSource,
+    pub path: Option<Vec<Point>>,
+}
+pub struct MoveSource {
+    pub unit: Unit,
+    pub starting: bool,
+    pub charge: Option<Kind>,
+    pub moves: f64,
+    limit: f64,
 }
 
 pub fn charge_kind(u: &Unit, catalog: &Catalog) -> Option<Kind> {
@@ -72,6 +76,19 @@ pub fn movement_stats(s: &State, u: &Unit, catalog: &Catalog) -> (bool, f64, f64
     (locked, left, movement)
 }
 pub fn stage(s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
+    stage_with_transit(s, c, || transit(s, catalog).map(str::to_owned))
+}
+pub fn transit<'a>(s: &'a State, catalog: &Catalog) -> Option<&'a str> {
+    s.units
+        .iter()
+        .find(|u| (u.has("u12") || u.has("u12p")) && u.mode == "move" && !empty_for(s, u, catalog))
+        .map(|u| u.id.as_str())
+}
+pub fn stage_with_transit(
+    s: &State,
+    c: &Command,
+    transit: impl FnOnce() -> Option<String>,
+) -> Result<(), Failure> {
     if !COMMANDS.contains(&c.kind.as_str()) {
         return Err(Failure::Unsupported("command-kind"));
     }
@@ -93,13 +110,12 @@ pub fn stage(s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
         s.summon_slots != -1.0 || c.kind == "react",
         "当前正在结算回合结束效果。",
     )?;
-    let transit = s
-        .units
-        .iter()
-        .find(|u| (u.has("u12") || u.has("u12p")) && u.mode == "move" && !empty_for(s, u, catalog));
+    let transit = transit();
     ensure(
         c.kind == "react"
-            || transit.is_none_or(|u| c.kind == "move" && c.unit_id.as_deref() == Some(&u.id)),
+            || transit
+                .as_deref()
+                .is_none_or(|id| c.kind == "move" && c.unit_id.as_deref() == Some(id)),
         "冲撞移动正在经过其他占位，必须先完成弹出或回到空地。",
     )?;
     let giant = c.kind == "skill"
@@ -163,51 +179,41 @@ pub fn actor<'a>(s: &'a State, c: &Command, catalog: &Catalog) -> Result<&'a Uni
     )?;
     Ok(u)
 }
-fn prepare(s: &State, c: &Command, catalog: &Catalog) -> Result<Prepared, Failure> {
+pub fn prepare_finish(s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
     let u = actor(s, c, catalog)?;
-    if c.kind == "finish-mode" {
-        ensure(
-            u.mode == "attack" || (u.mode == "move" && (u.runner() || u.size > 1.0)),
-            "没有可提前结束的连续操作。",
-        )?;
-        ensure(
-            !u.runner() || empty_for(s, u, catalog),
-            "必须先移到空地，不能结束在另一个棋子、地标或基地内。",
-        )?;
-        return Ok(Prepared {
-            index: s.units.iter().position(|v| v.id == u.id).unwrap_or(0),
-            to: u.at(),
-            starting: false,
-            charge: None,
-            moves: 0.0,
-            path: vec![],
-        });
-    }
-    let (Some(x), Some(y)) = (c.x, c.y) else {
-        return Err(Failure::Invalid("请选择棋盘格。"));
-    };
-    ensure(x.fract() == 0.0 && y.fract() == 0.0, "请选择棋盘格。")?;
-    let to = Point { x, y };
+    ensure(
+        u.mode == "attack" || (u.mode == "move" && (u.runner() || u.size > 1.0)),
+        "没有可提前结束的连续操作。",
+    )?;
+    ensure(
+        !u.runner() || empty_for(s, u, catalog),
+        "必须先移到空地，不能结束在另一个棋子、地标或基地内。",
+    )
+}
+/// 模式和资源只在当前观察内准备；规则执行复用相同函数，目标和路径仍逐个精确验证。
+pub fn move_source(s: &State, u: Unit, catalog: &Catalog) -> Result<MoveSource, Failure> {
     ensure(catalog[&u.kind.key()].landmark.is_none(), "地标不能移动。")?;
     ensure(
         u.mode == "none" || u.mode == "move",
         "本回合已选择另一操作模式，剩余攻击不能换成移动或技能。",
     )?;
     let starting = u.mode == "none";
-    let (_, left, mut limit) = movement_stats(s, u, catalog);
+    let (_, left, mut limit) = movement_stats(s, &u, catalog);
     if starting {
         ensure(left > 0.0, "本回合操作已用完。")?;
     }
-    if u.runner() {
-        return Err(Failure::Unsupported("collision-move"));
-    }
-    let charge = charge_kind(u, catalog);
+    let charge = charge_kind(&u, catalog);
     let ready = charge.as_ref().is_some_and(|k| {
-        let r = reserve(u, k, catalog);
+        let r = reserve(&u, k, catalog);
         number(&r["readyCharge"]) >= 1.0 && r["chargeType"] == "move"
     });
     let mut moves = if starting { 0.0 } else { u.moves };
-    let path = if u.size > 1.0 {
+    if u.runner() {
+        if starting {
+            ensure(ready, "需要在回合开始已有1层移动蓄力。")?;
+            moves = 5.0;
+        }
+    } else if u.size > 1.0 {
         if starting {
             if charge.is_some() {
                 ensure(ready, "分数移动须先蓄力。")?;
@@ -217,29 +223,65 @@ fn prepare(s: &State, c: &Command, catalog: &Catalog) -> Result<Prepared, Failur
             }
             moves = limit.floor();
         }
+    } else if charge.is_some() {
+        ensure(ready, "分数移动需要在回合开始已有1层移动蓄力。")?;
+        if limit.fract() != 0.0 {
+            limit *= 2.0;
+        }
+    }
+    Ok(MoveSource {
+        unit: u,
+        starting,
+        charge,
+        moves,
+        limit,
+    })
+}
+pub fn move_destination(
+    s: &State,
+    source: &MoveSource,
+    to: Point,
+    catalog: &Catalog,
+    query: Option<&crate::geometry::PlacementQuery>,
+) -> Result<Option<Vec<Point>>, Failure> {
+    let u = &source.unit;
+    let place = |p| {
+        query.map_or_else(
+            || can_place(s, u, p, catalog),
+            |q| q.can_place(s, u, p, catalog),
+        )
+    };
+    if u.runner() {
         ensure(
-            moves > 0.0 && distance(u.at(), to) == 1.0 && can_place(s, u, to, catalog),
+            source.moves > 0.0
+                && distance(u.at(), to) == 1.0
+                && if u.size > 1.0 {
+                    can_place(s, u, to, catalog)
+                } else {
+                    crate::geometry::inside(to)
+                },
+            "每次沿四向移动一格，不能越界或使大体型重叠。",
+        )?;
+        return Ok(None);
+    }
+    let path = if u.size > 1.0 {
+        ensure(
+            source.moves > 0.0 && distance(u.at(), to) == 1.0 && place(to),
             "2×2每次整体向一个方向移动一小格，四格均须合法且不能重叠。",
         )?;
         vec![u.at(), to]
     } else {
-        if charge.is_some() {
-            ensure(ready, "分数移动需要在回合开始已有1层移动蓄力。")?;
-            if limit.fract() != 0.0 {
-                limit *= 2.0;
-            }
-        }
-        movement_path(s, u, to, limit, u.has("13") && !u.silenced, catalog)
+        crate::geometry::movement_with_place(u, to, source.limit, u.has("13") && !u.silenced, place)
             .ok_or(Failure::Invalid("移动距离、路径、占位或独行侠禁区不合法。"))?
     };
-    Ok(Prepared {
-        index: s.units.iter().position(|v| v.id == u.id).unwrap(),
-        to,
-        starting,
-        charge,
-        moves,
-        path,
-    })
+    Ok(Some(path))
+}
+pub fn prepare_move(s: &State, c: &Command, catalog: &Catalog) -> Result<Prepared, Failure> {
+    let u = actor(s, c, catalog)?.fork();
+    let to = crate::shrines::point(c)?;
+    let source = move_source(s, u, catalog)?;
+    let path = move_destination(s, &source, to, catalog, None)?;
+    Ok(Prepared { source, to, path })
 }
 pub fn finish(u: &mut Unit) {
     if !u.bonus_sequence {
@@ -322,8 +364,12 @@ pub fn sync_banners(s: &mut State, catalog: &Catalog) {
 
 /// 完整的切片命令：先只读准备，再复制并结算；任何失败不改输入，也不执行 TS 回退。
 pub fn apply(previous: &State, c: &Command, catalog: &Catalog) -> Result<State, Failure> {
-    stage(previous, c, catalog)?;
-    let p = prepare(previous, c, catalog)?;
+    let prepared = if c.kind == "finish-mode" {
+        prepare_finish(previous, c, catalog)?;
+        None
+    } else {
+        Some(prepare_move(previous, c, catalog)?)
+    };
     let mut s = previous.fork();
     s.events.clear();
     if c.kind == "finish-mode" {
@@ -334,10 +380,15 @@ pub fn apply(previous: &State, c: &Command, catalog: &Catalog) -> Result<State, 
             u.bonus_attacks += 1.0;
         }
     } else {
-        let u = &mut s.units[p.index];
+        let p = prepared.unwrap();
+        let u = s
+            .units
+            .iter_mut()
+            .find(|u| u.id == p.source.unit.id)
+            .unwrap();
         let from = u.at();
         let actor = u.actor_event();
-        if p.starting {
+        if p.source.starting {
             u.mode = "move".into();
             u.shots = 0.0;
             u.moves = 0.0;
@@ -347,13 +398,13 @@ pub fn apply(previous: &State, c: &Command, catalog: &Catalog) -> Result<State, 
         s.events.push(json!({"type":"move","id":id,"causeId":id,"actor":actor,"subject":actor,"from":from,"to":p.to,"path":p.path,"unitId":u.id,"owner":u.owner}));
         u.x = p.to.x;
         u.y = p.to.y;
-        if let Some(kind) = &p.charge
-            && (u.size == 1.0 || p.starting)
+        if let Some(kind) = &p.source.charge
+            && (u.size == 1.0 || p.source.starting)
         {
             consume(u, kind, catalog);
         }
         if u.size > 1.0 {
-            u.moves = p.moves - 1.0;
+            u.moves = p.source.moves - 1.0;
         }
         if u.size == 1.0 || u.moves == 0.0 {
             finish(u);

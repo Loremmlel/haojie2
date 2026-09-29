@@ -32,7 +32,7 @@ pub const COMMANDS: &[&str] = &[
     "shatter",
 ];
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(untagged)]
 pub enum Kind {
     Number(i32),
@@ -151,7 +151,7 @@ pub struct UnitData {
     pub extra: Map<String, Value>,
 }
 impl Unit {
-    // 只有局面分支共享实体；规则快照继续使用拥有型复制，与 TS 一致。
+    // 内部局面与只读查询共享实体；写入自动分离，规则快照继续使用拥有型复制。
     pub fn fork(&self) -> Self {
         Self(Rc::clone(&self.0))
     }
@@ -236,7 +236,7 @@ pub struct State {
 }
 impl State {
     /// 与 TS forkPosition 相同：实体和扩展字段按需复制，小型核心容器立即隔离。
-    /// 分支只用于同步结算；预检/失败丢弃，正式成功由 transition 导出独立快照。
+    /// 预检/失败丢弃；内部成功直接保留，外部 transition 另行导出独立快照。
     pub fn fork(&self) -> Self {
         Self {
             version: self.version,
@@ -352,7 +352,7 @@ pub struct Command {
     pub sacrifice_ids: Option<Vec<String>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Failure {
     Invalid(&'static str),
     InvalidOwned(String),

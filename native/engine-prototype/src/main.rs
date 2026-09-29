@@ -10,6 +10,8 @@ mod damage;
 mod encoding;
 #[path = "core/geometry.rs"]
 mod geometry;
+#[path = "commands/inspection.rs"]
+mod inspection;
 #[path = "commands/lifecycle.rs"]
 mod lifecycle;
 mod model;
@@ -48,8 +50,9 @@ use std::hint::black_box;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
-fn transition(s: &State, c: &Command, catalog: &Catalog, preview: bool) -> Result<State, Failure> {
-    let next = match c.kind.as_str() {
+/// 已完成公共阶段检查；预检与正式连续运行共用同一个规则内核。
+fn execute(s: &State, c: &Command, catalog: &Catalog, preview: bool) -> Result<State, Failure> {
+    match c.kind.as_str() {
         "attack" | "react" => combat::apply(s, c, catalog, preview),
         "move"
             if s.unit(c.unit_id.as_deref().unwrap_or(""))
@@ -60,9 +63,17 @@ fn transition(s: &State, c: &Command, catalog: &Catalog, preview: bool) -> Resul
         "move" | "finish-mode" => movement::apply(s, c, catalog),
         _ if COMMANDS.contains(&c.kind.as_str()) => preparation::apply(s, c, catalog, preview),
         _ => Err(Failure::Unsupported("command-kind")),
-    }?;
-    // 与 TS 同样只让正式成功结果导出拥有型快照；预检结果由调用方丢弃。
-    Ok(if preview { next } else { next.clone() })
+    }
+}
+fn apply_runtime(s: &State, c: &Command, catalog: &Catalog) -> Result<State, Failure> {
+    movement::stage(s, c, catalog)?;
+    execute(s, c, catalog, false)
+}
+fn transition(s: &State, c: &Command, catalog: &Catalog) -> Result<State, Failure> {
+    // 外部导出保持独立拥有；内部连续执行依靠 Rc 写时分离保留旧局面。
+    let next = apply_runtime(s, c, catalog)?;
+    // State::clone 是深复制快照出口；内部提交才保留 Rc 共享。
+    Ok(next.clone())
 }
 
 #[derive(Deserialize)]
@@ -130,10 +141,11 @@ struct Response {
     result: Option<ResultState>,
 }
 fn evaluate(job: &Job, catalog: &Catalog) -> Response {
+    let mut queries = inspection::Queries::default();
     let inspections = job
         .probes
         .iter()
-        .map(|c| match transition(&job.state, c, catalog, true) {
+        .map(|c| match queries.inspect(&job.state, c, catalog) {
             Ok(_) => json!({"status":"available"}),
             Err(e) => e.value(),
         })
@@ -141,7 +153,7 @@ fn evaluate(job: &Job, catalog: &Catalog) -> Response {
     let result = job
         .command
         .as_ref()
-        .map(|c| ResultState::from(transition(&job.state, c, catalog, false)));
+        .map(|c| ResultState::from(transition(&job.state, c, catalog)));
     Response {
         inspections,
         result,
@@ -399,12 +411,7 @@ fn handle(
             let clear = request["clearHistory"] == true;
             let mut results = vec![];
             for c in commands {
-                match transition(
-                    resident.state.as_ref().ok_or("reset first")?,
-                    &c,
-                    catalog,
-                    false,
-                ) {
+                match apply_runtime(resident.state.as_ref().ok_or("reset first")?, &c, catalog) {
                     Ok(mut next) => {
                         results.push(if trace {
                             json!({"status":"available","state":next})

@@ -1,9 +1,9 @@
 //! 同 TS 惰性参数树；节点只缓存当前公开局面，不做评分或候选裁剪。
 use crate::actions::{self, Action, Step, array, extend, text};
 use crate::geometry;
-use crate::model::{Catalog, Point, State};
+use crate::model::{Catalog, Point, State, Unit};
 use serde_json::{Value, json};
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -47,7 +47,12 @@ pub struct Tree<'a> {
     pub catalog: &'a Catalog,
     actions: Vec<Action>,
     nodes: HashMap<Vec<usize>, Rc<Node>>,
-    hut_points: OnceCell<Vec<Point>>,
+    queries: RefCell<crate::inspection::Queries>,
+    pieces: HashMap<String, Unit>,
+    targets: Vec<geometry::Target>,
+    target_index: HashMap<String, usize>,
+    stats: RefCell<HashMap<String, crate::stats::Stats>>,
+    routes: RefCell<HashMap<(String, String), Vec<String>>>,
     pub encoding: OnceCell<Result<crate::encoding::BaseEncoding, String>>,
 }
 impl<'a> Tree<'a> {
@@ -56,7 +61,17 @@ impl<'a> Tree<'a> {
             return Err("invalid training actor".into());
         }
         let state = actions::position(observation)?;
-        let actions = actions::actions(&state, actor, catalog)?;
+        let mut queries = crate::inspection::Queries::default();
+        let actions = actions::actions(&state, actor, catalog, &mut queries)?;
+        let mut pieces = HashMap::new();
+        for u in state.pieces() {
+            pieces.entry(u.id.clone()).or_insert_with(|| u.fork());
+        }
+        let targets = geometry::targets(&state);
+        let mut target_index = HashMap::new();
+        for (i, t) in targets.iter().enumerate() {
+            target_index.entry(t.id.clone()).or_insert(i);
+        }
         Ok(Self {
             observation,
             state,
@@ -64,26 +79,41 @@ impl<'a> Tree<'a> {
             catalog,
             actions,
             nodes: HashMap::new(),
-            hut_points: OnceCell::new(),
+            queries: RefCell::new(queries),
+            pieces,
+            targets,
+            target_index,
+            stats: RefCell::new(HashMap::new()),
+            routes: RefCell::new(HashMap::new()),
             encoding: OnceCell::new(),
         })
     }
     fn routes(&self, c: &Value) -> Vec<String> {
+        let key = (
+            text(&c["unitId"]).to_string(),
+            text(&c["targetId"]).to_string(),
+        );
+        if let Some(routes) = self.routes.borrow().get(&key) {
+            return routes.clone();
+        }
         let s = &self.state;
-        let Some(u) = s.unit(text(&c["unitId"])) else {
+        let Some(u) = self.pieces.get(&key.0) else {
             return vec![];
         };
-        let Some(t) = geometry::find_target(s, text(&c["targetId"])) else {
+        let Some(t) = self.target_index.get(&key.1).map(|i| &self.targets[*i]) else {
             return vec![];
         };
         // TS selectableAttackRoutes 有结果时仍来自同一 attackRoutes，否则回退到全方向查询。
-        geometry::attack_routes(
-            s,
-            u,
-            &t,
-            crate::stats::stats(s, u, self.catalog).range,
-            u.piercing(),
-        )
+        let routes = geometry::attack_routes(s, u, t, self.range(u), u.piercing());
+        self.routes.borrow_mut().insert(key, routes.clone());
+        routes
+    }
+    fn range(&self, u: &Unit) -> f64 {
+        self.stats
+            .borrow_mut()
+            .entry(u.id.clone())
+            .or_insert_with(|| crate::stats::stats(&self.state, u, self.catalog))
+            .range
     }
     fn prepare(&self, mut p: Prefix) -> Prefix {
         while p.steps.first().is_some_and(|s| s.kind == "direction")
@@ -100,28 +130,14 @@ impl<'a> Tree<'a> {
         subject: Option<String>,
     ) -> Result<Option<Choice>, String> {
         let p = self.prepare(p);
-        if p.steps.is_empty()
-            && p.command["type"] == "react"
-            && let Some(r) = self
-                .state
-                .pending
-                .first()
-                .filter(|r| r["kind"] == "hut-spawn")
-        {
-            let points = self
-                .hut_points
-                .get_or_init(|| crate::reactions::hut_points(&self.state, r, self.catalog));
-            let c = serde_json::from_value(p.command.clone()).map_err(|e| e.to_string())?;
-            match crate::reactions::prepare_hut(&self.state, r, &c, points) {
-                Ok(()) => {}
-                Err(crate::model::Failure::Invalid(_) | crate::model::Failure::InvalidOwned(_)) => {
-                    return Ok(None);
-                }
-                Err(e) => return Err(format!("unexpected hut preparation failure: {e:?}")),
-            }
-        }
         let status = if p.steps.is_empty() {
-            actions::inspect(&self.state, self.actor, &p.command, self.catalog)?
+            actions::inspect(
+                &self.state,
+                self.actor,
+                &p.command,
+                self.catalog,
+                &mut self.queries.borrow_mut(),
+            )?
         } else {
             "parameter"
         };
@@ -207,7 +223,7 @@ impl<'a> Tree<'a> {
                 }
             }
             "target" => {
-                for t in geometry::targets(s) {
+                for t in &self.targets {
                     if step.unit_only && t.unit.is_none() {
                         continue;
                     }
@@ -229,7 +245,7 @@ impl<'a> Tree<'a> {
                     } else {
                         json!(t.id)
                     };
-                    add(t.id.clone(), command, Some(t.id), false)?;
+                    add(t.id.clone(), command, Some(t.id.clone()), false)?;
                 }
             }
             "point" => {
@@ -250,7 +266,8 @@ impl<'a> Tree<'a> {
                         self.catalog,
                     )
                 } else if a.id.split(':').next() == Some("giant") && c.get("targetId").is_some() {
-                    s.unit(text(&c["targetId"]))
+                    self.pieces
+                        .get(text(&c["targetId"]))
                         .map(|u| geometry::expansion_anchors(s, u, self.catalog))
                         .unwrap_or_default()
                 } else {
@@ -288,7 +305,7 @@ impl<'a> Tree<'a> {
                 }
             }
             "path" => {
-                if let Some(u) = s.unit(text(&c["unitId"])) {
+                if let Some(u) = self.pieces.get(text(&c["unitId"])) {
                     let path: Vec<Point> =
                         serde_json::from_value(c["path"].clone()).map_err(|e| e.to_string())?;
                     if !path.is_empty() {
@@ -301,11 +318,7 @@ impl<'a> Tree<'a> {
                     for at in points {
                         let mut extended = path.clone();
                         extended.push(at);
-                        if geometry::valid_attack_route(
-                            u,
-                            &extended,
-                            crate::stats::stats(s, u, self.catalog).range,
-                        ) {
+                        if geometry::valid_attack_route(u, &extended, self.range(u)) {
                             add(
                                 format!("{},{}", at.x, at.y),
                                 extend(c, json!({"path":extended})),

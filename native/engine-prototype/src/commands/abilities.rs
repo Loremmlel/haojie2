@@ -10,10 +10,11 @@ use crate::resolution::{Resolution, add_effect, deploy_unit, template};
 use crate::shrines::point;
 use crate::stats::{prune_siphons, stats};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 pub fn unit(s: &State, id: Option<&str>) -> Result<Unit, Failure> {
     s.unit(id.unwrap_or(""))
-        .cloned()
+        .map(Unit::fork)
         .ok_or(Failure::Invalid("请选择仍在场上的随从。"))
 }
 pub fn target(s: &State, id: Option<&str>) -> Result<Target, Failure> {
@@ -84,10 +85,21 @@ fn prepare_hook(
     catalog: &Catalog,
 ) -> Result<(Target, Point), Failure> {
     let t = enemy(s, u, c.target_id.as_deref(), range, false, catalog)?;
+    let to = hook_destination(s, u, c, range, &t, catalog)?;
+    Ok((t, to))
+}
+fn hook_destination(
+    s: &State,
+    u: &Unit,
+    c: &Command,
+    range: f64,
+    t: &Target,
+    catalog: &Catalog,
+) -> Result<Point, Failure> {
     let to = point(c)?;
     let v = t.unit.as_ref().unwrap();
     ensure(!v.has("5"), "大肉比不能被钩子牵引。")?;
-    let mut moved = v.clone();
+    let mut moved = v.fork();
     moved.x = to.x;
     moved.y = to.y;
     ensure(
@@ -96,7 +108,7 @@ fn prepare_hook(
             && attack_path(s, u, &Target::from(&moved), range, None, false).is_some(),
         "牵引落点必须合法且在钩子射程内。",
     )?;
-    Ok((t, to))
+    Ok(to)
 }
 struct Sacrifice {
     victim: Unit,
@@ -166,11 +178,16 @@ fn prepare_revival(
     range: f64,
     catalog: &Catalog,
 ) -> Result<(Value, Point), Failure> {
+    let record = revival_record(s, u, c.death_id.as_deref())?;
+    let to = revival_destination(s, u, c, range, &record, catalog)?;
+    Ok((record, to))
+}
+fn revival_record(s: &State, u: &Unit, id: Option<&str>) -> Result<Value, Failure> {
     let record = s.extra["deaths"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|r| r["id"].as_str() == c.death_id.as_deref());
+        .find(|r| r["id"].as_str() == id);
     ensure(
         record.is_some_and(|r| {
             r["kind"] != "grave"
@@ -181,7 +198,16 @@ fn prepare_revival(
         }),
         "只能选择前两个己方回合窗口内尚未复活的友方阵亡记录。",
     )?;
-    let record = record.unwrap();
+    Ok(record.unwrap().clone())
+}
+fn revival_destination(
+    s: &State,
+    u: &Unit,
+    c: &Command,
+    range: f64,
+    record: &Value,
+    catalog: &Catalog,
+) -> Result<Point, Failure> {
     let to = point(c)?;
     let key = crate::preparation::kind(&record["kind"]).key();
     let ghost = template(s, &key, u.owner, to, "preview", catalog);
@@ -190,54 +216,115 @@ fn prepare_revival(
             && attack_path(s, u, &point_target(to), range, None, false).is_some(),
         "复活位置须在射程内合法空格。",
     )?;
-    Ok((record.clone(), to))
+    Ok(to)
 }
-/// 对应 TS prepareSkillInspection：只投影施法者资源与操作，不复制全局、不执行技能效果。
-/// 大参数域共用正式入口的目标/几何准备；预检通过后仍由完整副本继续结算到随机边界。
-pub fn prepare_inspection(s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
+pub struct SkillInspection {
+    view: Option<State>,
+    unit: Unit,
+    key: String,
+    range: f64,
+    records: HashMap<Option<String>, Result<Value, Failure>>,
+    targets: HashMap<Option<String>, Result<Target, Failure>>,
+}
+impl SkillInspection {
+    pub fn inspect(&mut self, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
+        let Some(s) = &self.view else {
+            return Ok(());
+        };
+        match self.key.as_str() {
+            "u19" => {
+                let record = self
+                    .records
+                    .entry(c.death_id.clone())
+                    .or_insert_with(|| revival_record(s, &self.unit, c.death_id.as_deref()))
+                    .as_ref()
+                    .map_err(Clone::clone)?;
+                revival_destination(s, &self.unit, c, self.range, record, catalog)?;
+            }
+            "7" => {
+                let target = self
+                    .targets
+                    .entry(c.target_id.clone())
+                    .or_insert_with(|| {
+                        enemy(
+                            s,
+                            &self.unit,
+                            c.target_id.as_deref(),
+                            self.range,
+                            false,
+                            catalog,
+                        )
+                    })
+                    .as_ref()
+                    .map_err(Clone::clone)?;
+                hook_destination(s, &self.unit, c, self.range, target, catalog)?;
+            }
+            "14" => {
+                prepare_sacrifice(s, &self.unit, c, self.range, catalog)?;
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+}
+/// 冰痕正式入口在公共资格之前读取坐标，预检须保持错误顺序。
+pub fn skill_coordinate(s: &State, c: &Command) -> Result<(), Failure> {
+    let raw = s.unit(c.unit_id.as_deref().unwrap_or(""));
+    let kind = c.ability.as_ref().or_else(|| raw.map(|u| &u.kind));
+    if kind.is_some_and(|k| k.is("u24")) {
+        let u = unit(s, c.unit_id.as_deref())?;
+        ensure(u.has("u24"), "该棋子没有选定的技能。")?;
+        point(c)?;
+    }
+    Ok(())
+}
+/// 只投影当前施法者，保留冷字段共享；所有技能复用正式 begin_skill 公共资格。
+pub fn prepare_inspection(
+    s: &State,
+    c: &Command,
+    catalog: &Catalog,
+) -> Result<SkillInspection, Failure> {
     let raw = unit(s, c.unit_id.as_deref())?;
     let k = c.ability.as_ref().unwrap_or(&raw.kind);
     let key = k.key();
-    if !["u19", "7", "14"].contains(&key.as_str()) {
-        return Ok(());
-    }
     ensure(raw.has(&key), "该棋子没有选定的技能。")?;
-    let mut u = actor(s, c, catalog)?.clone();
-    if *k != u.kind {
-        u.extra
-            .extend(reserve(&raw, k, catalog).as_object().unwrap().clone());
+    let mut view = s.fork();
+    project_resources(&mut view, &raw, k, catalog);
+    let (u, range) = begin_skill(&mut view, c, &key, catalog)?;
+    Ok(SkillInspection {
+        view: ["u19", "7", "14"].contains(&key.as_str()).then_some(view),
+        unit: u,
+        key,
+        range,
+        records: HashMap::new(),
+        targets: HashMap::new(),
+    })
+}
+fn project_resources(s: &mut State, raw: &Unit, k: &crate::model::Kind, catalog: &Catalog) {
+    if *k == raw.kind {
+        return;
     }
-    ensure(!u.silenced, "沉默已移除此随从的技能。")?;
-    ensure(
-        !s.effect(&u, "freeze") && !s.effect(&u, "stun"),
-        "冻结或眩晕中不能施放技能。",
-    )?;
-    ensure(
-        u.mode == "none" || u.mode == "skill",
-        "本回合已选择另一操作模式，剩余攻击不能换成移动或技能。",
-    )?;
-    if u.mode == "none" {
-        ensure(
-            stats(s, &u, catalog).operations_left > 0.0,
-            "本回合操作已用完。",
-        )?;
-        u.mode = "skill".into();
-        u.shots = 0.0;
-        u.moves = 0.0;
+    let r = reserve(raw, k, catalog);
+    let key = k.key();
+    let u = s.unit_mut(&raw.id).unwrap();
+    for field in ["charge", "readyCharge", "chargeType", "lastCharge"] {
+        u.extra.insert(field.into(), r[field].clone());
     }
-    let range = stats(s, &u, catalog).range;
-    match key.as_str() {
-        "u19" => {
-            prepare_revival(s, &u, c, range, catalog)?;
-        }
-        "7" => {
-            prepare_hook(s, &u, c, range, catalog)?;
-        }
-        _ => {
-            prepare_sacrifice(s, &u, c, range, catalog)?;
-        }
-    }
-    Ok(())
+    let usage = raw.extra.get("abilityUsage").and_then(|v| v.get(&key));
+    u.extra.insert(
+        "onceUsed".into(),
+        usage
+            .and_then(|v| v.get("once"))
+            .cloned()
+            .unwrap_or(json!(false)),
+    );
+    u.extra.insert(
+        "freeUsed".into(),
+        usage
+            .and_then(|v| v.get("free"))
+            .cloned()
+            .unwrap_or(json!(-1)),
+    );
 }
 pub fn skill(
     s: &mut State,
@@ -251,31 +338,7 @@ pub fn skill(
     ensure(raw.has(&key), "该棋子没有选定的技能。")?;
     let inherited = k != raw.kind;
     let native = reserve(&raw, &raw.kind, catalog);
-    if inherited {
-        let r = reserve(&raw, &k, catalog);
-        let u = s.unit_mut(&raw.id).unwrap();
-        for field in ["charge", "readyCharge", "chargeType", "lastCharge"] {
-            u.extra.insert(field.into(), r[field].clone());
-        }
-        u.extra.insert(
-            "onceUsed".into(),
-            raw.extra
-                .get("abilityUsage")
-                .and_then(|v| v.get(&key))
-                .and_then(|v| v.get("once"))
-                .cloned()
-                .unwrap_or(json!(false)),
-        );
-        u.extra.insert(
-            "freeUsed".into(),
-            raw.extra
-                .get("abilityUsage")
-                .and_then(|v| v.get(&key))
-                .and_then(|v| v.get("free"))
-                .cloned()
-                .unwrap_or(json!(-1)),
-        );
-    }
+    project_resources(s, &raw, &k, catalog);
     let mut facts = json!({"action":match key.as_str(){"5"=>"quake","7"|"u23"=>"pull","21"=>"rush","u6"=>"cross","u14"=>"siphon","u24"=>"ice-mark",_=>"buff"},"ability":k,"actor":raw.actor_event()});
     if key == "5" {
         facts["area"] = json!(
@@ -349,17 +412,16 @@ pub fn skill(
     ctx.facts = previous;
     Ok(())
 }
-fn resolve_skill(
+fn begin_skill(
     s: &mut State,
     c: &Command,
     k: &str,
     catalog: &Catalog,
-    ctx: &mut Resolution,
-) -> Result<(), Failure> {
+) -> Result<(Unit, f64), Failure> {
     let u = if k == "u7" {
         unit(s, c.unit_id.as_deref())?
     } else {
-        actor(s, c, catalog)?.clone()
+        actor(s, c, catalog)?.fork()
     };
     ensure(!u.silenced, "沉默已移除此随从的技能。")?;
     ensure(
@@ -380,8 +442,18 @@ fn resolve_skill(
             "本回合免费技能已使用。",
         )?;
     }
-    let u = s.unit(&u.id).unwrap().clone();
+    let u = s.unit(&u.id).unwrap().fork();
     let range = stats(s, &u, catalog).range;
+    Ok((u, range))
+}
+fn resolve_skill(
+    s: &mut State,
+    c: &Command,
+    k: &str,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+) -> Result<(), Failure> {
+    let (u, range) = begin_skill(s, c, k, catalog)?;
     let source = Source::new(&u, "skill");
     match k {
         "5" => {
