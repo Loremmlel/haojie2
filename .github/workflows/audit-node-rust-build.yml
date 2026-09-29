@@ -1,0 +1,57 @@
+name: Build pinned artifacts for isolated Node-Rust audit
+on:
+  push:
+    branches: ['audit/node-rust-recheck-20260929']
+    paths: ['.github/workflows/audit-node-rust-build.yml']
+permissions:
+  contents: read
+jobs:
+  artifacts:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fcf37e73f91629965255b6fa4a5da1c80e7fa71a
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 6cd5bf4ab0969f9620efe11893122c7aae154177
+          path: _audit_old
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned JavaScript dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Build portable release binaries and frozen API bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/haojie-audit-out
+          { uname -a; node --version; rustc --version --verbose; cargo --version; ldd --version | head -1; } > /tmp/haojie-audit-out/build-environment.txt
+          printf '%s\n' fcf37e73f91629965255b6fa4a5da1c80e7fa71a > /tmp/haojie-audit-out/current-commit.txt
+          printf '%s\n' 6cd5bf4ab0969f9620efe11893122c7aae154177 > /tmp/haojie-audit-out/old-commit.txt
+          cargo build --manifest-path native/engine-prototype/Cargo.toml --target-dir /tmp/haojie-audit-target --release --locked
+          cp /tmp/haojie-audit-target/release/haojie-engine-prototype /tmp/haojie-audit-out/engine-current
+          cargo build --manifest-path _audit_old/native/engine-prototype/Cargo.toml --target-dir /tmp/haojie-audit-target --release --locked
+          cp /tmp/haojie-audit-target/release/haojie-engine-prototype /tmp/haojie-audit-out/engine-old
+          printf '%s\n' "export * from './scripts/training/performance/api';" "export { nativeClient } from './scripts/training/native/client';" > .audit-entry.ts
+          cp .audit-entry.ts _audit_old/.audit-entry.ts
+          ln -s "$GITHUB_WORKSPACE/node_modules" _audit_old/node_modules
+          node --input-type=module <<'JS'
+          import { build } from 'esbuild';
+          for (const [entry, label] of [['.audit-entry.ts','current'],['_audit_old/.audit-entry.ts','old']]) {
+            await build({entryPoints:[entry],bundle:true,platform:'node',format:'esm',target:'node22',outfile:`/tmp/haojie-audit-out/api-${label}.mjs`,metafile:true}).then(r=>import('node:fs').then(fs=>fs.writeFileSync(`/tmp/haojie-audit-out/metafile-${label}.json`,JSON.stringify(r.metafile))));
+          }
+          JS
+          cp "$(command -v node)" /tmp/haojie-audit-out/node
+          (cd /tmp/haojie-audit-out && sha256sum engine-* api-* node > SHA256SUMS)
+          tar -czf /tmp/haojie-audit-linux.tar.gz -C /tmp/haojie-audit-out .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: haojie-audit-linux-pinned
+          path: /tmp/haojie-audit-linux.tar.gz
+          retention-days: 7
+          if-no-files-found: error
