@@ -3,7 +3,7 @@ export { sampleCommand, emptyMetrics } from '../economics/sample';
 export { TinyPolicy, randomStream } from '../economics/policy';
 export { readTrainingRecords } from '../records/replay';
 export { TrainingActionTree } from '../../../src/ai/training/action-tree';
-export { encodeDecision } from '../../../src/ai/training/encoding/decision';
+export { encodeDecision, createDecisionEncoder } from '../../../src/ai/training/encoding/decision';
 export { createGame, applyCommand, inspectCommand } from '../../../src/engine/commands/game';
 export { applyPlayerCommand } from '../../../src/engine/online/authority';
 export { readRecordLines } from '../records/io';

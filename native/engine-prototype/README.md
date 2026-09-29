@@ -50,6 +50,8 @@ node --import tsx scripts/training/native/sampling/complete.ts --references arti
 
 `movement_stats` 是 `getStats` 的移动依赖投影，省去移动入口不读取的攻击属性计算；因此收益不全来自语言。按 ID 查询目标时两端均只包装命中项。修改 TS 规则须同时维护对应 Rust 模块并重跑差分，不在 Rust 引入另一套 AI 评分。
 
+2026-09-29 的固定编码复用在两端采用相同流程：每个不可变公开观察/观察方内惰性准备固定实体、身份表和全局字段，各参数节点复制张量与索引表后追加前缀及候选。TS 对应 `createPositionEncoder` / `createDecisionEncoder`，Rust 对应 `Tree.encoding` / `encode_base`；不会复用前缀新注册的身份或网络隐层。候选、回溯、随机消耗及编码协议不变，测量与覆盖边界见[本轮报告](../../docs/ai/performance/ENCODING-REUSE-2026-09-29.md)。移动批量准备仍未接入。
+
 TS 已有的攻击、部署、时钟、钩子、献祭、复活和小屋只读预检也已移植：先拒绝明显非法参数，再创建内部状态分支执行完整预检。目标/落点准备与正式结算共用函数；小屋落点仅在同一公开局面树内缓存。Rust 用 `Rc<Node>` 复用不可变节点，编码借用树的公开局面及棋子，避免重复反序列化；这些对应 TS 原有的对象引用语义，不改变候选范围或策略。
 
 TS 生产引擎与本原型已统一采用状态分支算法。只有 `State::fork` / `Unit::fork` / `ValueMap::fork` 创建共享分支；普通 `Clone` 仍生成独立快照，不能为单端提速改成浅复制。每个实体、每个局面扩展字段分别作为写入隔离单元；`turns / bases / deployRows / pending / siphons / events` 在创建分支时立即复制。规则内部快照继续深复制，正式成功由 `transition` 导出独立状态；预检和失败直接丢弃分支。TS 用写入拦截，Rust 用引用计数和可变借用实现同一流程。算法映射、原型计时与生产接入验收见[状态分支记录](../../docs/ai/performance/STATE-SHARING-2026-09-27.md)，Node 性能下降不构成保留算法分叉的理由。

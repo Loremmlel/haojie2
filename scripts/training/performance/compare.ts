@@ -13,6 +13,7 @@ const { values } = parseArgs({
   options: {
     output: { type: 'string' },
     baseline: { type: 'string' },
+    workset: { type: 'string' },
     rounds: { type: 'string', default: '3' },
     cases: { type: 'string', default: '32' },
   },
@@ -59,10 +60,13 @@ if (!values.baseline) {
   const rounds = Number(values.rounds);
   assert.ok(Number.isSafeInteger(count) && count >= 4 && count <= 128 && count % 4 === 0);
   assert.ok(Number.isSafeInteger(rounds) && rounds >= 1 && rounds <= 10);
-  const records = ['classic-tiny', 'shrine-tiny', 'classic-uniform', 'shrine-uniform'].map(
-    (name) => `artifacts/training/economics-20260926/${name}/worker-0.jsonl.gz`,
-  );
-  const cases: any[] = [];
+  const records = values.workset
+    ? []
+    : ['classic-tiny', 'shrine-tiny', 'classic-uniform', 'shrine-uniform'].map(
+        (name) => `artifacts/training/economics-20260926/${name}/worker-0.jsonl.gz`,
+      );
+  // 显式工作集仅用于固定公开局面的诊断，不作为训练轨迹或终局记录。
+  const cases: any[] = values.workset ? JSON.parse(readFileSync(values.workset, 'utf8')) : [];
   for (const path of records) {
     const rows: any[] = [];
     // 从已校验轨迹重建，只在内存保留公开观察；磁盘仍保存种子和命令。
@@ -74,6 +78,7 @@ if (!values.baseline) {
     }
   }
   const signatures: string[] = [];
+  assert.ok(cases.length > 0 && cases.every((r) => r.observation && [1, 2].includes(r.actor)));
   const run = (api: typeof API, verify: boolean) => {
     const policy = new api.TinyPolicy(73129);
     const metrics = api.emptyMetrics();
@@ -109,7 +114,16 @@ if (!values.baseline) {
       b = run(current, true);
       a = run(baseline, true);
     }
-    for (const key of ['nodes', 'evaluations', 'forced', 'backtracks'] as const)
+    for (const key of [
+      'nodes',
+      'evaluations',
+      'forced',
+      'backtracks',
+      'maxEntities',
+      'maxCandidates',
+      'offTurnCommands',
+      'offTurnPasses',
+    ] as const)
       assert.equal(a.metrics[key], b.metrics[key], `采样工作量改变：${key}`);
     measurements.push({ baseline: a, current: b });
     console.log(JSON.stringify({ round: i + 1, speedup: a.elapsedMs / b.elapsedMs }));
@@ -120,8 +134,18 @@ if (!values.baseline) {
   const report = {
     baseline: baselinePath,
     baselineSha256: digest(readFileSync(baselinePath)),
+    workset: values.workset
+      ? { path: resolve(values.workset), sha256: digest(readFileSync(values.workset)) }
+      : null,
     records: records.map((path) => ({ path, sha256: digest(readFileSync(path)) })),
-    cases: cases.map((r) => ({ path: r.path, game: r.game, index: r.index, before: r.before })),
+    cases: cases.map((r) => ({
+      path: r.path,
+      game: r.game,
+      rules: r.rules,
+      index: r.index,
+      ply: r.observation.ply,
+      before: r.before,
+    })),
     rounds,
     baselineMs,
     currentMs,
@@ -130,5 +154,7 @@ if (!values.baseline) {
     measurements,
   };
   writeFileSync(join(output, 'summary.json'), JSON.stringify(report, null, 2), { flag: 'wx' });
-  console.log(JSON.stringify({ baselineMs, currentMs, speedup: report.speedup, cases: count }));
+  console.log(
+    JSON.stringify({ baselineMs, currentMs, speedup: report.speedup, cases: cases.length }),
+  );
 }

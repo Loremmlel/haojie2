@@ -1,5 +1,5 @@
 import { TrainingActionTree } from '../../../src/ai/training/action-tree';
-import { encodeDecision } from '../../../src/ai/training/encoding/decision';
+import { createDecisionEncoder } from '../../../src/ai/training/encoding/decision';
 import type { Observation } from '../../../src/ai/types';
 import type { Command, Player } from '../../../src/engine/types';
 import { TinyPolicy } from './policy';
@@ -39,6 +39,7 @@ export function sampleCommand(
   let start = performance.now();
   const tree = new TrainingActionTree(observation, actor);
   metrics.treeMs += performance.now() - start;
+  const encode = createDecisionEncoder(observation, actor);
   let nodes = 0;
   const visit = (cursor: number[]): Command | 'pass' | undefined => {
     if (++nodes > 4096 || cursor.length > 256) throw new Error('参数解码预算耗尽');
@@ -54,7 +55,7 @@ export function sampleCommand(
     if (order.length === 1) metrics.forced++;
     else {
       start = performance.now();
-      const input = encodeDecision(observation, actor, node);
+      const input = encode(node);
       if (canPass) {
         const pass = Array<number>(64).fill(0);
         pass[63] = 1;

@@ -94,21 +94,19 @@ interface RecordOptions {
   selectable?: boolean;
 }
 
-/**
- * 公开观察的纯编码器，不读取正式PRNG、不修改输入、不解析ID中的数字。
- * 主对象与附属状态各为一行；引用重编号保留同一来源/克隆组的关联，数组顺序保留叠放语义。
- * 所有已知嵌套字段有明确映射；未知字段或词表项报错，不能悄悄忽略新规则。
- * 不截断实体、亡者、反应或时钟快照。返回的索引表供动作编码使用，不是网络输入。
- */
-export function encodePosition(observation: Observation, viewer: Player, prefix?: Command) {
-  const s = trainingPosition(observation);
-  ensure(viewer === 1 || viewer === 2, '编码观察方必须为1或2。');
-  knownKeys(observation, OBSERVATION_FIELDS, 'Observation');
-  ensure(observation.version === 2, '不支持此观察版本。');
-  const entities: number[][] = [];
-  const kinds: number[] = [];
-  const indices = new Map<string, number>();
-  const identities = new Map<string, number>();
+interface PositionRows {
+  entities: number[][];
+  kinds: number[];
+  indices: Map<string, number>;
+  identities: Map<string, number>;
+}
+
+/** 每个前缀拥有独立的张量与引用编号，调用者修改返回值不能污染后续编码。 */
+function positionRows(viewer: Player, base?: PositionRows) {
+  const entities = base ? base.entities.map((row) => [...row]) : [];
+  const kinds: number[] = base ? [...base.kinds] : [];
+  const indices = new Map<string, number>(base?.indices);
+  const identities = new Map<string, number>(base?.identities);
   const reference = (id?: string): number => {
     if (id === undefined) return 0;
     ensure(typeof id === 'string' && !!id, '实体引用必须是非空字符串。');
@@ -138,6 +136,22 @@ export function encodePosition(observation: Observation, viewer: Player, prefix?
     entities.push(row);
     kinds.push(o.kind === undefined ? 128 + ROLES.indexOf(role) : kindIndex(o.kind));
   };
+  return { entities, kinds, indices, identities, reference, owner, add };
+}
+
+/**
+ * 公开观察的纯编码器，不读取正式PRNG、不修改输入、不解析ID中的数字。
+ * 主对象与附属状态各为一行；引用重编号保留同一来源/克隆组的关联，数组顺序保留叠放语义。
+ * 所有已知嵌套字段有明确映射；未知字段或词表项报错，不能悄悄忽略新规则。
+ * 不截断实体、亡者、反应或时钟快照。返回的索引表供动作编码使用，不是网络输入。
+ */
+function encodeBasePosition(observation: Observation, viewer: Player) {
+  const s = trainingPosition(observation);
+  ensure(viewer === 1 || viewer === 2, '编码观察方必须为1或2。');
+  knownKeys(observation, OBSERVATION_FIELDS, 'Observation');
+  ensure(observation.version === 2, '不支持此观察版本。');
+  const rows = positionRows(viewer);
+  const { entities, indices, reference, owner, add } = rows;
   const printed = (kind: Kind): Scalar[] => {
     const d = definition(kind);
     return [
@@ -420,57 +434,6 @@ export function encodePosition(observation: Observation, viewer: Player, prefix?
     for (const [i, group] of s.summonOffer.groups.entries())
       group.forEach((c, j) => card(c, s.summonOffer!.owner, 'summon-offer', `offer:${i}`, j));
   }
-  if (prefix) {
-    add('prefix', {
-      id: 'prefix',
-      owner: viewer,
-      source: prefix.unitId ?? prefix.cardId,
-      target: prefix.targetId,
-      fields: [
-        category(prefix.type, COMMANDS),
-        category(prefix.mode, MODES),
-        prefix.x,
-        prefix.y,
-        prefix.row,
-        prefix.column,
-        prefix.ultimate,
-        prefix.charge,
-        category(prefix.direction, DIRECTIONS),
-        prefix.ability === undefined ? undefined : kindIndex(prefix.ability),
-        prefix.chosenKind === undefined ? undefined : kindIndex(prefix.chosenKind),
-        prefix.shrineKind === undefined ? undefined : kindIndex(prefix.shrineKind),
-        category(prefix.parity, ['odd', 'even']),
-        prefix.recipeId === undefined
-          ? undefined
-          : category(
-              prefix.recipeId,
-              SYNTHESIS_RECIPES.map((r) => r.id),
-            ),
-        prefix.player === undefined ? undefined : owner(prefix.player),
-      ],
-    });
-    for (const [field, ids] of [
-      ['secondId', prefix.secondId ? [prefix.secondId] : []],
-      ['deathId', prefix.deathId ? [prefix.deathId] : []],
-      ['materialIds', prefix.materialIds ?? []],
-      ['cardIds', prefix.cardIds ?? []],
-      ['sacrificeIds', prefix.sacrificeIds ?? []],
-    ] as const)
-      ids.forEach((id, i) =>
-        add('argument', {
-          parent: 'prefix',
-          target: id,
-          order: i,
-          fields: [
-            category(field, ['secondId', 'deathId', 'materialIds', 'cardIds', 'sacrificeIds']),
-          ],
-        }),
-      );
-    prefix.path?.forEach((p, i) => add('path', { parent: 'prefix', order: i, fields: [p.x, p.y] }));
-    prefix.offerIndices?.forEach((n, i) =>
-      add('argument', { parent: 'prefix', order: i, fields: [6, n] }),
-    );
-  }
   const globals = [
     viewer / 2,
     owner(s.active),
@@ -499,8 +462,81 @@ export function encodePosition(observation: Observation, viewer: Player, prefix?
     Number(draft?.revealed ?? false),
     numeric(s.summonOffer?.count ?? 0),
     s.summonOffer ? owner(s.summonOffer.owner) : 0,
-    Number(prefix !== undefined),
+    0,
   ];
   ensure(globals.length === 32, '全局编码长度发生变化。');
-  return { entities, kinds, globals, indices, reference };
+  return { ...rows, globals };
+}
+
+/** 单次编码保留原入口；多节点调用者显式创建局面内编码器。 */
+export function encodePosition(observation: Observation, viewer: Player, prefix?: Command) {
+  return createPositionEncoder(observation, viewer)(prefix);
+}
+
+/**
+ * 仅在同一不可变公开观察和观察方内惰性复用固定编码；改变局面须新建编码器。
+ * 固定实体、词表校验与主身份表只构造一次，前缀和候选注册的引用始终隔离。
+ */
+export function createPositionEncoder(observation: Observation, viewer: Player) {
+  let base: ReturnType<typeof encodeBasePosition> | undefined;
+  return (prefix?: Command) => {
+    base ??= encodeBasePosition(observation, viewer);
+    const { entities, kinds, indices, reference, owner, add } = positionRows(viewer, base);
+    if (prefix) {
+      add('prefix', {
+        id: 'prefix',
+        owner: viewer,
+        source: prefix.unitId ?? prefix.cardId,
+        target: prefix.targetId,
+        fields: [
+          category(prefix.type, COMMANDS),
+          category(prefix.mode, MODES),
+          prefix.x,
+          prefix.y,
+          prefix.row,
+          prefix.column,
+          prefix.ultimate,
+          prefix.charge,
+          category(prefix.direction, DIRECTIONS),
+          prefix.ability === undefined ? undefined : kindIndex(prefix.ability),
+          prefix.chosenKind === undefined ? undefined : kindIndex(prefix.chosenKind),
+          prefix.shrineKind === undefined ? undefined : kindIndex(prefix.shrineKind),
+          category(prefix.parity, ['odd', 'even']),
+          prefix.recipeId === undefined
+            ? undefined
+            : category(
+                prefix.recipeId,
+                SYNTHESIS_RECIPES.map((r) => r.id),
+              ),
+          prefix.player === undefined ? undefined : owner(prefix.player),
+        ],
+      });
+      for (const [field, ids] of [
+        ['secondId', prefix.secondId ? [prefix.secondId] : []],
+        ['deathId', prefix.deathId ? [prefix.deathId] : []],
+        ['materialIds', prefix.materialIds ?? []],
+        ['cardIds', prefix.cardIds ?? []],
+        ['sacrificeIds', prefix.sacrificeIds ?? []],
+      ] as const)
+        ids.forEach((id, i) =>
+          add('argument', {
+            parent: 'prefix',
+            target: id,
+            order: i,
+            fields: [
+              category(field, ['secondId', 'deathId', 'materialIds', 'cardIds', 'sacrificeIds']),
+            ],
+          }),
+        );
+      prefix.path?.forEach((p, i) =>
+        add('path', { parent: 'prefix', order: i, fields: [p.x, p.y] }),
+      );
+      prefix.offerIndices?.forEach((n, i) =>
+        add('argument', { parent: 'prefix', order: i, fields: [6, n] }),
+      );
+    }
+    const globals = [...base.globals];
+    globals[31] = Number(prefix !== undefined);
+    return { entities, kinds, globals, indices, reference };
+  };
 }

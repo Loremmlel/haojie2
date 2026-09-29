@@ -48,6 +48,7 @@ pub struct Tree<'a> {
     actions: Vec<Action>,
     nodes: HashMap<Vec<usize>, Rc<Node>>,
     hut_points: OnceCell<Vec<Point>>,
+    pub encoding: OnceCell<Result<crate::encoding::BaseEncoding, String>>,
 }
 impl<'a> Tree<'a> {
     pub fn new(observation: &'a Value, actor: usize, catalog: &'a Catalog) -> Result<Self, String> {
@@ -64,6 +65,7 @@ impl<'a> Tree<'a> {
             actions,
             nodes: HashMap::new(),
             hut_points: OnceCell::new(),
+            encoding: OnceCell::new(),
         })
     }
     fn routes(&self, c: &Value) -> Vec<String> {

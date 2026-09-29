@@ -442,14 +442,20 @@ impl Encoder<'_> {
     }
 }
 
+/// 只保存公开观察的固定编码，不保存前缀派生身份，也不跨树复用。
+pub struct BaseEncoding {
+    entities: Vec<Vec<f64>>,
+    kinds: Vec<usize>,
+    indices: HashMap<String, usize>,
+    identities: HashMap<String, usize>,
+    globals: Vec<f64>,
+}
+
 /// 只接收公开 Observation；严格拒绝新字段与未共同揭示的对手暗选，不截断任何实体。
-pub fn encode(tree: &Tree<'_>, node: &Node) -> Result<Input, String> {
+fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
     let observation = tree.observation;
     let viewer = tree.actor;
     let catalog = tree.catalog;
-    if node.choices.is_empty() {
-        return Err("empty action branch requires backtracking".into());
-    }
     validate_schema(&catalog.encoding)?;
     no_null(observation)?;
     // 树的状态已从同一公开观察构造；像 TS 一样复用只读实体，避免每个参数节点重建整局。
@@ -670,6 +676,90 @@ pub fn encode(tree: &Tree<'_>, node: &Node) -> Result<Input, String> {
             }
         }
     }
+    let mut globals = vec![viewer as f64 / 2.0, e.owner(&v["active"])?];
+    globals.extend(
+        e.vocab("phases")
+            .iter()
+            .map(|p| if *p == v["phase"] { 1.0 } else { 0.0 }),
+    );
+    globals.push(if v["mode"] == "shrine" { 1.0 } else { 0.0 });
+    for value in [
+        &v["ply"],
+        &v["summonSlots"],
+        &v["turns"][&sidekeys[0]],
+        &v["turns"][&sidekeys[1]],
+        &v["bases"][&sidekeys[0]],
+        &v["bases"][&sidekeys[1]],
+        &v["heads"][&sidekeys[0]],
+        &v["heads"][&sidekeys[1]],
+        &v["bonus"][&sidekeys[0]],
+        &v["bonus"][&sidekeys[1]],
+        v.get("regularSummons").unwrap_or(&json!(0)),
+    ] {
+        globals.push(num(value)?);
+    }
+    globals.extend([
+        if v["winner"].is_null() || v["winner"] == "draw" {
+            0.0
+        } else {
+            e.owner(&v["winner"])?
+        },
+        if v.get("winner").is_some() { 1.0 } else { 0.0 },
+        num(&json!(array(&v["pending"]).len()))?,
+        num(&json!(array(&v["hands"][&sidekeys[0]]).len()))?,
+        num(&json!(array(&v["hands"][&sidekeys[1]]).len()))?,
+    ]);
+    for p in sides {
+        globals.push(if array(&v["shrineSetupDone"]).contains(&json!(p)) {
+            1.0
+        } else {
+            0.0
+        });
+    }
+    for key in &sidekeys {
+        globals.push(if draft["committed"][key] == true {
+            1.0
+        } else {
+            0.0
+        });
+    }
+    globals.extend([
+        if draft["revealed"] == true { 1.0 } else { 0.0 },
+        num(v["summonOffer"].get("count").unwrap_or(&json!(0)))?,
+        e.owner(&v["summonOffer"]["owner"])?,
+        0.0,
+    ]);
+    Ok(BaseEncoding {
+        entities: e.entities,
+        kinds: e.kinds,
+        indices: e.indices,
+        identities: e.identities,
+        globals,
+    })
+}
+
+/// 每个参数节点复制固定张量和身份表，再追加自己的前缀；顺序与单次编码相同。
+pub fn encode(tree: &Tree<'_>, node: &Node) -> Result<Input, String> {
+    if node.choices.is_empty() {
+        return Err("empty action branch requires backtracking".into());
+    }
+    let base = tree
+        .encoding
+        .get_or_init(|| encode_base(tree))
+        .as_ref()
+        .map_err(Clone::clone)?;
+    let viewer = tree.actor;
+    let catalog = tree.catalog;
+    let v = tree.observation;
+    let mut e = Encoder {
+        s: &tree.state,
+        catalog,
+        viewer,
+        entities: base.entities.clone(),
+        kinds: base.kinds.clone(),
+        indices: base.indices.clone(),
+        identities: base.identities.clone(),
+    };
     let recipes: Vec<Value> = catalog.recipes.iter().map(|r| r["id"].clone()).collect();
     if let Some(c) = &node.prefix {
         let optional_kind = |k: &str| -> Result<Value, String> {
@@ -739,59 +829,8 @@ pub fn encode(tree: &Tree<'_>, node: &Node) -> Result<Input, String> {
             )?;
         }
     }
-    let mut globals = vec![viewer as f64 / 2.0, e.owner(&v["active"])?];
-    globals.extend(
-        e.vocab("phases")
-            .iter()
-            .map(|p| if *p == v["phase"] { 1.0 } else { 0.0 }),
-    );
-    globals.push(if v["mode"] == "shrine" { 1.0 } else { 0.0 });
-    for value in [
-        &v["ply"],
-        &v["summonSlots"],
-        &v["turns"][&sidekeys[0]],
-        &v["turns"][&sidekeys[1]],
-        &v["bases"][&sidekeys[0]],
-        &v["bases"][&sidekeys[1]],
-        &v["heads"][&sidekeys[0]],
-        &v["heads"][&sidekeys[1]],
-        &v["bonus"][&sidekeys[0]],
-        &v["bonus"][&sidekeys[1]],
-        v.get("regularSummons").unwrap_or(&json!(0)),
-    ] {
-        globals.push(num(value)?);
-    }
-    globals.extend([
-        if v["winner"].is_null() || v["winner"] == "draw" {
-            0.0
-        } else {
-            e.owner(&v["winner"])?
-        },
-        if v.get("winner").is_some() { 1.0 } else { 0.0 },
-        num(&json!(array(&v["pending"]).len()))?,
-        num(&json!(array(&v["hands"][&sidekeys[0]]).len()))?,
-        num(&json!(array(&v["hands"][&sidekeys[1]]).len()))?,
-    ]);
-    for p in sides {
-        globals.push(if array(&v["shrineSetupDone"]).contains(&json!(p)) {
-            1.0
-        } else {
-            0.0
-        });
-    }
-    for key in &sidekeys {
-        globals.push(if draft["committed"][key] == true {
-            1.0
-        } else {
-            0.0
-        });
-    }
-    globals.extend([
-        if draft["revealed"] == true { 1.0 } else { 0.0 },
-        num(v["summonOffer"].get("count").unwrap_or(&json!(0)))?,
-        e.owner(&v["summonOffer"]["owner"])?,
-        if node.prefix.is_some() { 1.0 } else { 0.0 },
-    ]);
+    let mut globals = base.globals.clone();
+    globals[31] = if node.prefix.is_some() { 1.0 } else { 0.0 };
     let mut candidates = vec![];
     let mut sources = vec![];
     let mut targets = vec![];

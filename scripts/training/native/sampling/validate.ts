@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
 import { TrainingActionTree, type ActionNode } from '../../../../src/ai/training/action-tree';
-import { encodeDecision } from '../../../../src/ai/training/encoding/decision';
+import { createDecisionEncoder } from '../../../../src/ai/training/encoding/decision';
 import { observe } from '../../../../src/ai/observation';
 import { createTrainingInspector } from '../../../../src/ai/training/queries';
 import { createGame } from '../../../../src/engine/commands/game';
@@ -73,6 +73,7 @@ try {
     for (const actor of [1, 2] as const) {
       const observation = observe(job.state, actor);
       const tree = new TrainingActionTree(observation, actor);
+      const encode = createDecisionEncoder(observation, actor);
       const cursors: number[][] = [[]];
       tree.node().choices.forEach((c, i) => {
         if (c.next) cursors.push([i]);
@@ -102,7 +103,7 @@ try {
             assert.equal(got.logits[i], null);
             return;
           }
-          const encoded = encodeDecision(observation, actor, n);
+          const encoded = encode(n);
           near(got.encoded[i], encoded, `${name}:encoded-${i}`, 2e-15);
           near(got.logits[i], policy.logits(encoded), `logits:${name}:${i}`, 2e-8);
         });
