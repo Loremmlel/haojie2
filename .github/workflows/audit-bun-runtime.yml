@@ -1,0 +1,43 @@
+name: Obtain pinned Bun for isolated runtime audit
+on:
+  push:
+    branches: ['audit/node-rust-recheck-20260929']
+    paths: ['.github/workflows/audit-bun-runtime.yml']
+permissions:
+  contents: read
+jobs:
+  artifact:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Download and verify official Bun release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/bun-audit
+          cd /tmp/bun-audit
+          curl --fail --location --retry 2 --max-time 120 -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' https://api.github.com/repos/oven-sh/bun/releases/tags/bun-v1.4.2 -o release.json
+          curl --fail --location --retry 2 --max-time 180 https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64.zip -o bun-linux-x64.zip
+          python3 - <<'PY'
+          import json, hashlib
+          from pathlib import Path
+          release=json.loads(Path('release.json').read_text())
+          asset=next(a for a in release['assets'] if a['name']=='bun-linux-x64.zip')
+          actual=hashlib.sha256(Path('bun-linux-x64.zip').read_bytes()).hexdigest()
+          assert asset['digest']=='sha256:'+actual, (asset['digest'],actual)
+          Path('release-asset.json').write_text(json.dumps({'tag':release['tag_name'],'asset':asset,'verified_sha256':actual},indent=2))
+          PY
+          unzip -q bun-linux-x64.zip
+          cp bun-linux-x64/bun ./bun
+          chmod +x bun
+          { ./bun --version; ./bun --revision; uname -a; } > build-environment.txt
+          sha256sum bun > SHA256SUMS
+          tar -czf /tmp/haojie-bun-1.4.2-linux.tar.gz bun SHA256SUMS build-environment.txt release-asset.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: haojie-bun-1.4.2-linux
+          path: /tmp/haojie-bun-1.4.2-linux.tar.gz
+          retention-days: 7
+          if-no-files-found: error
