@@ -1,4 +1,5 @@
 import type { GamePosition } from '../types';
+import { cloneRuleData } from './clone';
 
 // 与 Rust State 的拥有型核心字段对应；其余对象字段按顶层 JSON 子树共享。
 const ownedFields = new Set(['turns', 'pending', 'siphons', 'events', 'deployRows', 'bases']);
@@ -6,7 +7,7 @@ const commits = new WeakMap<object, () => GamePosition>();
 
 /** 同一只读局面的来源图只登记一次；每次分支仍拥有独立代理/写入表，不能跨局面复用。 */
 export function createPositionFork<S extends GamePosition>(position: S): () => S {
-  let sources: WeakSet<object> | undefined;
+  let sources: ReturnType<typeof sourceObjects> | undefined;
   return () => forkPosition(position, false, (sources ??= sourceObjects(position)));
 }
 
@@ -128,6 +129,8 @@ export function forkPosition<S extends GamePosition>(
   }
   if (willCommit)
     commits.set(result, () => {
+      // JS 宿主可传入跨实体别名或环；此时必须沿代理图导出，不能直接跳过未分离的父对象。
+      if (sources.aliased) return cloneRuleData(result);
       const seen = new Map<object, any>();
       const materialize = (value: any): any => {
         if (!value || typeof value !== 'object') return value;
@@ -147,10 +150,14 @@ export function forkPosition<S extends GamePosition>(
 }
 
 /** JS 没有 Rust 的静态所有权信息；只登记来源，不复制对象或改变分支算法。 */
-function sourceObjects(position: GamePosition): WeakSet<object> {
-  const sources = new WeakSet<object>();
+function sourceObjects(position: GamePosition): WeakSet<object> & { aliased?: true } {
+  const sources: WeakSet<object> & { aliased?: true } = new WeakSet<object>();
   const visit = (value: any) => {
-    if (!value || typeof value !== 'object' || sources.has(value)) return;
+    if (!value || typeof value !== 'object') return;
+    if (sources.has(value)) {
+      sources.aliased = true;
+      return;
+    }
     sources.add(value);
     for (const key of Object.keys(value)) visit(value[key]);
   };

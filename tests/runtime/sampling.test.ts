@@ -77,6 +77,26 @@ test('连续运行提交保留旧局面、观察隔离及正式错误原子性',
   assert.deepEqual(initial, before);
 });
 
+test('跨实体共享资源通过代理图收口，保留别名关系且不修改输入', () => {
+  const s = fixture(),
+    u = add(s, 1, 1, 4, 9),
+    v = add(s, 1, 1, 5, 9);
+  u.traits = [21];
+  u.abilityCharges = {};
+  v.abilityCharges = u.abilityCharges;
+  const command = { type: 'charge' as const, unitId: u.id, ability: 21, mode: 'skill' as const };
+  for (const apply of [applyCommand, applyRuntimeCommand]) {
+    const next = apply(s, command);
+    assert.equal(next.units[0].abilityCharges, next.units[1].abilityCharges);
+    assert.equal(next.units[1].abilityCharges?.[21]?.charge, 1);
+    assert.deepEqual(u.abilityCharges, {});
+    assert.notEqual(next.units[0].abilityCharges, u.abilityCharges);
+  }
+  const env = TrainingEnvironment.fromState(s);
+  env.step(1, command);
+  assert.equal(env.observation(1).units[1].abilityCharges?.[21]?.charge, 1);
+});
+
 test('决策内固定行前向与独立张量前向逐位一致，前缀、掩码和新局面不串用', () => {
   const s = fixture();
   const u = add(s, 26, 1, 2, 5);
