@@ -396,9 +396,13 @@ export function reactionAction(s: GamePosition): ActionSpec | null {
     ],
   );
 }
-export function actionError(s: GamePosition, a: ActionSpec): string | null {
+export function actionError(
+  s: GamePosition,
+  a: ActionSpec,
+  inspectError = queryCommandError,
+): string | null {
   const id = a.id.split(':')[0];
-  if (!a.steps.length) return queryCommandError(s, a.command);
+  if (!a.steps.length) return inspectError(s, a.command);
   if (s.winner) return '对局已经结束。';
   if (a.command.type === 'react') return null;
   if (s.pending.length) return '先处理待结算效果。';

@@ -1,5 +1,5 @@
 import { TrainingActionTree } from '../../../src/ai/training/action-tree';
-import { createDecisionEncoder } from '../../../src/ai/training/encoding/decision';
+import { createSamplingEncoder } from '../../../src/ai/training/encoding/decision';
 import type { Observation } from '../../../src/ai/types';
 import type { Command, Player } from '../../../src/engine/types';
 import { TinyPolicy } from './policy';
@@ -39,7 +39,8 @@ export function sampleCommand(
   let start = performance.now();
   const tree = new TrainingActionTree(observation, actor);
   metrics.treeMs += performance.now() - start;
-  const encode = createDecisionEncoder(observation, actor);
+  const encode = createSamplingEncoder(observation, actor);
+  const evaluate = policy?.decision();
   let nodes = 0;
   const visit = (cursor: number[]): Command | 'pass' | undefined => {
     if (++nodes > 4096 || cursor.length > 256) throw new Error('参数解码预算耗尽');
@@ -68,7 +69,7 @@ export function sampleCommand(
       metrics.maxEntities = Math.max(metrics.maxEntities, input.entities.length);
       metrics.evaluations++;
       start = performance.now();
-      const logits = policy ? policy.logits(input) : input.candidates.map(() => 0);
+      const logits = evaluate ? evaluate(input) : input.candidates.map(() => 0);
       metrics.inferenceMs += performance.now() - start;
       if (logits.length !== order.length || !logits.every(Number.isFinite))
         throw new Error('网络输出无效');

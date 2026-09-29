@@ -3,12 +3,17 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative } from 'node:path';
+import { parseArgs } from 'node:util';
 import { build } from 'esbuild';
 
 // 比较完整基线源码与当前工作树，不混用新 AI 和旧引擎。
 // 正式 RNG 只用于宿主重放断言，决策仅接收 observe 的白名单。
 // 固定 work 预算；任何差异或输入修改立即抛错，报告不写入计时基准。
-const ref = process.argv[2] ?? 'cec107917b840f9cb34954fa1635db58ccd2ae66';
+const { values, positionals } = parseArgs({
+  allowPositionals: true,
+  options: { measure: { type: 'boolean' }, output: { type: 'string' } },
+});
+const ref = positionals[0] ?? 'cec107917b840f9cb34954fa1635db58ccd2ae66';
 const baseline = execFileSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], {
   encoding: 'utf8',
 }).trim();
@@ -64,8 +69,10 @@ const cases = [
   { name: 'shrine-draft', state: a },
 ];
 let commands = 0;
+const replayCases = [];
 for (const row of records.slice(1)) {
   if (!row.command) continue;
+  replayCases.push({ state: a, command: row.command });
   a = before.engine.applyCommand(a, row.command);
   b = after.engine.applyCommand(b, row.command);
   assert.deepEqual(b, a, `完整权威状态在第 ${commands + 1} 条命令发生变化`);
@@ -231,6 +238,70 @@ for (const { name, state } of cases) {
   assert.deepEqual(state, original, `${name}:输入被修改`);
   console.log(`一致：${name}`);
 }
+const measurements = [];
+if (values.measure) {
+  const run = (api) => {
+    const applyRows = [],
+      aiRows = [];
+    // 冻结回放命令覆盖外部快照出口；重复同一输入，不把新旧局长差异计作加速。
+    for (const row of replayCases) {
+      const t = performance.now();
+      for (let i = 0; i < 4; i++) api.engine.applyCommand(row.state, row.command);
+      applyRows.push(performance.now() - t);
+    }
+    for (const { name, state } of cases) {
+      const observation = api.ai.observe(state),
+        side = api.ai.decisionOwner(observation);
+      for (const [difficulty, simulations] of [
+        ['easy', 40],
+        ['medium', 320],
+        ['hard', 800],
+      ]) {
+        const t = performance.now();
+        const decision = api.ai.decide(observation, side, difficulty, {
+          mode: 'work',
+          simulations,
+        });
+        aiRows.push({
+          name,
+          difficulty,
+          elapsedMs: performance.now() - t,
+          command: decision.command,
+        });
+      }
+    }
+    return { applyRows, aiRows, memory: process.memoryUsage() };
+  };
+  for (let i = -1; i < 3; i++) {
+    const pair = {};
+    for (const [label, api] of i % 2 === 0
+      ? [
+          ['baseline', before],
+          ['candidate', after],
+        ]
+      : [
+          ['candidate', after],
+          ['baseline', before],
+        ])
+      pair[label] = run(api);
+    assert.deepEqual(
+      pair.candidate.aiRows.map((r) => r.command),
+      pair.baseline.aiRows.map((r) => r.command),
+    );
+    measurements.push({ warmup: i < 0, ...pair });
+    console.log(
+      JSON.stringify({
+        round: i,
+        applyMs: Object.fromEntries(
+          Object.entries(pair).map(([k, v]) => [k, v.applyRows.reduce((a, b) => a + b, 0)]),
+        ),
+        aiMs: Object.fromEntries(
+          Object.entries(pair).map(([k, v]) => [k, v.aiRows.reduce((a, b) => a + b.elapsedMs, 0)]),
+        ),
+      }),
+    );
+  }
+}
 const report = {
   baseline,
   cases: cases.map(({ name, state }) => ({ name, units: state.units.length, phase: state.phase })),
@@ -243,7 +314,12 @@ const report = {
   decisionSha256: digest.digest('hex'),
   fullStateEqual: true,
   fixedWorkDecisionsEqual: true,
+  measurements,
 };
 mkdirSync('artifacts', { recursive: true });
-writeFileSync('artifacts/ai-reuse-equivalence-report.json', JSON.stringify(report, null, 2) + '\n');
-console.log(JSON.stringify(report, null, 2));
+writeFileSync(
+  values.output ?? 'artifacts/ai-reuse-equivalence-report.json',
+  JSON.stringify(report, null, 2) + '\n',
+  { flag: values.output ? 'wx' : 'w' },
+);
+console.log(JSON.stringify({ ...report, measurements: undefined }, null, 2));

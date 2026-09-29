@@ -39,8 +39,26 @@ export class RuleError extends Error {
     this.name = 'RuleError';
   }
 }
+let inspectionDepth = 0;
+/** 同步预检只导出拒绝文案；省去必被丢弃的 JS 调用栈，异常退出也恢复正式错误语义。 */
+export function withRuleInspection<T>(fn: () => T): T {
+  inspectionDepth++;
+  try {
+    return fn();
+  } finally {
+    inspectionDepth--;
+  }
+}
 export function ensure(value: unknown, message: string): asserts value {
-  if (!value) throw new RuleError(message);
+  if (!value) {
+    if (inspectionDepth) {
+      const error = Object.create(RuleError.prototype) as RuleError;
+      error.name = 'RuleError';
+      error.message = message;
+      throw error;
+    }
+    throw new RuleError(message);
+  }
 }
 export const faction = (p: Player) => (p === 1 ? '苍穹方' : '赤焰方');
 export const now = (s: GamePosition, u: Unit) => s.ply + u.offset;

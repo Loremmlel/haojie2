@@ -91,5 +91,5 @@ export async function nativeClient(executable: string, timeoutMs = 60_000) {
     close();
     throw error;
   }
-  return { request, close, commands };
+  return { request, close, commands, pid: child.pid };
 }

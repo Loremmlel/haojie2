@@ -7,3 +7,6 @@ export { encodeDecision, createDecisionEncoder } from '../../../src/ai/training/
 export { createGame, applyCommand, inspectCommand } from '../../../src/engine/commands/game';
 export { applyPlayerCommand } from '../../../src/engine/online/authority';
 export { readRecordLines } from '../records/io';
+export { sampleWorker } from '../economics/run';
+export { TrainingEnvironment } from '../../../src/match/training';
+export { observe, decisionOwner, fingerprint } from '../../../src/ai/observation';

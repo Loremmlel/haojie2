@@ -292,7 +292,7 @@ export function consumeChosenSummon(s: GamePosition, owner: Player, kind: Kind, 
   ensure(selectableSummons(ultimate).includes(kind), '自选结果必须属于本次召唤的来源池。');
   aura(s, owner, 'laoqian')!.usedPly = s.ply;
 }
-export function summon(s: GamePosition, c: Command) {
+export function prepareSummon(s: GamePosition, c: Command) {
   ensure(!s.summonOffer, '先从候选召唤中选出两个结果。');
   ensure(s.summonSlots > 0, '本回合召唤次数已用完。');
   const shrine = s.mode === 'shrine';
@@ -304,8 +304,12 @@ export function summon(s: GamePosition, c: Command) {
   const ultimate = shrine || !!c.ultimate;
   if (!shrine && ultimate) {
     ensure(s.heads[s.active] >= 2, '终极召唤需要2人头。');
-    s.heads[s.active] -= 2;
   }
+  return { shrine, ultimate };
+}
+export function summon(s: GamePosition, c: Command) {
+  const { shrine, ultimate } = prepareSummon(s, c);
+  if (!shrine && ultimate) s.heads[s.active] -= 2;
   if (shrine && (s.regularSummons ?? 0) === 2 && hasAura(s, s.active, 's13')) {
     const count = random(s, [0, 1 / 3, 1]) < 1 / 3 ? 4 : 3;
     const groups: Card[][] = [];
@@ -336,7 +340,7 @@ export function chooseSummons(s: GamePosition, c: Command) {
   delete s.summonOffer;
   emit(s, { type: 'summon', owner: s.active, text: '老千K · 选定两个结果' });
 }
-export function extraSummon(s: GamePosition, c: Command) {
+export function prepareExtraSummon(s: GamePosition, c: Command) {
   ensure(
     s.mode === 'shrine' && s.phase === 'summon' && !s.summonOffer,
     '人头额外召唤仅限神龛模式回合开始。',
@@ -344,6 +348,10 @@ export function extraSummon(s: GamePosition, c: Command) {
   const ultimate = c.ultimate !== false,
     cost = ultimate ? 3 : 2;
   ensure(s.heads[s.active] >= cost, `本次${ultimate ? '终极' : '普通'}召唤需要${cost}人头。`);
+  return { ultimate, cost };
+}
+export function extraSummon(s: GamePosition, c: Command) {
+  const { ultimate, cost } = prepareExtraSummon(s, c);
   s.heads[s.active] -= cost;
   draw(s, s.active, 1, ultimate, c.chosenKind);
 }

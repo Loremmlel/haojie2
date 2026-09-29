@@ -56,30 +56,47 @@ export class TinyPolicy {
   }
 
   logits(input: EncodedDecision): number[] {
-    const entities = input.entities.map((row, i) =>
-      this.layer(
-        [...row, ...this.embedding.subarray(input.kinds[i] * 16, (input.kinds[i] + 1) * 16)],
-        this.entity,
-        this.width,
-      ),
-    );
+    return this.evaluate(input);
+  }
+
+  /** 决策内固定行与权重只读；仅复用逐实体 MLP，不缓存含前缀/掩码的池化结果。 */
+  decision() {
+    const cache = new WeakMap<number[], { kind: number; hidden: Float32Array }>();
+    return (input: EncodedDecision) => this.evaluate(input, cache);
+  }
+
+  private evaluate(
+    input: EncodedDecision,
+    cache?: WeakMap<number[], { kind: number; hidden: Float32Array }>,
+  ): number[] {
+    const entityInput = Array<number>(80).fill(0);
+    const entities = input.entities.map((row, i) => {
+      const kind = input.kinds[i],
+        known = cache?.get(row);
+      if (known && known.kind === kind) return known.hidden;
+      for (let j = 0; j < 64; j++) entityInput[j] = row[j];
+      for (let j = 0; j < 16; j++) entityInput[64 + j] = this.embedding[kind * 16 + j];
+      const hidden = this.layer(entityInput, this.entity, this.width);
+      cache?.set(row, { kind, hidden });
+      return hidden;
+    });
     const context = this.layer(input.globals, this.global, this.width);
     const count = input.entity_mask.filter(Boolean).length;
     for (let i = 0; i < entities.length; i++)
       if (input.entity_mask[i])
         for (let j = 0; j < this.width; j++) context[j] += entities[i][j] / Math.max(1, count);
     const empty = new Float32Array(this.width);
+    const actionInput = Array<number>(64 + 3 * this.width).fill(0);
+    for (let j = 0; j < this.width; j++) actionInput[64 + j] = context[j];
     return input.candidates.map((row, i) => {
-      const hidden = this.layer(
-        [
-          ...row,
-          ...context,
-          ...(entities[input.sources[i]] ?? empty),
-          ...(entities[input.targets[i]] ?? empty),
-        ],
-        this.action,
-        this.width,
-      );
+      for (let j = 0; j < 64; j++) actionInput[j] = row[j];
+      const source = entities[input.sources[i]] ?? empty,
+        target = entities[input.targets[i]] ?? empty;
+      for (let j = 0; j < this.width; j++) {
+        actionInput[64 + this.width + j] = source[j];
+        actionInput[64 + 2 * this.width + j] = target[j];
+      }
+      const hidden = this.layer(actionInput, this.action, this.width);
       let value = this.output[this.width];
       for (let j = 0; j < this.width; j++) value += hidden[j] * this.output[j];
       return value;

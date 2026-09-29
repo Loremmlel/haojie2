@@ -2,14 +2,33 @@ import type { GamePosition } from '../types';
 
 // 与 Rust State 的拥有型核心字段对应；其余对象字段按顶层 JSON 子树共享。
 const ownedFields = new Set(['turns', 'pending', 'siphons', 'events', 'deployRows', 'bases']);
+const commits = new WeakMap<object, () => GamePosition>();
+
+/** 同一只读局面的来源图只登记一次；每次分支仍拥有独立代理/写入表，不能跨局面复用。 */
+export function createPositionFork<S extends GamePosition>(position: S): () => S {
+  let sources: WeakSet<object> | undefined;
+  return () => forkPosition(position, false, (sources ??= sourceObjects(position)));
+}
+
+/** 收口同步草稿：剥离代理，未写入的子树保留只读共享；外部出口再导出独立快照。 */
+export function commitPosition<S extends GamePosition>(position: S): S {
+  const commit = commits.get(position);
+  if (!commit) return position;
+  const result = commit() as S;
+  commits.delete(position);
+  return result;
+}
 
 /**
  * 双端共同算法：复制根和实体引用列表；实体/扩展字段首次写入时复制整棵子树。
  * 分支只在同步结算内存在；正式成功由入口导出独立纯数据，预检/失败直接丢弃。
  * 输入是引擎维护的纯数据局面；来源表区分输入对象和分支中新建的对象，不设单端旧算法回退。
  */
-export function forkPosition<S extends GamePosition>(position: S): S {
-  const sources = sourceObjects(position);
+export function forkPosition<S extends GamePosition>(
+  position: S,
+  willCommit = false,
+  sources = sourceObjects(position),
+): S {
   type Owner = { root?: Node };
   type Node = { data: any; proxy: any; owner: Owner; owned: boolean };
   const nodes = new WeakMap<object, Node>();
@@ -107,6 +126,23 @@ export function forkPosition<S extends GamePosition>(position: S): S {
     else if (ownedFields.has(key)) result[key] = shared(value, true);
     else result[key] = shared(value);
   }
+  if (willCommit)
+    commits.set(result, () => {
+      const seen = new Map<object, any>();
+      const materialize = (value: any): any => {
+        if (!value || typeof value !== 'object') return value;
+        const node = nodes.get(value);
+        // 未分离的整个复制单元从未被写入，原输入是纯数据，不需要遍历其冷字段。
+        if (node && !node.owned) return node.data;
+        if (!node && sources.has(value)) return value;
+        const data = node?.data ?? value;
+        if (seen.has(data)) return seen.get(data);
+        seen.set(data, data);
+        for (const key of Object.keys(data)) data[key] = materialize(data[key]);
+        return data;
+      };
+      return materialize(result);
+    });
   return result;
 }
 

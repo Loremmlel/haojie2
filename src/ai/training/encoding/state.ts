@@ -102,15 +102,22 @@ interface PositionRows {
 }
 
 /** 每个前缀拥有独立的张量与引用编号，调用者修改返回值不能污染后续编码。 */
-function positionRows(viewer: Player, base?: PositionRows) {
-  const entities = base ? base.entities.map((row) => [...row]) : [];
+function positionRows(viewer: Player, base?: PositionRows, borrowFixed = false) {
+  const entities = base
+    ? borrowFixed
+      ? [...base.entities]
+      : base.entities.map((row) => [...row])
+    : [];
   const kinds: number[] = base ? [...base.kinds] : [];
-  const indices = new Map<string, number>(base?.indices);
-  const identities = new Map<string, number>(base?.identities);
+  const indices = borrowFixed && base ? base.indices : new Map<string, number>(base?.indices);
+  const identities = new Map<string, number>(borrowFixed ? undefined : base?.identities);
+  const fixedIdentities = borrowFixed ? base?.identities : undefined;
   const reference = (id?: string): number => {
     if (id === undefined) return 0;
     ensure(typeof id === 'string' && !!id, '实体引用必须是非空字符串。');
-    if (!identities.has(id)) identities.set(id, identities.size + 1);
+    const fixed = fixedIdentities?.get(id);
+    if (fixed !== undefined) return fixed;
+    if (!identities.has(id)) identities.set(id, (fixedIdentities?.size ?? 0) + identities.size + 1);
     return identities.get(id)!;
   };
   const owner = (p?: Player) => {
@@ -478,10 +485,21 @@ export function encodePosition(observation: Observation, viewer: Player, prefix?
  * 固定实体、词表校验与主身份表只构造一次，前缀和候选注册的引用始终隔离。
  */
 export function createPositionEncoder(observation: Observation, viewer: Player) {
+  return positionEncoder(observation, viewer, false);
+}
+/** 内部采样只读固定实体行；前缀身份编号使用局部增量，不能暴露给可修改张量调用者。 */
+export function createSamplingPositionEncoder(observation: Observation, viewer: Player) {
+  return positionEncoder(observation, viewer, true);
+}
+function positionEncoder(observation: Observation, viewer: Player, borrowFixed: boolean) {
   let base: ReturnType<typeof encodeBasePosition> | undefined;
   return (prefix?: Command) => {
     base ??= encodeBasePosition(observation, viewer);
-    const { entities, kinds, indices, reference, owner, add } = positionRows(viewer, base);
+    const { entities, kinds, indices, reference, owner, add } = positionRows(
+      viewer,
+      base,
+      borrowFixed,
+    );
     if (prefix) {
       add('prefix', {
         id: 'prefix',

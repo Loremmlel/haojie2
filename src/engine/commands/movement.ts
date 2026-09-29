@@ -2,6 +2,7 @@ import { chargeFor, consumeCharge, moveChargeKind, hasTrait, isLandmark } from '
 import { cloneRuleData } from '../core/clone';
 import { landmarkAt } from '../setup/shrines';
 import { hitPullDestination, hutSpawnPoints } from './reactions';
+import { memoizePreparation } from './preparation';
 import { protectedEffect } from './combat';
 import { eventActor, withEventFacts } from '../core/event-facts';
 import { alive, damage, findTarget, performAttack, lowerMax } from './combat';
@@ -11,6 +12,7 @@ import {
   attackPath,
   basePoint,
   canPlace,
+  createPlacementQuery,
   cells,
   distance,
   equal,
@@ -76,12 +78,32 @@ export function moveUnit(s: GamePosition, c: Command, ctx: Resolution) {
 }
 /**
  * 共用移动准备：只在浅副本上投影模式预算，路径/占位读取原局面；失败不修改输入。
- * 冲撞后的死亡、弹出和可返回空地检查仍由实际结算完成，不能把准备通过当作命令通过。
+ * 普通移动的完整合法性在此验证；冲撞后的死亡、弹出和可返回空地检查仍由实际结算完成。
  */
 export function prepareMove(s: GamePosition, c: Command) {
   const u = { ...actor(s, c.unitId) },
-    to = point(c.x, c.y),
-    starting = u.mode === 'none';
+    to = point(c.x, c.y);
+  return moveDestinations(s, u)(to);
+}
+/** 同一攻击者的公共预算只准备一次；落点仍按原规则逐个验证，冲撞后果继续完整预检。 */
+export function createMoveQuery(s: GamePosition) {
+  const source = memoizePreparation((id: string | undefined) => actor(s, id));
+  let placement: ReturnType<typeof createPlacementQuery> | undefined;
+  const destinations = memoizePreparation((id: string | undefined) =>
+    moveDestinations(s, { ...source(id) }, (placement ??= createPlacementQuery(s))),
+  );
+  return (c: Command) => {
+    source(c.unitId);
+    const to = point(c.x, c.y);
+    return destinations(c.unitId)(to);
+  };
+}
+function moveDestinations(
+  s: GamePosition,
+  u: Unit,
+  query?: ReturnType<typeof createPlacementQuery>,
+) {
+  const starting = u.mode === 'none';
   ensure(!isLandmark(u), '地标不能移动。');
   chooseMode(s, u, 'move');
   const charged = moveChargeKind(u),
@@ -94,11 +116,13 @@ export function prepareMove(s: GamePosition, c: Command) {
       );
       u.moves = 5;
     }
-    ensure(
-      u.moves > 0 && distance(u, to) === 1 && canEnter(s, u, to),
-      '每次沿四向移动一格，不能越界或使大体型重叠。',
-    );
-    return { to, starting, charged, moves: u.moves, path: undefined };
+    return (to: Point) => {
+      ensure(
+        u.moves > 0 && distance(u, to) === 1 && canEnter(s, u, to),
+        '每次沿四向移动一格，不能越界或使大体型重叠。',
+      );
+      return { to, starting, charged, moves: u.moves, path: undefined };
+    };
   }
   let limit = getStats(s, u).move;
   if (u.size > 1) {
@@ -112,11 +136,15 @@ export function prepareMove(s: GamePosition, c: Command) {
       }
       u.moves = Math.floor(limit);
     }
-    ensure(
-      u.moves > 0 && distance(u, to) === 1 && canPlace(s, u, to),
-      '2×2每次整体向一个方向移动一小格，四格均须合法且不能重叠。',
-    );
-    return { to, starting, charged, moves: u.moves, path: [{ x: u.x, y: u.y }, to] };
+    return (to: Point) => {
+      ensure(
+        u.moves > 0 &&
+          distance(u, to) === 1 &&
+          (query ? query.canPlace(u, to) : canPlace(s, u, to)),
+        '2×2每次整体向一个方向移动一小格，四格均须合法且不能重叠。',
+      );
+      return { to, starting, charged, moves: u.moves, path: [{ x: u.x, y: u.y }, to] };
+    };
   }
   if (charged !== undefined) {
     ensure(
@@ -125,9 +153,14 @@ export function prepareMove(s: GamePosition, c: Command) {
     );
     if (limit % 1) limit *= 2;
   }
-  const path = movementPath(s, u, to, limit, hasTrait(u, 13) && !u.silenced);
-  ensure(path, '移动距离、路径、占位或独行侠禁区不合法。');
-  return { to, starting, charged, moves: u.moves, path };
+  return (to: Point) => {
+    const straight = hasTrait(u, 13) && !u.silenced;
+    const path = query
+      ? query.movementPath(u, to, limit, straight)
+      : movementPath(s, u, to, limit, straight);
+    ensure(path, '移动距离、路径、占位或独行侠禁区不合法。');
+    return { to, starting, charged, moves: u.moves, path };
+  };
 }
 function resolveMove(
   s: GamePosition,
@@ -184,15 +217,19 @@ function resolveMove(
   if (hasWeapon(u, 'u16')) u.bonusAttacks++;
 }
 export function finishMode(s: GamePosition, c: Command) {
+  const u = prepareFinishMode(s, c);
+  const wasMove = u.mode === 'move';
+  finishOperation(u);
+  if (wasMove && hasWeapon(u, 'u16')) u.bonusAttacks++;
+}
+export function prepareFinishMode(s: GamePosition, c: Command) {
   const u = actor(s, c.unitId);
   ensure(
     u.mode === 'attack' || (u.mode === 'move' && (isRunner(u) || u.size > 1)),
     '没有可提前结束的连续操作。',
   );
   ensure(!isRunner(u) || emptyFor(s, u), '必须先移到空地，不能结束在另一个棋子、地标或基地内。');
-  const wasMove = u.mode === 'move';
-  finishOperation(u);
-  if (wasMove && hasWeapon(u, 'u16')) u.bonusAttacks++;
+  return u;
 }
 /** 只读准备小屋反应；批量预检可传入同一局面已算出的落点，不消费队列或生命上限。 */
 export function prepareHutSpawn(

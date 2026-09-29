@@ -12,6 +12,8 @@ import {
   initializeShrines,
   shatter,
   summon,
+  prepareSummon,
+  prepareExtraSummon,
   syncBanners,
 } from '../setup/shrines';
 import { allPieces, canDeployKind, hasTrait } from '../core/traits';
@@ -19,7 +21,7 @@ import { withRandomSource, type RandomSource } from '../core/random';
 import { synthesize } from '../setup/synthesis';
 import { normalizeLegacyGuards } from '../core/protection';
 import { clonePosition } from '../core/clone';
-import { forkPosition } from '../core/branch';
+import { forkPosition, commitPosition, createPositionFork } from '../core/branch';
 import { definition, isStored } from '../catalog';
 import {
   chargeAction,
@@ -29,11 +31,23 @@ import {
   useSkill,
   cast,
   prepareSkillInspection,
+  createSkillInspectionQuery,
+  prepareChargeInspection,
+  createChargeInspectionQuery,
 } from './abilities';
 import { findTarget, performAttack, prepareAttack, pruneSiphons, resolution } from './combat';
 import { canPlace, refreshDeployment, cells, equal } from '../core/geometry';
-import { beginTurn, endTurn, switchTurn } from './lifecycle';
-import { finishMode, moveUnit, prepareMove, prepareHutSpawn, react } from './movement';
+import { beginTurn, endTurn, prepareEndTurn, switchTurn } from './lifecycle';
+import {
+  finishMode,
+  prepareFinishMode,
+  moveUnit,
+  prepareMove,
+  createMoveQuery,
+  prepareHutSpawn,
+  react,
+} from './movement';
+import { memoizePreparation } from './preparation';
 import { hutSpawnPoints } from './reactions';
 import {
   actor,
@@ -49,6 +63,7 @@ import {
   getStats,
   point,
   RuleError,
+  withRuleInspection,
   template,
 } from '../core/state';
 import type {
@@ -61,7 +76,28 @@ import type {
   Point,
   Reaction,
 } from '../types';
-type InspectionQueries = { hutSpawns: Map<Reaction, Point[]> };
+type InspectionQueries = ReturnType<typeof inspectionQueries>;
+function projectedAttacker(s: GamePosition, unitId?: string) {
+  const u = { ...actor(s, unitId) };
+  chooseMode(s, u, 'attack');
+  return u;
+}
+function transitUnit(s: GamePosition) {
+  return s.units.find(
+    (u) => (hasTrait(u, 'u12p') || hasTrait(u, 'u12')) && u.mode === 'move' && !emptyFor(s, u),
+  );
+}
+function inspectionQueries(s: GamePosition) {
+  return {
+    hutSpawns: new Map<Reaction, Point[]>(),
+    move: createMoveQuery(s),
+    skill: createSkillInspectionQuery(s),
+    charge: createChargeInspectionQuery(s),
+    attacker: memoizePreparation((id: string | undefined) => projectedAttacker(s, id)),
+    transit: memoizePreparation(() => transitUnit(s)),
+    fork: createPositionFork(s),
+  };
+}
 /** 只读部署资格供预检与结算复用；返回手牌引用只在结算副本上消费。 */
 function prepareDeploy(s: GamePosition, c: Command) {
   const card = s.hands[s.active].find((v) => v.id === c.cardId);
@@ -82,9 +118,39 @@ function attackTarget(s: GamePosition, c: Command, u: Unit) {
     c.targetId ?? (c.path ? piercingTargets(s, u, c.path).at(-1)?.target.id : undefined),
   );
 }
-/** 提前执行共享的只读准备；通过后仍须完整模拟，未知随机和结算后校验不能省略。 */
+function preparePhase(s: GamePosition, type: Command['type']) {
+  if (type === 'begin') ensure(s.phase === 'summon' && s.summonSlots === 0, '请先完成所有召唤。');
+  else if (type === 'skip-synthesis') ensure(s.phase === 'synthesis', '当前不是合成窗口。');
+  else if (type === 'finish-shrine-setup')
+    ensure(s.phase === 'shrine-setup', '当前不是神龛入场阶段。');
+}
+/**
+ * 共用只读准备；仅在后续结算没有随机或合法性检查时返回 true。
+ * 普通移动与部署的完整资格由相同准备函数决定；冲撞、攻击、技能等仍模拟后果。
+ */
 function prepareInspection(s: GamePosition, c: Command, queries?: InspectionQueries) {
   switch (c.type) {
+    case 'charge':
+      if (queries) queries.charge(c);
+      else prepareChargeInspection(s, c);
+      return true;
+    case 'finish-mode':
+      prepareFinishMode(s, c);
+      return true;
+    case 'begin':
+    case 'skip-synthesis':
+    case 'finish-shrine-setup':
+      preparePhase(s, c.type);
+      break;
+    case 'summon':
+      prepareSummon(s, c);
+      break;
+    case 'extra-summon':
+      prepareExtraSummon(s, c);
+      break;
+    case 'end':
+      prepareEndTurn(s);
+      break;
     case 'react': {
       const r = s.pending[0];
       if (r?.kind === 'hut-spawn') {
@@ -98,20 +164,19 @@ function prepareInspection(s: GamePosition, c: Command, queries?: InspectionQuer
       break;
     }
     case 'skill':
-      prepareSkillInspection(s, c);
+      if (queries) queries.skill(c);
+      else prepareSkillInspection(s, c);
       break;
     case 'deploy':
       prepareDeploy(s, c);
-      break;
+      return true;
     case 'move':
-      prepareMove(s, c);
-      break;
+      return (queries ? queries.move(c) : prepareMove(s, c)).path !== undefined;
     case 'clock':
       prepareClockRestore(s, c);
       break;
     case 'attack': {
-      const u = { ...actor(s, c.unitId) };
-      chooseMode(s, u, 'attack');
+      const u = queries ? queries.attacker(c.unitId) : projectedAttacker(s, c.unitId);
       prepareAttack(s, u, attackTarget(s, c, u), {
         direction: c.direction,
         mode: c.mode,
@@ -120,6 +185,7 @@ function prepareInspection(s: GamePosition, c: Command, queries?: InspectionQuer
       break;
     }
   }
+  return false;
 }
 export function createGame(seed = 20260907, mode: 'classic' | 'shrine' = 'classic'): GameState {
   ensure(Number.isSafeInteger(seed), '种子须为整数。');
@@ -164,15 +230,13 @@ function transition<S extends GamePosition>(
   randomSource?: RandomSource,
   preview = false,
   queries?: InspectionQueries,
+  exportSnapshot = true,
 ): S {
   ensure(previous.version === 2, '此命令只接受浩劫2.0局面；旧版对局不会被静默迁移。');
   ensure(!previous.winner, '对局已经结束，可悔棋或开新局。');
   ensure(!previous.pending.length || c.type === 'react', '请先处理当前待结算效果。');
   ensure(previous.summonSlots !== -1 || c.type === 'react', '当前正在结算回合结束效果。');
-  const transit = previous.units.find(
-    (u) =>
-      (hasTrait(u, 'u12p') || hasTrait(u, 'u12')) && u.mode === 'move' && !emptyFor(previous, u),
-  );
+  const transit = queries ? queries.transit(undefined) : transitUnit(previous);
   ensure(
     !transit || c.type === 'react' || (c.type === 'move' && c.unitId === transit.id),
     '冲撞移动正在经过其他占位，必须先完成弹出或回到空地。',
@@ -212,8 +276,8 @@ function transition<S extends GamePosition>(
       s.phase === 'play' || s.phase === 'shrine-setup' || giant,
       '先完成回合开始的召唤选择，再进入行动阶段。',
     );
-  if (preview) prepareInspection(s, c, queries);
-  s = forkPosition(previous);
+  if (preview && prepareInspection(s, c, queries)) return previous;
+  s = queries ? (queries.fork() as S) : forkPosition(previous, !preview);
   normalizeLegacyGuards(s);
   s.events = [];
   const next = withRandomSource(s, randomSource, () => {
@@ -223,7 +287,7 @@ function transition<S extends GamePosition>(
         synthesize(s, c);
         break;
       case 'skip-synthesis':
-        ensure(s.phase === 'synthesis', '当前不是合成窗口。');
+        preparePhase(s, c.type);
         s.phase = 'summon';
         emit(s, { type: 'turn', owner: s.active, text: '进入召唤阶段' });
         break;
@@ -235,7 +299,7 @@ function transition<S extends GamePosition>(
         chooseShrine(s, c);
         break;
       case 'finish-shrine-setup':
-        ensure(s.phase === 'shrine-setup', '当前不是神龛入场阶段。');
+        preparePhase(s, c.type);
         (s.shrineSetupDone ??= []).push(s.active);
         if (s.active === 1) s.active = 2;
         else {
@@ -267,7 +331,7 @@ function transition<S extends GamePosition>(
         summon(s, c);
         break;
       case 'begin':
-        ensure(s.phase === 'summon' && s.summonSlots === 0, '请先完成所有召唤。');
+        preparePhase(s, c.type);
         s.phase = 'play';
         emit(s, { type: 'turn', owner: s.active, text: '行动阶段' });
         break;
@@ -346,7 +410,9 @@ function transition<S extends GamePosition>(
     return s;
   });
   // 正式成功结果导出独立纯数据；预检和失败都丢弃分支，与 Rust 一致。
-  return preview ? next : clonePosition(next);
+  if (preview) return next;
+  const committed = commitPosition(next);
+  return exportSnapshot ? clonePosition(committed) : committed;
 }
 function hasRandomState(s: GamePosition): s is GameState {
   return 'seed' in s && typeof s.seed === 'number' && 'rng' in s && typeof s.rng === 'number';
@@ -363,6 +429,11 @@ export function applyCommand(
   ensure(hasRandomState(previous), '权威结算需要完整随机状态；玩家视图不能代替GameState。');
   return transition(previous, c, randomSource);
 }
+/** 内部连续环境拥有局面；共享提交只交回环境，不可作为外部可修改快照暴露。 */
+export function applyRuntimeCommand(previous: GameState, c: Command): GameState {
+  ensure(hasRandomState(previous), '权威结算需要完整随机状态；玩家视图不能代替GameState。');
+  return transition(previous, c, undefined, false, undefined, false);
+}
 const unresolvedRandom = Symbol('preview requires private randomness');
 export type CommandInspection =
   | { status: 'available' | 'uncertain' }
@@ -376,19 +447,21 @@ export function inspectCommand(s: GamePosition, c: Command): CommandInspection {
  * 只复用派生查询，不缓存实际结算或正式随机数；单次 inspectCommand 保持无缓存入口。
  */
 export function createCommandInspector(s: GamePosition): (c: Command) => CommandInspection {
-  const queries: InspectionQueries = { hutSpawns: new Map() };
+  const queries = inspectionQueries(s);
   return (c) => inspect(s, c, queries);
 }
 function inspect(s: GamePosition, c: Command, queries?: InspectionQueries): CommandInspection {
   try {
-    transition(
-      s,
-      c,
-      () => {
-        throw unresolvedRandom;
-      },
-      true,
-      queries,
+    withRuleInspection(() =>
+      transition(
+        s,
+        c,
+        () => {
+          throw unresolvedRandom;
+        },
+        true,
+        queries,
+      ),
     );
     return { status: 'available' };
   } catch (error) {

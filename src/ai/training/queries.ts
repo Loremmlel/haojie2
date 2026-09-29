@@ -38,10 +38,14 @@ export function inspectTrainingCommand(observation: Observation, actor: Player, 
 }
 /** 同一不可变观察的查询批次；仍逐条校验命令与操作者，不把预检结果当作权威结果。 */
 export function createTrainingInspector(observation: Observation, actor: Player) {
+  const inspect = createTrainingCommandInspector(observation, actor);
+  return (input: unknown) => inspect(parseCommand(input));
+}
+/** 动作树只提交自己构造的规范命令；不重复 JSON/字段解析，外部输入仍须经过上面的边界。 */
+export function createTrainingCommandInspector(observation: Observation, actor: Player) {
   const s = trainingPosition(observation);
   const inspect = createCommandInspector(s);
-  return (input: unknown) => {
-    const command = parseCommand(input);
+  return (command: Command) => {
     const error = actorCommandError(s, actor, command);
     return error
       ? { status: 'invalid' as const, message: error }
@@ -60,11 +64,23 @@ export interface TrainingAction extends ActionSpec {
  * targets/points 是参数域，不是完整合法掩码；多参数动作须组合后公开预检并由实局裁决。
  * 路径保留为逐格序列，材料保留完整 ID 集，不把旧 AI 的有界候选当成全部动作。
  */
-export function trainingActionSpace(observation: Observation, actor: Player) {
+export function trainingActionSpace(
+  observation: Observation,
+  actor: Player,
+  inspect = createTrainingCommandInspector(observation, actor),
+) {
   const s = trainingPosition(observation);
   const actions: TrainingAction[] = [];
+  const inspectError = (_s: GamePosition, command: Command) => {
+    const result = inspect(command);
+    return result.status === 'invalid' ? result.message : null;
+  };
   const add = (a: TrainingAction) => {
-    if (actorCommandError(s, actor, a.command) || (!a.materialCount && actionError(s, a))) return;
+    if (
+      actorCommandError(s, actor, a.command) ||
+      (!a.materialCount && actionError(s, a, inspectError))
+    )
+      return;
     const pool = commandSummonPool(s, a.command);
     actions.push({
       ...a,

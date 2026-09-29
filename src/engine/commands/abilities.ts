@@ -1,4 +1,5 @@
 import { cloneRuleData } from '../core/clone';
+import { memoizePreparation } from './preparation';
 import {
   withAbilityCharge,
   abilityKinds,
@@ -80,7 +81,7 @@ export function chargeAction(s: GamePosition, c: Command) {
     return withAbilityCharge(u, kind, () => resolveCharge(s, c));
   });
 }
-function resolveCharge(s: GamePosition, c: Command) {
+function prepareCharge(s: GamePosition, c: Command) {
   const u = actor(s, c.unitId),
     kind = c.ability ?? u.kind,
     d = definition(kind);
@@ -108,11 +109,46 @@ function resolveCharge(s: GamePosition, c: Command) {
   ensure(max > 0, '这枚随从没有此类蓄力。');
   ensure(u.charge < max, '该类蓄力已满。');
   ensure(u.charge === 0 || u.chargeType === mode, '当前蓄力属于另一模式。');
+  return { u, mode, max };
+}
+function resolveCharge(s: GamePosition, c: Command) {
+  const { u, mode, max } = prepareCharge(s, c);
   u.chargeType = mode;
   u.charge++;
   u.lastCharge = now(s, u);
   finishOperation(u);
   emit(s, { type: 'skill', to: u, owner: u.owner, text: `蓄力 ${u.charge}/${max}` });
+}
+/** 只投影当前实体；蓄力的全部失败条件与正式执行共用，成功后只有确定性资源写入。 */
+export function prepareChargeInspection(s: GamePosition, c: Command) {
+  const raw = findUnit(s, c.unitId),
+    kind = c.ability ?? raw.kind;
+  ensure(hasTrait(raw, kind), '该棋子没有选定的蓄力能力。');
+  const { u, view } = projectedView(s, raw);
+  withAbilityCharge(u, kind, () => prepareCharge(view, c));
+}
+export function createChargeInspectionQuery(s: GamePosition) {
+  const prepare = memoizePreparation((key: string) => {
+    const [unitId, ability, mode] = JSON.parse(key);
+    prepareChargeInspection(s, {
+      type: 'charge',
+      unitId: unitId ?? undefined,
+      ability: ability ?? undefined,
+      mode: mode ?? undefined,
+    });
+  });
+  return (c: Command) => prepare(JSON.stringify([c.unitId, c.ability, c.mode]));
+}
+function projectedView(s: GamePosition, raw: Unit) {
+  const u = cloneRuleData(raw);
+  return {
+    u,
+    view: {
+      ...s,
+      units: s.units.map((v) => (v.id === u.id ? u : v)),
+      ...(s.landmarks ? { landmarks: s.landmarks.map((v) => (v.id === u.id ? u : v)) } : {}),
+    },
+  };
 }
 export function useSkill(s: GamePosition, c: Command, ctx: Resolution) {
   const u = findUnit(s, c.unitId),
@@ -198,7 +234,10 @@ function beginSkill(s: GamePosition, c: Command) {
 }
 /** 复活的记录与落点验证只读；正式效果在全部条件通过后才创建棋子和支付上限。 */
 function prepareRevival(s: GamePosition, u: Unit, c: Command, range: number) {
-  const record = s.deaths.find((r) => r.id === c.deathId);
+  return revivalDestination(s, u, c, range, revivalRecord(s, u, c.deathId));
+}
+function revivalRecord(s: GamePosition, u: Unit, deathId: string | undefined) {
+  const record = s.deaths.find((r) => r.id === deathId);
   ensure(
     record &&
       record.kind !== 'grave' &&
@@ -208,6 +247,15 @@ function prepareRevival(s: GamePosition, u: Unit, c: Command, range: number) {
       record.ply >= s.ply - 4,
     '只能选择前两个己方回合窗口内尚未复活的友方阵亡记录。',
   );
+  return record;
+}
+function revivalDestination(
+  s: GamePosition,
+  u: Unit,
+  c: Command,
+  range: number,
+  record: ReturnType<typeof revivalRecord>,
+) {
   const to = point(c.x, c.y),
     ghost = template(record.kind, u.owner, s.turns[u.owner], to);
   ensure(canPlace(s, ghost, to) && attackPath(s, u, to, range), '复活位置须在射程内合法空格。');
@@ -235,8 +283,16 @@ function skillEnemy(
   return t;
 }
 function prepareHook(s: GamePosition, u: Unit, c: Command, range: number) {
-  const t = skillEnemy(s, u, c.targetId, range),
-    to = point(c.x, c.y);
+  return hookDestination(s, u, c, range, skillEnemy(s, u, c.targetId, range));
+}
+function hookDestination(
+  s: GamePosition,
+  u: Unit,
+  c: Command,
+  range: number,
+  t: ReturnType<typeof skillEnemy>,
+) {
+  const to = point(c.x, c.y);
   ensure(!isHookImmune(t.unit!), '大肉比不能被钩子牵引。');
   ensure(
     !equal(t, to) &&
@@ -279,25 +335,67 @@ function prepareSacrifice(s: GamePosition, u: Unit, c: Command, range: number) {
  * 其余局面只读；复用正式技能入口和准备条件，不执行效果，也不消费正式随机数。
  */
 export function prepareSkillInspection(s: GamePosition, c: Command) {
+  skillCoordinate(s, c);
+  return skillInspection(s, c)?.(c);
+}
+/** 公共施法资格、目标关系和亡者窗口按决策复用；保留原先到叶子才拒绝的候选和错误顺序。 */
+export function createSkillInspectionQuery(s: GamePosition) {
+  const prepare = memoizePreparation((key: string) => {
+    const [unitId, ability] = JSON.parse(key);
+    return skillInspection(
+      s,
+      { type: 'skill', unitId: unitId ?? undefined, ability: ability ?? undefined },
+      true,
+    );
+  });
+  return (c: Command) => {
+    skillCoordinate(s, c);
+    prepare(JSON.stringify([c.unitId, c.ability]))?.(c);
+  };
+}
+// 原正式技能在公共资源准备前捕获冰痕落点；保留非法坐标的拒绝顺序。
+function skillCoordinate(s: GamePosition, c: Command) {
+  if ((c.ability ?? findUnit(s, c.unitId).kind) === 'u24') {
+    ensure(hasTrait(findUnit(s, c.unitId), 'u24'), '该棋子没有选定的技能。');
+    point(c.x, c.y);
+  }
+}
+function skillInspection(
+  s: GamePosition,
+  c: Command,
+  reuse = false,
+): ((c: Command) => void) | undefined {
   const raw = findUnit(s, c.unitId),
     kind = c.ability ?? raw.kind;
-  if (kind !== 'u19' && kind !== 7 && kind !== 14) return;
   ensure(hasTrait(raw, kind), '该棋子没有选定的技能。');
-  const u = cloneRuleData(raw);
-  const view = {
-    ...s,
-    units: s.units.map((v) => (v.id === u.id ? u : v)),
-    ...(s.landmarks ? { landmarks: s.landmarks.map((v) => (v.id === u.id ? u : v)) } : {}),
-  };
+  const { u, view } = projectedView(s, raw);
   if (kind !== u.kind) {
     u.onceUsed = u.abilityUsage?.[kind]?.once ?? false;
     u.freeUsed = u.abilityUsage?.[kind]?.free ?? -1;
   }
-  withAbilityCharge(u, kind, () => {
+  return withAbilityCharge(u, kind, () => {
     const prepared = beginSkill(view, c);
-    if (kind === 'u19') prepareRevival(view, prepared.u, c, prepared.range);
-    else if (kind === 7) prepareHook(view, prepared.u, c, prepared.range);
-    else prepareSacrifice(view, prepared.u, c, prepared.range);
+    if (kind !== 'u19' && kind !== 7 && kind !== 14) return () => {};
+    // 能力投影在 withAbilityCharge 返回后会恢复；独立保存查询视图，不能引用已恢复的施法者。
+    const projected = cloneRuleData(prepared.u);
+    const position = {
+      ...view,
+      units: view.units.map((v) => (v.id === projected.id ? projected : v)),
+      ...(view.landmarks
+        ? { landmarks: view.landmarks.map((v) => (v.id === projected.id ? projected : v)) }
+        : {}),
+    };
+    const record = (id: string | undefined) => revivalRecord(position, projected, id);
+    const target = (id: string | undefined) => skillEnemy(position, projected, id, prepared.range);
+    const records = reuse ? memoizePreparation(record) : record;
+    const targets = reuse ? memoizePreparation(target) : target;
+    return (command: Command) => {
+      if (kind === 'u19')
+        revivalDestination(position, projected, command, prepared.range, records(command.deathId));
+      else if (kind === 7)
+        hookDestination(position, projected, command, prepared.range, targets(command.targetId));
+      else if (kind === 14) prepareSacrifice(position, projected, command, prepared.range);
+    };
   });
 }
 function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {

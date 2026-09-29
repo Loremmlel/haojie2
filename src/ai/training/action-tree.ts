@@ -15,10 +15,10 @@ import { allPieces } from '../../engine/core/traits';
 import { parseCommand } from '../../engine/online/authority';
 import { SYNTHESIS_RECIPES, synthesisDestinations } from '../../engine/setup/synthesis';
 import type { SelectionStep } from '../../engine/commands/options';
-import type { Command, Player } from '../../engine/types';
+import type { Command, Player, Unit, Target } from '../../engine/types';
 import type { Observation } from '../types';
 import {
-  createTrainingInspector,
+  createTrainingCommandInspector,
   trainingActionSpace,
   trainingPosition,
   type TrainingAction,
@@ -91,13 +91,23 @@ export class TrainingActionTree {
   readonly actions: TrainingAction[];
   readonly #nodes = new Map<string, ActionNode>();
   readonly #inspect;
+  readonly #pieces = new Map<string, Unit>();
+  readonly #targets: Target[];
+  readonly #targetIndex = new Map<string, Target>();
+  readonly #stats = new Map<Unit, ReturnType<typeof getStats>>();
+  readonly #routeCache = new Map<string, ReturnType<typeof attackRoutes>>();
   constructor(
     readonly observation: Observation,
     readonly actor: Player,
   ) {
     this.position = trainingPosition(observation);
-    this.#inspect = createTrainingInspector(observation, actor);
-    this.actions = trainingActionSpace(observation, actor).actions;
+    for (const unit of allPieces(this.position))
+      if (!this.#pieces.has(unit.id)) this.#pieces.set(unit.id, unit);
+    this.#targets = targets(this.position);
+    for (const target of this.#targets)
+      if (!this.#targetIndex.has(target.id)) this.#targetIndex.set(target.id, target);
+    this.#inspect = createTrainingCommandInspector(observation, actor);
+    this.actions = trainingActionSpace(observation, actor, this.#inspect).actions;
   }
 
   #prepare(prefix: Prefix): Prefix {
@@ -109,13 +119,26 @@ export class TrainingActionTree {
   }
 
   #routes(command: Command) {
-    const u = allPieces(this.position).find((v) => v.id === command.unitId);
-    const t = targets(this.position).find((v) => v.id === command.targetId);
+    const key = JSON.stringify([command.unitId, command.targetId]);
+    const cached = this.#routeCache.get(key);
+    if (cached) return cached;
+    const u = this.#pieces.get(command.unitId!);
+    const t = this.#targetIndex.get(command.targetId!);
     if (!u || !t) return [];
     const selectable = selectableAttackRoutes(this.position, u, t);
-    return selectable.length
+    const routes = selectable.length
       ? selectable
-      : attackRoutes(this.position, u, t, getStats(this.position, u).range, piercing(u));
+      : attackRoutes(this.position, u, t, this.#attributes(u).range, piercing(u));
+    this.#routeCache.set(key, routes);
+    return routes;
+  }
+  #attributes(u: Unit) {
+    let stats = this.#stats.get(u);
+    if (!stats) {
+      stats = getStats(this.position, u);
+      this.#stats.set(u, stats);
+    }
+    return stats;
   }
 
   #choice(key: string, prefix: Prefix, subject?: string): ActionChoice | null {
@@ -164,7 +187,7 @@ export class TrainingActionTree {
           add(`kind:${kind}`, { ...c, chosenKind: kind });
         break;
       case 'target':
-        for (const t of targets(this.position)) {
+        for (const t of this.#targets) {
           if (step.unitOnly && !t.unit) continue;
           // 墓地保留来源 owner，但目标关系必须使用引擎派生的当前阵营。
           const owner = t.unit ? allegiance(this.position, t.unit) : t.owner;
@@ -186,7 +209,7 @@ export class TrainingActionTree {
           const recipe = SYNTHESIS_RECIPES.find((r) => r.id === c.recipeId)!;
           points = synthesisDestinations(this.position, recipe, c.materialIds);
         } else if (action.id.split(':')[0] === 'giant' && c.targetId) {
-          const target = allPieces(this.position).find((u) => u.id === c.targetId);
+          const target = this.#pieces.get(c.targetId);
           points = target ? expansionAnchors(this.position, target) : [];
         }
         for (const p of points) add(`${p.x},${p.y}`, { ...c, ...p });
@@ -206,14 +229,14 @@ export class TrainingActionTree {
           add(route.direction, { ...c, direction: route.direction });
         break;
       case 'path': {
-        const u = allPieces(this.position).find((v) => v.id === c.unitId);
+        const u = this.#pieces.get(c.unitId!);
         if (!u) break;
         const path = c.path ?? [];
         if (path.length) add('commit-path', c);
         const points = path.length ? neighbors(path.at(-1)!) : cells(u);
         for (const p of points) {
           const extended = [...path, p];
-          if (validAttackRoute(this.position, u, extended, getStats(this.position, u).range))
+          if (validAttackRoute(this.position, u, extended, this.#attributes(u).range))
             add(`${p.x},${p.y}`, { ...c, path: extended }, undefined, true);
         }
         break;

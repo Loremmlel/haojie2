@@ -1,4 +1,4 @@
-import { createGame, applyCommand } from '../engine/commands/game';
+import { createGame, applyRuntimeCommand } from '../engine/commands/game';
 import { actorCommandError, parseCommand } from '../engine/online/authority';
 import { HAOJIE_RULESET } from '../engine/online/player-view';
 import { ensure } from '../engine/core/state';
@@ -28,7 +28,7 @@ export interface TrainingStatus {
 
 /**
  * 常驻训练环境持有权威局面，策略只能通过 observation 读取白名单。
- * 每步仍由 applyCommand 原子结算；不保存 Session 历史，也不做 IO 或计时。
+ * 每步复用 applyCommand 的原子规则内核，以共享提交连续执行；公开观察仍独立导出。
  * 命令成功后才更新计数并清理表现记录，保留 serial、正式随机数和全部规则状态。
  * 外部取消可直接丢弃环境；达到训练上限明确截断，不强行结束回合或判胜。
  */
@@ -117,7 +117,7 @@ export class TrainingEnvironment {
     const command = parseCommand(input);
     const error = actorCommandError(this.#state, actor, command);
     ensure(!error, error ?? '操作者无权执行命令。');
-    const next = applyCommand(
+    const next = applyRuntimeCommand(
       this.#state,
       command.type === 'choose-shrine' ? { ...command, player: actor } : command,
     );

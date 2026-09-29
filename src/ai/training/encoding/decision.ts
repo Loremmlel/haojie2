@@ -5,7 +5,7 @@ import type { Player } from '../../../engine/types';
 import type { Observation } from '../../types';
 import type { ActionNode } from '../action-tree';
 import { COMMANDS, DIRECTIONS, kindIndex, MODES } from './schema';
-import { createPositionEncoder } from './state';
+import { createPositionEncoder, createSamplingPositionEncoder } from './state';
 
 export const DECISION_STAGES = [
   'action',
@@ -42,6 +42,17 @@ export function encodeDecision(
 /** 同一不可变公开观察的参数节点共用固定编码；返回张量相互独立。 */
 export function createDecisionEncoder(observation: Observation, viewer: Player) {
   const encode = createPositionEncoder(observation, viewer);
+  return decisionEncoder(observation, viewer, encode);
+}
+/** 仅供同一决策内的只读前向；固定实体行共享，候选与前缀仍逐节点独立。 */
+export function createSamplingEncoder(observation: Observation, viewer: Player) {
+  return decisionEncoder(observation, viewer, createSamplingPositionEncoder(observation, viewer));
+}
+function decisionEncoder(
+  observation: Observation,
+  viewer: Player,
+  encode: ReturnType<typeof createPositionEncoder>,
+) {
   return (node: ActionNode): EncodedDecision => {
     ensure(node.choices.length > 0, '空动作分支须回溯，不能伪造合法候选。');
     const state = encode(node.prefix);

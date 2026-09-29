@@ -145,19 +145,25 @@ export function beginTurn(s: GamePosition, ctx: Resolution) {
     `${faction(owner)}第${s.turns[owner]}回合开始，可召唤${s.summonSlots}次`,
   );
 }
-export function endTurn(s: GamePosition, ctx: Resolution) {
+export function prepareEndTurn(s: GamePosition) {
   ensure(s.phase === 'play', '请先完成召唤并进入行动阶段。');
   for (const u of s.units)
     ensure(
       (!hasTrait(u, 'u12p') && !hasTrait(u, 'u12')) || u.mode !== 'move' || emptyFor(s, u),
       '冲撞棋子必须离开棋子、地标或基地占位后才能结束回合。',
     );
-  for (const c of s.hands[s.active].filter((c) => !isStored(definition(c.kind)))) {
+  const discarded = s.hands[s.active].filter((c) => !isStored(definition(c.kind)));
+  for (const c of discarded) {
     const ghost = template(c.kind, s.active, s.turns[s.active], { x: 1, y: 1 });
     ensure(
       !ALL_CELLS.some((p) => canPlace(s, ghost, p, true)),
       `请先部署${definition(c.kind).name}，随从不能储存。`,
     );
+  }
+  return discarded;
+}
+export function endTurn(s: GamePosition, ctx: Resolution) {
+  for (const c of prepareEndTurn(s)) {
     emit(
       s,
       { type: 'skill', owner: s.active, text: '无处部署' },
