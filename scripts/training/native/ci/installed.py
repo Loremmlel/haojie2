@@ -22,7 +22,7 @@ def main():
     env.pop("PYTHONPATH", None)
     for argv in (
         [source / "scripts/training/native/ci/verify.py", "--engine", args.engine],
-        ["-m", "unittest", "discover", "-s", source / "training/tests", "-p", "test_native.py", "-v"],
+        ["-m", "unittest", "discover", "-s", source / "training/tests", "-p", "test_native*.py", "-v"],
         [source / "scripts/training/native/pipeline/accept.py", "--engine", args.engine,
          "--starts", source / "fixtures/late-starts.json", "--output", args.output],
     ):

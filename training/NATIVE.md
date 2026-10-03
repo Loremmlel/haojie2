@@ -28,8 +28,7 @@ Windows 使用 `.venv/Scripts/python.exe` 和 `native/engine/target/release/haoj
 ```sh
 PYTHON -m haojie_training.native --engine ENGINE init --tiny --checkpoint initial.pt
 PYTHON -m haojie_training.native --engine ENGINE sample --checkpoint initial.pt --starts starts.json --output sample --commands 12000 --plies 500
-PYTHON -m haojie_training.native --engine ENGINE audit sample/game-0.jsonl sample/game-1.jsonl
-PYTHON -m haojie_training.native --engine ENGINE prepare sample/game-0.jsonl sample/game-1.jsonl --output data
+PYTHON -m haojie_training.native --engine ENGINE audit sample/game-0.jsonl sample/game-1.jsonl --prepare data
 PYTHON -m haojie_training.train --data data/train.pt --validation data/validation.pt --initialize-from initial.pt --checkpoint updated.pt --steps 2 --batch-size 4 --threads 1 --device cpu
 PYTHON -m haojie_training.train --data data/train.pt --validation data/validation.pt --resume updated.pt --checkpoint restored.pt --steps 2 --batch-size 4 --threads 1 --device cpu
 PYTHON -m haojie_training.native --engine ENGINE sample --checkpoint restored.pt --starts starts.json --output evaluation --commands 12000 --plies 500
@@ -53,6 +52,9 @@ PYTHON -m haojie_training.native --engine ENGINE sample --checkpoint restored.pt
 - 模型请求带递增 id 和检查点文件 SHA256；核对规则/完整编码/规则包、有限权重及 logits。错误/过期响应明确失败，不回退教师或随机策略。换权重创建新模型及环境，不复用 TinyPolicy 投影。
 - `haojie-native-record-v1` 使用逐行 SHA256 链和执行前后状态哈希。规范编码：类型标签 null=0/bool=1/number=2/string=3/array=4/object=5；长度 u64 LE，字符串 UTF-8，对象按 UTF-8 键排序，数值有限 f64 LE、负零归零，布尔0/1，缺失不等于 null。哈希链计算 `{previous,body}` 的规范编码；旧记录和旧指纹不改写。
 - 训练入口验证命令字段、范围、身份与权限。状态只来自原生新局及合法命令，权威 RNG/暗选不进入模型输入。原开发差分协议不作为不可信训练入口。
+- 推荐 `audit --prepare`：一次原生重放完成校验与编码，准备阶段消费已经拥有的张量。单独 `audit` 继续可用；`prepare --output` 自行执行一次审核。先单独 audit 再 prepare 属于刻意执行两次完整审核的严格工作流，性能比较分别记账。
+- 已审核结果只在当前可信 Python 进程内使用，不从外部文件反序列化为缓存凭据。完成回执绑定本次实际读取的全部原始字节（含未完成尾部）、规则包、完整编码 schema、审核器版本与源码身份；复用还检查实际二进制和当前记录内容。路径、mtime 或以前成功不能授权复用。输出来自同一份已确认张量，核验后不重新读取来源生成特征。
+- 新单遍入口需要 `ENGINE --version` 包含 `auditor: haojie-native-audit-v1` 与 `audited-encoding` 能力。宿主和引擎一起升级；记录、规则、编码、模型和二进制传输协议没有换版。
 - 原始完整命令行写入 `.partial`；完成行写出、sync后使用不覆盖目标的同目录硬链接发布。完整JSON行损坏、校验失败及压缩损坏均报错。未换行尾部单列 `incompleteTail`，不视为已提交命令。新原始出口为未压缩 JSONL，不接受 gzip 冒充普通文本。
 - 原生同实现审核不等于独立规则验证。开发/CI 保留 TS 规则、候选、编码、规范哈希和实际模型前向差分。
 

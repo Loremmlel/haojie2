@@ -14,6 +14,7 @@ from ..model import ModelConfig, PolicyValueNet
 from ..prepare import digest, save_split
 from ..runtime import Trainer, checkpoint_config
 from .client import Client
+from .audit import audit, validate_audited
 
 
 def metadata(ready):
@@ -169,52 +170,48 @@ def sample(
             client.close()
 
 
-def prepare(executable, paths, output, shard_size=64):
+def prepare(executable, paths, output, shard_size=64, *, audited=None):
     if output.exists():
         raise ValueError("数据目录已存在")
     games = []
     meta = None
-    for path in paths:
-        with Client(executable) as client:
-            current = metadata(client.ready)
-            if meta is not None and meta != current:
-                raise ValueError("来源规则版本不一致")
-            meta = current
-            client.send({"op": "audit", "record": str(path.resolve()), "encode": True})
-            examples, records, header, outcome = [], [], None, None
-            while True:
-                row = client.receive()
-                if row["type"] == "game":
-                    header = row
-                elif row["type"] == "example":
-                    examples.append(example(row.pop("input"), row["selected"]))
-                    records.append(
-                        {k: row[k] for k in ("index", "step", "actor", "command", "stage")}
-                    )
-                elif row["type"] == "outcome":
-                    outcome = row
-                elif row["type"] == "done":
-                    break
-                else:
-                    raise ValueError("未知编码消息")
-            if not examples or header is None or outcome is None:
-                raise ValueError("空监督或未审核记录")
-            if outcome["reason"] == "error":
-                raise ValueError("实现错误轨迹不进入学习")
-            for item, record in zip(examples, records):
-                if outcome["terminated"] and record["step"] == 0:
-                    item["value"] = torch.tensor(float(outcome["returns"][str(record["actor"])]))
-                    item["value_mask"] = torch.tensor(True)
-            group = f"{meta['ruleset']}:{header['start']['rules']}:{header['start']['seed']}"
-            # 改变截断预算不产生新轨迹身份，防止同一前缀在恢复后重复计样。
-            lineage = {
-                k: header[k] for k in ("rulesHash", "start", "model", "samplerSeed", "policyKind")
-            }
-            identity = hashlib.sha256(
-                json.dumps(lineage, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
-            records = [{**r, "group": group, "game_id": identity} for r in records]
-            games.append((group, identity, examples, records, header["model"]))
+    audit_identity = None
+    paths = list(paths)
+    if audited is not None:
+        audited = list(audited)
+        validate_audited(executable, paths, audited)
+    sources = []
+    for i, path in enumerate(paths):
+        result = audited[i] if audited is not None else audit(executable, path)
+        current = metadata(result.ready)
+        if meta is not None and meta != current:
+            raise ValueError("来源规则版本不一致")
+        meta = current
+        current_audit = {**result.report["auditor"], "binary_sha256": result.engine_sha256}
+        if audit_identity is not None and audit_identity != current_audit:
+            raise ValueError("来源审核器身份不一致")
+        audit_identity = current_audit
+        examples = [example(inputs, selected) for inputs, selected in result.inputs]
+        records, header, outcome = result.records, result.header, result.report["outcome"]
+        if not examples:
+            raise ValueError("空监督或未审核记录")
+        if outcome["reason"] == "error":
+            raise ValueError("实现错误轨迹不进入学习")
+        for item, record in zip(examples, records):
+            if outcome["terminated"] and record["step"] == 0:
+                item["value"] = torch.tensor(float(outcome["returns"][str(record["actor"])]))
+                item["value_mask"] = torch.tensor(True)
+        group = f"{meta['ruleset']}:{header['start']['rules']}:{header['start']['seed']}"
+        # 改变截断预算不产生新轨迹身份，防止同一前缀在恢复后重复计样。
+        lineage = {
+            k: header[k] for k in ("rulesHash", "start", "model", "samplerSeed", "policyKind")
+        }
+        identity = hashlib.sha256(
+            json.dumps(lineage, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        records = [{**r, "group": group, "game_id": identity} for r in records]
+        games.append((group, identity, examples, records, header["model"]))
+        sources.append({"sha256": result.report["inputSha256"], "path": str(path)})
     families = sorted({g[0] for g in games})
     if len(families) < 2 or len({g[1] for g in games}) != len(games):
         raise ValueError("至少两个种子族，拒绝重复对局")
@@ -222,7 +219,9 @@ def prepare(executable, paths, output, shard_size=64):
         {
             "policy_source": "sampled-action-imitation",
             "behavior_models": sorted({g[4] for g in games}),
-            "sources": [{"sha256": digest(p), "path": str(p)} for p in paths],
+            "sources": sources,
+            # 全部来源已逐一核对同一个审核器，避免在每个来源重复保存完整编码表。
+            "audit": audit_identity,
         }
     )
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -15,12 +15,17 @@ use std::{
 };
 
 pub const FORMAT: &str = "haojie-native-record-v1";
+pub const AUDITOR: &str = "haojie-native-audit-v1";
 pub const RULES: &[u8] = include_bytes!("../../data/rules.json");
 pub fn bytes_hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 pub fn rules_hash() -> String {
     bytes_hash(RULES)
+}
+pub fn auditor(catalog: &Catalog) -> Value {
+    json!({"version":AUDITOR,"build":env!("HAOJIE_SOURCE_SHA256"),"rulesHash":rules_hash(),
+        "ruleset":crate::model::RULESET,"schema":catalog.encoding})
 }
 /// 类型标签；长度 u64 LE；数值统一有限 f64 LE（-0 归 0）；对象按 UTF-8 键排序。
 pub fn hash(value: &Value) -> String {
@@ -175,6 +180,7 @@ pub fn audit(
     let mut incomplete_tail = false;
     let mut line = vec![];
     let mut current_hash = String::new();
+    let mut input_hash = Sha256::new();
     loop {
         line.clear();
         (&mut source)
@@ -187,6 +193,8 @@ pub fn audit(
         if line.is_empty() {
             break;
         }
+        // 对同一次实际读取计算内容身份，包含未完成尾部；输出之后不重新打开来源。
+        input_hash.update(&line);
         if !line.ends_with(b"\n") {
             if complete {
                 return Err("bytes after completed outcome".into());
@@ -369,7 +377,8 @@ pub fn audit(
         emit(summary.clone(), None)?;
     }
     Ok(
-        json!({"outcome":summary,"complete":complete,"incompleteTail":incomplete_tail,"finalHash":current_hash,"commands":count}),
+        json!({"outcome":summary,"complete":complete,"incompleteTail":incomplete_tail,"finalHash":current_hash,"commands":count,
+            "inputSha256":format!("{:x}",input_hash.finalize()),"auditor":auditor(catalog)}),
     )
 }
 

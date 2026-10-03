@@ -17,8 +17,9 @@ pub fn describe() -> Value {
         "rulesHash": crate::records::rules_hash(),
         "encoding": "haojie-entities-factorized-v1",
         "record": crate::records::FORMAT,
+        "auditor": crate::records::AUDITOR,
         "protocols": {"training": crate::training_host::PROTOCOL, "development": crate::model::PROTOCOL},
-        "capabilities": ["create", "observe", "query", "preflight", "execute", "continuous-sampling", "public-encoding", "record-write", "record-audit", "learning-stage-resume"],
+        "capabilities": ["create", "observe", "query", "preflight", "execute", "continuous-sampling", "public-encoding", "record-write", "record-audit", "audited-encoding", "learning-stage-resume"],
         "interfaces": {
             "training": "validated-start-command-record-input",
             "development": "trusted-canonical-state-and-rule-package",

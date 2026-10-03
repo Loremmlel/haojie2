@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import platform
 import shutil
@@ -25,6 +26,8 @@ def digest(path):
 
 
 def main():
+    global pipeline
+    current_pipeline = pipeline
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ("baseline", "candidate", "checkpoint", "starts", "output"):
         parser.add_argument(f"--{key}", type=Path, required=True)
@@ -32,7 +35,13 @@ def main():
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--pipeline-reference", type=Path)
+    parser.add_argument("--single-pass-candidate", action="store_true")
     args = parser.parse_args()
+    if args.pipeline_reference:
+        spec = importlib.util.spec_from_file_location("haojie_training.native.strict_reference", args.pipeline_reference)
+        pipeline = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pipeline)
     if min(args.commands, args.concurrency, args.rounds) < 1:
         raise ValueError("预算、并发和轮数须为正")
     torch.set_num_threads(1)
@@ -49,6 +58,8 @@ def main():
                 "platform": platform.platform(), "threads": 1, "device": "cpu",
                 "commands": args.commands, "concurrency": args.concurrency, "starts": len(starts),
                 "profile": args.profile, "checkpoint_sha256": digest(args.checkpoint),
+                "pipeline_reference_sha256": digest(args.pipeline_reference) if args.pipeline_reference else None,
+                "single_pass_candidate": args.single_pass_candidate,
                 "starts_sha256": digest(args.starts),
                 "engines": {key: digest(path) for key, path in engines.items()}}
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -92,13 +103,17 @@ def main():
             records.extend(sorted(folder.glob("*.jsonl")))
         stages["sampling"] = time.perf_counter() - t
         t = time.perf_counter()
-        with Client(engines[label]) as client:
-            for path in records:
-                client.send({"op": "audit", "record": str(path.resolve()), "encode": False})
-                client.receive()
-        stages["audit"] = time.perf_counter() - t
+        single = args.single_pass_candidate and label == "candidate"
+        if single:
+            audited = [current_pipeline.audit(engines[label], path) for path in records]
+        else:
+            with Client(engines[label]) as client:
+                for path in records:
+                    client.send({"op": "audit", "record": str(path.resolve()), "encode": False})
+                    client.receive()
+        stages["audit_encode" if single else "audit"] = time.perf_counter() - t
         t = time.perf_counter()
-        prepared = pipeline.prepare(engines[label], records, output / "data")
+        prepared = current_pipeline.prepare(engines[label], records, output / "data", audited=audited) if single else pipeline.prepare(engines[label], records, output / "data")
         stages["prepare"] = time.perf_counter() - t
         t = time.perf_counter()
         with Client(engines[label]) as client:
@@ -132,7 +147,10 @@ def main():
         for report in reports:
             for game in report["games"]:
                 for key, value in game.get("metrics", {}).items():
-                    metrics[key] += value
+                    if key in ("maxEntities", "maxCandidates"):
+                        metrics[key] = max(metrics[key], value)
+                    else:
+                        metrics[key] += value
         result = {"label": label, "seconds": elapsed, "phases": stages, "resources": resources,
                   "reports": reports, "metrics": dict(metrics), "records": identities,
                   "record_file_sha256": [digest(path) for path in records],
@@ -164,7 +182,7 @@ def main():
                 pair["baseline"]["seconds"] / pair["candidate"]["seconds"]}), flush=True)
         summary = {"pairs": pairs, "speedup_median": statistics.median(
             p["baseline"]["seconds"] / p["candidate"]["seconds"] for p in pairs),
-            "note": "同一真实未训练权重；含实际候选、前向、记录、独立审核、再次审核编码、两步优化和验证。不是棋力结论。"}
+            "note": "同一真实未训练权重；完整候选、前向、记录、两步更新与验证。strict 含独立审核加再次审核编码；single-pass 合并审核编码并消费已审核张量。不是棋力结论。"}
         (args.output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 

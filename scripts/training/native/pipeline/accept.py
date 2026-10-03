@@ -57,8 +57,7 @@ def main():
         60,
     )
     records = sorted((args.output / "sample").glob("*.jsonl"))
-    native("audit", "audit", *records)
-    native("prepare", "prepare", *records, "--output", data)
+    native("audit-prepare", "audit", *records, "--prepare", data)
     manifest = json.loads((data / "manifest.json").read_text())
     assert all(s["value_labels"] > 0 for s in manifest["splits"].values())
     common = [
