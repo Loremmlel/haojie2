@@ -65,6 +65,9 @@ const nativePaths = [
   'src/main.rs',
   'src/model.rs',
   'src/core/geometry.rs',
+  'src/core/entities.rs',
+  'src/core/command.rs',
+  'src/core/profile.rs',
   'src/core/shared.rs',
   'src/commands/movement.rs',
   'src/commands/inspection.rs',
@@ -85,6 +88,9 @@ const nativePaths = [
   'src/training/encoding.rs',
   'src/training/policy.rs',
   'src/training/sampler.rs',
+  'src/training/boundary.rs',
+  'src/training/host.rs',
+  'src/training/records.rs',
 ].map((p) => `native/engine-prototype/${p}`);
 save('manifest.json', {
   head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
