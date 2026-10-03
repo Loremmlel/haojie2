@@ -93,6 +93,12 @@ class Trainer:
             ),
             "finite_gradients": bool(gradients)
             and bool(torch.stack([torch.isfinite(g).all() for g in gradients]).all()),
+            "finite_optimizer": all(
+                bool(torch.isfinite(value).all())
+                for state in self.optimizer.state.values()
+                for value in state.values()
+                if isinstance(value, torch.Tensor)
+            ),
             "scale": self.scaler.get_scale(),
         }
 

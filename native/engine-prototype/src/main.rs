@@ -2,6 +2,8 @@
 mod abilities;
 #[path = "training/actions.rs"]
 mod actions;
+#[path = "training/boundary.rs"]
+mod boundary;
 #[path = "commands/combat.rs"]
 mod combat;
 #[path = "commands/damage.rs"]
@@ -23,6 +25,8 @@ mod policy;
 mod preparation;
 #[path = "commands/reactions.rs"]
 mod reactions;
+#[path = "training/records.rs"]
+mod records;
 #[path = "core/resolution.rs"]
 mod resolution;
 #[path = "setup/runtime.rs"]
@@ -39,6 +43,8 @@ mod spells;
 mod stats;
 #[path = "setup/synthesis.rs"]
 mod synthesis;
+#[path = "training/host.rs"]
+mod training_host;
 #[path = "training/tree.rs"]
 mod tree;
 
@@ -442,6 +448,9 @@ fn handle(
     }
 }
 fn main() -> io::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--training") {
+        return training_host::serve().map_err(io::Error::other);
+    }
     let mut catalog = None;
     let mut loaded = vec![];
     let mut resident = Resident::default();

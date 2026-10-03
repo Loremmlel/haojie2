@@ -1,5 +1,7 @@
 # Rust 训练引擎
 
+新增 `--training` 是独立 Rust＋Python 入口，使用内嵌规则包和实际模型批量推理，见[安装与契约](../../training/NATIVE.md)。下文 v4 协议继续用于开发差分和旧 TinyPolicy 性能研究。
+
 当前范围和验收入口见[状态入口](../../docs/ai/STATUS.md)；阶段目标、原始验证证据和当时计划保存在 [RUST-PROTOTYPE.md](../../docs/ai/performance/RUST-PROTOTYPE.md)。当前实现完整规则、公开动作树、实体编码及经济性实验的小网络连续采样。浏览器继续使用 TS。原生策略尚未训练，不把采样吞吐当作棋力或完整训练倍率。
 
 在仓库根目录运行（本机 Windows、Rust 1.98.1、Node 22.23.2）：

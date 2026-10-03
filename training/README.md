@@ -1,5 +1,7 @@
 # PyTorch训练子项目
 
+Rust＋Python 独立入口、源码包和恢复契约见[无 Node 训练](NATIVE.md)。下文旧教师、搜索及 `prepare` 命令仍保留 TS 依赖，不能与新入口混淆。
+
 Python 3.12独立环境，与TypeScript规则代码同仓库维护。当前实现约11.70M参数的实体Transformer、候选评分/价值头、共享TypeScript公开状态编码和动作分解、教师数据准备、整局验证划分、张量训练与续训，以及CPU/XPU精度基准。网络CLI已能完成完整对局，研究入口支持教师候选域上的网络叶值PUCT；浏览器已验收本地HTTP前向，单HTML模型部署尚未接入。训练loss与教师拟合率没有对作者胜率含义。
 
 当前阶段见[唯一状态入口](../docs/ai/STATUS.md)；原始实验记录见[历史进度](../docs/ai/history/TRAINING-PROGRESS.md)。

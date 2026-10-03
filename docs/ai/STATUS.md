@@ -1,5 +1,7 @@
 # AI / 训练当前状态
 
+2026-10-03补充：独立Rust＋Python实际模型闭环的安装、记录、编码、更新和安全阶段恢复见[新入口](../../training/NATIVE.md)及[分阶段任务记录](performance/native-training/README.md)。该入口不依赖Node；TS手工教师/PUCT及旧数据工具仍单独保留，不宣称已迁移或获得棋力。下文9月29日记录仍为原性能基线背景。
+
 核对基线：2026-09-29，本轮从 `db9beb0` 开始，规则仍为 `3.0-feedback5-live-deployment-2026-09-23`。本页是唯一当前状态入口；[训练路线](TRAINING.md)说明接口与研究背景，[历史进度](history/TRAINING-PROGRESS.md)和各实验报告保留当时的结论、数字、命令与版本，其中的“下一步”不是现行任务。此前整理提交只调整位置、导入和文档；本轮固定编码复用见[性能切片](performance/ENCODING-REUSE-2026-09-29.md)，不改变规则、选招、训练方法或模型。
 
 ## 位置与维护用途

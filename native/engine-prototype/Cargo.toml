@@ -8,6 +8,7 @@ publish = false
 indexmap = "=2.10.0"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
 
 [profile.release]
 lto = "thin"

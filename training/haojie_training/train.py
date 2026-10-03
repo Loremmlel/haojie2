@@ -215,7 +215,12 @@ def main():
     synchronize(device)
     training_seconds = time.perf_counter() - started
     health = trainer.health()
-    if not health["finite_parameters"] or not health["finite_gradients"] or not trainer.updates:
+    if (
+        not all(
+            health[key] for key in ("finite_parameters", "finite_gradients", "finite_optimizer")
+        )
+        or not trainer.updates
+    ):
         raise FloatingPointError(f"训练数值检查失败：{health}")
     trainer.save(args.checkpoint, metadata)
     source_hash = hashlib.sha256()

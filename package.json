@@ -20,6 +20,7 @@
     "bench:ai:compare": "tsx scripts/ai/compare.ts",
     "bench:ai:audit": "tsx scripts/ai/audit.ts",
     "train:serve": "tsx scripts/training/serve.ts",
+    "train:rules:check": "tsx scripts/training/native/rules-package.ts --check",
     "bench:training:browser": "node scripts/training/browser/serve.mjs",
     "train:selfplay": "tsx scripts/training/self-play.ts",
     "train:selfplay:parallel": "node scripts/training/dispatch/self-play.mjs",

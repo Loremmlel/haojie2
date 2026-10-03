@@ -17,9 +17,9 @@ pub struct Metrics {
     encoding_ms: f64,
     inference_ms: f64,
     sampling_ms: f64,
-    observation_ms: f64,
-    step_ms: f64,
-    record_ms: f64,
+    pub observation_ms: f64,
+    pub step_ms: f64,
+    pub record_ms: f64,
     nodes: usize,
     evaluations: usize,
     forced: usize,
@@ -29,10 +29,24 @@ pub struct Metrics {
     off_turn_commands: usize,
     off_turn_passes: usize,
 }
+impl Metrics {
+    pub fn merge(&mut self, other: Self) {
+        self.tree_ms += other.tree_ms;
+        self.encoding_ms += other.encoding_ms;
+        self.inference_ms += other.inference_ms;
+        self.sampling_ms += other.sampling_ms;
+        self.nodes += other.nodes;
+        self.evaluations += other.evaluations;
+        self.forced += other.forced;
+        self.backtracks += other.backtracks;
+        self.max_entities = self.max_entities.max(other.max_entities);
+        self.max_candidates = self.max_candidates.max(other.max_candidates);
+    }
+}
 fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0
 }
-enum Selected {
+pub enum Selected {
     Command(Value),
     Pass,
     Empty,
@@ -43,6 +57,11 @@ struct Sampling<'a> {
     metrics: &'a mut Metrics,
     optional: bool,
     nodes: usize,
+    external: Option<&'a mut dyn Inference>,
+    trace: Vec<usize>,
+}
+pub trait Inference {
+    fn logits(&mut self, input: &encoding::Input) -> Result<Vec<f64>, String>;
 }
 impl Sampling<'_> {
     fn visit(&mut self, tree: &mut Tree<'_>, cursor: &[usize]) -> Result<Selected, String> {
@@ -82,11 +101,14 @@ impl Sampling<'_> {
             self.metrics.max_entities = self.metrics.max_entities.max(input.entities.len());
             self.metrics.evaluations += 1;
             let t = Instant::now();
-            let logits = self
-                .projections
-                .as_mut()
-                .map(|p| p.logits(&input))
-                .unwrap_or_else(|| vec![0.0; count]);
+            let logits = if let Some(inference) = self.external.as_mut() {
+                inference.logits(&input)?
+            } else {
+                self.projections
+                    .as_mut()
+                    .map(|p| p.logits(&input))
+                    .unwrap_or_else(|| vec![0.0; count])
+            };
             self.metrics.inference_ms += ms(t);
             if logits.len() != count || logits.iter().any(|v| !v.is_finite()) {
                 return Err("invalid policy logits".into());
@@ -101,16 +123,19 @@ impl Sampling<'_> {
         }
         for i in order {
             if pass && i == node.choices.len() {
+                self.trace.insert(0, i);
                 return Ok(Selected::Pass);
             }
             let c = &node.choices[i];
             if c.next.is_none() {
+                self.trace.insert(0, i);
                 return Ok(Selected::Command(c.command.clone()));
             }
             let mut next = cursor.to_vec();
             next.push(i);
             let selected = self.visit(tree, &next)?;
             if !matches!(selected, Selected::Empty) {
+                self.trace.insert(0, i);
                 return Ok(selected);
             }
             self.metrics.backtracks += 1;
@@ -136,8 +161,37 @@ fn sample(
         optional,
         nodes: 0,
         projections: policy.map(TinyPolicy::decision),
+        external: None,
+        trace: vec![],
     }
     .visit(&mut tree, &[])
+}
+/// 正式模型沿用同一 Gumbel 排序与空分支回溯；不声称路径概率等于各节点概率乘积。
+pub fn external(
+    observation: &Value,
+    actor: usize,
+    inference: &mut dyn Inference,
+    random: &mut Random,
+    catalog: &Catalog,
+    optional: bool,
+) -> Result<(Selected, Vec<usize>, Metrics), String> {
+    let start = Instant::now();
+    let mut tree = Tree::new(observation, actor, catalog)?;
+    let mut metrics = Metrics {
+        tree_ms: ms(start),
+        ..Metrics::default()
+    };
+    let mut sampling = Sampling {
+        projections: None,
+        random,
+        metrics: &mut metrics,
+        optional,
+        nodes: 0,
+        external: Some(inference),
+        trace: vec![],
+    };
+    let selected = sampling.visit(&mut tree, &[])?;
+    Ok((selected, sampling.trace, metrics))
 }
 /// 本地受控基准批次：固定命令/回合上限，失败返回已完成前缀与 unknown，绝不伪造终局收益。
 /// 墙钟只计时，不参与选招。取消由宿主终止此独立进程；不会写文件或修改驻留规则会话。
