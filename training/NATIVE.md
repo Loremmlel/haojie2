@@ -6,6 +6,12 @@
 
 TS 手工教师、restricted PUCT、旧记录转换和历史改善/连续实验仍是独立的 TS 工具，未迁移且不由本入口调用。搜索轨迹不能静默变成 one-hot。缺少新规则包哈希的旧权重继续由旧入口使用，新采样入口明确拒绝。
 
+## 当前运行内核
+
+环境内部使用类型化实体、命令、反应与时钟快照；公开只读视图直接进入动作树与编码，连续模拟不再经过 `Observation Value → State`。外部存档、观察、记录及控制消息仍遵守原协议。原生发送缓冲在同步写入完成后复用，Python 接收的张量仍独立拥有。现有二进制协议与就绪调度没有换版。
+
+2026-10-03 在 Node 不在 PATH 的环境中重新完成真实终局采样、非空标签、0→2→4 更新、恢复与连续四步相等及新权重审核。完整规则、固定编码、RNG、私有信息和旧记录规范哈希均通过冻结旧版及 TS 差分。实现对应见[运行内核](../docs/ai/performance/kernel/ARCHITECTURE.md)，性能边界和复现见[实测报告](../docs/ai/performance/kernel/RESULTS.md)。本轮不改变模型、优化器、监督语义或训练安装依赖。
+
 ## 独立安装与运行
 
 需要 Rust 1.98.1、链接器、Python 3.12，不需要 Node/npm/Bun/tsx/node_modules 或 TS 源码。源码包提供 `native/engine-prototype/{Cargo.toml,Cargo.lock,src,data}` 及 Python 包。CPU 安装：

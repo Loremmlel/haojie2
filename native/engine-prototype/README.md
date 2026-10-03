@@ -57,7 +57,7 @@ node --import tsx scripts/training/native/sampling/complete.ts --references arti
 
 `commands/inspection.rs::Queries` 对应 TS 的 `inspectionQueries`：绑定单一不可变局面，共享阶段、行动资源、属性、空间占位、技能目标和亡者查询。部署、普通移动、蓄力、结束模式的完整合法性由执行端同一个准备函数决定，预检不再分支结算；冲撞、攻击、技能、反应及随机边界继续执行必要的完整后果。树的实体索引、属性和路径方向也只在本观察内复用，保持原顺序与首个同名实体语义。Rust 用 `Rc<Node>` 复用不可变节点，与 TS 引用对应，不改变候选范围或策略。
 
-TS 生产引擎与本原型统一采用状态分支算法。`State::fork` / `Unit::fork` / `ValueMap::fork` 创建共享分支；普通 `Clone` 仍生成独立快照。每个实体、每个局面扩展字段分别作为写入隔离单元；`turns / bases / deployRows / pending / siphons / events` 在创建分支时立即复制。规则内部快照继续深复制，外部 `transition` 导出独立状态；驻留和连续采样用 `apply_runtime` 保留成功分支，预检和失败直接丢弃。TS 的内部提交剥离 Proxy，Rust 以 Rc 写时分离实现相同边界。JS 宿主跨实体别名或环由 TS 沿代理图导出保留，Rust JSON 输入没有这种对象身份。原始映射见[状态分支记录](../../docs/ai/performance/STATE-SHARING-2026-09-27.md)，当前收口与证据见[任务记录](../../docs/ai/performance/runtime/README.md)。
+当前采用类型化运行内核：实体数字句柄、明确的命令/效果/蓄力/反应/时钟类型，公开视图直接进入动作树与数值编码。`State::fork` / `Unit::fork` / `ValueMap::fork` 保留分支隔离；普通 `Clone` 是独立快照出口。TS 已用紧凑实体复制和冷字段写入前分离替换 Proxy；Rust 使用类型化实体的 Rc 可变借用分离，两端共享相同查询、参数顺序、规则结算及事务边界。正式外部返回独立快照；内部连续采样保留成功分支。JS 外部别名/环由明确的整图复制兼容入口处理，不进入正常热循环。当前映射见[内核设计](../../docs/ai/performance/kernel/ARCHITECTURE.md)，测量与复现见[任务记录](../../docs/ai/performance/kernel/README.md)；旧[状态分支记录](../../docs/ai/performance/STATE-SHARING-2026-09-27.md)仅保留历史证据。
 
 ## 协议与信任边界
 
