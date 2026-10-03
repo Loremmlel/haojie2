@@ -4,7 +4,7 @@ Rust＋Python 独立入口、源码包和恢复契约见[无 Node 训练](NATIVE
 
 Python 3.12独立环境，与TypeScript规则代码同仓库维护。当前实现约11.70M参数的实体Transformer、候选评分/价值头、共享TypeScript公开状态编码和动作分解、教师数据准备、整局验证划分、张量训练与续训，以及CPU/XPU精度基准。网络CLI已能完成完整对局，研究入口支持教师候选域上的网络叶值PUCT；浏览器已验收本地HTTP前向，单HTML模型部署尚未接入。训练loss与教师拟合率没有对作者胜率含义。
 
-当前阶段见[唯一状态入口](../docs/ai/STATUS.md)；原始实验记录见[历史进度](../docs/ai/history/TRAINING-PROGRESS.md)。
+当前阶段见[唯一状态入口](../docs/ai/STATUS.md)；原始实验记录见[历史进度](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)。
 
 ## 安装与检查
 
@@ -170,7 +170,7 @@ training/.venv/Scripts/python.exe -X utf8 -m haojie_training.benchmark --devices
 
 报告检查实际矩阵输出dtype、权重变化、参数/梯度/loss有限性、跳过更新数，并在训练前比较相同FP32权重的输出差异。随机模型短测的误差和top1一致率不代表训练收敛或游戏棋力。使用eager模式，没有torch.compile；后续编译优化需分别报告编译成本与稳态速度。
 
-本机Core Ultra 5 225H / Arc 130T的原11.55M骨架测量见[训练性能报告](../docs/ai/TRAINING-PYTORCH-2026-09-22.md)；v2在batch 32、256实体、117候选下的新版对照见[历史进度](../docs/ai/history/TRAINING-PROGRESS.md)：CPU FP32约23.93样本/秒，XPU BF16约84.88样本/秒。两次形状/网络不同，不能直接比较绝对吞吐。命令中的8线程来自本机CPU预试，换机器应重新选择。
+本机Core Ultra 5 225H / Arc 130T的原11.55M骨架测量见[训练性能报告](../docs/ai/TRAINING-PYTORCH-2026-09-22.md)；v2在batch 32、256实体、117候选下的新版对照见[历史进度](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)：CPU FP32约23.93样本/秒，XPU BF16约84.88样本/秒。两次形状/网络不同，不能直接比较绝对吞吐。命令中的8线程来自本机CPU预试，换机器应重新选择。
 
 ## 浏览器推理验收
 
@@ -186,7 +186,7 @@ npm run bench:training:browser -- --data artifacts/training/pilot-20260922/brows
 
 所有资产由本机服务提供，服务器只允许GET预列路径；不发布目录、不访问CDN。ONNX Runtime Web 1.30.0的`ort.webgpu.bundle.min.mjs`必须配套`ort-wasm-simd-threaded.asyncify.wasm`，不可混用旧JSEP文件。CPU当前用同一运行库的WASM单线程；混合FP16是主干/价值头FP16＋候选评分FP32，外部浮点输入/输出仍为FP32。
 
-实测见[历史进度](../docs/ai/history/TRAINING-PROGRESS.md#浏览器实测117m模型)。这只是独立开发工具，不进入发行HTML；当次Codex内置浏览器阻止file://，所以记录为本地HTTP。浏览器完整命令解码、MCTS、单HTML内嵌运行库/权重、离线启动和峰值内存另行验收。
+实测见[历史进度](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md#浏览器实测117m模型)。这只是独立开发工具，不进入发行HTML；当次Codex内置浏览器阻止file://，所以记录为本地HTTP。浏览器完整命令解码、MCTS、单HTML内嵌运行库/权重、离线启动和峰值内存另行验收。
 
 ## 网络CLI对战
 
@@ -255,7 +255,7 @@ node --import tsx scripts/training/search/bootstrap/audit.ts artifacts/training/
 
 网络只接收八项公开根张量，当前操作者价值转换为搜索根视角，固定缩放0.25；真正终局保留±1／0。每决策最多16次网络查询，调用、缓存和模型SHA独立记录；未知召唤窗口估计仍为0，不能当作平局标签。教师仍提供候选和范围外回退，网络策略logit没有用作搜索先验。这是受限的教师辅助价值迭代入口，不能称作全域或无教师的AlphaZero。
 
-新轨迹按同样`--search-policy`编码，manifest保留每局父模型SHA；随后用`train --initialize-from`在新数据上建立下一代。首次完整回接的固定协议与结果见[网络叶值实验](../docs/ai/experiments/search/VALUE-CYCLE-2026-09-25.md)，`value-cycle/round_two.py`仅执行该协议的两步回流验收，不是生产训练步数建议。
+新轨迹按同样`--search-policy`编码，manifest保留每局父模型SHA；随后用`train --initialize-from`在新数据上建立下一代。首次完整回接的固定协议与结果见[网络叶值实验](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/experiments/search/VALUE-CYCLE-2026-09-25.md)，`value-cycle/round_two.py`仅执行该协议的两步回流验收，不是生产训练步数建议。
 
 ```powershell
 training/.venv/Scripts/python.exe -m unittest discover -s training/tests -v
@@ -265,7 +265,7 @@ training/.venv/Scripts/python.exe -m ruff format --check training/haojie_trainin
 
 ### 连续分轮运行与恢复
 
-`scripts/training/search/continuous/run.py`提供冻结配置的长跑入口，串接采样、重放、最近三轮根数据池、实际训练、FP32数值检查和候选换边筛选。完整协议、配置字段和恢复验收见[连续自对弈实验](../docs/ai/experiments/search/CONTINUOUS-2026-09-25.md)。
+`scripts/training/search/continuous/run.py`提供冻结配置的长跑入口，串接采样、重放、最近三轮根数据池、实际训练、FP32数值检查和候选换边筛选。完整协议、配置字段和恢复验收见[连续自对弈实验](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/experiments/search/CONTINUOUS-2026-09-25.md)。
 
 ```powershell
 training/.venv/Scripts/python.exe -X utf8 scripts/training/search/continuous/run.py --config artifacts/training/continuous-night-20260925.config.json --output artifacts/training/continuous-night-20260925

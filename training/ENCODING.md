@@ -49,4 +49,4 @@ candidate_mask只表示当前节点存在的候选与填充，不承诺中间参
 
 旧填充张量继续读取；扩量可选择带逐分片SHA256的`haojie-training-shards-v1`索引、只读mmap和训练长度分桶，保持特征及标签语义不变。分片在自己的样本上限内填充，批次取样时再裁剪/填充，不截断较大局面。预处理目前仍保留变长样本，实际实体量包含附属状态、死亡记录和快照，不能用场上棋子数代替网络序列长度。
 
-v1是可验证的起点。网络CLI支持完整命令和对局，但不能因此推断已覆盖所有罕见能力、部署延迟达标或棋力达标。现行边界见[状态入口](../docs/ai/STATUS.md)，原始实验结果见[历史进度](../docs/ai/history/TRAINING-PROGRESS.md)。
+v1是可验证的起点。网络CLI支持完整命令和对局，但不能因此推断已覆盖所有罕见能力、部署延迟达标或棋力达标。现行边界见[状态入口](../docs/ai/STATUS.md)，原始实验结果见[历史进度](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)。

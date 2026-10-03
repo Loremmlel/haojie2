@@ -1,6 +1,6 @@
 # 浩劫维护入口
 
-本文件只列全局硬约束。详细且仍有效的工程与规则约束见[维护约束](docs/maintenance/ENGINEERING-CONSTRAINTS.md)；当前 AI/训练状态只读[状态入口](docs/ai/STATUS.md)，历史进度见[归档记录](docs/ai/history/TRAINING-PROGRESS.md)。实施规则以[现行规则](docs/RULES.md)和较新的作者反馈为准；来源优先级为作者回复 > 新增段落的明确修改 > 一般规则 > 旧版猜测。旧文中的“当前”“下一步”只对应其记录日期，不自动授权新工作。
+本文件只列全局硬约束。详细且仍有效的工程与规则约束见[维护约束](docs/maintenance/ENGINEERING-CONSTRAINTS.md)；当前 AI/训练状态只读[状态入口](docs/ai/STATUS.md)，历史进度见[归档记录](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)。实施规则以[现行规则](docs/RULES.md)和较新的作者反馈为准；来源优先级为作者回复 > 新增段落的明确修改 > 一般规则 > 旧版猜测。旧文中的“当前”“下一步”只对应其记录日期，不自动授权新工作。
 
 ## 游戏和公开边界
 

@@ -2,7 +2,7 @@
 
 2026-09-22讨论与实现记录，作为接口和训练路线背景保存；现行状态、入口和已暂停方案只见[当前状态](STATUS.md)。目标设备为普通桌面/笔记本，CPU推理也须实用，可使用WebGPU。目标棋力是对熟练作者取得超过80%的胜率；这是后续实战验收目标，不是当前能力或训练规模保证。
 
-截至2026-09-27的阶段数字与原始结论见[历史进度](history/TRAINING-PROGRESS.md)；其中的“下一步”不再是当前任务。
+截至2026-09-27的阶段数字与原始结论见[历史进度](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)；其中的“下一步”不再是当前任务。
 
 网页/CLI增量存档可通过`npm run train:import-save -- 输入.json 输出.jsonl.gz`转换为增量训练轨迹，并沿用审计与编码器；起点、未结束局标签和隐私边界见[存档与训练转换](../session/SAVES.md)。旧快照训练JSONL不兼容，须重新生成。
 
@@ -47,7 +47,7 @@
 
 WebGPU可评估FP16，但要检测shader-f16与实际算子支持。CPU/WASM不统一要求FP16，应比较FP32和受支持的8位量化版本，重新验收量化后的策略/价值与棋力。稳定形状、兼容算子和批量叶子推理值得测量；批次过大也可能削弱树搜索的及时反馈。
 
-长期训练前还应在目标浏览器测约12M/25M模型的加载、编译预热、batch=1及小批量推理、峰值内存。此段写作时尚无浏览器基准；之后仅完成约11.7M模型的本地 HTTP 前向测试，不代表离线发行版、完整命令解码或峰值内存验收，见[历史记录](history/TRAINING-PROGRESS.md#浏览器实测117m模型)。Node规则基准和PyTorch训练基准不能代替浏览器推理测试。
+长期训练前还应在目标浏览器测约12M/25M模型的加载、编译预热、batch=1及小批量推理、峰值内存。此段写作时尚无浏览器基准；之后仅完成约11.7M模型的本地 HTTP 前向测试，不代表离线发行版、完整命令解码或峰值内存验收，见[历史记录](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md#浏览器实测117m模型)。Node规则基准和PyTorch训练基准不能代替浏览器推理测试。
 
 保持单个离线HTML。50M FP16权重约100MB，Base64内联约133MB，另有运行时、解码和激活内存。实际file://环境必须验证WASM多线程能力；不能套用开启跨源隔离的网页多线程数据。模型训练在独立工具中进行，不给发行HTML加入训练服务或隐式下载。
 
@@ -117,7 +117,7 @@ geometry复用共享查询：`{type:"attack",unitId,targetId}`返回可选方向
 
 当前教师仍使用原有启发式候选，不会探索全部路径/组合，也不会自动新增回合外响应窗口。这是热启动基线的策略限制，不是引擎权限限制。共享公开状态编码与分步动作树已实现，覆盖及参数/完整命令的区别见[编码说明](../../training/ENCODING.md)。未来MCTS需实现渐进扩展及响应调度；当前接口尚未接入MCTS、完整命令的精确合法掩码、浏览器网络推理或信息集求解器。
 
-纯网络CLI对战已由`npm run train:match`提供，复用分步动作树的贪心排序/空分支回溯；Node负责引擎，常驻Python只接收公开编码张量。网络预算耗尽和推理异常明确暂停，单候选免推理，最终命令仍交给引擎原子裁定。用法与统计边界见[网络CLI对战](../../training/README.md#网络cli对战)，当时的运行结果见[历史进度](history/TRAINING-PROGRESS.md)。
+纯网络CLI对战已由`npm run train:match`提供，复用分步动作树的贪心排序/空分支回溯；Node负责引擎，常驻Python只接收公开编码张量。网络预算耗尽和推理异常明确暂停，单候选免推理，最终命令仍交给引擎原子裁定。用法与统计边界见[网络CLI对战](../../training/README.md#网络cli对战)，当时的运行结果见[历史进度](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)。
 
 ## 生成热启动样本
 
