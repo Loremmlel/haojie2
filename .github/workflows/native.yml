@@ -113,6 +113,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.endurance
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      NEW_SEEDS: classic:731280001,shrine:741280001,classic:731280031,shrine:741280037
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.1
@@ -125,6 +127,10 @@ jobs:
       - run: node --import tsx scripts/training/performance/kernel/freeze.ts --executable artifacts/native-target/release/haojie-engine --output artifacts/endurance/frozen
       - run: node --import tsx scripts/training/performance/kernel/workset.ts --baseline artifacts/endurance/frozen/api.mjs --executable artifacts/endurance/frozen/engine.exe --output artifacts/endurance/workset
       - run: node --import tsx scripts/training/performance/kernel/complete.ts --api artifacts/endurance/frozen/api.mjs --executable artifacts/endurance/frozen/engine.exe --workset artifacts/endurance/workset --output artifacts/endurance/complete
+      - name: Collect the additional fixed seeds without replacing interrupted games
+        run: node --import tsx scripts/training/performance/kernel/workset.ts --baseline artifacts/endurance/frozen/api.mjs --executable artifacts/endurance/frozen/engine.exe --seeds "$NEW_SEEDS" --output artifacts/endurance/new-workset
+      - name: Verify three additional terminal games and the exact registered unknown prefix
+        run: node --import tsx scripts/training/performance/kernel/complete.ts --api artifacts/endurance/frozen/api.mjs --executable artifacts/endurance/frozen/engine.exe --workset artifacts/endurance/new-workset --seeds "$NEW_SEEDS" --known-interruptions --output artifacts/endurance/new-complete
       - uses: actions/upload-artifact@v4
         if: always()
         with:

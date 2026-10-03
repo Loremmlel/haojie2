@@ -115,6 +115,9 @@ def main():
         stages["audit_encode" if single else "audit"] = time.perf_counter() - t
         t = time.perf_counter()
         prepared = current_pipeline.prepare(engines[label], records, output / "data", audited=audited) if single else pipeline.prepare(engines[label], records, output / "data")
+        if single:
+            # prepare 已同步消费并保存分片；与正式 CLI 退出一致，在学习前释放审核输入的最后持有者。
+            del audited
         stages["prepare"] = time.perf_counter() - t
         t = time.perf_counter()
         with Client(engines[label]) as client:

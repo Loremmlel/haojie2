@@ -48,6 +48,13 @@ try {
       readFileSync(join(values.workset, `${rules}-${seed}.json`), 'utf8'),
     );
     assert.ok(!reference.error || values['known-interruptions'], '自然终局门禁不接受中断参照');
+    if (reference.error) {
+      // 白名单只登记本轮冻结版的这一处失败；新错误、其他种子或更早中断都必须失败。
+      assert.deepEqual(
+        [rules, seed, reference.error, reference.decisions.length],
+        ['classic', 731280031, '参数解码预算耗尽', 2421],
+      );
+    }
     const native = await client.request(
       {
         op: 'sample-game',
@@ -93,9 +100,14 @@ try {
       () => env,
       'commands',
     );
-    if (reference.error) assert.ok(result.results[0].error?.includes(reference.error));
-    else assert.equal(result.results[0].error, null);
-    assert.equal(result.results[0].interrupted, null);
+    if (reference.error) {
+      // 只接受显式登记的旧版节点预算中断；TS 宿主把这一错误归为 implementation-error。
+      assert.ok(result.results[0].error?.includes(reference.error));
+      assert.equal(result.results[0].interrupted, 'implementation-error');
+    } else {
+      assert.equal(result.results[0].error, null);
+      assert.equal(result.results[0].interrupted, null);
+    }
     assert.equal(env.status().terminated, native.status.terminated);
     assert.deepEqual(decisions, reference.decisions);
     assert.deepEqual(canonical([env.observation(1), env.observation(2)]), native.observations);
