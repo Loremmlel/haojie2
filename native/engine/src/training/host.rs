@@ -22,13 +22,15 @@ pub struct Wire<R, W> {
     model: String,
     id: u64,
     tensor_bytes: Vec<u8>,
+    control_bytes: Vec<u8>,
 }
 impl<R: BufRead, W: Write> Wire<R, W> {
     fn read(&mut self) -> Result<Value, String> {
-        let mut bytes = vec![];
+        let bytes = &mut self.control_bytes;
+        bytes.clear();
         (&mut self.input)
             .take(16 * 1024 * 1024 + 1)
-            .read_until(b'\n', &mut bytes)
+            .read_until(b'\n', bytes)
             .map_err(|e| e.to_string())?;
         if bytes.is_empty() {
             return Err("host disconnected".into());
@@ -36,7 +38,7 @@ impl<R: BufRead, W: Write> Wire<R, W> {
         if bytes.len() > 16 * 1024 * 1024 || !bytes.ends_with(b"\n") {
             return Err("invalid control frame".into());
         }
-        serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+        serde_json::from_slice(bytes).map_err(|e| e.to_string())
     }
     fn send(&mut self, value: &Value) -> Result<(), String> {
         serde_json::to_writer(&mut self.output, value).map_err(|e| e.to_string())?;
@@ -47,11 +49,16 @@ impl<R: BufRead, W: Write> Wire<R, W> {
         #[cfg(feature = "kernel-profile")]
         let _profile = crate::profile::scope(crate::profile::Phase::Protocol);
         let bytes = &mut self.tensor_bytes;
-        encoding::tensor_bytes(input, bytes);
+        let payload_size = encoding::tensor_size(input);
         meta["entities"] = json!(input.entities.len());
         meta["candidates"] = json!(input.candidates.len());
-        meta["bytes"] = json!(bytes.len());
-        self.send(&meta)?;
+        meta["bytes"] = json!(payload_size);
+        // 控制头与张量直接生成到同一最终帧，不再先生成完整载荷后搬到外围缓冲。
+        bytes.clear();
+        bytes.reserve(payload_size + 256);
+        serde_json::to_writer(&mut *bytes, &meta).map_err(|e| e.to_string())?;
+        bytes.push(b'\n');
+        encoding::append_tensor_bytes(input, bytes);
         self.output
             .write_all(&self.tensor_bytes)
             .map_err(|e| e.to_string())?;
@@ -67,7 +74,7 @@ impl<R: BufRead, W: Write> Inference for Wire<R, W> {
             json!({"type":"infer","id":self.id,"model":self.model}),
             input,
         )?;
-        let response = self.read()?;
+        let mut response = self.read()?;
         encoding::known(&response, &["id", "model", "logits", "cancel"])?;
         if response["id"] != self.id || response["model"] != self.model {
             return Err("stale inference/model response".into());
@@ -76,7 +83,7 @@ impl<R: BufRead, W: Write> Inference for Wire<R, W> {
             return Err("cancelled".into());
         }
         let logits: Vec<f64> =
-            serde_json::from_value(response["logits"].clone()).map_err(|e| e.to_string())?;
+            serde_json::from_value(response["logits"].take()).map_err(|e| e.to_string())?;
         if logits.len() != input.candidates.len() || logits.iter().any(|n| !n.is_finite()) {
             return Err("invalid model logits".into());
         }
@@ -247,6 +254,7 @@ pub fn serve() -> Result<(), String> {
         model: String::new(),
         id: 0,
         tensor_bytes: Vec::new(),
+        control_bytes: Vec::new(),
     };
     wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe()}))?;
     loop {

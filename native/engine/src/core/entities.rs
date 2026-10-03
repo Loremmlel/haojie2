@@ -8,26 +8,30 @@ use std::rc::Rc;
 pub struct EntityHandle(usize);
 #[derive(Clone)]
 struct Slot {
-    id: String,
+    id: Rc<str>,
     index: usize,
     landmark: bool,
+    active: bool,
 }
 #[derive(Clone, Default)]
 struct Layout {
-    slots: Vec<Option<Slot>>,
-    ids: Rc<HashMap<String, EntityHandle>>,
+    slots: Vec<Slot>,
+    ids: Rc<HashMap<Rc<str>, EntityHandle>>,
     count: Option<(usize, usize)>,
 }
 #[derive(Clone, Default)]
 pub struct EntityIndex(RefCell<Rc<Layout>>);
 impl EntityIndex {
     fn current<'a>(s: &'a State, slot: &Slot) -> Option<&'a Unit> {
+        if !slot.active {
+            return None;
+        }
         let unit = if slot.landmark {
             s.landmarks().get(slot.index)
         } else {
             s.units.get(slot.index)
         };
-        unit.filter(|u| u.id == slot.id)
+        unit.filter(|u| u.id.as_str() == slot.id.as_ref())
     }
     fn sync(&self, s: &State, force: bool) {
         let count = (s.units.len(), s.landmarks().len());
@@ -37,32 +41,33 @@ impl EntityIndex {
         let mut binding = self.0.borrow_mut();
         let layout = Rc::make_mut(&mut binding);
         // 与 TS 相同：只在新增身份时复制身份表；已有槽保留字符串，更新位置而非重新生成。
-        let mut slots = vec![None; layout.slots.len()];
+        // 保留槽的拥有型容量；active 对应 TS 新布局中的可用槽，旧分支先由 Rc 分离。
+        for slot in &mut layout.slots {
+            slot.active = false;
+        }
         for (landmark, units) in [(false, s.units.as_slice()), (true, s.landmarks())] {
             for (index, u) in units.iter().enumerate() {
-                let h = layout.ids.get(&u.id).copied().unwrap_or_else(|| {
-                    let h = EntityHandle(slots.len());
-                    Rc::make_mut(&mut layout.ids).insert(u.id.clone(), h);
-                    slots.push(None);
+                let h = layout.ids.get(u.id.as_str()).copied().unwrap_or_else(|| {
+                    let h = EntityHandle(layout.slots.len());
+                    // JS 字符串本来就是不可变值；Rust 同样只注册一份身份字节，分支复制共享它。
+                    let id: Rc<str> = Rc::from(u.id.as_str());
+                    Rc::make_mut(&mut layout.ids).insert(Rc::clone(&id), h);
+                    layout.slots.push(Slot {
+                        id,
+                        index,
+                        landmark,
+                        active: false,
+                    });
                     h
                 });
-                if slots[h.0].is_none() {
-                    let mut slot = layout
-                        .slots
-                        .get_mut(h.0)
-                        .and_then(Option::take)
-                        .unwrap_or_else(|| Slot {
-                            id: u.id.clone(),
-                            index,
-                            landmark,
-                        });
+                let slot = &mut layout.slots[h.0];
+                if !slot.active {
                     slot.index = index;
                     slot.landmark = landmark;
-                    slots[h.0] = Some(slot);
+                    slot.active = true;
                 }
             }
         }
-        layout.slots = slots;
         layout.count = Some(count);
     }
     pub fn handle(&self, s: &State, id: &str) -> Option<EntityHandle> {
@@ -71,12 +76,10 @@ impl EntityIndex {
         self.sync(s, false);
         let locate = || {
             let t = self.0.borrow();
-            t.ids.get(id).copied().filter(|h| {
-                t.slots[h.0]
-                    .as_ref()
-                    .and_then(|slot| Self::current(s, slot))
-                    .is_some()
-            })
+            t.ids
+                .get(id)
+                .copied()
+                .filter(|h| Self::current(s, &t.slots[h.0]).is_some())
         };
         if let Some(h) = locate() {
             return Some(h);
@@ -93,10 +96,7 @@ impl EntityIndex {
         self.sync(s, false);
         let locate = || {
             let t = self.0.borrow();
-            t.slots
-                .get(h.0)
-                .and_then(Option::as_ref)
-                .and_then(|slot| Self::current(s, slot))
+            t.slots.get(h.0).and_then(|slot| Self::current(s, slot))
         };
         if let Some(u) = locate() {
             return Some(u);
@@ -107,9 +107,8 @@ impl EntityIndex {
     pub fn location(&self, s: &State, h: EntityHandle) -> Option<(bool, usize)> {
         self.at(s, h)?;
         let t = self.0.borrow();
-        t.slots[h.0]
-            .as_ref()
-            .map(|slot| (slot.landmark, slot.index))
+        let slot = &t.slots[h.0];
+        Some((slot.landmark, slot.index))
     }
 }
 

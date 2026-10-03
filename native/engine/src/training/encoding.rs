@@ -187,15 +187,28 @@ struct FixedWire {
     kinds: Vec<u8>,
 }
 
-/// 同步消费最终发送缓冲；不可变固定区只转换一次，节点区直接追加，协议布局不变。
+pub fn tensor_size(input: &Input) -> usize {
+    (input.entities.len() + input.candidates.len()) * 256
+        + input.globals.len() * 4
+        + (input.kinds.len() + input.sources.len() + input.targets.len()) * 8
+        + input.entity_mask.len()
+        + input.candidate_mask.len()
+}
+
+#[cfg(test)]
 pub fn tensor_bytes(input: &Input, bytes: &mut Vec<u8>) {
+    bytes.clear();
+    append_tensor_bytes(input, bytes);
+}
+
+/// 直接追加到最终发送帧；保留已有控制头，不可变固定区只转换一次，协议布局不变。
+pub fn append_tensor_bytes(input: &Input, bytes: &mut Vec<u8>) {
     fn rows<'a>(bytes: &mut Vec<u8>, values: impl IntoIterator<Item = &'a f64>) {
         for &n in values {
             bytes.extend_from_slice(&(n as f32).to_le_bytes());
         }
     }
-    bytes.clear();
-    bytes.reserve(input.entities.len() * 265 + 128 + input.candidates.len() * 273);
+    bytes.reserve(tensor_size(input));
     let fixed = input.fixed_wire.as_ref().map(|(count, cell)| {
         (
             *count,
@@ -1528,6 +1541,11 @@ mod buffer_tests {
                 tensor_bytes(&owned, &mut a);
                 tensor_bytes(&input, &mut b);
                 assert_eq!(a, b);
+                assert_eq!(tensor_size(&input), b.len());
+                let mut framed = b"control\n".to_vec();
+                append_tensor_bytes(&input, &mut framed);
+                assert_eq!(&framed[..8], b"control\n");
+                assert_eq!(&framed[8..], b);
                 retained.push((owned, expected, a));
                 crate::records::add_pass(&mut input);
                 input.entity_mask[0] = false;
