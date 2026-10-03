@@ -6,8 +6,27 @@ import {
   occupant,
   canPlace,
   deploymentRows,
+  adjacent,
+  distance,
 } from '../../src/engine/core/geometry';
 import { add, fixture } from '../helpers';
+
+test('直接相邻判定与占位参照一致，覆盖重叠、多格及格间坐标', () => {
+  const s = fixture();
+  const a = add(s, 1, 1, 4, 7),
+    b = add(s, 1, 2, 4, 7);
+  for (const size of [1, 2, 3])
+    for (const otherSize of [1, 2, 3])
+      for (let dy = -4; dy <= 4; dy += 0.5)
+        for (let dx = -4; dx <= 4; dx += 0.5) {
+          a.size = size;
+          b.size = otherSize;
+          b.x = a.x + dx;
+          b.y = a.y + dy;
+          const expected = cells(a).some((p) => cells(b).some((q) => distance(p, q) === 1));
+          assert.equal(adjacent(a, b), expected);
+        }
+});
 
 test('占位查询保持逐格匹配、叠放栈顶和独立坐标，不把格间点当作占位', () => {
   const s = fixture();

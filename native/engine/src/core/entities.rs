@@ -15,7 +15,7 @@ struct Slot {
 #[derive(Clone, Default)]
 struct Layout {
     slots: Vec<Option<Slot>>,
-    ids: HashMap<String, EntityHandle>,
+    ids: Rc<HashMap<String, EntityHandle>>,
     count: Option<(usize, usize)>,
 }
 #[derive(Clone, Default)]
@@ -36,23 +36,33 @@ impl EntityIndex {
         }
         let mut binding = self.0.borrow_mut();
         let layout = Rc::make_mut(&mut binding);
-        layout.slots.fill(None);
+        // 与 TS 相同：只在新增身份时复制身份表；已有槽保留字符串，更新位置而非重新生成。
+        let mut slots = vec![None; layout.slots.len()];
         for (landmark, units) in [(false, s.units.as_slice()), (true, s.landmarks())] {
             for (index, u) in units.iter().enumerate() {
-                let h = *layout.ids.entry(u.id.clone()).or_insert_with(|| {
-                    let h = EntityHandle(layout.slots.len());
-                    layout.slots.push(None);
+                let h = layout.ids.get(&u.id).copied().unwrap_or_else(|| {
+                    let h = EntityHandle(slots.len());
+                    Rc::make_mut(&mut layout.ids).insert(u.id.clone(), h);
+                    slots.push(None);
                     h
                 });
-                if layout.slots[h.0].is_none() {
-                    layout.slots[h.0] = Some(Slot {
-                        id: u.id.clone(),
-                        index,
-                        landmark,
-                    });
+                if slots[h.0].is_none() {
+                    let mut slot = layout
+                        .slots
+                        .get_mut(h.0)
+                        .and_then(Option::take)
+                        .unwrap_or_else(|| Slot {
+                            id: u.id.clone(),
+                            index,
+                            landmark,
+                        });
+                    slot.index = index;
+                    slot.landmark = landmark;
+                    slots[h.0] = Some(slot);
                 }
             }
         }
+        layout.slots = slots;
         layout.count = Some(count);
     }
     pub fn handle(&self, s: &State, id: &str) -> Option<EntityHandle> {
@@ -100,5 +110,54 @@ impl EntityIndex {
         t.slots[h.0]
             .as_ref()
             .map(|slot| (slot.landmark, slot.index))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn changed_layout_and_shared_ids_preserve_first_match_and_snapshot_handles() {
+        let mut catalog = None;
+        crate::handle(
+            serde_json::from_slice(crate::records::RULES).unwrap(),
+            &mut catalog,
+            &mut vec![],
+            &mut crate::Resident::default(),
+        )
+        .unwrap();
+        let catalog = catalog.unwrap();
+        let mut source = crate::runtime::create(8137, false, &catalog).unwrap();
+        for x in [3.0, 4.0, 5.0] {
+            crate::resolution::add_unit(
+                &mut source,
+                "1",
+                1,
+                crate::model::Point { x, y: 6.0 },
+                &catalog,
+                &mut crate::resolution::Resolution::default(),
+            )
+            .unwrap();
+        }
+        let ids: Vec<_> = source.units.iter().map(|u| u.id.clone()).collect();
+        let handles: Vec<_> = ids
+            .iter()
+            .map(|id| source.entities.handle(&source, id).unwrap())
+            .collect();
+        let mut branch = source.fork();
+        branch.units[0].id = "replacement".into();
+        let replacement = branch.entities.handle(&branch, "replacement").unwrap();
+        assert_ne!(replacement, handles[0]);
+        assert!(branch.entity(handles[0]).is_none());
+        assert_eq!(source.entity(handles[0]).unwrap().id, ids[0]);
+        branch.units.reverse();
+        assert_eq!(branch.entity(handles[1]).unwrap().id, ids[1]);
+        assert_eq!(branch.entity(replacement).unwrap().id, "replacement");
+        let mut duplicate = branch.units[0].clone();
+        duplicate.hp = 1.0;
+        branch.units.push(duplicate);
+        assert_ne!(branch.unit(&ids[2]).unwrap().hp, 1.0);
+        branch.units.remove(0);
+        assert_eq!(branch.unit(&ids[2]).unwrap().hp, 1.0);
+        assert_ne!(source.unit(&ids[2]).unwrap().hp, 1.0);
     }
 }

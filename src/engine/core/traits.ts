@@ -3,13 +3,20 @@ import { definition } from '../catalog';
 import type { AbilityCharge, GamePosition, Kind, Player, Unit } from '../types';
 
 export const abilityKinds = (u: Unit): Kind[] => [...new Set([u.kind, ...(u.traits ?? [])])];
+// 首个匹配的纯图鉴查询不需要构造去重列表；保留本体优先和继承顺序。
+const mageKind = (kind: Kind) => !!definition(kind).mage;
+const movingCharge = (kind: Kind) => {
+  const move = definition(kind).move;
+  return move > 0 && move % 1 !== 0;
+};
+const attackingCharge = (kind: Kind) => definition(kind).actions === 0.5;
 export const hasTrait = (u: Unit, kind: Kind): boolean =>
   u.kind === kind || !!u.traits?.includes(kind);
 export const anyTrait = (u: Unit, kinds: readonly Kind[]): boolean =>
   kinds.some((k) => hasTrait(u, k));
 export const isLandmark = (u: Unit): boolean => !!definition(u.kind).landmark;
 export const isShrine = (u: Unit): boolean => definition(u.kind).tier === 'shrine';
-export const isMage = (u: Unit): boolean => abilityKinds(u).some((k) => !!definition(k).mage);
+export const isMage = (u: Unit): boolean => mageKind(u.kind) || !!u.traits?.some(mageKind);
 export const canDeployKind = (kind: Kind): boolean => {
   const d = definition(kind);
   return d.spell === undefined && d.weapon === undefined && !d.aura;
@@ -83,6 +90,6 @@ export function consumeCharge(u: Unit, kind: Kind) {
   });
 }
 export const moveChargeKind = (u: Unit): Kind | undefined =>
-  abilityKinds(u).find((k) => definition(k).move > 0 && definition(k).move % 1 !== 0);
+  movingCharge(u.kind) ? u.kind : u.traits?.find(movingCharge);
 export const attackChargeKind = (u: Unit): Kind | undefined =>
-  abilityKinds(u).find((k) => definition(k).actions === 0.5);
+  attackingCharge(u.kind) ? u.kind : u.traits?.find(attackingCharge);

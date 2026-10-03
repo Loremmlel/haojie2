@@ -8,7 +8,7 @@ pub struct Decision<'a> {
     rows: HashMap<usize, EntityProjection>,
 }
 struct EntityProjection {
-    row: Weak<Vec<f64>>,
+    row: Weak<Vec<[f64; 64]>>,
     kind: usize,
     hidden: Rc<Vec<f32>>,
 }
@@ -93,27 +93,31 @@ impl TinyPolicy {
             .entities
             .iter()
             .zip(&input.kinds)
-            .map(|(row, k)| {
-                let identity = Rc::as_ptr(row) as usize;
+            .enumerate()
+            .map(|(i, (row, k))| {
+                let owner = input.entities.fixed.as_ref().filter(|rows| i < rows.len());
+                let identity = std::ptr::from_ref(row) as usize;
                 if let Some(known) = cache.as_ref().and_then(|c| c.get(&identity))
                     && known.kind == *k
                     && known
                         .row
                         .upgrade()
-                        .is_some_and(|saved| Rc::ptr_eq(&saved, row))
+                        .is_some_and(|saved| owner.is_some_and(|rows| Rc::ptr_eq(&saved, rows)))
                 {
                     return known.hidden.clone();
                 }
-                entity_input[..64].copy_from_slice(row);
+                entity_input[..64].copy_from_slice(row.as_slice());
                 for j in 0..16 {
                     entity_input[64 + j] = self.embedding[k * 16 + j] as f64;
                 }
                 let hidden = Rc::new(layer(&entity_input, &self.entity));
-                if let Some(cache) = cache.as_mut() {
+                if let Some(cache) = cache.as_mut()
+                    && let Some(owner) = owner
+                {
                     cache.insert(
                         identity,
                         EntityProjection {
-                            row: Rc::downgrade(row),
+                            row: Rc::downgrade(owner),
                             kind: *k,
                             hidden: hidden.clone(),
                         },
@@ -173,10 +177,11 @@ mod tests {
     fn readonly_rows_reuse_exact_projection_without_reusing_masks_or_dead_prefixes() {
         let policy = TinyPolicy::new(73129);
         let mut random = Random::new(19);
-        let mut row = || Rc::new((0..64).map(|_| random.next()).collect::<Vec<_>>());
-        let fixed = row();
+        let mut row = || std::array::from_fn(|_| random.next());
+        let fixed = Rc::new(vec![row()]);
         let mut input = Input::default();
-        input.entities = vec![fixed.clone(), row()];
+        input.entities.fixed = Some(Rc::clone(&fixed));
+        input.entities.tail = vec![row()];
         input.kinds = vec![1, 150];
         input.globals = vec![0.25; 32];
         input.candidates = vec![[0.5; 64], [0.75; 64]];
@@ -186,14 +191,14 @@ mod tests {
         input.targets = vec![1, 0];
         let mut cache = policy.decision();
         for i in 0..100 {
-            input.entities[1] = row();
+            input.entities.tail[0] = row();
             input.entity_mask[0] = i % 2 == 0;
             input.kinds[1] = 128 + i % 24;
             assert_eq!(cache.logits(&input), policy.logits(&input));
             assert!(cache.rows.len() <= 2, "失效前缀不能积累投影或复用地址");
         }
-        Rc::make_mut(&mut input.entities[0])[0] = 9.0;
-        assert_ne!(input.entities[0][0], fixed[0]);
+        Rc::make_mut(input.entities.fixed.as_mut().unwrap())[0][0] = 9.0;
+        assert_ne!(input.entities.fixed.as_ref().unwrap()[0][0], fixed[0][0]);
         assert_eq!(cache.logits(&input), policy.logits(&input));
         assert_eq!(policy.decision().logits(&input), policy.logits(&input));
     }

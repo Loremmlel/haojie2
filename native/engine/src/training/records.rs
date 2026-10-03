@@ -248,7 +248,11 @@ pub fn audit(
                 }
                 let start: Start =
                     serde_json::from_value(body["start"].clone()).map_err(|e| e.to_string())?;
+                #[cfg(feature = "kernel-profile")]
+                let importing = crate::profile::scope(crate::profile::Phase::StateImport);
                 let s = start.state(catalog)?;
+                #[cfg(feature = "kernel-profile")]
+                drop(importing);
                 initial_ply = s.ply;
                 max_commands = body["maxCommands"]
                     .as_u64()

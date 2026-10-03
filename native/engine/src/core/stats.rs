@@ -1,4 +1,4 @@
-use crate::geometry::{Target, attack_path, cells, distance};
+use crate::geometry::{Target, adjacent, attack_path, cell_iter};
 use crate::model::{Catalog, Kind, State, Unit, extra_number};
 use crate::movement::{movement_stats, reserve};
 use serde::Serialize;
@@ -20,9 +20,9 @@ pub struct Stats {
     pub sleeping: bool,
 }
 pub fn attack_charge(u: &Unit, catalog: &Catalog) -> Option<Kind> {
-    u.kinds()
-        .into_iter()
+    u.native_and_traits()
         .find(|k| catalog.by_kind(k).actions == 0.5)
+        .cloned()
 }
 pub fn banner_count(s: &State, owner: usize) -> usize {
     s.landmarks()
@@ -37,7 +37,7 @@ pub fn stats(s: &State, u: &Unit, catalog: &Catalog) -> Stats {
     let _profile = crate::profile::scope(crate::profile::Phase::Attributes);
     let d = catalog.by_kind(&u.kind);
     let enabled = !u.silenced;
-    let age = s.turns[&u.owner.to_string()] + u.offset / 2.0 - u.born;
+    let age = s.turn(u.owner) + u.offset / 2.0 - u.born;
     let frozen = s.effect(u, "freeze");
     let stunned = s.effect(u, "stun");
     let sleeping = if d.landmark.is_some() {
@@ -58,9 +58,7 @@ pub fn stats(s: &State, u: &Unit, catalog: &Catalog) -> Stats {
             .units
             .iter()
             .filter(|v| {
-                cells(v, v.at())
-                    .iter()
-                    .any(|p| (p.x - u.x).abs().max((p.y - u.y).abs()) <= 1.0)
+                cell_iter(v, v.at()).any(|p| (p.x - u.x).abs().max((p.y - u.y).abs()) <= 1.0)
             })
             .count() as f64;
         attack = (40.0 - 5.0 * n).max(0.0) + extra_number(u, "attackBonus");
@@ -93,13 +91,9 @@ pub fn stats(s: &State, u: &Unit, catalog: &Catalog) -> Stats {
     }
     if enabled
         && u.has("12")
-        && s.units.iter().any(|v| {
-            v.side() != u.owner
-                && v.id != u.id
-                && cells(u, u.at())
-                    .iter()
-                    .any(|&p| cells(v, v.at()).iter().any(|&q| distance(p, q) == 1.0))
-        })
+        && s.units
+            .iter()
+            .any(|v| v.side() != u.owner && v.id != u.id && adjacent(u, v))
     {
         actions -= 1.0;
     }

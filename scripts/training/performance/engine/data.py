@@ -25,6 +25,7 @@ def main():
     for name in ("baseline", "candidate", "records", "output"):
         p.add_argument("--" + name, type=Path, required=True)
     p.add_argument("--rounds", type=int, default=3)
+    p.add_argument("--profile", action="store_true")
     args = p.parse_args()
     if not 1 <= args.rounds <= 10:
         raise ValueError("轮数必须为1至10")
@@ -42,7 +43,7 @@ def main():
     shutil.copyfile(__file__, args.output / "data.py")
     manifest = {"python": platform.python_version(), "torch": str(torch.__version__),
                 "records": [{"path": str(f.resolve()), "sha256": digest(f), "bytes": f.stat().st_size} for f in records],
-                "engines": {k: digest(v) for k, v in binaries.items()}}
+                "engines": {k: digest(v) for k, v in binaries.items()}, "profile": args.profile}
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     references = {}
 
@@ -54,6 +55,8 @@ def main():
                 rows = []
                 started = time.perf_counter()
                 with Client(binaries[label]) as client:
+                    if client.ready["engine"]["build"]["kernelProfile"] != args.profile:
+                        raise ValueError("探针构建与正式计时必须分开")
                     cold = time.perf_counter() - started
                     for i, path in enumerate(records):
                         start = time.perf_counter()
@@ -74,7 +77,8 @@ def main():
                         expected = references.setdefault((encode, i), (identity, counts))
                         if (identity, counts) != expected:
                             raise AssertionError("审核结果/输出工作量不等价")
-                        rows.append({"seconds": seconds, "report": report, **counts})
+                        rows.append({"seconds": seconds, "report": report, **counts,
+                                     **({"profile": row["kernelProfile"]} if args.profile else {})})
                 elapsed = time.perf_counter() - started
                 timings = sorted(r["seconds"] for r in rows)
                 stages["encode" if encode else "audit"] = {"seconds": elapsed, "startup_seconds": cold,
@@ -89,6 +93,9 @@ def main():
                           "stages": {k: v["seconds"] for k, v in stages.items()}}), flush=True)
         return result
 
+    if args.profile:
+        run("candidate", "profile")
+        return
     run("baseline", "warmup-baseline")
     run("candidate", "warmup-candidate")
     pairs = []

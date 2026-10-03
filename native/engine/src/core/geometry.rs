@@ -10,14 +10,22 @@ pub fn distance(a: Point, b: Point) -> f64 {
     (a.x - b.x).abs() + (a.y - b.y).abs()
 }
 pub fn cells(u: &Unit, at: Point) -> Vec<Point> {
-    (0..u.size as usize)
-        .flat_map(|y| {
-            (0..u.size as usize).map(move |x| Point {
-                x: at.x + x as f64,
-                y: at.y + y as f64,
-            })
+    cell_iter(u, at).collect()
+}
+/// 与 TS 数值逐格判定同序；只读遍历不需要创建拥有型坐标列表。
+pub fn cell_iter(u: &Unit, at: Point) -> impl Iterator<Item = Point> + Clone + use<> {
+    square_cells(u.size as usize, at)
+}
+fn square_cells(size: usize, at: Point) -> impl Iterator<Item = Point> + Clone {
+    (0..size).flat_map(move |y| {
+        (0..size).map(move |x| Point {
+            x: at.x + x as f64,
+            y: at.y + y as f64,
         })
-        .collect()
+    })
+}
+pub fn adjacent(a: &Unit, b: &Unit) -> bool {
+    cell_iter(a, a.at()).any(|p| cell_iter(b, b.at()).any(|q| distance(p, q) == 1.0))
 }
 pub fn covers(u: &Unit, p: Point) -> bool {
     let dx = p.x - u.x;
@@ -116,10 +124,13 @@ impl Target {
         }
     }
     pub fn footprint(&self) -> Vec<Point> {
+        self.footprint_iter().collect()
+    }
+    fn footprint_iter(&self) -> impl Iterator<Item = Point> + Clone + use<> {
         self.unit
             .as_ref()
-            .map(|u| cells(u, u.at()))
-            .unwrap_or_else(|| vec![self.at])
+            .map(|u| square_cells(u.size as usize, u.at()))
+            .unwrap_or_else(|| square_cells(1, self.at))
     }
     pub fn actor(&self) -> serde_json::Value {
         let mut actor = serde_json::json!({"id":self.id,"owner":self.owner,"x":self.at.x,"y":self.at.y,"size":self.unit.as_ref().map(|u|u.size).unwrap_or(1.0)});
@@ -251,32 +262,32 @@ fn attack_search(
 ) -> (Option<Vec<Point>>, Vec<String>) {
     #[cfg(feature = "kernel-profile")]
     let _profile = crate::profile::scope(crate::profile::Phase::Paths);
-    let ends = t.footprint();
-    let starts = cells(u, u.at());
-    if ends.iter().all(|&to| {
+    let ends = t.footprint_iter();
+    let starts = cell_iter(u, u.at());
+    if ends.clone().all(|to| {
         starts
-            .iter()
-            .all(|&from| distance(from, to) > limit.ceil().max(0.0))
+            .clone()
+            .all(|from| distance(from, to) > limit.ceil().max(0.0))
     }) {
         return (None, vec![]);
     }
     let mut end = [false; 117];
     let mut blocked = [false; 117];
-    for p in &ends {
-        if inside(*p) {
-            end[index(*p)] = true;
+    for p in ends.clone() {
+        if inside(p) {
+            end[index(p)] = true;
         }
     }
     for v in s.pieces() {
         if !pierce && v.id != u.id && v.id != t.id && v.side() != u.owner {
-            for p in cells(v, v.at()) {
+            for p in cell_iter(v, v.at()) {
                 blocked[index(p)] = true;
             }
         }
     }
-    for p in &ends {
-        if inside(*p) {
-            blocked[index(*p)] = false;
+    for p in ends {
+        if inside(p) {
+            blocked[index(p)] = false;
         }
     }
     if t.id != format!("base-{}", 3 - u.owner) {

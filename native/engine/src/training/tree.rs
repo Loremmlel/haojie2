@@ -170,21 +170,27 @@ impl<'a> Tree<'a> {
         if status == "invalid" {
             return Ok(None);
         }
+        // 叶子没有后续前缀，直接交付这份命令；参数节点仍保留自己的不可变前缀。
+        let (command, next) = if p.steps.is_empty() {
+            (p.command, None)
+        } else {
+            (p.command.clone(), Some(p))
+        };
         Ok(Some(Choice {
             key,
-            command: p.command.clone(),
+            command,
             status,
             subject,
-            next: if p.steps.is_empty() { None } else { Some(p) },
+            next,
         }))
     }
     fn start(&self, i: usize) -> Prefix {
         let a = &self.actions[i];
         let mut steps = vec![];
         if !a.materials.is_empty() {
-            steps.extend(vec![Step::new("material"); 3]);
+            steps.extend(std::iter::repeat_n(Step::new("material"), 3));
         }
-        steps.extend(a.steps.clone());
+        steps.extend(a.steps.iter().cloned());
         if !a.chosen.is_empty() {
             steps.push(Step::new("chosen"));
         }

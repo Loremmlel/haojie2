@@ -378,7 +378,7 @@ fn equip(
         "只能给非中立的友方随从装备武器。",
     )?;
     ensure(!u.any(&["10", "s7"]), "投石机与YYF不能装备武器。")?;
-    let mage = u.kinds().iter().any(|k| catalog.by_kind(k).mage);
+    let mage = u.native_and_traits().any(|k| catalog.by_kind(k).mage);
     ensure(!(k.is("u5") || k.is("s16")) || mage, "这件法杖仅限法师。")?;
     ensure(!k.is("u28") || !mage, "炎魔之心仅限非法师。")?;
     ensure(

@@ -125,7 +125,7 @@ fn js_key_order(mut keys: Vec<String>) -> Vec<String> {
 }
 #[derive(Default, Serialize)]
 pub struct Input {
-    pub entities: Vec<Rc<Vec<f64>>>,
+    pub entities: EntityRows,
     pub kinds: Vec<usize>,
     pub globals: Vec<f64>,
     #[serde(serialize_with = "serialize_rows")]
@@ -136,6 +136,34 @@ pub struct Input {
     pub targets: Vec<i32>,
     #[serde(skip)]
     fixed_wire: Option<(usize, Rc<OnceCell<FixedWire>>)>,
+}
+/// 固定区一次连续生成；节点追加区复用容量。两区都直接写最终数值行，不逐行装箱。
+#[derive(Default)]
+pub struct EntityRows {
+    pub fixed: Option<Rc<Vec<[f64; 64]>>>,
+    pub tail: Vec<[f64; 64]>,
+}
+impl EntityRows {
+    pub fn fixed_len(&self) -> usize {
+        self.fixed.as_ref().map_or(0, |rows| rows.len())
+    }
+    pub fn len(&self) -> usize {
+        self.fixed_len() + self.tail.len()
+    }
+    pub fn iter(&self) -> impl Iterator<Item = &[f64; 64]> {
+        self.fixed
+            .iter()
+            .flat_map(|rows| rows.iter())
+            .chain(&self.tail)
+    }
+    fn push(&mut self, row: [f64; 64]) {
+        self.tail.push(row);
+    }
+}
+impl Serialize for EntityRows {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.iter().map(|row| row.as_slice()))
+    }
 }
 fn serialize_rows<S: serde::Serializer>(
     rows: &[[f64; 64]],
@@ -173,7 +201,7 @@ pub fn tensor_bytes(input: &Input, bytes: &mut Vec<u8>) {
             *count,
             cell.get_or_init(|| {
                 let mut entities = Vec::with_capacity(count * 256);
-                for row in &input.entities[..*count] {
+                for row in input.entities.iter().take(*count) {
                     rows(&mut entities, row.iter());
                 }
                 let mut kinds = Vec::with_capacity(count * 8);
@@ -188,7 +216,7 @@ pub fn tensor_bytes(input: &Input, bytes: &mut Vec<u8>) {
     if let Some((_, wire)) = fixed {
         bytes.extend_from_slice(&wire.entities);
     }
-    for row in &input.entities[count..] {
+    for row in input.entities.iter().skip(count) {
         rows(bytes, row.iter());
     }
     rows(bytes, &input.globals);
@@ -213,7 +241,7 @@ struct Encoder<'a> {
     s: &'a State,
     catalog: &'a Catalog,
     viewer: usize,
-    entities: Vec<Rc<Vec<f64>>>,
+    entities: EntityRows,
     kinds: Vec<usize>,
     indices: Cow<'a, HashMap<String, usize>>,
     identities: HashMap<String, usize>,
@@ -233,7 +261,7 @@ struct RowMeta<'a> {
     selectable: bool,
 }
 struct Row {
-    values: Vec<f64>,
+    values: [f64; 64],
     kind: usize,
 }
 impl Row {
@@ -281,8 +309,12 @@ impl Encoder<'_> {
         if let Some(n) = self.base_identities.and_then(|ids| ids.get(id)) {
             return Ok(*n);
         }
+        if let Some(n) = self.identities.get(id) {
+            return Ok(*n);
+        }
         let n = self.base_identities.map_or(0, HashMap::len) + self.identities.len() + 1;
-        Ok(*self.identities.entry(id.into()).or_insert(n))
+        self.identities.insert(id.into(), n);
+        Ok(n)
     }
     fn kind_code(&self, kind: Option<&Kind>) -> Result<usize, String> {
         let Some(kind) = kind else {
@@ -321,7 +353,7 @@ impl Encoder<'_> {
             .copied()
             .ok_or("unknown role")?
             - 1;
-        let mut values = vec![0.0; 64];
+        let mut values = [0.0; 64];
         values[0] = (role + 1) as f64 / 32.0;
         values[1] = match meta.owner {
             None => 0.0,
@@ -356,7 +388,7 @@ impl Encoder<'_> {
         })
     }
     fn push(&mut self, row: Row) {
-        self.entities.push(Rc::new(row.values));
+        self.entities.push(row.values);
         self.kinds.push(row.kind);
     }
     fn vocab(&self, name: &str) -> &[Value] {
@@ -372,17 +404,11 @@ impl Encoder<'_> {
             .map(|i| i + 1)
             .ok_or_else(|| format!("unknown kind {k}"))
     }
-    fn kind_from_key(&self, key: &str) -> Result<Value, String> {
-        self.vocab("kinds")
-            .iter()
-            .find(|v| {
-                if v.is_string() {
-                    text(v) == key
-                } else {
-                    crate::preparation::kind(v).key() == key
-                }
-            })
-            .cloned()
+    fn kind_from_key(&self, key: &str) -> Result<Kind, String> {
+        self.catalog
+            .get(key)
+            .filter(|d| self.catalog.kind_codes.contains_key(&d.id))
+            .map(|d| d.id.clone())
             .ok_or_else(|| format!("unknown kind key {key}"))
     }
     fn owner(&self, v: &Value) -> Result<f64, String> {
@@ -403,11 +429,7 @@ impl Encoder<'_> {
             .as_str()
             .filter(|s| !s.is_empty())
             .ok_or("invalid entity reference")?;
-        if let Some(n) = self.base_identities.and_then(|ids| ids.get(id)) {
-            return Ok(*n);
-        }
-        let n = self.base_identities.map_or(0, HashMap::len) + self.identities.len() + 1;
-        Ok(*self.identities.entry(id.into()).or_insert(n))
+        self.reference_id(Some(id))
     }
     fn add(&mut self, role: &str, o: Value, fields: Vec<Value>) -> Result<(), String> {
         let role = self
@@ -418,7 +440,7 @@ impl Encoder<'_> {
         if fields.len() > 52 {
             return Err("too many entity fields".into());
         }
-        let mut row = vec![0.0; 64];
+        let mut row = [0.0; 64];
         row[0] = (role + 1) as f64 / 32.0;
         row[1] = self.owner(&o["owner"])?;
         for (i, key) in ["id", "parent", "source", "target"].iter().enumerate() {
@@ -448,7 +470,7 @@ impl Encoder<'_> {
         } else {
             self.kind(&o["kind"])?
         });
-        self.entities.push(Rc::new(row));
+        self.entities.push(row);
         Ok(())
     }
     fn effect(&mut self, e: &crate::model::Effect, parent: &str, i: usize) -> Result<(), String> {
@@ -495,15 +517,16 @@ impl Encoder<'_> {
             }
         }
         let extra = |key: &str| u.extra.get(key).unwrap_or(&Value::Null);
-        let id = if role == "snapshot" {
-            format!("{}:snapshot:{order}", parent.unwrap())
+        let id: Cow<'_, str> = if role == "snapshot" {
+            Cow::Owned(format!("{}:snapshot:{order}", parent.unwrap()))
         } else {
-            u.id.clone()
+            Cow::Borrowed(&u.id)
         };
-        self.indices
-            .to_mut()
-            .entry(u.id.clone())
-            .or_insert(self.entities.len());
+        if !self.indices.contains_key(&u.id) {
+            self.indices
+                .to_mut()
+                .insert(u.id.clone(), self.entities.len());
+        }
         let mut row = self.row(
             role,
             RowMeta {
@@ -642,11 +665,11 @@ impl Encoder<'_> {
             row.value(1, &h["amount"])?;
             self.push(row);
         }
-        let mut equipment = u.equipment.clone();
+        let mut equipment: Cow<'_, [Kind]> = Cow::Borrowed(&u.equipment);
         for key in js_keys(extra("equipmentIds")) {
-            let k = crate::preparation::kind(&self.kind_from_key(&key)?);
+            let k = self.kind_from_key(&key)?;
             if !equipment.contains(&k) {
-                equipment.push(k);
+                equipment.to_mut().push(k);
             }
         }
         for (i, k) in equipment.iter().enumerate() {
@@ -666,7 +689,7 @@ impl Encoder<'_> {
             self.printed_into(&mut row, 1, k)?;
             self.push(row);
         }
-        let mut abilities: Vec<Kind> = u.traits.clone().unwrap_or_default();
+        let mut abilities: Cow<'_, [Kind]> = Cow::Borrowed(u.traits.as_deref().unwrap_or(&[]));
         let keys = js_key_order(
             u.ability_usage
                 .as_ref()
@@ -681,12 +704,12 @@ impl Encoder<'_> {
                 .unwrap_or_default(),
         ));
         for key in keys {
-            let k = crate::preparation::kind(&self.kind_from_key(&key)?);
+            let k = self.kind_from_key(&key)?;
             if !abilities.contains(&k) {
-                abilities.push(k);
+                abilities.to_mut().push(k);
             }
         }
-        for k in abilities {
+        for k in abilities.iter() {
             let key = k.key();
             let usage = u.ability_usage.as_ref().and_then(|m| m.get(&key));
             let charge = u.ability_charges.as_ref().and_then(|m| m.get(&key));
@@ -694,12 +717,12 @@ impl Encoder<'_> {
                 "ability",
                 RowMeta {
                     parent: Some(&id),
-                    kind: Some(&k),
+                    kind: Some(k),
                     owner: Some(u.owner),
                     ..RowMeta::default()
                 },
             )?;
-            row.boolean(0, Some(u.traits.as_ref().is_some_and(|v| v.contains(&k))));
+            row.boolean(0, Some(u.traits.as_ref().is_some_and(|v| v.contains(k))));
             row.boolean(1, usage.map(|u| u.once));
             row.number(2, usage.map(|u| u.free))?;
             row.number(3, charge.map(|r| r.charge))?;
@@ -789,7 +812,7 @@ impl Encoder<'_> {
 
 /// 只保存公开观察的固定编码，不保存前缀派生身份，也不跨树复用。
 pub struct BaseEncoding {
-    entities: Vec<Rc<Vec<f64>>>,
+    entities: Rc<Vec<[f64; 64]>>,
     kinds: Vec<usize>,
     indices: HashMap<String, usize>,
     identities: HashMap<String, usize>,
@@ -853,11 +876,31 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
             ],
         )?;
     }
+    // 容量只影响布局，不限制实体数；覆盖基础实体和常见附属行，超出时照常增长。
+    let snapshots: usize = s
+        .clock_frames
+        .iter()
+        .flat_map(|all| all.values())
+        .flat_map(|frames| [&frames.current, &frames.previous])
+        .filter_map(|frame| frame.as_ref())
+        .map(|frame| frame.units.len())
+        .sum();
+    let capacity = 2
+        * (s.units.len()
+            + s.landmarks().len()
+            + snapshots
+            + array(&v("hands")["1"]).len()
+            + array(&v("hands")["2"]).len()
+            + array(v("deaths")).len())
+        + 16;
     let mut e = Encoder {
         s,
         catalog,
         viewer,
-        entities: vec![],
+        entities: EntityRows {
+            tail: Vec::with_capacity(capacity),
+            ..Default::default()
+        },
         kinds: vec![],
         indices: Cow::Owned(HashMap::new()),
         identities: HashMap::new(),
@@ -1150,7 +1193,7 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
     ]);
     Ok(BaseEncoding {
         wire: Rc::new(OnceCell::new()),
-        entities: e.entities,
+        entities: Rc::new(e.entities.tail),
         kinds: e.kinds,
         indices: e.indices.into_owned(),
         identities: e.identities,
@@ -1193,18 +1236,15 @@ fn encode_mode(
     let mut input = std::mem::take(&mut workspace.input);
     let mut identities = std::mem::take(&mut workspace.identities);
     identities.clear();
+    input.entities.tail.clear();
     if initialized {
-        input.entities.truncate(base.entities.len());
         input.kinds.truncate(base.kinds.len());
     } else {
-        input.entities = if borrow {
-            base.entities.clone()
+        input.entities.fixed = Some(if borrow {
+            Rc::clone(&base.entities)
         } else {
-            base.entities
-                .iter()
-                .map(|r| Rc::new((**r).clone()))
-                .collect()
-        };
+            Rc::new((*base.entities).clone())
+        });
         input.kinds.clone_from(&base.kinds);
         input.globals.clone_from(&base.globals);
         if !borrow {

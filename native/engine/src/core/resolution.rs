@@ -27,9 +27,16 @@ impl Resolution {
     }
     /// 与 TS enrichEvent 共用字段契约；仅捕获坐标/身份事实，不增加额外 serial 或随机消耗。
     pub fn emit(&mut self, s: &mut State, mut event: Value, message: Option<String>) {
+        #[cfg(feature = "kernel-profile")]
+        let _profile = crate::profile::scope(crate::profile::Phase::Events);
         let id = format!("e{}", s.serial);
         s.serial += 1;
         event["id"] = json!(id);
+        // 与 TS 只读预检一致：保留规则查找所需的原始事件，省去不会导出的展示与日志。
+        if self.preview {
+            s.events.push(event);
+            return;
+        }
         if let Some(facts) = self.facts.as_mut()
             && facts.get("causeId").is_none()
         {
@@ -46,14 +53,10 @@ impl Resolution {
                     None
                 }
             });
-        let mut result = self.facts.clone().unwrap_or_else(|| json!({}));
-        result
+        let actor = event
             .as_object_mut()
             .unwrap()
-            .extend(event.as_object().unwrap().clone());
-        let actor = event
-            .get("actor")
-            .cloned()
+            .remove("actor")
             .or_else(|| self.facts.as_ref().and_then(|f| f.get("actor").cloned()))
             .or_else(|| {
                 if event["type"] == "attack" {
@@ -63,10 +66,28 @@ impl Resolution {
                 }
             });
         let subject = event
-            .get("subject")
-            .cloned()
+            .as_object_mut()
+            .unwrap()
+            .remove("subject")
             .or(inferred)
             .or_else(|| self.facts.as_ref().and_then(|f| f.get("subject").cloned()));
+        let keep_area = ["attack", "skill", "move"].contains(&event["type"].as_str().unwrap_or(""))
+            || event.get("area").is_some();
+        for key in ["from", "to"] {
+            if let Some(p) = event.get(key) {
+                event[key] = json!({"x":p["x"],"y":p["y"]});
+            }
+        }
+        // event 已由本次 emit 独占；只复制未被覆盖的上下文字段，优先级与 TS 展开相同。
+        let mut result = event;
+        if let Some(facts) = self.facts.as_ref().and_then(Value::as_object) {
+            let fields = result.as_object_mut().unwrap();
+            for (key, value) in facts {
+                if key != "actor" && key != "subject" && !fields.contains_key(key) {
+                    fields.insert(key.clone(), value.clone());
+                }
+            }
+        }
         if let Some(actor) = actor {
             result["actor"] = actor;
         } else {
@@ -77,14 +98,7 @@ impl Resolution {
         } else {
             result.as_object_mut().unwrap().remove("subject");
         }
-        for key in ["from", "to"] {
-            if let Some(p) = event.get(key) {
-                result[key] = json!({"x":p["x"],"y":p["y"]});
-            }
-        }
-        if !["attack", "skill", "move"].contains(&event["type"].as_str().unwrap_or(""))
-            && event.get("area").is_none()
-        {
+        if !keep_area {
             result.as_object_mut().unwrap().remove("area");
         }
         s.events.push(result);

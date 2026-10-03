@@ -7,11 +7,42 @@ import {
 } from '../../src/engine/commands/game';
 import { kill } from '../../src/engine/commands/combat';
 import { ALL_CELLS } from '../../src/engine/core/geometry';
-import { RuleError } from '../../src/engine/core/state';
+import { emit, RuleError, withRuleInspection } from '../../src/engine/core/state';
+import { eventActor, withEventFacts } from '../../src/engine/core/event-facts';
 import { observe } from '../../src/ai/observation';
 import { trainingPosition } from '../../src/ai/training/queries';
 import type { Command, GameState } from '../../src/engine/types';
 import { add, fixture } from '../helpers';
+
+test('嵌套预检退出后恢复事件快照和日志，保留原始事件与正式序号', () => {
+  const s = fixture(),
+    u = add(s, 1, 1, 4, 4);
+  const serial = s.serial,
+    log = [...s.log];
+  assert.throws(() =>
+    withRuleInspection(() =>
+      withRuleInspection(() =>
+        withEventFacts(s, { actor: eventActor(u), action: 'attack' }, () => {
+          emit(s, { type: 'damage', to: u, unitId: u.id, amount: 5 }, '预检');
+          throw new Error('退出');
+        }),
+      ),
+    ),
+  );
+  assert.equal(s.serial, serial + 1);
+  assert.equal(s.events.at(-1)?.unitId, u.id);
+  assert.equal(s.events.at(-1)?.amount, 5);
+  assert.deepEqual(s.log, log);
+  withEventFacts(s, { actor: eventActor(u), action: 'attack' }, () => {
+    emit(s, { type: 'damage', to: u, unitId: u.id, amount: 5 }, '正式');
+  });
+  u.x++;
+  assert.equal(s.events.at(-1)?.actor?.x, 4);
+  assert.equal(s.events.at(-1)?.subject?.x, 4);
+  assert.equal(s.events.at(-1)?.to?.x, 4);
+  assert.equal(s.events.at(-1)?.id, `e${serial + 1}`);
+  assert.equal(s.log.at(-1), `${s.ply} · 正式`);
+});
 
 /** 使用正式命令入口作为参照；遇到随机请求即中断，不编造随机结果。 */
 function compare(s: GameState, commands: Command[]) {

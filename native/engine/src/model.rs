@@ -100,7 +100,7 @@ impl Catalog {
     }
 }
 
-/// 单个实体是分支复制单元；可变借用隔离完整实体，普通 Clone 保持规则快照独立。
+/// 单个实体是分支复制单元；快照共享只读数据，任一副本写入前分离完整实体。
 #[derive(Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct Unit(Rc<UnitData>);
@@ -108,7 +108,7 @@ impl Clone for Unit {
     fn clone(&self) -> Self {
         #[cfg(feature = "kernel-profile")]
         let _profile = crate::profile::scope(crate::profile::Phase::UnitCopy);
-        Self(Rc::new((*self.0).clone()))
+        Self(Rc::clone(&self.0))
     }
 }
 impl Deref for Unit {
@@ -263,7 +263,7 @@ impl Unit {
     pub fn new(data: UnitData) -> Self {
         Self(Rc::new(data))
     }
-    // 内部局面与只读查询共享实体；写入自动分离，规则快照继续使用拥有型复制。
+    // 内部查询与规则快照都由类型控制写入分离，不能获得共享数据的可变引用。
     pub fn fork(&self) -> Self {
         Self(Rc::clone(&self.0))
     }
@@ -277,6 +277,10 @@ impl Unit {
             }
         }
         result
+    }
+    /// 纯谓词查询保留本体优先和继承顺序；可能含重复，不替代规则触发用的去重 kinds。
+    pub fn native_and_traits(&self) -> impl Iterator<Item = &Kind> {
+        std::iter::once(&self.kind).chain(self.traits.iter().flatten())
     }
     pub fn any(&self, kinds: &[&str]) -> bool {
         kinds.iter().any(|k| self.has(k))
@@ -423,9 +427,20 @@ impl State {
     pub fn unit(&self, id: &str) -> Option<&Unit> {
         self.entities.handle(self, id).and_then(|h| self.entity(h))
     }
+    pub fn turn(&self, owner: usize) -> f64 {
+        match owner {
+            1 => self.turns["1"],
+            2 => self.turns["2"],
+            _ => self.turns[&owner.to_string()],
+        }
+    }
     pub fn entity(&self, h: crate::entities::EntityHandle) -> Option<&Unit> {
-        let u = self.entities.at(self, h)?;
-        let (landmark, _) = self.entities.location(self, h)?;
+        let (landmark, index) = self.entities.location(self, h)?;
+        let u = if landmark {
+            self.landmarks().get(index)
+        } else {
+            self.units.get(index)
+        }?;
         (!landmark || u.live()).then_some(u)
     }
     pub fn unit_mut(&mut self, id: &str) -> Option<&mut Unit> {

@@ -577,7 +577,7 @@ pub fn damage(
             && source
                 .unit
                 .as_ref()
-                .is_some_and(|u| u.kinds().iter().any(|k| catalog.by_kind(k).mage)))
+                .is_some_and(|u| u.native_and_traits().any(|k| catalog.by_kind(k).mage)))
     {
         bonus += 15.0
             * s.pieces()

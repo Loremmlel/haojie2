@@ -11,7 +11,10 @@ def main():
     args = parser.parse_args()
     data = json.loads(args.input.read_text(encoding="utf-8"))
     totals = {}
-    for case in data["rows"]:
+    cases = data.get("rows")
+    if cases is None:
+        cases = [case for stage in data["stages"].values() for case in stage["rows"]]
+    for case in cases:
         for row in case["profile"]["rows"]:
             total = totals.setdefault(row["name"], {"calls": 0, "selfMs": 0.0, "allocations": 0, "bytes": 0})
             for key, value in zip(total, (row["calls"], row["selfMs"], *row["selfAllocations"][:2])):

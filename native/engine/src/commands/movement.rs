@@ -1,4 +1,4 @@
-use crate::geometry::{can_place, cells, deployment_rows, distance, empty_for};
+use crate::geometry::{adjacent, can_place, deployment_rows, distance, empty_for};
 use crate::model::{
     COMMANDS, Catalog, Command, Failure, Kind, Point, State, Unit, ensure, extra_number,
 };
@@ -19,12 +19,12 @@ pub struct MoveSource {
 }
 
 pub fn charge_kind(u: &Unit, catalog: &Catalog) -> Option<Kind> {
-    let native = std::iter::once(u.kind.clone());
-    let inherited = u.traits.iter().flatten().cloned();
-    native.chain(inherited).find(|k| {
-        let m = catalog.by_kind(k).movement;
-        m > 0.0 && m.fract() != 0.0
-    })
+    u.native_and_traits()
+        .find(|k| {
+            let m = catalog.by_kind(k).movement;
+            m > 0.0 && m.fract() != 0.0
+        })
+        .cloned()
 }
 pub fn reserve(u: &Unit, kind: &Kind, catalog: &Catalog) -> crate::model::Charge {
     if *kind == u.kind {
@@ -52,7 +52,7 @@ pub fn reserve(u: &Unit, kind: &Kind, catalog: &Catalog) -> crate::model::Charge
 /// getStats 的移动依赖投影：只计算睡眠、冻结、眩晕、操作预算和移动力。
 /// 公式和时钟来自 TS，不计算移动入口不读取的攻击、治疗和攻击光环字段。
 pub fn movement_stats(s: &State, u: &Unit, catalog: &Catalog) -> (bool, f64, f64) {
-    let age = s.turns[&u.owner.to_string()] + u.offset / 2.0 - u.born;
+    let age = s.turn(u.owner) + u.offset / 2.0 - u.born;
     let sleeping = if catalog.by_kind(&u.kind).landmark.is_some() {
         u.hp <= 0.0
     } else {
@@ -72,13 +72,9 @@ pub fn movement_stats(s: &State, u: &Unit, catalog: &Catalog) -> (bool, f64, f64
     let mut movement = catalog.by_kind(&u.kind).movement;
     if !u.silenced
         && u.has("12")
-        && s.units.iter().any(|v| {
-            v.side() != u.owner
-                && v.id != u.id
-                && cells(u, u.at())
-                    .iter()
-                    .any(|&p| cells(v, v.at()).iter().any(|&q| distance(p, q) == 1.0))
-        })
+        && s.units
+            .iter()
+            .any(|v| v.side() != u.owner && v.id != u.id && adjacent(u, v))
     {
         movement -= 1.0;
     }

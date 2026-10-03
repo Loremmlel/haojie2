@@ -60,8 +60,9 @@ pub enum Phase {
     StateImport,
     StateExport,
     Policy,
+    Events,
 }
-const NAMES: [&str; 18] = [
+const NAMES: [&str; 19] = [
     "kernel",
     "observe",
     "candidates",
@@ -80,6 +81,7 @@ const NAMES: [&str; 18] = [
     "state_import",
     "state_export",
     "policy",
+    "events",
 ];
 const COUNT: usize = NAMES.len();
 #[derive(Clone, Copy, Default)]

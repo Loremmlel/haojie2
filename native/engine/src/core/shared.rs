@@ -1,4 +1,4 @@
-//! 状态分支共享顶层扩展字段，取得可变引用前复制该字段的 JSON 子树。
+//! 状态分支共享扩展映射，写入先分离映射，再分离实际修改字段的 JSON 子树。
 //! 与 TS forkPosition 对应；普通 Clone 仍导出独立快照，保持原 Map 的序列化和键操作顺序。
 use indexmap::{IndexMap, map::Entry};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeMap};
@@ -6,30 +6,30 @@ use serde_json::{Map, Value};
 use std::{ops::Index, rc::Rc};
 
 #[derive(Default)]
-pub struct ValueMap(IndexMap<String, Rc<Value>>);
+pub struct ValueMap(Rc<IndexMap<String, Rc<Value>>>);
 
 impl Clone for ValueMap {
     fn clone(&self) -> Self {
-        Self(
+        Self(Rc::new(
             self.0
                 .iter()
                 .map(|(key, value)| (key.clone(), Rc::new((**value).clone())))
                 .collect(),
-        )
+        ))
     }
 }
 
 impl ValueMap {
     pub fn fork(&self) -> Self {
-        Self(self.0.clone())
+        Self(Rc::clone(&self.0))
     }
     /// 白名单视图只共享选中的字段；没有指回完整权威映射的指针。
     pub fn select(&self, keys: &[&str]) -> Self {
-        Self(
+        Self(Rc::new(
             keys.iter()
                 .filter_map(|key| self.0.get(*key).map(|v| ((*key).to_string(), Rc::clone(v))))
                 .collect(),
-        )
+        ))
     }
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.0.get(key).map(Rc::as_ref)
@@ -38,19 +38,24 @@ impl ValueMap {
         self.0.iter().map(|(k, v)| (k.as_str(), v.as_ref()))
     }
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
-        self.0.get_mut(key).map(Rc::make_mut)
+        if !self.0.contains_key(key) {
+            return None;
+        }
+        Rc::make_mut(&mut self.0).get_mut(key).map(Rc::make_mut)
     }
     pub fn contains_key(&self, key: &str) -> bool {
         self.0.contains_key(key)
     }
     pub fn insert(&mut self, key: String, value: Value) {
-        self.0.insert(key, Rc::new(value));
+        Rc::make_mut(&mut self.0).insert(key, Rc::new(value));
     }
     pub fn remove(&mut self, key: &str) {
-        self.0.swap_remove(key);
+        if self.0.contains_key(key) {
+            Rc::make_mut(&mut self.0).swap_remove(key);
+        }
     }
     pub fn entry(&mut self, key: impl Into<String>) -> ValueEntry<'_> {
-        ValueEntry(self.0.entry(key.into()))
+        ValueEntry(Rc::make_mut(&mut self.0).entry(key.into()))
     }
 }
 
@@ -70,17 +75,17 @@ impl Index<&str> for ValueMap {
 impl<'de> Deserialize<'de> for ValueMap {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let map = Map::<String, Value>::deserialize(deserializer)?;
-        Ok(Self(
+        Ok(Self(Rc::new(
             map.into_iter()
                 .map(|(key, value)| (key, Rc::new(value)))
                 .collect(),
-        ))
+        )))
     }
 }
 impl Serialize for ValueMap {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (key, value) in &self.0 {
+        for (key, value) in self.0.iter() {
             map.serialize_entry(key, value.as_ref())?;
         }
         map.end()
@@ -97,6 +102,13 @@ mod tests {
         let input = json!({"hands":{"1":[{"id":"card","kind":18}]},"obsolete":true,"log":[]});
         let source: ValueMap = serde_json::from_value(input.clone()).unwrap();
         let mut branch = source.fork();
+        assert!(Rc::ptr_eq(&source.0, &branch.0));
+        assert!(branch.get_mut("absent").is_none());
+        branch.remove("absent");
+        assert!(Rc::ptr_eq(&source.0, &branch.0));
+        let public = source.select(&["hands", "log"]);
+        assert!(!Rc::ptr_eq(&source.0, &public.0));
+        assert!(!public.contains_key("obsolete"));
         branch.get_mut("hands").unwrap()["1"][0]["kind"] = json!(1);
         branch.remove("obsolete");
         branch

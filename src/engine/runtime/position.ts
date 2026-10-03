@@ -34,16 +34,23 @@ function table(s: GamePosition, rebuild = false): EntityTable | undefined {
     t.count === s.units.length + (s.landmarks?.length ?? 0)
   )
     return t;
-  const identities = new Map(t.identities);
+  // 既有身份表只读共享；出现新身份才复制，未移动的不可变槽也可继续共享。
+  let added: Map<string, EntityHandle> | undefined;
   const slots: (EntitySlot | undefined)[] = Array(t.slots.length);
   const add = (u: Unit, index: number, landmark: boolean) => {
-    let h = identities.get(u.id);
+    let h = (added ?? t.identities).get(u.id);
     if (h === undefined) {
       h = slots.length as EntityHandle;
-      identities.set(u.id, h);
+      (added ??= new Map(t.identities)).set(u.id, h);
       slots.push(undefined);
     }
-    if (!slots[h]) slots[h] = { id: u.id, index, landmark };
+    if (!slots[h]) {
+      const previous = t.slots[h];
+      slots[h] =
+        previous?.id === u.id && previous.index === index && previous.landmark === landmark
+          ? previous
+          : { id: u.id, index, landmark };
+    }
   };
   s.units.forEach((u, i) => add(u, i, false));
   s.landmarks?.forEach((u, i) => add(u, i, true));
@@ -51,7 +58,7 @@ function table(s: GamePosition, rebuild = false): EntityTable | undefined {
   t.landmarks = s.landmarks;
   t.count = s.units.length + (s.landmarks?.length ?? 0);
   t.slots = slots;
-  t.identities = identities;
+  if (added) t.identities = added;
   return t;
 }
 function slotUnit(s: GamePosition, slot?: EntitySlot) {

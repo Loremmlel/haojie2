@@ -69,7 +69,17 @@ export function topTarget(s: GamePosition, t: Target) {
   return occupant(s, t)?.id === t.id;
 }
 export function adjacent(a: Unit, b: Unit) {
-  return cells(a).some((c) => cells(b).some((d) => distance(c, d) === 1));
+  const as = a.size ?? definition(a.kind).size ?? 1,
+    bs = b.size ?? definition(b.kind).size ?? 1;
+  // 与 cells 的逐行格序及坐标运算相同；纯判定直接遍历，不为每对实体构造格子数组。
+  for (let i = 0; i < Math.floor(as * as); i++) {
+    const x = a.x + (i % as),
+      y = a.y + Math.floor(i / as);
+    for (let j = 0; j < Math.floor(bs * bs); j++)
+      if (Math.abs(x - (b.x + (j % bs))) + Math.abs(y - (b.y + Math.floor(j / bs))) === 1)
+        return true;
+  }
+  return false;
 }
 export function ring(a: Unit, b: Point | Unit) {
   const bc = 'kind' in b ? cells(b) : [b];

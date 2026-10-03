@@ -84,6 +84,7 @@ def main():
         instrument(pipeline, "collate_examples", "collation")
         instrument(protocol, "decode", "tensor_decode")
         instrument(Client, "send", "control_send")
+        instrument(Client, "__init__", "engine_startup")
         instrument(pipeline.PolicyValueNet, "forward", "model_forward")
 
     references = None

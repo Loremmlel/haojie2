@@ -463,7 +463,7 @@ pub fn steal(
                 .iter()
                 .map(crate::preparation::weapon_health)
                 .sum::<f64>();
-        let mage = killer.kinds().iter().any(|k| catalog.by_kind(k).mage);
+        let mage = killer.native_and_traits().any(|k| catalog.by_kind(k).mage);
         if without + crate::preparation::weapon_health(&k) > 0.0
             && (!(k.is("u5") || k.is("s16")) || mage)
             && (!k.is("u28") || !mage)

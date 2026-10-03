@@ -255,9 +255,14 @@ pub fn serve() -> Result<(), String> {
             Some("close") => return Ok(()),
             Some("sample") => sample(request, &catalog, &mut wire),
             Some("audit") => {
+                #[cfg(feature = "kernel-profile")]
+                let kernel = {
+                    crate::profile::start();
+                    crate::profile::scope(crate::profile::Phase::Kernel)
+                };
                 encoding::known(&request, &["op", "record", "encode"])?;
                 let path = request["record"].as_str().ok_or("missing record path")?;
-                records::audit(Path::new(path), &catalog, |meta, input| {
+                let result = records::audit(Path::new(path), &catalog, |meta, input| {
                     if request["encode"] == true {
                         if let Some(input) = input {
                             wire.tensor(meta, input)
@@ -268,7 +273,18 @@ pub fn serve() -> Result<(), String> {
                         Ok(())
                     }
                 })
-                .map(|report| json!({"type":"done","report":report}))
+                .map(|report| json!({"type":"done","report":report}));
+                #[cfg(feature = "kernel-profile")]
+                {
+                    drop(kernel);
+                    let profile = crate::profile::finish();
+                    result.map(|mut result| {
+                        result["kernelProfile"] = profile;
+                        result
+                    })
+                }
+                #[cfg(not(feature = "kernel-profile"))]
+                result
             }
             _ => Err("unknown training operation".into()),
         };

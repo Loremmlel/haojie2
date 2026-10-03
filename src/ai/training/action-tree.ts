@@ -178,10 +178,12 @@ export class TrainingActionTree {
     const { command: c, action, steps } = prefix;
     const step = steps[0];
     const result: ActionChoice[] = [];
+    // 同一节点的后续参数说明只读；需要推进时才创建共享尾部，空分支不分配。
+    let remaining: Step[] | undefined;
     const add = (key: string, command: Command, subject?: string, repeat = false) => {
       const choice = this.#choice(
         key,
-        { action, command, steps: repeat ? steps : steps.slice(1) },
+        { action, command, steps: repeat ? steps : (remaining ??= steps.slice(1)) },
         subject,
       );
       if (choice) result.push(choice);

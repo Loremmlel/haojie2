@@ -17,7 +17,7 @@ import {
   onLandmarkDeployment,
   syncBanners,
 } from '../setup/shrines';
-import { attackPath } from './geometry';
+import { adjacent, attackPath } from './geometry';
 import { enrichEvent } from './event-facts';
 import { simulationRandom } from './random';
 import { COMBAT_RULES, definition, isStored, SUMMON_POOL, ULTIMATE_POOL } from '../catalog';
@@ -42,7 +42,7 @@ export class RuleError extends Error {
   }
 }
 let inspectionDepth = 0;
-/** 同步预检只导出拒绝文案；省去必被丢弃的 JS 调用栈，异常退出也恢复正式错误语义。 */
+/** 同步只读预检省去调用栈与展示快照；异常退出也恢复正式错误及事件语义。 */
 export function withRuleInspection<T>(fn: () => T): T {
   inspectionDepth++;
   try {
@@ -78,7 +78,13 @@ export const hasWeapon = (u: Unit, k: Kind) => u.equipment.includes(k);
 export const age = (s: GamePosition, u: Unit) => s.turns[u.owner] + u.offset / 2 - u.born;
 export const isRunner = (u: Unit) => !u.silenced && anyTrait(u, ['u12', 'u12p']);
 export function emit(s: GamePosition, event: Omit<GameEvent, 'id'>, message?: string) {
-  const snap = enrichEvent(s, { ...event, id: `e${s.serial++}` });
+  const raw = { ...event, id: `e${s.serial++}` };
+  // 只读预检只返回资格，不导出局面；保留规则会查找的原始事件和序号，省去展示快照与日志。
+  if (inspectionDepth) {
+    s.events.push(raw);
+    return;
+  }
+  const snap = enrichEvent(s, raw);
   if (event.from) snap.from = { x: event.from.x, y: event.from.y };
   if (event.to) snap.to = { x: event.to.x, y: event.to.y };
   if (event.path) snap.path = event.path.map((p) => ({ x: p.x, y: p.y }));
@@ -285,20 +291,7 @@ export function getStats(s: GamePosition, u: Unit): Stats {
   if (
     enabled &&
     hasTrait(u, 12) &&
-    s.units.some(
-      (v) =>
-        allegiance(s, v) !== u.owner &&
-        v.id !== u.id &&
-        Array.from({ length: u.size * u.size }, (_, i) => ({
-          x: u.x + (i % u.size),
-          y: u.y + Math.floor(i / u.size),
-        })).some((p) =>
-          Array.from({ length: v.size * v.size }, (_, i) => ({
-            x: v.x + (i % v.size),
-            y: v.y + Math.floor(i / v.size),
-          })).some((q) => Math.abs(p.x - q.x) + Math.abs(p.y - q.y) === 1),
-        ),
-    )
+    s.units.some((v) => allegiance(s, v) !== u.owner && v.id !== u.id && adjacent(u, v))
   ) {
     actions--;
     move--;
