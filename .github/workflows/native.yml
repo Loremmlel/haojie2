@@ -89,7 +89,7 @@ jobs:
       - name: Nonempty update, separate-process restore and new-weight sampling
         run: |
           mkdir -p artifacts/native-evidence
-          docker run --rm --network none --mount type=bind,source="$PWD/artifacts/native-evidence",target=/evidence haojie-native-check
+          docker run --rm --network none --user "$(id -u):$(id -g)" --env HOME=/tmp --mount type=bind,source="$PWD/artifacts/native-evidence",target=/evidence haojie-native-check
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
