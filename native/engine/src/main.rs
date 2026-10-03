@@ -4,6 +4,8 @@ mod abilities;
 mod actions;
 #[path = "training/boundary.rs"]
 mod boundary;
+#[path = "training/canonical.rs"]
+mod canonical;
 #[path = "commands/combat.rs"]
 mod combat;
 #[path = "core/command.rs"]
@@ -361,6 +363,20 @@ fn handle(
             }
             #[cfg(not(feature = "kernel-profile"))]
             result
+        }
+        "hash-states" => {
+            // 可信开发入口的差分参照；正式训练仍只接收已校验起点与命令记录。
+            let states: Vec<State> =
+                serde_json::from_value(request["states"].take()).map_err(|e| e.to_string())?;
+            Ok(json!(
+                states
+                    .iter()
+                    .map(|s| {
+                        let value = serde_json::to_value(s).unwrap();
+                        json!({"typed":canonical::hash(s),"value":records::hash(&value)})
+                    })
+                    .collect::<Vec<_>>()
+            ))
         }
         "training-nodes" => {
             let catalog = catalog.as_ref().ok_or("initialize first")?;

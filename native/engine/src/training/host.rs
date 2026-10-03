@@ -126,7 +126,8 @@ fn sample<R: BufRead, W: Write>(
         return Err("sampling start already terminal".into());
     }
     let mut writer = Writer::new(Path::new(&request.record))?;
-    writer.push(json!({"type":"game","format":records::FORMAT,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],"model":request.model,"start":request.start,"initialHash":records::state_hash(&state)?,"samplerSeed":request.sampler_seed,"policyKind":"model-gumbel-backtracking-v1","maxCommands":request.max_commands,"maxPlies":request.max_plies}))?;
+    let mut current_hash = records::state_hash(&state)?;
+    writer.push(json!({"type":"game","format":records::FORMAT,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],"model":request.model,"start":request.start,"initialHash":current_hash,"samplerSeed":request.sampler_seed,"policyKind":"model-gumbel-backtracking-v1","maxCommands":request.max_commands,"maxPlies":request.max_plies}))?;
     wire.model = request.model;
     let mut random = Random::new(request.sampler_seed);
     let mut count = 0;
@@ -193,9 +194,12 @@ fn sample<R: BufRead, W: Write>(
             let next = boundary::step_typed(&state, actor, &command, catalog)?;
             metrics.step_ms += step.elapsed().as_secs_f64() * 1000.0;
             let record = Instant::now();
-            writer.push(json!({"type":"sample","index":count,"actor":actor,"command":command,"path":path,"optional":off_turn,"before":records::state_hash(&state)?,"after":records::state_hash(&next)?,"model":wire.model,"samplerState":random.0}))?;
+            let after_hash = records::state_hash(&next)?;
+            writer.push(json!({"type":"sample","index":count,"actor":actor,"command":command,"path":path,"optional":off_turn,"before":current_hash,"after":after_hash,"model":wire.model,"samplerState":random.0}))?;
             metrics.record_ms += record.elapsed().as_secs_f64() * 1000.0;
             state = next;
+            // 哈希随已提交的拥有型状态推进；跨请求、载入和失败不共享缓存。
+            current_hash = after_hash;
             count += 1;
             Ok(())
         })();
@@ -212,7 +216,7 @@ fn sample<R: BufRead, W: Write>(
     let outcome = records::outcome(&state, count, reason);
     writer.push(outcome.clone())?;
     writer.finish()?;
-    let result = json!({"type":"done","outcome":outcome,"error":error,"elapsedMs":start.elapsed().as_secs_f64()*1000.0,"finalHash":records::state_hash(&state)?,"model":wire.model,"metrics":metrics});
+    let result = json!({"type":"done","outcome":outcome,"error":error,"elapsedMs":start.elapsed().as_secs_f64()*1000.0,"finalHash":current_hash,"model":wire.model,"metrics":metrics});
     #[cfg(feature = "kernel-profile")]
     {
         drop(kernel);

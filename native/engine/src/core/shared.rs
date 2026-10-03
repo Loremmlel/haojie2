@@ -34,6 +34,9 @@ impl ValueMap {
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.0.get(key).map(Rc::as_ref)
     }
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Value)> {
+        self.0.iter().map(|(k, v)| (k.as_str(), v.as_ref()))
+    }
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
         self.0.get_mut(key).map(Rc::make_mut)
     }

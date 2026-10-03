@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -26,47 +26,12 @@ pub fn rules_hash() -> String {
 pub fn hash(value: &Value) -> String {
     #[cfg(feature = "kernel-profile")]
     let _profile = crate::profile::scope(crate::profile::Phase::Hash);
-    fn encode(v: &Value, h: &mut Sha256) {
-        match v {
-            Value::Null => h.update([0]),
-            Value::Bool(b) => h.update([1, u8::from(*b)]),
-            Value::Number(n) => {
-                h.update([2]);
-                let f = n.as_f64().unwrap();
-                h.update((if f == 0.0 { 0.0 } else { f }).to_le_bytes());
-            }
-            Value::String(s) => {
-                h.update([3]);
-                h.update((s.len() as u64).to_le_bytes());
-                h.update(s.as_bytes());
-            }
-            Value::Array(a) => {
-                h.update([4]);
-                h.update((a.len() as u64).to_le_bytes());
-                for v in a {
-                    encode(v, h);
-                }
-            }
-            Value::Object(o) => {
-                h.update([5]);
-                h.update((o.len() as u64).to_le_bytes());
-                let mut keys: Vec<_> = o.keys().collect();
-                keys.sort();
-                for k in keys {
-                    encode(&json!(k), h);
-                    encode(&o[k], h);
-                }
-            }
-        }
-    }
-    let mut h = Sha256::new();
-    encode(value, &mut h);
-    format!("{:x}", h.finalize())
+    crate::canonical::hash(value)
 }
 pub fn state_hash(s: &State) -> Result<String, String> {
     #[cfg(feature = "kernel-profile")]
     let _profile = crate::profile::scope(crate::profile::Phase::Hash);
-    Ok(hash(&serde_json::to_value(s).map_err(|e| e.to_string())?))
+    Ok(crate::canonical::hash(s))
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -101,7 +66,7 @@ impl Start {
     }
 }
 pub struct Writer {
-    file: File,
+    file: BufWriter<File>,
     partial: PathBuf,
     target: PathBuf,
     previous: String,
@@ -118,7 +83,7 @@ impl Writer {
             .open(&partial)
             .map_err(|e| e.to_string())?;
         Ok(Self {
-            file,
+            file: BufWriter::with_capacity(64 * 1024, file),
             partial,
             target: path.into(),
             previous: String::new(),
@@ -134,8 +99,9 @@ impl Writer {
         self.previous = digest;
         Ok(())
     }
-    pub fn finish(self) -> Result<(), String> {
-        self.file.sync_all().map_err(|e| e.to_string())?;
+    pub fn finish(mut self) -> Result<(), String> {
+        self.file.flush().map_err(|e| e.to_string())?;
+        self.file.get_ref().sync_all().map_err(|e| e.to_string())?;
         // 同目录硬链接的 create-new 语义防止并发覆盖已有证据；成功后只移除自己拥有的临时名字。
         std::fs::hard_link(&self.partial, &self.target).map_err(|e| e.to_string())?;
         std::fs::remove_file(&self.partial).map_err(|e| e.to_string())
@@ -207,8 +173,10 @@ pub fn audit(
     let mut max_plies = 0.0;
     let mut initial_ply = 0.0;
     let mut incomplete_tail = false;
+    let mut line = vec![];
+    let mut current_hash = String::new();
     loop {
-        let mut line = vec![];
+        line.clear();
         (&mut source)
             .take(16 * 1024 * 1024 + 1)
             .read_until(b'\n', &mut line)
@@ -288,7 +256,8 @@ pub fn audit(
                 {
                     return Err("invalid sampler seed".into());
                 }
-                if body["initialHash"] != state_hash(&s)? {
+                current_hash = state_hash(&s)?;
+                if body["initialHash"] != current_hash {
                     return Err("initial state hash mismatch".into());
                 }
                 model = body["model"].as_str().ok_or("model hash missing")?.into();
@@ -324,7 +293,7 @@ pub fn audit(
                     return Err("sample beyond boundary/invalid sampler state".into());
                 }
                 if body["index"] != count
-                    || body["before"] != state_hash(s)?
+                    || body["before"] != current_hash
                     || body["model"] != model
                 {
                     return Err("sample identity/hash mismatch".into());
@@ -345,7 +314,8 @@ pub fn audit(
                     return Err("optional decision actor mismatch".into());
                 }
                 let next = boundary::step(s, actor, &body["command"], catalog)?;
-                if body["after"] != state_hash(&next)? {
+                let after_hash = state_hash(&next)?;
+                if body["after"] != after_hash {
                     return Err("result hash mismatch".into());
                 }
                 examples(
@@ -363,6 +333,8 @@ pub fn audit(
                     },
                 )?;
                 state = Some(next);
+                // 仅在本行完整重放、校验与同步输出成功后推进；失败不产生可复用结果。
+                current_hash = after_hash;
                 count += 1;
             }
             Some("outcome") => {
@@ -397,7 +369,7 @@ pub fn audit(
         emit(summary.clone(), None)?;
     }
     Ok(
-        json!({"outcome":summary,"complete":complete,"incompleteTail":incomplete_tail,"finalHash":state_hash(&s)?,"commands":count}),
+        json!({"outcome":summary,"complete":complete,"incompleteTail":incomplete_tail,"finalHash":current_hash,"commands":count}),
     )
 }
 
@@ -450,6 +422,12 @@ mod tests {
             "ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],
             "model":"a".repeat(64),"start":start,"initialHash":state_hash(&state).unwrap(),
             "samplerSeed":91,"policyKind":"model-gumbel-backtracking-v1","maxCommands":10,"maxPlies":10})).unwrap();
+        // 每行提交必须已对独立读者可见；取消或退出不能让已完成前缀留在用户态缓冲。
+        let prefix = std::fs::read(&writer.partial).unwrap();
+        assert!(prefix.ends_with(b"\n"));
+        let prefix_report = audit(&writer.partial, &catalog, |_, _| Ok(())).unwrap();
+        assert_eq!(prefix_report["complete"], false);
+        assert_eq!(prefix_report["finalHash"], state_hash(&state).unwrap());
         writer.push(outcome(&state, 0, "terminal")).unwrap();
         writer.finish().unwrap();
         let result = audit(&path, &catalog, |_, _| Ok(()));
