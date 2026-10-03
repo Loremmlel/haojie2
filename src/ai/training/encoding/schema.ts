@@ -132,16 +132,14 @@ export const UNIT_FIELDS = [
 export function kindIndex(kind: Kind | undefined): number {
   if (kind === undefined) return 0;
   const index = kindIndices.get(kind);
-  ensure(
-    index !== undefined && index <= 128,
-    `编码词表不支持棋子 ${String(kind)}，请升级编码版本。`,
-  );
+  if (index === undefined || index > 128)
+    ensure(false, `编码词表不支持棋子 ${String(kind)}，请升级编码版本。`);
   return index;
 }
 
 export function kindFromKey(key: string): Kind {
   const kind = kindKeys.get(key);
-  ensure(kind !== undefined, `未知能力/装备词表键 ${key}。`);
+  if (kind === undefined) ensure(false, `未知能力/装备词表键 ${key}。`);
   return kind;
 }
 
@@ -151,20 +149,29 @@ export function category(
 ): number | undefined {
   if (value === undefined) return undefined;
   const index = vocabulary.indexOf(value);
-  ensure(index >= 0, `编码词表不支持 ${value}。`);
+  if (index < 0) ensure(false, `编码词表不支持 ${value}。`);
   return index + 1;
 }
 
 export function knownKeys(value: object, allowed: readonly string[], label: string): void {
-  ensure(value && typeof value === 'object' && !Array.isArray(value), `${label}必须是对象。`);
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    ensure(false, `${label}必须是对象。`);
   for (const key of Object.keys(value))
-    ensure(allowed.includes(key), `${label}含未编码字段 ${key}。`);
+    if (!allowed.includes(key)) ensure(false, `${label}含未编码字段 ${key}。`);
 }
+
+// 常用整数仍由同一运算预编译；非整数、范围外数值和负零保留原运算语义。
+const smallNumbers = Array.from({ length: 321 }, (_, i) => {
+  const n = i - 64;
+  return (Math.sign(n) * Math.log1p(Math.abs(n))) / 8;
+});
 
 /** 有限数值使用同一不截断缩放；四个13位存在掩码区分缺失、零与false。 */
 export function numeric(value: number | boolean): number {
   if (typeof value === 'boolean') return Number(value);
   ensure(typeof value === 'number' && Number.isFinite(value), '编码数值必须有限。');
+  if (Number.isInteger(value) && value >= -64 && value <= 256)
+    return value === 0 ? value : smallNumbers[value + 64];
   return (Math.sign(value) * Math.log1p(Math.abs(value))) / 8;
 }
 

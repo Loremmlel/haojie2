@@ -12,12 +12,16 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--tail", type=int, default=20)
     parser.add_argument("--slices", action="store_true")
+    parser.add_argument("--seeds", default="classic:731270001,classic:731270031,shrine:741270001,shrine:741270037")
     args = parser.parse_args()
     if args.tail < 1:
         raise ValueError("尾部长度须为正")
     starts, sources = [], []
-    for rules, seed in (("classic", 731270001), ("classic", 731270031),
-                        ("shrine", 741270001), ("shrine", 741270037)):
+    for entry in args.seeds.split(","):
+        rules, raw_seed = entry.split(":")
+        seed = int(raw_seed)
+        if rules not in ("classic", "shrine") or not 0 < seed <= 0xFFFFFFFF:
+            raise ValueError("固定种子格式无效")
         path = args.workset / f"{rules}-{seed}.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
         commands = payload["decisions"]
@@ -28,7 +32,8 @@ def main():
                 {"actor": p["actor"], "command": p["command"]} for p in commands[:position]
             ]})
         sources.append({"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                        "commands": len(commands), "positions": positions})
+                        "commands": len(commands), "positions": positions,
+                        "error": payload.get("error"), "status": payload.get("status")})
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x", encoding="utf-8") as file:
         json.dump(starts, file, separators=(",", ":"))

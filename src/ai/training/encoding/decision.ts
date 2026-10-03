@@ -45,32 +45,55 @@ export function createDecisionEncoder(observation: Observation, viewer: Player) 
   return decisionEncoder(observation, viewer, encode);
 }
 /** 仅供同一决策内的只读前向；固定实体行共享，候选与前缀仍逐节点独立。 */
-export function createSamplingEncoder(observation: Observation, viewer: Player) {
-  return decisionEncoder(observation, viewer, createSamplingPositionEncoder(observation, viewer));
+export function createSamplingEncoder(
+  observation: Observation,
+  viewer: Player,
+  reuseBuffers = false,
+) {
+  return decisionEncoder(
+    observation,
+    viewer,
+    createSamplingPositionEncoder(observation, viewer, reuseBuffers),
+    reuseBuffers,
+  );
 }
 function decisionEncoder(
   observation: Observation,
   viewer: Player,
   encode: ReturnType<typeof createPositionEncoder>,
+  reuseBuffers = false,
 ) {
+  // 仅内部同步前向显式启用；默认出口仍独立拥有，不能把借用张量留给异步消费者。
+  const storage: number[][] = [];
+  const workspace = {
+    candidates: [] as number[][],
+    sources: [] as number[],
+    targets: [] as number[],
+    entity_mask: [] as boolean[],
+    candidate_mask: [] as boolean[],
+  };
   return (node: ActionNode): EncodedDecision => {
     ensure(node.choices.length > 0, '空动作分支须回溯，不能伪造合法候选。');
     const state = encode(node.prefix);
     const index = (id?: string) => {
       if (id === undefined) return -1;
       const result = state.indices.get(id);
-      ensure(result !== undefined, `动作引用缺失的公开实体 ${id}。`);
+      if (result === undefined) ensure(false, `动作引用缺失的公开实体 ${id}。`);
       return result;
     };
-    const sources: number[] = [],
-      targetIndices: number[] = [];
-    const candidates = node.choices.map((choice) => {
+    const sources = reuseBuffers ? workspace.sources : [],
+      targetIndices = reuseBuffers ? workspace.targets : [],
+      candidates = reuseBuffers ? workspace.candidates : [];
+    sources.length = targetIndices.length = candidates.length = node.choices.length;
+    node.choices.forEach((choice, i) => {
       const c = choice.command;
-      const row = Array<number>(64).fill(0);
+      const row = reuseBuffers
+        ? (storage[i] ??= Array<number>(64)).fill(0)
+        : Array<number>(64).fill(0);
       row[COMMANDS.indexOf(c.type)] = 1;
       if (c.mode !== undefined) {
         const mode = MODES.indexOf(c.mode);
-        ensure(mode >= 0, `候选模式未编码：${c.mode}。`);
+        if (mode < 0) ensure(false, `候选模式未编码：${c.mode}。`);
         row[23 + mode] = 1;
       }
       row[36] = (c.x ?? 0) / WIDTH;
@@ -103,25 +126,29 @@ function decisionEncoder(
       const point = c.path?.at(-1);
       row[60] = (point?.x ?? 0) / WIDTH;
       row[61] = (point?.y ?? 0) / HEIGHT;
-      sources.push(
-        index(
-          c.unitId ??
-            c.cardId ??
-            (c.type === 'react' ? observation.pending[0]?.source.id : undefined),
-        ),
+      sources[i] = index(
+        c.unitId ??
+          c.cardId ??
+          (c.type === 'react' ? observation.pending[0]?.source.id : undefined),
       );
-      targetIndices.push(index(choice.subject ?? c.targetId ?? c.deathId));
-      return row;
+      targetIndices[i] = index(choice.subject ?? c.targetId ?? c.deathId);
+      candidates[i] = row;
     });
+    const entity_mask = reuseBuffers ? workspace.entity_mask : [];
+    const candidate_mask = reuseBuffers ? workspace.candidate_mask : [];
+    entity_mask.length = state.entities.length;
+    candidate_mask.length = candidates.length;
+    entity_mask.fill(true);
+    candidate_mask.fill(true);
     return {
       entities: state.entities,
       kinds: state.kinds,
       globals: state.globals,
-      entity_mask: state.entities.map(() => true),
+      entity_mask,
       candidates,
       sources,
       targets: targetIndices,
-      candidate_mask: candidates.map(() => true),
+      candidate_mask,
     };
   };
 }

@@ -90,7 +90,7 @@ impl Sampling<'_> {
             let t = Instant::now();
             let mut input = encoding::encode_sampling(tree, &node)?;
             if pass {
-                let mut row = vec![0.0; 64];
+                let mut row = [0.0; 64];
                 row[63] = 1.0;
                 input.candidates.push(row);
                 input.candidate_mask.push(true);

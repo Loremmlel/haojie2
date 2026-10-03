@@ -39,7 +39,7 @@ export function sampleCommand(
   let start = performance.now();
   const tree = new TrainingActionTree(observation, actor);
   metrics.treeMs += performance.now() - start;
-  const encode = createSamplingEncoder(observation, actor);
+  const encode = createSamplingEncoder(observation, actor, true);
   const evaluate = policy?.decision();
   let nodes = 0;
   const visit = (cursor: number[]): Command | 'pass' | undefined => {

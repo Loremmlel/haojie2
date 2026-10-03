@@ -17,6 +17,7 @@ from haojie_training.evaluate import evaluate
 from haojie_training.native import pipeline
 from haojie_training.native.client import Client
 from haojie_training.runtime import Trainer
+from usage import Usage
 
 
 def digest(path):
@@ -43,6 +44,7 @@ def main():
         engines[key] = args.output / f"{key}.exe"
         shutil.copyfile(getattr(args, key), engines[key])
     shutil.copyfile(__file__, args.output / "application.py")
+    shutil.copyfile(Path(__file__).with_name("usage.py"), args.output / "usage.py")
     manifest = {"python": platform.python_version(), "torch": str(torch.__version__),
                 "platform": platform.platform(), "threads": 1, "device": "cpu",
                 "commands": args.commands, "concurrency": args.concurrency, "starts": len(starts),
@@ -75,7 +77,7 @@ def main():
 
     references = None
 
-    def run(label, name):
+    def work(label, name, usage):
         nonlocal references
         output = args.output / name
         output.mkdir()
@@ -117,6 +119,7 @@ def main():
         stages["evaluation"] = time.perf_counter() - t
         assert trainer.health()["finite_optimizer"]
         elapsed = time.perf_counter() - begin
+        resources = usage.stop()
         # 两端已经独立审核全部哈希链；JSON 对象字段书写顺序不属于规范哈希语义。
         # 核对每行的规范链哈希，文件字节哈希另外留档，不误判类型化序列化的字段顺序。
         identities = [[json.loads(line)["sha256"] for line in path.read_text(encoding="utf-8").splitlines()]
@@ -130,7 +133,7 @@ def main():
             for game in report["games"]:
                 for key, value in game.get("metrics", {}).items():
                     metrics[key] += value
-        result = {"label": label, "seconds": elapsed, "phases": stages,
+        result = {"label": label, "seconds": elapsed, "phases": stages, "resources": resources,
                   "reports": reports, "metrics": dict(metrics), "records": identities,
                   "record_file_sha256": [digest(path) for path in records],
                   "splits": prepared["splits"], "validation_examples": evaluation["examples"],
@@ -138,6 +141,13 @@ def main():
         (output / "measurement.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(json.dumps({"run": name, "seconds": elapsed, "phases": stages}), flush=True)
         return result
+
+    def run(label, name):
+        usage = Usage().start()
+        try:
+            return work(label, name, usage)
+        finally:
+            usage.stop()
 
     pairs = []
     if args.profile:

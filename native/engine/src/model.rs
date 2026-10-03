@@ -38,6 +38,8 @@ pub struct Point {
 #[derive(Deserialize)]
 pub struct Definition {
     #[serde(skip)]
+    pub encoded_printed: std::cell::OnceCell<[Option<f64>; 10]>,
+    #[serde(skip)]
     pub printed_mage: Option<bool>,
     #[serde(skip)]
     pub printed_aura: Option<bool>,

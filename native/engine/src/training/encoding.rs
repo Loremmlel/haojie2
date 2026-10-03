@@ -5,6 +5,7 @@ use crate::tree::{Node, Tree};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::borrow::Cow;
+use std::cell::{OnceCell, RefMut};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -46,18 +47,32 @@ pub fn known(v: &Value, keys: &[&str]) -> Result<(), String> {
     }
     Ok(())
 }
-fn category(v: &Value, words: &[Value]) -> Result<Value, String> {
+fn cat(v: &Value, words: &[&str]) -> Result<Value, String> {
     if v.is_null() {
         return Ok(Value::Null);
     }
     words
         .iter()
-        .position(|w| w == v)
+        .position(|w| v == *w)
         .map(|i| json!(i + 1))
         .ok_or_else(|| format!("unknown encoding category {v}"))
 }
-fn cat(v: &Value, words: &[&str]) -> Result<Value, String> {
-    category(v, &words.iter().map(|w| json!(w)).collect::<Vec<_>>())
+fn numeric(n: f64) -> f64 {
+    // 与 TS 相同的有限整数表；负零、非整数和范围外数值保留原运算。
+    static SMALL: std::sync::OnceLock<[f64; 321]> = std::sync::OnceLock::new();
+    if (-64.0..=256.0).contains(&n) && n.fract() == 0.0 {
+        if n == 0.0 {
+            return n;
+        }
+        SMALL.get_or_init(|| {
+            std::array::from_fn(|i| {
+                let n = i as f64 - 64.0;
+                n.signum() * n.abs().ln_1p() / 8.0
+            })
+        })[(n + 64.0) as usize]
+    } else {
+        n.signum() * n.abs().ln_1p() / 8.0
+    }
 }
 fn num(v: &Value) -> Result<f64, String> {
     if let Some(b) = v.as_bool() {
@@ -67,7 +82,7 @@ fn num(v: &Value) -> Result<f64, String> {
         .as_f64()
         .filter(|n| n.is_finite())
         .ok_or("encoding expects finite number")?;
-    Ok(n.signum() * n.abs().ln_1p() / 8.0)
+    Ok(numeric(n))
 }
 fn no_null(v: &Value) -> Result<(), String> {
     match v {
@@ -108,16 +123,91 @@ fn js_key_order(mut keys: Vec<String>) -> Vec<String> {
     });
     keys
 }
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 pub struct Input {
     pub entities: Vec<Rc<Vec<f64>>>,
     pub kinds: Vec<usize>,
     pub globals: Vec<f64>,
-    pub candidates: Vec<Vec<f64>>,
+    #[serde(serialize_with = "serialize_rows")]
+    pub candidates: Vec<[f64; 64]>,
     pub entity_mask: Vec<bool>,
     pub candidate_mask: Vec<bool>,
     pub sources: Vec<i32>,
     pub targets: Vec<i32>,
+    #[serde(skip)]
+    fixed_wire: Option<(usize, Rc<OnceCell<FixedWire>>)>,
+}
+fn serialize_rows<S: serde::Serializer>(
+    rows: &[[f64; 64]],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut sequence = serializer.serialize_seq(Some(rows.len()))?;
+    for row in rows {
+        sequence.serialize_element(row.as_slice())?;
+    }
+    sequence.end()
+}
+#[derive(Default)]
+pub struct Workspace {
+    input: Input,
+    identities: HashMap<String, usize>,
+    initialized: bool,
+}
+struct FixedWire {
+    entities: Vec<u8>,
+    kinds: Vec<u8>,
+}
+
+/// 同步消费最终发送缓冲；不可变固定区只转换一次，节点区直接追加，协议布局不变。
+pub fn tensor_bytes(input: &Input, bytes: &mut Vec<u8>) {
+    fn rows<'a>(bytes: &mut Vec<u8>, values: impl IntoIterator<Item = &'a f64>) {
+        for &n in values {
+            bytes.extend_from_slice(&(n as f32).to_le_bytes());
+        }
+    }
+    bytes.clear();
+    bytes.reserve(input.entities.len() * 265 + 128 + input.candidates.len() * 273);
+    let fixed = input.fixed_wire.as_ref().map(|(count, cell)| {
+        (
+            *count,
+            cell.get_or_init(|| {
+                let mut entities = Vec::with_capacity(count * 256);
+                for row in &input.entities[..*count] {
+                    rows(&mut entities, row.iter());
+                }
+                let mut kinds = Vec::with_capacity(count * 8);
+                for &n in &input.kinds[..*count] {
+                    kinds.extend_from_slice(&(n as i64).to_le_bytes());
+                }
+                FixedWire { entities, kinds }
+            }),
+        )
+    });
+    let count = fixed.map_or(0, |(n, _)| n);
+    if let Some((_, wire)) = fixed {
+        bytes.extend_from_slice(&wire.entities);
+    }
+    for row in &input.entities[count..] {
+        rows(bytes, row.iter());
+    }
+    rows(bytes, &input.globals);
+    for row in &input.candidates {
+        rows(bytes, row);
+    }
+    if let Some((_, wire)) = fixed {
+        bytes.extend_from_slice(&wire.kinds);
+    }
+    for &n in &input.kinds[count..] {
+        bytes.extend_from_slice(&(n as i64).to_le_bytes());
+    }
+    for list in [&input.sources, &input.targets] {
+        for &n in list {
+            bytes.extend_from_slice(&(n as i64).to_le_bytes());
+        }
+    }
+    bytes.extend(input.entity_mask.iter().map(|b| u8::from(*b)));
+    bytes.extend(input.candidate_mask.iter().map(|b| u8::from(*b)));
 }
 struct Encoder<'a> {
     s: &'a State,
@@ -152,7 +242,7 @@ impl Row {
             if !v.is_finite() {
                 return Err("encoding expects finite number".into());
             }
-            self.values[8 + at] = v.signum() * v.abs().ln_1p() / 8.0;
+            self.values[8 + at] = numeric(v);
             self.present(at);
         }
         Ok(())
@@ -360,22 +450,6 @@ impl Encoder<'_> {
         });
         self.entities.push(Rc::new(row));
         Ok(())
-    }
-    fn printed(&self, k: &Value) -> Result<Vec<Value>, String> {
-        let kind = crate::preparation::kind(k);
-        let d = self.catalog.get_kind(&kind).ok_or("missing printed kind")?;
-        Ok(vec![
-            json!(d.attack),
-            json!(d.health),
-            json!(d.range),
-            json!(d.actions),
-            json!(d.movement),
-            json!(d.size.unwrap_or(1.0)),
-            json!(d.printed_mage),
-            json!(d.spell),
-            json!(d.weapon),
-            json!(d.printed_aura),
-        ])
     }
     fn effect(&mut self, e: &crate::model::Effect, parent: &str, i: usize) -> Result<(), String> {
         let mut row = self.row(
@@ -640,25 +714,27 @@ impl Encoder<'_> {
         Ok(())
     }
     fn printed_into(&self, row: &mut Row, offset: usize, k: &Kind) -> Result<(), String> {
-        let d = self.catalog.by_kind(k);
-        for (i, n) in [
-            d.attack,
-            d.health,
-            d.range,
-            d.actions,
-            d.movement,
-            d.size.unwrap_or(1.0),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            row.number(offset + i, Some(n))?;
+        let d = self.catalog.get_kind(k).ok_or("missing printed kind")?;
+        let values = d.encoded_printed.get_or_init(|| {
+            [
+                Some(numeric(d.attack)),
+                Some(numeric(d.health)),
+                Some(numeric(d.range)),
+                Some(numeric(d.actions)),
+                Some(numeric(d.movement)),
+                Some(numeric(d.size.unwrap_or(1.0))),
+                d.printed_mage.map(f64::from),
+                d.spell.map(numeric),
+                d.weapon.map(numeric),
+                d.printed_aura.map(f64::from),
+            ]
+        });
+        for (i, value) in values.iter().enumerate() {
+            if let Some(n) = value {
+                row.values[8 + offset + i] = *n;
+                row.present(offset + i);
+            }
         }
-        // 印刷布尔字段的缺失与 false 不等价，直接读取规则包保留的存在性。
-        row.boolean(offset + 6, d.printed_mage);
-        row.number(offset + 7, d.spell)?;
-        row.number(offset + 8, d.weapon)?;
-        row.boolean(offset + 9, d.printed_aura);
         Ok(())
     }
     fn card(
@@ -683,16 +759,31 @@ impl Encoder<'_> {
                 "parity",
             ],
         )?;
-        let mut fields = vec![
-            c["drawnAt"].clone(),
-            c["expiresAt"].clone(),
-            c["rerolled"].clone(),
-            c["summonedPly"].clone(),
-            cat(&c["summonPool"], &["normal", "ultimate"])?,
-            cat(&c["parity"], &["odd", "even"])?,
-        ];
-        fields.extend(self.printed(&c["kind"])?);
-        self.add(role,json!({"id":c["id"],"kind":c["kind"],"owner":owner,"parent":parent,"group":c["group"],"order":order,"selectable":true}),fields)
+        let kind = crate::preparation::kind(&c["kind"]);
+        let mut row = self.row(
+            role,
+            RowMeta {
+                id: optional_text(&c["id"])?,
+                kind: Some(&kind),
+                owner: Some(owner.as_u64().ok_or("invalid encoding owner")? as usize),
+                parent: parent.as_deref(),
+                group: optional_text(&c["group"])?,
+                order,
+                selectable: true,
+                ..RowMeta::default()
+            },
+        )?;
+        for (i, field) in ["drawnAt", "expiresAt", "rerolled", "summonedPly"]
+            .iter()
+            .enumerate()
+        {
+            row.value(i, &c[*field])?;
+        }
+        row.value(4, &cat(&c["summonPool"], &["normal", "ultimate"])?)?;
+        row.value(5, &cat(&c["parity"], &["odd", "even"])?)?;
+        self.printed_into(&mut row, 6, &kind)?;
+        self.push(row);
+        Ok(())
     }
 }
 
@@ -703,6 +794,16 @@ pub struct BaseEncoding {
     indices: HashMap<String, usize>,
     identities: HashMap<String, usize>,
     globals: Vec<f64>,
+    wire: Rc<OnceCell<FixedWire>>,
+}
+fn optional_text(v: &Value) -> Result<Option<&str>, String> {
+    if v.is_null() {
+        Ok(None)
+    } else {
+        v.as_str()
+            .map(Some)
+            .ok_or_else(|| "invalid entity reference".into())
+    }
 }
 
 /// 只接收公开 Observation；严格拒绝新字段与未共同揭示的对手暗选，不截断任何实体。
@@ -838,13 +939,23 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
     }
     for (i, d) in array(v("deaths")).iter().enumerate() {
         known(d, &["id", "kind", "owner", "ply", "revived", "group"])?;
-        let mut fields = vec![d["ply"].clone(), d["revived"].clone()];
-        fields.extend(e.printed(&d["kind"])?);
-        e.add(
+        let kind = crate::preparation::kind(&d["kind"]);
+        let mut row = e.row(
             "death",
-            crate::actions::extend(d, json!({"order":i,"selectable":true})),
-            fields,
+            RowMeta {
+                id: optional_text(&d["id"])?,
+                kind: Some(&kind),
+                owner: Some(d["owner"].as_u64().ok_or("invalid encoding owner")? as usize),
+                group: optional_text(&d["group"])?,
+                order: i,
+                selectable: true,
+                ..RowMeta::default()
+            },
         )?;
+        row.value(0, &d["ply"])?;
+        row.value(1, &d["revived"])?;
+        e.printed_into(&mut row, 2, &kind)?;
+        e.push(row);
     }
     for (i, h) in array(v("hazards")).iter().enumerate() {
         known(h, &["id", "owner", "sourceId", "axis", "line", "due"])?;
@@ -1038,6 +1149,7 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
         0.0,
     ]);
     Ok(BaseEncoding {
+        wire: Rc::new(OnceCell::new()),
         entities: e.entities,
         kinds: e.kinds,
         indices: e.indices.into_owned(),
@@ -1048,12 +1160,22 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
 
 /// 默认返回独立行；内部同步采样只借用固定行和索引，前缀身份使用追加映射。
 pub fn encode(tree: &Tree<'_>, node: &Node) -> Result<Input, String> {
-    encode_mode(tree, node, false)
+    let mut workspace = Workspace::default();
+    encode_mode(tree, node, false, &mut workspace)?;
+    Ok(workspace.input)
 }
-pub fn encode_sampling(tree: &Tree<'_>, node: &Node) -> Result<Input, String> {
-    encode_mode(tree, node, true)
+pub fn encode_sampling<'a>(tree: &'a Tree<'_>, node: &Node) -> Result<RefMut<'a, Input>, String> {
+    // 工作区由树拥有；借用结束前不能再次编码或变更树，不依赖可复用的对象地址。
+    let mut workspace = tree.encoding_workspace.borrow_mut();
+    encode_mode(tree, node, true, &mut workspace)?;
+    Ok(RefMut::map(workspace, |w| &mut w.input))
 }
-fn encode_mode(tree: &Tree<'_>, node: &Node, borrow: bool) -> Result<Input, String> {
+fn encode_mode(
+    tree: &Tree<'_>,
+    node: &Node,
+    borrow: bool,
+    workspace: &mut Workspace,
+) -> Result<(), String> {
     #[cfg(feature = "kernel-profile")]
     let _profile = crate::profile::scope(crate::profile::Phase::Encoding);
     if node.choices.is_empty() {
@@ -1066,29 +1188,41 @@ fn encode_mode(tree: &Tree<'_>, node: &Node, borrow: bool) -> Result<Input, Stri
         .map_err(Clone::clone)?;
     let viewer = tree.actor;
     let catalog = tree.catalog;
-    let mut e = Encoder {
-        s: &tree.state,
-        catalog,
-        viewer,
-        entities: if borrow {
+    let initialized = workspace.initialized;
+    workspace.initialized = false;
+    let mut input = std::mem::take(&mut workspace.input);
+    let mut identities = std::mem::take(&mut workspace.identities);
+    identities.clear();
+    if initialized {
+        input.entities.truncate(base.entities.len());
+        input.kinds.truncate(base.kinds.len());
+    } else {
+        input.entities = if borrow {
             base.entities.clone()
         } else {
             base.entities
                 .iter()
                 .map(|r| Rc::new((**r).clone()))
                 .collect()
-        },
-        kinds: base.kinds.clone(),
+        };
+        input.kinds.clone_from(&base.kinds);
+        input.globals.clone_from(&base.globals);
+        if !borrow {
+            identities.clone_from(&base.identities);
+        }
+    }
+    let mut e = Encoder {
+        s: &tree.state,
+        catalog,
+        viewer,
+        entities: input.entities,
+        kinds: input.kinds,
         indices: if borrow {
             Cow::Borrowed(&base.indices)
         } else {
             Cow::Owned(base.indices.clone())
         },
-        identities: if borrow {
-            HashMap::new()
-        } else {
-            base.identities.clone()
-        },
+        identities,
         base_identities: borrow.then_some(&base.identities),
     };
     // 命令直接写固定数值缓冲；不构造 JSON 字段数组或再次解析内部命令。
@@ -1215,18 +1349,21 @@ fn encode_mode(tree: &Tree<'_>, node: &Node, borrow: bool) -> Result<Input, Stri
             e.push(row);
         }
     }
-    let mut globals = base.globals.clone();
+    let mut globals = input.globals;
     globals[31] = f64::from(node.prefix.is_some());
-    let mut candidates = Vec::with_capacity(node.choices.len());
-    let mut sources = Vec::with_capacity(node.choices.len());
-    let mut targets = Vec::with_capacity(node.choices.len());
+    let mut candidates = input.candidates;
+    candidates.resize(node.choices.len(), [0.0; 64]);
+    let mut sources = input.sources;
+    let mut targets = input.targets;
+    sources.clear();
+    targets.clear();
     let stage = e
         .category_code(Some(node.stage), "decision_stages")?
         .unwrap()
         / 16.0;
-    for choice in &node.choices {
+    for (choice, row) in node.choices.iter().zip(&mut candidates) {
         let c = &choice.command;
-        let mut row = vec![0.0; 64];
+        row.fill(0.0);
         row[e.category_code(Some(&c.kind), "commands")?.unwrap() as usize - 1] = 1.0;
         if let Some(n) = e.category_code(c.mode.as_deref(), "modes")? {
             row[23 + n as usize - 1] = 1.0;
@@ -1288,16 +1425,104 @@ fn encode_mode(tree: &Tree<'_>, node: &Node, borrow: bool) -> Result<Input, Stri
                     .or(c.death_id.as_deref()),
             )?,
         );
-        candidates.push(row);
     }
-    Ok(Input {
-        entity_mask: vec![true; e.entities.len()],
-        candidate_mask: vec![true; candidates.len()],
+    let mut entity_mask = input.entity_mask;
+    let mut candidate_mask = input.candidate_mask;
+    entity_mask.resize(e.entities.len(), true);
+    candidate_mask.resize(candidates.len(), true);
+    entity_mask.fill(true);
+    candidate_mask.fill(true);
+    workspace.identities = e.identities;
+    workspace.input = Input {
+        entity_mask,
+        candidate_mask,
         entities: e.entities,
         kinds: e.kinds,
         globals,
         candidates,
         sources,
         targets,
-    })
+        fixed_wire: borrow.then(|| (base.entities.len(), Rc::clone(&base.wire))),
+    };
+    workspace.initialized = true;
+    Ok(())
+}
+
+#[cfg(test)]
+mod buffer_tests {
+    use super::*;
+
+    #[test]
+    fn synchronous_workspace_matches_owned_rows_and_wire_after_reuse_and_errors() {
+        let mut catalog = None;
+        crate::handle(
+            serde_json::from_slice(crate::records::RULES).unwrap(),
+            &mut catalog,
+            &mut vec![],
+            &mut crate::Resident::default(),
+        )
+        .unwrap();
+        let catalog = catalog.unwrap();
+        for shrine in [false, true] {
+            let state = crate::runtime::create(731280031, shrine, &catalog).unwrap();
+            let view = crate::runtime::public_view(&state, 1).unwrap();
+            let mut tree = Tree::from_view(&view, &catalog).unwrap();
+            let root = tree.node(&[]).unwrap();
+            let mut nodes = vec![Rc::clone(&root)];
+            for (i, c) in root.choices.iter().enumerate() {
+                if c.next.is_some() {
+                    let node = tree.node(&[i]).unwrap();
+                    if !node.choices.is_empty() {
+                        nodes.push(node);
+                    }
+                }
+            }
+            let mut retained = Vec::new();
+            for node in nodes.iter().chain(nodes.iter().rev()) {
+                let owned = encode(&tree, node).unwrap();
+                let expected = serde_json::to_value(&owned).unwrap();
+                let mut input = encode_sampling(&tree, node).unwrap();
+                assert_eq!(serde_json::to_value(&*input).unwrap(), expected);
+                let mut a = vec![];
+                let mut b = vec![];
+                tensor_bytes(&owned, &mut a);
+                tensor_bytes(&input, &mut b);
+                assert_eq!(a, b);
+                retained.push((owned, expected, a));
+                crate::records::add_pass(&mut input);
+                input.entity_mask[0] = false;
+                input.candidate_mask[0] = false;
+            }
+            let mut invalid = (*root).clone();
+            invalid.prefix = Some(crate::model::Command {
+                kind: "attack".into(),
+                mode: Some("invalid".into()),
+                ..Default::default()
+            });
+            assert!(encode_sampling(&tree, &invalid).is_err());
+            assert_eq!(
+                serde_json::to_value(&*encode_sampling(&tree, &root).unwrap()).unwrap(),
+                serde_json::to_value(encode(&tree, &root).unwrap()).unwrap()
+            );
+            for (owned, value, bytes) in retained {
+                assert_eq!(serde_json::to_value(&owned).unwrap(), value);
+                let mut current = vec![];
+                tensor_bytes(&owned, &mut current);
+                assert_eq!(current, bytes);
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_table_preserves_exact_bits_and_negative_zero() {
+        for n in (-90..310)
+            .map(f64::from)
+            .chain([-0.0, 0.5, -0.25, f64::MIN_POSITIVE, f64::MAX])
+        {
+            assert_eq!(
+                numeric(n).to_bits(),
+                (n.signum() * n.abs().ln_1p() / 8.0).to_bits()
+            );
+        }
+    }
 }

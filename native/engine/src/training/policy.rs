@@ -175,16 +175,15 @@ mod tests {
         let mut random = Random::new(19);
         let mut row = || Rc::new((0..64).map(|_| random.next()).collect::<Vec<_>>());
         let fixed = row();
-        let mut input = Input {
-            entities: vec![fixed.clone(), row()],
-            kinds: vec![1, 150],
-            globals: vec![0.25; 32],
-            candidates: vec![vec![0.5; 64], vec![0.75; 64]],
-            entity_mask: vec![true, true],
-            candidate_mask: vec![true, true],
-            sources: vec![0, -1],
-            targets: vec![1, 0],
-        };
+        let mut input = Input::default();
+        input.entities = vec![fixed.clone(), row()];
+        input.kinds = vec![1, 150];
+        input.globals = vec![0.25; 32];
+        input.candidates = vec![[0.5; 64], [0.75; 64]];
+        input.entity_mask = vec![true, true];
+        input.candidate_mask = vec![true, true];
+        input.sources = vec![0, -1];
+        input.targets = vec![1, 0];
         let mut cache = policy.decision();
         for i in 0..100 {
             input.entities[1] = row();

@@ -56,14 +56,6 @@ pub fn array(v: &Value) -> &[Value] {
 pub fn text(v: &Value) -> &str {
     v.as_str().unwrap_or("")
 }
-pub fn extend(v: &Value, fields: Value) -> Value {
-    let mut c = v.clone();
-    c.as_object_mut()
-        .unwrap()
-        .extend(fields.as_object().unwrap().clone());
-    c
-}
-
 /// 拒绝权威私有字段；预检使用无 RNG 的公开局面，首次概率分支返回 uncertain。
 pub fn position(observation: &Value) -> Result<State, String> {
     #[cfg(feature = "kernel-profile")]

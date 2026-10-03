@@ -54,6 +54,7 @@ pub struct Tree<'a> {
     stats: RefCell<HashMap<crate::entities::EntityHandle, crate::stats::Stats>>,
     routes: RefCell<HashMap<(crate::entities::EntityHandle, usize), Vec<String>>>,
     pub encoding: OnceCell<Result<crate::encoding::BaseEncoding, String>>,
+    pub encoding_workspace: RefCell<crate::encoding::Workspace>,
 }
 impl<'a> Tree<'a> {
     pub fn new(observation: &'a Value, actor: usize, catalog: &'a Catalog) -> Result<Self, String> {
@@ -99,6 +100,7 @@ impl<'a> Tree<'a> {
             stats: RefCell::new(HashMap::new()),
             routes: RefCell::new(HashMap::new()),
             encoding: OnceCell::new(),
+            encoding_workspace: RefCell::default(),
         })
     }
     fn routes(&self, c: &Command) -> Vec<String> {

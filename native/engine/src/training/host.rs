@@ -46,37 +46,8 @@ impl<R: BufRead, W: Write> Wire<R, W> {
     fn tensor(&mut self, mut meta: Value, input: &encoding::Input) -> Result<(), String> {
         #[cfg(feature = "kernel-profile")]
         let _profile = crate::profile::scope(crate::profile::Phase::Protocol);
-        // 同步写完后才允许下一请求复用；公开张量的顺序、精度和二进制协议不变。
         let bytes = &mut self.tensor_bytes;
-        bytes.clear();
-        bytes.reserve(
-            input.entities.len() * (64 * 4 + 8 + 1)
-                + 32 * 4
-                + input.candidates.len() * (64 * 4 + 8 * 2 + 1),
-        );
-        for row in &input.entities {
-            for &n in row.iter() {
-                bytes.extend_from_slice(&(n as f32).to_le_bytes());
-            }
-        }
-        for &n in &input.globals {
-            bytes.extend_from_slice(&(n as f32).to_le_bytes());
-        }
-        for row in &input.candidates {
-            for &n in row {
-                bytes.extend_from_slice(&(n as f32).to_le_bytes());
-            }
-        }
-        for &n in &input.kinds {
-            bytes.extend_from_slice(&(n as i64).to_le_bytes());
-        }
-        for list in [&input.sources, &input.targets] {
-            for &n in list {
-                bytes.extend_from_slice(&(n as i64).to_le_bytes());
-            }
-        }
-        bytes.extend(input.entity_mask.iter().map(|b| u8::from(*b)));
-        bytes.extend(input.candidate_mask.iter().map(|b| u8::from(*b)));
+        encoding::tensor_bytes(input, bytes);
         meta["entities"] = json!(input.entities.len());
         meta["candidates"] = json!(input.candidates.len());
         meta["bytes"] = json!(bytes.len());

@@ -1,4 +1,4 @@
-import { definition } from '../../../engine/catalog';
+import { CATALOG } from '../../../engine/catalog';
 import { basePoint, other } from '../../../engine/core/geometry';
 import { ensure, getStats } from '../../../engine/core/state';
 import { SYNTHESIS_RECIPES } from '../../../engine/setup/synthesis';
@@ -23,6 +23,34 @@ import {
   valueInto,
   type EntityRole,
 } from './schema';
+
+const recipeIds = SYNTHESIS_RECIPES.map((r) => r.id);
+const printedValues = new Map(
+  CATALOG.map((d) => [
+    d.id,
+    [
+      d.attack,
+      d.health,
+      d.range,
+      d.actions,
+      d.move,
+      d.size ?? 1,
+      d.mage,
+      d.spell,
+      d.weapon,
+      d.aura,
+    ].map((value) => (value === undefined ? undefined : numeric(value))),
+  ]),
+);
+function printedInto(row: number[], offset: number, kind: Kind) {
+  const values = printedValues.get(kind)!;
+  for (let i = 0; i < values.length; i++) {
+    if (values[i] === undefined) continue;
+    const at = offset + i;
+    row[8 + at] = values[i]!;
+    row[60 + Math.floor(at / 13)] += 2 ** (at % 13) / 8191;
+  }
+}
 
 const OBSERVATION_FIELDS = [
   'version',
@@ -159,21 +187,6 @@ function encodeBasePosition(observation: Observation, viewer: Player) {
   ensure(observation.version === 2, '不支持此观察版本。');
   const rows = positionRows(viewer);
   const { entities, indices, reference, owner, add } = rows;
-  const printed = (kind: Kind): Scalar[] => {
-    const d = definition(kind);
-    return [
-      d.attack,
-      d.health,
-      d.range,
-      d.actions,
-      d.move,
-      d.size ?? 1,
-      d.mage,
-      d.spell,
-      d.weapon,
-      d.aura,
-    ];
-  };
   const effect = (e: Effect, parent: string, order: number) => {
     knownKeys(e, ['type', 'from', 'until', 'owner', 'amount', 'sourceId', 'global'], 'Effect');
     add('effect', {
@@ -255,7 +268,12 @@ function encodeBasePosition(observation: Observation, viewer: Player) {
     }
     u.effects.forEach((e, i) => effect(e, instance, i));
     u.attacked.forEach((id, i) =>
-      add('attacked', { parent: instance, target: id, owner: u.owner, order: i }),
+      add('attacked', {
+        parent: instance,
+        target: id,
+        owner: u.owner,
+        order: i,
+      }),
     );
     u.guardSourceIds?.forEach((id, i) =>
       add('guard', { parent: instance, source: id, owner: u.owner, order: i }),
@@ -272,16 +290,17 @@ function encodeBasePosition(observation: Observation, viewer: Player) {
     const equipment = [
       ...new Set([...u.equipment, ...Object.keys(u.equipmentIds ?? {}).map(kindFromKey)]),
     ];
-    equipment.forEach((kind, i) =>
-      add('equipment', {
+    equipment.forEach((kind, i) => {
+      const row = add('equipment', {
         parent: instance,
         kind,
         owner: u.owner,
         id: u.equipmentIds?.[kind],
         order: i,
-        fields: [u.equipment.includes(kind), ...printed(kind)],
-      }),
-    );
+        fields: [u.equipment.includes(kind)],
+      });
+      printedInto(row, 1, kind);
+    });
     const abilities = [
       ...new Set([
         ...(u.traits ?? []),
@@ -313,7 +332,7 @@ function encodeBasePosition(observation: Observation, viewer: Player) {
   };
   const card = (c: Card, p: Player, role: 'card' | 'summon-offer', parent?: string, order = 0) => {
     knownKeys(c, CARD_FIELDS, 'Card');
-    add(role, {
+    const row = add(role, {
       id: c.id,
       kind: c.kind,
       owner: p,
@@ -328,9 +347,9 @@ function encodeBasePosition(observation: Observation, viewer: Player) {
         c.summonedPly,
         category(c.summonPool, ['normal', 'ultimate']),
         category(c.parity, ['odd', 'even']),
-        ...printed(c.kind),
       ],
     });
+    printedInto(row, 6, c.kind);
   };
   const sides = [viewer, other(viewer)];
   // 预注册主对象；重命名ID不会改变网络张量，附属引用也不会扰乱后续主对象的编号。
@@ -363,12 +382,13 @@ function encodeBasePosition(observation: Observation, viewer: Player) {
   for (const p of sides) s.hands[p].forEach((c, i) => card(c, p, 'card', undefined, i));
   s.deaths.forEach((d, i) => {
     knownKeys(d, ['id', 'kind', 'owner', 'ply', 'revived', 'group'], 'DeathRecord');
-    add('death', {
+    const row = add('death', {
       ...d,
       order: i,
       selectable: true,
-      fields: [d.ply, d.revived, ...printed(d.kind)],
+      fields: [d.ply, d.revived],
     });
+    printedInto(row, 2, d.kind);
   });
   s.hazards.forEach((h, i) => {
     knownKeys(h, ['id', 'owner', 'sourceId', 'axis', 'line', 'due'], 'Hazard');
@@ -517,18 +537,34 @@ export function createPositionEncoder(observation: Observation, viewer: Player) 
   return positionEncoder(observation, viewer, false);
 }
 /** 内部采样只读固定实体行；前缀身份编号使用局部增量，不能暴露给可修改张量调用者。 */
-export function createSamplingPositionEncoder(observation: Observation, viewer: Player) {
-  return positionEncoder(observation, viewer, true);
+export function createSamplingPositionEncoder(
+  observation: Observation,
+  viewer: Player,
+  reuseBuffers = false,
+) {
+  return positionEncoder(observation, viewer, true, reuseBuffers);
 }
-function positionEncoder(observation: Observation, viewer: Player, borrowFixed: boolean) {
+function positionEncoder(
+  observation: Observation,
+  viewer: Player,
+  borrowFixed: boolean,
+  reuseBuffers = false,
+) {
   let base: ReturnType<typeof encodeBasePosition> | undefined;
+  let workspace: ReturnType<typeof positionRows> | undefined;
+  let globalBuffer: number[] | undefined;
   return (prefix?: Command) => {
     base ??= encodeBasePosition(observation, viewer);
-    const { entities, kinds, indices, reference, owner, add } = positionRows(
-      viewer,
-      base,
-      borrowFixed,
-    );
+    const rows = reuseBuffers
+      ? (workspace ??= positionRows(viewer, base, true))
+      : positionRows(viewer, base, borrowFixed);
+    if (reuseBuffers) {
+      // 上一个同步消费者已经结束；固定列表只建一次，前缀身份不能跨节点残留。
+      rows.entities.length = base.entities.length;
+      rows.kinds.length = base.kinds.length;
+      rows.identities.clear();
+    }
+    const { entities, kinds, indices, reference, owner, add } = rows;
     if (prefix) {
       add('prefix', {
         id: 'prefix',
@@ -549,12 +585,7 @@ function positionEncoder(observation: Observation, viewer: Player, borrowFixed: 
           prefix.chosenKind === undefined ? undefined : kindIndex(prefix.chosenKind),
           prefix.shrineKind === undefined ? undefined : kindIndex(prefix.shrineKind),
           category(prefix.parity, ['odd', 'even']),
-          prefix.recipeId === undefined
-            ? undefined
-            : category(
-                prefix.recipeId,
-                SYNTHESIS_RECIPES.map((r) => r.id),
-              ),
+          prefix.recipeId === undefined ? undefined : category(prefix.recipeId, recipeIds),
           prefix.player === undefined ? undefined : owner(prefix.player),
         ],
       });
@@ -582,7 +613,7 @@ function positionEncoder(observation: Observation, viewer: Player, borrowFixed: 
         add('argument', { parent: 'prefix', order: i, fields: [6, n] }),
       );
     }
-    const globals = [...base.globals];
+    const globals = reuseBuffers ? (globalBuffer ??= [...base.globals]) : [...base.globals];
     globals[31] = Number(prefix !== undefined);
     return { entities, kinds, globals, indices, reference };
   };
