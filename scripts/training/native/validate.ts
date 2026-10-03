@@ -30,7 +30,7 @@ const { values } = parseArgs({
     output: { type: 'string' },
     executable: {
       type: 'string',
-      default: 'artifacts/native-target/release/haojie-engine-prototype.exe',
+      default: `artifacts/native-target/release/haojie-engine${process.platform === 'win32' ? '.exe' : ''}`,
     },
     'fixtures-only': { type: 'boolean', default: false },
     match: { type: 'string' },
@@ -91,7 +91,9 @@ const nativePaths = [
   'src/training/boundary.rs',
   'src/training/host.rs',
   'src/training/records.rs',
-].map((p) => `native/engine-prototype/${p}`);
+  'src/identity.rs',
+  'build.rs',
+].map((p) => `native/engine/${p}`);
 save('manifest.json', {
   head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   node: process.version,

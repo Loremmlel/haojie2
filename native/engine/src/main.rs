@@ -16,6 +16,7 @@ mod encoding;
 mod entities;
 #[path = "core/geometry.rs"]
 mod geometry;
+mod identity;
 #[path = "commands/inspection.rs"]
 mod inspection;
 #[path = "commands/lifecycle.rs"]
@@ -502,8 +503,18 @@ fn handle(
     }
 }
 fn main() -> io::Result<()> {
-    if std::env::args().nth(1).as_deref() == Some("--training") {
-        return training_host::serve().map_err(io::Error::other);
+    match std::env::args().nth(1).as_deref() {
+        Some("--training") => return training_host::serve().map_err(io::Error::other),
+        Some("--version" | "--capabilities") => {
+            println!("{}", identity::describe());
+            return Ok(());
+        }
+        None | Some("--development") => {}
+        Some(_) => {
+            return Err(io::Error::other(
+                "use --version, --training or --development",
+            ));
+        }
     }
     let mut catalog = None;
     let mut loaded = vec![];

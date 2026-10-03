@@ -16,7 +16,7 @@ const { values } = parseArgs({
     output: { type: 'string' },
     executable: {
       type: 'string',
-      default: 'artifacts/native-target/release/haojie-engine-prototype.exe',
+      default: `artifacts/native-target/release/haojie-engine${process.platform === 'win32' ? '.exe' : ''}`,
     },
     commands: { type: 'string', default: '1000' },
     rounds: { type: 'string', default: '3' },

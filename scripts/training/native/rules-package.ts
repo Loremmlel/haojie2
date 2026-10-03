@@ -13,7 +13,7 @@ import { ENCODING_SCHEMA } from '../../../src/ai/training/encoding/schema';
 import { DECISION_STAGES } from '../../../src/ai/training/encoding/decision';
 
 // 仅开发/CI 使用；训练安装与运行只读取随源码提交的确定性字节。
-const path = 'native/engine-prototype/data/rules.json';
+const path = 'native/engine/data/rules.json';
 const content =
   JSON.stringify({
     op: 'init',
@@ -43,7 +43,7 @@ if (process.argv.includes('--check')) {
   )
     throw new Error('规则包过期，请显式重新生成并提交');
 } else {
-  mkdirSync('native/engine-prototype/data', { recursive: true });
+  mkdirSync('native/engine/data', { recursive: true });
   writeFileSync(path, content);
   writeFileSync(path.replace('rules.json', 'manifest.json'), manifest);
 }

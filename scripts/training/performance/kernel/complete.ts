@@ -1,4 +1,4 @@
-// 新双端各自从种子采样到真实终局，再与冻结参照逐条比较；不向选择器传参照命令。
+// 双端独立采样并比较冻结轨迹；既核对真实终局，也保留旧版已知预算中断的 unknown。
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -13,6 +13,8 @@ const { values } = parseArgs({
     executable: { type: 'string' },
     workset: { type: 'string' },
     output: { type: 'string' },
+    seeds: { type: 'string' },
+    'known-interruptions': { type: 'boolean', default: false },
   },
 });
 assert.ok(values.api && values.executable && values.workset && values.output);
@@ -23,25 +25,42 @@ const client = await nativeClient(resolve(values.executable), 1_800_000);
 const canonical = (v: unknown) => JSON.parse(JSON.stringify(v));
 const reports = [];
 try {
-  for (const [rules, seed] of [
-    ['classic', 731270001],
-    ['shrine', 741270001],
-    ['classic', 731270031],
-    ['shrine', 741270037],
-  ] as const) {
+  const games = values.seeds
+    ? values.seeds.split(',').map((entry) => {
+        const [rules, number] = entry.split(':');
+        const seed = Number(number);
+        assert.ok(
+          (rules === 'classic' || rules === 'shrine') &&
+            Number.isInteger(seed) &&
+            seed > 0 &&
+            seed <= 0xffffffff,
+        );
+        return [rules, seed] as const;
+      })
+    : ([
+        ['classic', 731270001],
+        ['shrine', 741270001],
+        ['classic', 731270031],
+        ['shrine', 741270037],
+      ] as const);
+  for (const [rules, seed] of games) {
     const reference = JSON.parse(
       readFileSync(join(values.workset, `${rules}-${seed}.json`), 'utf8'),
     );
-    const native = await client.request({
-      op: 'sample-game',
-      rules,
-      seed,
-      policy: 'tiny',
-      maxCommands: 12000,
-      maxPlies: 500,
-    });
-    assert.equal(native.error, null);
-    assert.equal(native.status.terminated, true);
+    assert.ok(!reference.error || values['known-interruptions'], '自然终局门禁不接受中断参照');
+    const native = await client.request(
+      {
+        op: 'sample-game',
+        rules,
+        seed,
+        policy: 'tiny',
+        maxCommands: 12000,
+        maxPlies: 500,
+      },
+      true,
+    );
+    assert.equal(native.error, reference.error ?? null);
+    assert.equal(native.status.terminated, reference.state.winner !== undefined);
     assert.deepEqual(native.commands, reference.decisions);
     assert.deepEqual(native.state, reference.state);
     writeFileSync(join(output, `${rules}-${seed}-native.json`), JSON.stringify(native), {
@@ -74,9 +93,10 @@ try {
       () => env,
       'commands',
     );
-    assert.equal(result.results[0].error, null);
+    if (reference.error) assert.ok(result.results[0].error?.includes(reference.error));
+    else assert.equal(result.results[0].error, null);
     assert.equal(result.results[0].interrupted, null);
-    assert.equal(env.status().terminated, true);
+    assert.equal(env.status().terminated, native.status.terminated);
     assert.deepEqual(decisions, reference.decisions);
     assert.deepEqual(canonical([env.observation(1), env.observation(2)]), native.observations);
     // 独立外部入口重放还核对正式 RNG、序号及所有权威字段，公开观察不替代完整状态。

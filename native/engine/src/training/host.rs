@@ -15,7 +15,7 @@ use std::{
     time::Instant,
 };
 
-const PROTOCOL: &str = "haojie-training-binary-v1";
+pub const PROTOCOL: &str = "haojie-training-binary-v1";
 pub struct Wire<R, W> {
     input: R,
     output: W,
@@ -273,7 +273,7 @@ pub fn serve() -> Result<(), String> {
         id: 0,
         tensor_bytes: Vec::new(),
     };
-    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding}))?;
+    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe()}))?;
     loop {
         let request = wire.read()?;
         let result = match request["op"].as_str() {

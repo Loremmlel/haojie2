@@ -31,7 +31,7 @@ export async function nativeClient(executable: string, timeoutMs = 60_000) {
   });
   const lines = createInterface({ input: child.stdout });
   const iterator = lines[Symbol.asyncIterator]();
-  async function request(value: unknown): Promise<any> {
+  async function request(value: unknown, retainSampleFailure = false): Promise<any> {
     if (failure) throw failure;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -45,7 +45,11 @@ export async function nativeClient(executable: string, timeoutMs = 60_000) {
           const line = await iterator.next();
           assert.ok(!line.done, `Rust 进程提前退出：${failure ?? stderr}`);
           const result = JSON.parse(line.value);
-          assert.ok(!result.error, `Rust 协议失败：${result.error}`);
+          // 工作集采集可以保留采样失败的真实前缀；普通协议/差分请求继续立即失败。
+          assert.ok(
+            !result.error || (retainSampleFailure && Array.isArray(result.commands)),
+            `Rust 协议失败：${result.error}`,
+          );
           return result;
         })(),
         new Promise<never>((_, reject) => {

@@ -17,6 +17,7 @@ const { values } = parseArgs({
     output: { type: 'string' },
     baseline: { type: 'string' },
     executable: { type: 'string' },
+    seeds: { type: 'string' },
   },
 });
 assert.ok(values.output && values.baseline && values.executable);
@@ -30,22 +31,37 @@ const workset: any[] = [];
 const client = await nativeClient(resolve(values.executable), 1_800_000);
 try {
   // 种子在实施前固定；超限保留真实前缀，不用换种子获得更短的终局。
-  for (const [rules, seed] of [
-    ['classic', 731270001],
-    ['shrine', 741270001],
-    ['classic', 731270031],
-    ['shrine', 741270037],
-  ] as const) {
-    const native = await client.request({
-      op: 'sample-game',
-      seed,
-      rules,
-      maxCommands: 12000,
-      maxPlies: 500,
-      policy: 'tiny',
-    });
+  const games = values.seeds
+    ? values.seeds.split(',').map((entry) => {
+        const [rules, number] = entry.split(':');
+        const seed = Number(number);
+        assert.ok(
+          (rules === 'classic' || rules === 'shrine') &&
+            Number.isInteger(seed) &&
+            seed > 0 &&
+            seed <= 0xffffffff,
+        );
+        return [rules, seed] as const;
+      })
+    : ([
+        ['classic', 731270001],
+        ['shrine', 741270001],
+        ['classic', 731270031],
+        ['shrine', 741270037],
+      ] as const);
+  for (const [rules, seed] of games) {
+    const native = await client.request(
+      {
+        op: 'sample-game',
+        seed,
+        rules,
+        maxCommands: 12000,
+        maxPlies: 500,
+        policy: 'tiny',
+      },
+      true,
+    );
     save(`${rules}-${seed}-native.json`, native);
-    assert.equal(native.error, null);
     const decisions = native.commands;
     const positions = new Set([0, 10, 50, 100, 250, 500, 750, 1000]);
     for (let i = 0; i < 16; i++) positions.add(Math.floor(((i + 0.5) * decisions.length) / 16));
@@ -80,7 +96,14 @@ try {
       [1, 2].map((p) => canonical(old.observe(state, p as Player))),
       native.observations,
     );
-    save(`${rules}-${seed}.json`, { rules, seed, decisions, state });
+    save(`${rules}-${seed}.json`, {
+      rules,
+      seed,
+      decisions,
+      state,
+      error: native.error,
+      status: native.status,
+    });
     console.log(
       JSON.stringify({
         rules,
@@ -88,6 +111,7 @@ try {
         commands: decisions.length,
         ply: state.ply,
         winner: state.winner ?? null,
+        error: native.error,
       }),
     );
   }

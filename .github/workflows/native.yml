@@ -1,0 +1,129 @@
+name: Native engine
+on:
+  push:
+    branches: [main, 'codex/**']
+    paths:
+      [
+        'native/**',
+        'src/**',
+        'scripts/training/**',
+        'training/**',
+        'tests/**',
+        'package*.json',
+        '.github/workflows/native.yml',
+      ]
+  pull_request:
+    paths:
+      [
+        'native/**',
+        'src/**',
+        'scripts/training/**',
+        'training/**',
+        'tests/**',
+        'package*.json',
+        '.github/workflows/native.yml',
+      ]
+  workflow_dispatch:
+    inputs:
+      endurance:
+        description: Run four seeded natural games and full TS/Rust replay
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  engine:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci --no-audit --no-fund
+      - run: cargo fmt --manifest-path native/engine/Cargo.toml --check
+      - run: npm run native:test
+      - run: npm run native:check
+      - run: npm run native:build
+      - run: npm run train:rules:check
+      - name: Release identity and representative rule / candidate / encoding differential
+        shell: pwsh
+        run: |
+          $engine = if ($IsWindows) { 'artifacts/native-target/release/haojie-engine.exe' } else { 'artifacts/native-target/release/haojie-engine' }
+          python scripts/training/native/ci/verify.py --engine $engine
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node --import tsx scripts/training/native/validate.ts --executable $engine --fixtures-only --output artifacts/native-rules
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node --import tsx scripts/training/native/sampling/validate.ts --executable $engine --output artifacts/native-encoding
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node --import tsx --test tests/runtime/native-record.test.ts
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-${{ matrix.os }}
+          path: |
+            artifacts/native-rules/*.json
+            artifacts/native-encoding/*.json
+  installed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build source-only delivery
+        run: python3 scripts/training/native/pipeline/package.py --output artifacts/native-package/source.tar.gz
+      - name: Install without host runtime or repository mounts
+        run: docker build -f scripts/training/native/ci/Dockerfile -t haojie-native-check artifacts/native-package
+      - name: Nonempty update, separate-process restore and new-weight sampling
+        run: |
+          mkdir -p artifacts/native-evidence
+          docker run --rm --network none --mount type=bind,source="$PWD/artifacts/native-evidence",target=/evidence haojie-native-check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - name: Independent host TS audit of native records and canonical state hashes
+        run: |
+          for record in artifacts/native-evidence/closure/sample-updated/*.jsonl; do
+            node --import tsx scripts/training/native/pipeline/audit.ts "$record" "$record.ts-audit.json" --summary-only
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-installed
+          path: |
+            artifacts/native-package/*
+            artifacts/native-evidence/*
+  endurance:
+    if: github.event_name == 'workflow_dispatch' && inputs.endurance
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run native:build
+      - run: mkdir -p artifacts/endurance
+      - run: node --import tsx scripts/training/performance/kernel/freeze.ts --executable artifacts/native-target/release/haojie-engine --output artifacts/endurance/frozen
+      - run: node --import tsx scripts/training/performance/kernel/workset.ts --baseline artifacts/endurance/frozen/api.mjs --executable artifacts/endurance/frozen/engine.exe --output artifacts/endurance/workset
+      - run: node --import tsx scripts/training/performance/kernel/complete.ts --api artifacts/endurance/frozen/api.mjs --executable artifacts/endurance/frozen/engine.exe --workset artifacts/endurance/workset --output artifacts/endurance/complete
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-endurance
+          path: artifacts/endurance

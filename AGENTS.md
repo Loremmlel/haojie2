@@ -19,5 +19,5 @@
 ## 细则索引
 
 - [规则与反馈](docs/RULES.md)、[2.5 合成](docs/changes/CHANGELOG-2.5.md)、[3.0 神龛](docs/changes/CHANGELOG-3.0.md)、[9 月 23 日反馈](docs/feedback/FEEDBACK-2026-09-23.md)：后续规则覆盖旧部署行快照，当前部署行从实时局面计算。
-- [AI 算法](docs/ai/AI.md)、[训练导航](docs/ai/TRAINING.md)、[TS/Rust 状态分支对应](docs/ai/performance/STATE-SHARING-2026-09-27.md)、[Rust 接口](native/engine-prototype/README.md)。
+- [AI 算法](docs/ai/AI.md)、[训练导航](docs/ai/TRAINING.md)、[TS/Rust 状态分支对应](docs/ai/performance/kernel/ARCHITECTURE.md)、[Rust 接口](native/engine/README.md)。
 - [在线接入](docs/ONLINE-ADAPTATION.md)、[存档与训练记录](docs/session/SAVES.md)、[特效](docs/VFX.md)。

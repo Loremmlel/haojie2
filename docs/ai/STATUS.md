@@ -1,6 +1,6 @@
 # AI / 训练当前状态
 
-核对日期：2026-10-03。本轮基于最新核对的远端 `d6df36f975fbddf785b318d7a280e266ccd1cfe0`，在独立分支 `codex/runtime-kernel` 完成 TS/Rust 内部运行表示重写；没有合并、推送或远程部署。规则仍为 `3.0-feedback5-live-deployment-2026-09-23`。
+核对日期：2026-10-03。远端 `main` 已包含内核重写，当前核对提交为 `7cc64224a4fcc5188e9445bc16fe1058afa2d145`。独立分支 `codex/native-engine-hotspots` 正在将原生引擎转正并冻结热点优化基线；本轮进展、实测和未验证项只维护在[任务记录](performance/engine/README.md)。规则仍为 `3.0-feedback5-live-deployment-2026-09-23`。
 
 ## 当前入口
 
@@ -8,11 +8,11 @@
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 生产游戏与本地 AI  | `src/engine/`、`src/ai/`、`src/ui/`；单 HTML、公开联机组件契约不变，神经网络尚未进入发行 AI。                                                                         |
 | 无 Node 训练       | [安装与恢复](../../training/NATIVE.md)：实际模型采样、原生记录/审核/编码、分片、优化器更新、完整学习阶段恢复及新权重评测。                                            |
-| 原生接口与共同算法 | [Rust 接口](../../native/engine-prototype/README.md)、[当前运行内核与双端对应](performance/kernel/ARCHITECTURE.md)。                                                  |
+| 原生接口与共同算法 | [正式 Rust 引擎](../../native/engine/README.md)、[当前运行内核与双端对应](performance/kernel/ARCHITECTURE.md)。                                                       |
 | TS 教师与搜索      | [训练导航](TRAINING.md)、[Python 与旧工具说明](../../training/README.md)；手工教师、restricted PUCT 仍需 Node，未迁移到原生入口。                                     |
 | 本轮性能与功能证据 | [运行内核实测](performance/kernel/RESULTS.md)、[复现入口](performance/kernel/REPRODUCE.md)；此前训练宿主工作见[原生训练报告](performance/native-training/README.md)。 |
 
-## 已验证与限制
+## 内核重写冻结验收与限制
 
 无 Node 隔离环境完成独立构建安装，经典/神龛真实终局采样、非空监督、0→2→4 次更新、参数变化、有限优化器状态、另进程恢复及新权重再采样。恢复结果与连续四步训练逐张量相等。支持完整学习阶段恢复，不支持半局递归栈精确恢复。
 

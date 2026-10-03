@@ -63,7 +63,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "haojie-engine-prototype"
+name = "haojie-engine"
 version = "0.1.0"
 dependencies = [
  "indexmap",

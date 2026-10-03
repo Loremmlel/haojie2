@@ -6,10 +6,7 @@ import { nativeHash } from '../../scripts/training/native/pipeline/hash';
 
 test('原生记录规范固定字节向量覆盖负零、缺失值和UTF-8键顺序', () => {
   const vectors = JSON.parse(
-    readFileSync(
-      new URL('../../native/engine-prototype/data/hash-vectors.json', import.meta.url),
-      'utf8',
-    ),
+    readFileSync(new URL('../../native/engine/data/hash-vectors.json', import.meta.url), 'utf8'),
   );
   for (const vector of vectors) {
     assert.equal(

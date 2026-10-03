@@ -14,16 +14,16 @@ TS 手工教师、restricted PUCT、旧记录转换和历史改善/连续实验�
 
 ## 独立安装与运行
 
-需要 Rust 1.98.1、链接器、Python 3.12，不需要 Node/npm/Bun/tsx/node_modules 或 TS 源码。源码包提供 `native/engine-prototype/{Cargo.toml,Cargo.lock,src,data}` 及 Python 包。CPU 安装：
+正式维护入口为 [haojie-engine](../native/engine/README.md)。需要 Rust 1.98.1、链接器、Python 3.12，不需要 Node/npm/Bun/tsx/node_modules 或 TS 源码。源码包提供 `native/engine/{Cargo.toml,Cargo.lock,build.rs,src,data}` 及 Python 包。CPU 安装：
 
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
 .venv/bin/pip install ./training
-cargo build --release --manifest-path native/engine-prototype/Cargo.toml --locked
+cargo build --release --manifest-path native/engine/Cargo.toml --locked
 ```
 
-Windows 使用 `.venv/Scripts/python.exe` 和 `.exe` 引擎。下文 `PYTHON` / `ENGINE` 是需替换的可执行文件路径。
+Windows 使用 `.venv/Scripts/python.exe` 和 `native/engine/target/release/haojie-engine.exe`；Linux 的程序无 `.exe`。下文 `PYTHON` / `ENGINE` 是需替换的可执行文件路径。`ENGINE --version` 输出构建身份、规则/编码/记录/协议版本与能力清单；`--engine` 必须显式指定，原生测试同样要求 `HAOJIE_NATIVE`，缺引擎直接失败。
 
 ```sh
 PYTHON -m haojie_training.native --engine ENGINE init --tiny --checkpoint initial.pt

@@ -10,7 +10,7 @@ export async function freeze(
   entry: string,
   output: string,
   executable: string,
-  native = 'native/engine-prototype',
+  native = 'native/engine',
 ) {
   mkdirSync(output, { recursive: false });
   const built = await build({
@@ -31,6 +31,8 @@ export async function freeze(
       .map((p) => join(native, 'src', String(p))),
     join(native, 'Cargo.toml'),
     join(native, 'Cargo.lock'),
+    join(native, 'build.rs'),
+    ...readdirSync(join(native, 'data')).map((p) => join(native, 'data', p)),
   ];
   const hash = (v: Buffer) => createHash('sha256').update(v).digest('hex');
   const target = join(output, 'engine.exe');

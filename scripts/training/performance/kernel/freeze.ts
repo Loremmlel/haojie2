@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -46,21 +46,16 @@ const result = await build({
     },
   ],
 });
-for (const path of git('ls-tree', '-r', '--name-only', ref ?? 'HEAD', 'native/engine-prototype')
-  .trim()
-  .split('\n'))
-  if (/\.(rs|toml|lock|json)$/.test(path)) source(path);
-// 未提交的新 Rust 模块同样进入当前源码指纹。
-if (!ref)
-  for (const path of git(
-    'ls-files',
-    '--others',
-    '--exclude-standard',
-    'native/engine-prototype/src',
-  )
-    .trim()
-    .split('\n'))
-    if (path.endsWith('.rs')) source(path);
+// 历史目录只在冻结旧 Git 对象时识别；当前源码（含未提交模块）从正式入口收集。
+const nativePaths = ref
+  ? git('ls-tree', '-r', '--name-only', ref, 'native/engine', 'native/engine-prototype')
+      .trim()
+      .split('\n')
+  : readdirSync('native/engine', { recursive: true }).map(
+      (p) => `native/engine/${String(p).replaceAll('\\', '/')}`,
+    );
+for (const path of nativePaths)
+  if (!path.includes('/target/') && /\.(rs|toml|lock|json)$/.test(path)) source(path);
 writeFileSync(join(output, 'api.mjs'), result.outputFiles[0].contents, { flag: 'wx' });
 if (values.executable) copyFileSync(values.executable, join(output, 'engine.exe'));
 const manifest = {

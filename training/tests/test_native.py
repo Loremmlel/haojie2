@@ -11,12 +11,13 @@ from haojie_training.native.client import Client
 from haojie_training.native.pipeline import initialize, model_from, prepare, sample
 
 
-@unittest.skipUnless(os.environ.get("HAOJIE_NATIVE"), "需显式设置 HAOJIE_NATIVE")
 class NativeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(1)
-        cls.engine = os.environ["HAOJIE_NATIVE"]
+        if not os.environ.get("HAOJIE_NATIVE"):
+            raise RuntimeError("原生验收必须显式设置 HAOJIE_NATIVE，不能跳过")
+        cls.engine = str(Path(os.environ["HAOJIE_NATIVE"]).resolve(strict=True))
 
     def test_invalid_inputs_cancel_stale_and_corruption(self):
         with tempfile.TemporaryDirectory() as folder, Client(self.engine) as client:
