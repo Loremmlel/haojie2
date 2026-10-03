@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 
 from haojie_training.native.client import Client
-from haojie_training.native.pipeline import initialize, model_from
+from haojie_training.native.pipeline import initialize, model_from, prepare, sample
 
 
 @unittest.skipUnless(os.environ.get("HAOJIE_NATIVE"), "需显式设置 HAOJIE_NATIVE")
@@ -94,6 +94,10 @@ class NativeTests(unittest.TestCase):
             client.send({"op": "audit", "record": str(bad), "encode": False})
             with self.assertRaisesRegex(ValueError, "corrupt"):
                 client.receive()
+            bad.write_bytes(b" " * (16 * 1024 * 1024 + 1))
+            client.send({"op": "audit", "record": str(bad), "encode": False})
+            with self.assertRaisesRegex(ValueError, "exceeds limit"):
+                client.receive()
             request["record"] = str(root / "stale.jsonl")
             client.send(request)
             infer = client.receive()
@@ -120,6 +124,27 @@ class NativeTests(unittest.TestCase):
                 torch.save(payload, path)
                 with self.assertRaisesRegex(ValueError, "哈希"):
                     model_from(path, client.ready)
+
+    def test_changed_budget_cannot_duplicate_a_sampling_prefix(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            checkpoint = root / "initial.pt"
+            initialize(self.engine, checkpoint, tiny=True)
+            records = []
+            for i, (seed, plies) in enumerate(((71, 10), (72, 10), (71, 20))):
+                output = root / f"sample-{i}"
+                sample(
+                    self.engine,
+                    checkpoint,
+                    [{"seed": seed, "rules": "classic"}],
+                    output,
+                    commands=4,
+                    plies=plies,
+                )
+                records.extend(output.glob("*.jsonl"))
+            with self.assertRaisesRegex(ValueError, "重复对局"):
+                prepare(self.engine, records, root / "data")
+            self.assertFalse((root / "data").exists())
 
 
 if __name__ == "__main__":

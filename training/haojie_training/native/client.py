@@ -28,10 +28,13 @@ class Client:
         self.errors = bytearray()
         threading.Thread(target=self._read, daemon=True).start()
         threading.Thread(target=self._stderr, daemon=True).start()
-        self.ready = self.receive()
-        if self.ready.get("protocol") != "haojie-training-binary-v1":
+        try:
+            self.ready = self.receive()
+            if self.ready.get("protocol") != "haojie-training-binary-v1":
+                raise ValueError("原生训练协议不匹配")
+        except BaseException:
             self.close()
-            raise ValueError("原生训练协议不匹配")
+            raise
 
     def _stderr(self):
         for line in self.process.stderr:

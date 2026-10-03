@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -203,9 +203,13 @@ pub fn audit(
     let mut incomplete_tail = false;
     loop {
         let mut line = vec![];
-        source
+        (&mut source)
+            .take(16 * 1024 * 1024 + 1)
             .read_until(b'\n', &mut line)
             .map_err(|e| e.to_string())?;
+        if line.len() > 16 * 1024 * 1024 {
+            return Err("record frame exceeds limit".into());
+        }
         if line.is_empty() {
             break;
         }
@@ -357,6 +361,9 @@ pub fn audit(
             Some("outcome") => {
                 let s = state.as_ref().ok_or("missing game")?;
                 let reason = body["reason"].as_str().ok_or("missing outcome reason")?;
+                if (reason == "terminal") != s.extra.contains_key("winner") {
+                    return Err("false terminal boundary".into());
+                }
                 if (reason == "commands" && count as u64 != max_commands)
                     || (reason == "plies" && s.ply - initial_ply < max_plies)
                 {
@@ -385,4 +392,61 @@ pub fn audit(
     Ok(
         json!({"outcome":summary,"complete":complete,"incompleteTail":incomplete_tail,"finalHash":state_hash(&s)?,"commands":count}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_record_vectors_cover_numbers_and_utf8_key_order() {
+        let vectors: Vec<Value> =
+            serde_json::from_str(include_str!("../../data/hash-vectors.json")).unwrap();
+        for vector in vectors {
+            let hex = vector["bytes"].as_str().unwrap();
+            let bytes: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect();
+            assert_eq!(hash(&vector["value"]), bytes_hash(&bytes));
+        }
+        assert_ne!(hash(&json!({})), hash(&json!({"a": null})));
+    }
+
+    #[test]
+    fn valid_hash_chain_cannot_claim_a_nonterminal_game_is_terminal() {
+        let mut catalog = None;
+        crate::handle(
+            serde_json::from_slice(RULES).unwrap(),
+            &mut catalog,
+            &mut vec![],
+            &mut crate::Resident::default(),
+        )
+        .unwrap();
+        let catalog = catalog.unwrap();
+        let start = Start {
+            seed: 71,
+            rules: "classic".into(),
+            prelude: vec![],
+        };
+        let state = start.state(&catalog).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "haojie-false-terminal-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let mut writer = Writer::new(&path).unwrap();
+        writer.push(json!({"type":"game","format":FORMAT,"rulesHash":rules_hash(),
+            "ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],
+            "model":"a".repeat(64),"start":start,"initialHash":state_hash(&state).unwrap(),
+            "samplerSeed":91,"policyKind":"model-gumbel-backtracking-v1","maxCommands":10,"maxPlies":10})).unwrap();
+        writer.push(outcome(&state, 0, "terminal")).unwrap();
+        writer.finish().unwrap();
+        let result = audit(&path, &catalog, |_, _| Ok(()));
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(result.unwrap_err(), "false terminal boundary");
+    }
 }

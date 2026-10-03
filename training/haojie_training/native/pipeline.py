@@ -202,8 +202,13 @@ def prepare(executable, paths, output, shard_size=64):
                     item["value"] = torch.tensor(float(outcome["returns"][str(record["actor"])]))
                     item["value_mask"] = torch.tensor(True)
             group = f"{meta['ruleset']}:{header['start']['rules']}:{header['start']['seed']}"
+            # 改变截断预算不产生新轨迹身份，防止同一前缀在恢复后重复计样。
+            lineage = {
+                k: header[k]
+                for k in ("rulesHash", "start", "model", "samplerSeed", "policyKind")
+            }
             identity = hashlib.sha256(
-                json.dumps(header, sort_keys=True, separators=(",", ":")).encode()
+                json.dumps(lineage, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
             records = [{**r, "group": group, "game_id": identity} for r in records]
             games.append((group, identity, examples, records, header["model"]))

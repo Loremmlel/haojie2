@@ -26,8 +26,8 @@ pub struct Metrics {
     backtracks: usize,
     max_entities: usize,
     max_candidates: usize,
-    off_turn_commands: usize,
-    off_turn_passes: usize,
+    pub off_turn_commands: usize,
+    pub off_turn_passes: usize,
 }
 impl Metrics {
     pub fn merge(&mut self, other: Self) {

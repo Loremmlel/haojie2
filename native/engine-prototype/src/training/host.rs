@@ -166,14 +166,11 @@ fn sample<R: BufRead, W: Write>(
             let mut off_turn = false;
             metrics.observation_ms += observed.elapsed().as_secs_f64() * 1000.0;
             if optional {
-                let (choice, trace, costs) = sampler::external(
-                    &runtime::observe(&state, other)?,
-                    other,
-                    wire,
-                    &mut random,
-                    catalog,
-                    true,
-                )?;
+                let observed = Instant::now();
+                let other_observation = runtime::observe(&state, other)?;
+                metrics.observation_ms += observed.elapsed().as_secs_f64() * 1000.0;
+                let (choice, trace, costs) =
+                    sampler::external(&other_observation, other, wire, &mut random, catalog, true)?;
                 selected = choice;
                 path = trace;
                 metrics.merge(costs);
@@ -181,6 +178,9 @@ fn sample<R: BufRead, W: Write>(
                     actor = other;
                     offer = false;
                     off_turn = true;
+                    metrics.off_turn_commands += 1;
+                } else if matches!(selected, Selected::Pass) {
+                    metrics.off_turn_passes += 1;
                 }
             }
             if !matches!(selected, Selected::Command(_)) {
