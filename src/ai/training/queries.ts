@@ -24,9 +24,12 @@ import {
 import { canChooseSummon, commandSummonPool, selectableSummons } from '../../engine/setup/shrines';
 import type { Command, GamePosition, Player } from '../../engine/types';
 import type { Observation } from '../types';
+import { viewPosition } from '../observation';
 
 /** 仅接受策略观察；即使 JS 绕过 TS 类型也拒绝夹带正式随机状态/历史。查询不修改嵌套对象。 */
 export function trainingPosition(observation: Observation): GamePosition {
+  const position = viewPosition(observation);
+  if (position) return position;
   for (const key of ['seed', 'rng', 'log', 'events', 'past', 'future', 'present'])
     ensure(!Object.hasOwn(observation, key), `训练观察禁止携带 ${key}。`);
   return { ...observation, log: [], events: [] };

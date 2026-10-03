@@ -23,6 +23,14 @@ impl ValueMap {
     pub fn fork(&self) -> Self {
         Self(self.0.clone())
     }
+    /// 白名单视图只共享选中的字段；没有指回完整权威映射的指针。
+    pub fn select(&self, keys: &[&str]) -> Self {
+        Self(
+            keys.iter()
+                .filter_map(|key| self.0.get(*key).map(|v| ((*key).to_string(), Rc::clone(v))))
+                .collect(),
+        )
+    }
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.0.get(key).map(Rc::as_ref)
     }

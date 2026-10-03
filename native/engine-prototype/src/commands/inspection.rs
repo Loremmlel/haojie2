@@ -20,6 +20,8 @@ pub struct Queries {
 }
 impl Queries {
     pub fn inspect(&mut self, s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
+        #[cfg(feature = "kernel-profile")]
+        let _profile = crate::profile::scope(crate::profile::Phase::Preparation);
         movement::stage_with_transit(s, c, || {
             self.transit
                 .get_or_init(|| movement::transit(s, catalog).map(str::to_owned))
@@ -75,10 +77,11 @@ impl Queries {
                     .or_insert_with(|| combat::projected_attacker(s, c, catalog))
                     .as_ref()
                     .map_err(Clone::clone)?;
-                combat::prepare_inspection(s, c, u, catalog)?;
+                let prepared = combat::prepare_inspection(s, c, u, catalog)?;
+                return combat::apply_prepared(s, c, catalog, true, Some(prepared)).map(|_| ());
             }
             "react" => {
-                if let Some(r) = s.pending.first().filter(|r| r["kind"] == "hut-spawn") {
+                if let Some(r) = s.pending.first().filter(|r| r.kind == "hut-spawn") {
                     let points = self
                         .hut
                         .get_or_init(|| reactions::hut_points(s, r, catalog));

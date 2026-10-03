@@ -85,7 +85,7 @@ pub fn advance(
         json!({"type":"skill","to":u.actor_event(),"owner":u.owner,"text":"独立推进回合"}),
         Some(format!(
             "{}提前进入自己的下一回合",
-            catalog[&u.kind.key()].name
+            catalog.by_kind(&u.kind).name
         )),
     );
     Ok(())
@@ -100,7 +100,7 @@ pub fn begin(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<(
         let u = s.unit_mut(&old.id).unwrap();
         let offset = u.offset;
         u.effects
-            .retain(|e| number(&e["until"]) > ply + if e["global"] == true { 0.0 } else { offset });
+            .retain(|e| e.until > ply + if e.global == Some(true) { 0.0 } else { offset });
         let u = u.clone();
         if u.extra.get("expiresAt").is_some_and(|v| number(v) <= ply) {
             kill(s, &u, &Source::effect(0, "expire"), catalog, ctx)?;
@@ -112,10 +112,10 @@ pub fn begin(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<(
         }
     }
     for p in ["1", "2"] {
-        s.extra.get_mut("baseEffects").unwrap()[p]
-            .as_array_mut()
+        s.base_effects
+            .get_mut(p)
             .unwrap()
-            .retain(|e| number(&e["until"]) > s.ply);
+            .retain(|e| e.until > s.ply);
     }
     for c in hand(s).to_vec() {
         if c.get("expiresAt")
@@ -240,14 +240,18 @@ pub fn end(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<(),
     hand_mut(s).retain(|c| stored(catalog, &kind(&c["kind"]).key()));
     for u in s.pieces().cloned().collect::<Vec<_>>() {
         for e in &u.effects {
-            if (e["type"] == "burn" || e["type"] == "freeze") && s.active_effect(e, Some(&u)) {
+            if (e.kind == "burn" || e.kind == "freeze") && s.active_effect(e, Some(&u)) {
                 ctx.token += 1;
-                let mut source = Source::effect(number(&e["owner"]) as usize, "status");
-                source.unit = s.units.iter().find(|v| e["sourceId"] == v.id).cloned();
+                let mut source = Source::effect(e.owner, "status");
+                source.unit = s
+                    .units
+                    .iter()
+                    .find(|v| e.source_id.as_deref() == Some(v.id.as_str()))
+                    .cloned();
                 damage(
                     s,
                     &Target::from(&u),
-                    e.get("amount").map(number).unwrap_or(5.0),
+                    e.amount.unwrap_or(5.0),
                     &source,
                     catalog,
                     ctx,

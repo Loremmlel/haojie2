@@ -1,3 +1,5 @@
+import { own } from '../runtime/position';
+import { pieceById } from '../runtime/position';
 import {
   allPieces,
   hasTrait,
@@ -82,8 +84,8 @@ export function emit(s: GamePosition, event: Omit<GameEvent, 'id'>, message?: st
   if (event.path) snap.path = event.path.map((p) => ({ x: p.x, y: p.y }));
   s.events.push(snap);
   if (message) {
-    s.log.push(`${s.ply} · ${message}`);
-    if (s.log.length > 180) s.log.shift();
+    own(s, 'log').push(`${s.ply} · ${message}`);
+    if (s.log.length > 180) own(s, 'log').shift();
   }
 }
 export function random(s: GamePosition, boundaries: readonly number[] = [0, 1]) {
@@ -210,7 +212,7 @@ export function draw(
         ...(limit !== undefined && limit >= 0 ? { expiresAt: s.turns[owner] + limit } : {}),
         ...(group ? { group } : {}),
       };
-      s.hands[owner].push(c);
+      own(s, 'hands')[owner].push(c);
       result.push(c);
     }
     emit(
@@ -343,7 +345,7 @@ export function getStats(s: GamePosition, u: Unit): Stats {
   };
 }
 export function findUnit(s: GamePosition, id?: string): Unit {
-  const u = allPieces(s).find((u) => u.id === id);
+  const u = pieceById(s, id);
   ensure(u, '请选择仍在场上的随从。');
   return u;
 }

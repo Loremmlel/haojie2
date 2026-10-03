@@ -3,6 +3,87 @@ use crate::model::{Catalog, State};
 use crate::resolution::Resolution;
 use serde_json::{Value, json};
 
+const PUBLIC_FIELDS: &[&str] = &[
+    "baseEffects",
+    "heads",
+    "hands",
+    "bonus",
+    "deaths",
+    "hazards",
+    "iceMarks",
+    "mode",
+    "auras",
+    "regularSummons",
+    "summonOffer",
+    "shrineSetupDone",
+    "winner",
+];
+
+/// 独立的只读公开根；共享实体与冷字段，不包含权威 RNG、日志或完整状态的反向引用。
+pub struct PublicPosition {
+    position: State,
+    pub viewer: usize,
+}
+impl PublicPosition {
+    pub fn position(&self) -> &State {
+        &self.position
+    }
+}
+
+pub fn public_view(s: &State, viewer: usize) -> Result<PublicPosition, String> {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Observe);
+    if ![1, 2].contains(&viewer) {
+        return Err("viewer must be 1 or 2".into());
+    }
+    let mut extra = s.extra.select(PUBLIC_FIELDS);
+    extra.insert("log".into(), json!([]));
+    if let Some(d) = s.extra.get("shrineDraft") {
+        extra.insert("shrineDraft".into(), visible_draft(d, viewer));
+    }
+    let position = State {
+        version: s.version,
+        serial: s.serial,
+        ply: s.ply,
+        active: s.active,
+        phase: s.phase.clone(),
+        summon_slots: s.summon_slots,
+        turns: s.turns.clone(),
+        bases: s.bases.clone(),
+        units: s.units.iter().map(crate::model::Unit::fork).collect(),
+        landmarks: s
+            .landmarks
+            .as_ref()
+            .map(|a| a.iter().map(crate::model::Unit::fork).collect()),
+        pending: s.pending.iter().map(crate::model::Reaction::fork).collect(),
+        clock_frames: s.clock_frames.clone(),
+        entities: s.entities.clone(),
+        siphons: s.siphons.clone(),
+        events: vec![],
+        base_effects: s.base_effects.clone(),
+        deploy_rows: json!({"1":crate::geometry::deployment_rows(s,1),"2":crate::geometry::deployment_rows(s,2)}),
+        extra,
+    };
+    Ok(PublicPosition { position, viewer })
+}
+
+fn visible_draft(d: &Value, viewer: usize) -> Value {
+    let mut choices = json!({});
+    for p in 1..=2 {
+        if let Some(c) = d["choices"]
+            .get(p.to_string())
+            .filter(|_| d["revealed"] == true || p == viewer)
+        {
+            let mut visible = json!({"kind":c["kind"]});
+            if let Some(parity) = c.get("parity") {
+                visible["parity"] = parity.clone();
+            }
+            choices[p.to_string()] = visible;
+        }
+    }
+    json!({"offers":d["offers"],"committed":d["committed"],"revealed":d["revealed"],"choices":choices})
+}
+
 pub fn create(seed: u32, shrine: bool, catalog: &Catalog) -> Result<State, String> {
     let seed = if seed == 0 { 2654435769 } else { seed };
     let mut s:State=serde_json::from_value(json!({"version":2,"seed":seed,"rng":seed,"serial":1,"ply":1,"active":1,"phase":"summon","summonSlots":2,"turns":{"1":0,"2":0},"bases":{"1":300,"2":300},"baseEffects":{"1":[],"2":[]},"heads":{"1":0,"2":0},"hands":{"1":[],"2":[]},"bonus":{"1":0,"2":0},"deployRows":{"1":[1,2,3,4,5,6,7,8],"2":[6,7,8,9,10,11,12,13]},"units":[],"pending":[],"deaths":[],"hazards":[],"siphons":[],"iceMarks":[],"log":[],"events":[]})).map_err(|e|e.to_string())?;
@@ -38,13 +119,11 @@ pub fn create(seed: u32, shrine: bool, catalog: &Catalog) -> Result<State, Strin
     Ok(s)
 }
 pub fn viewer(s: &State) -> usize {
-    s.pending
-        .first()
-        .and_then(|r| r["owner"].as_u64())
-        .map(|v| v as usize)
-        .unwrap_or(s.active)
+    s.pending.first().map(|r| r.owner).unwrap_or(s.active)
 }
 pub fn observe(s: &State, viewer: usize) -> Result<Value, String> {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Compatibility);
     if ![1, 2].contains(&viewer) {
         return Err("viewer must be 1 or 2".into());
     }
@@ -62,7 +141,6 @@ pub fn observe(s: &State, viewer: usize) -> Result<Value, String> {
         "regularSummons",
         "summonOffer",
         "shrineSetupDone",
-        "clockFrames",
         "winner",
     ] {
         if let Some(v) = s.extra.get(key) {
@@ -72,6 +150,10 @@ pub fn observe(s: &State, viewer: usize) -> Result<Value, String> {
     if let Some(landmarks) = &s.landmarks {
         output["landmarks"] = json!(landmarks);
     }
+    if let Some(frames) = &s.clock_frames {
+        output["clockFrames"] = json!(frames);
+    }
+    output["baseEffects"] = json!(s.base_effects);
     if let Some(d) = s.extra.get("shrineDraft") {
         let mut choices = json!({});
         for p in 1..=2 {

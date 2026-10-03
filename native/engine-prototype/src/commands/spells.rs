@@ -218,7 +218,7 @@ fn resolve(
             s.unit_mut(&t.id)
                 .unwrap()
                 .effects
-                .retain(|e| e["type"] != effect);
+                .retain(|e| e.kind != effect);
             add_effect(
                 s,
                 &t.id,
@@ -232,8 +232,8 @@ fn resolve(
             if k != "17" {
                 let ply = s.ply;
                 let e = s.unit_mut(&t.id).unwrap().effects.last_mut().unwrap();
-                e["from"] = json!(ply + 2.0);
-                e["until"] = json!(ply + 3.0);
+                e.from = ply + 2.0;
+                e.until = ply + 3.0;
             }
             ctx.emit(
                 s,
@@ -268,7 +268,7 @@ fn resolve(
                 s.unit_mut(&t.id)
                     .unwrap()
                     .effects
-                    .retain(|e| e["type"] != "inner-fire");
+                    .retain(|e| e.kind != "inner-fire");
                 add_effect(
                     s,
                     &t.id,

@@ -1,8 +1,9 @@
 //! 同 TS 惰性参数树；节点只缓存当前公开局面，不做评分或候选裁剪。
-use crate::actions::{self, Action, Step, array, extend, text};
+use crate::actions::{self, Action, Step, array, text};
 use crate::geometry;
-use crate::model::{Catalog, Point, State, Unit};
+use crate::model::{Catalog, Command, Point, State, Unit};
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -10,13 +11,13 @@ use std::rc::Rc;
 #[derive(Clone)]
 pub struct Prefix {
     action: usize,
-    pub command: Value,
+    pub command: Command,
     steps: Vec<Step>,
 }
 #[derive(Clone)]
 pub struct Choice {
     pub key: String,
-    pub command: Value,
+    pub command: Command,
     pub status: &'static str,
     pub subject: Option<String>,
     pub next: Option<Prefix>,
@@ -24,7 +25,7 @@ pub struct Choice {
 #[derive(Clone)]
 pub struct Node {
     pub cursor: Vec<usize>,
-    pub prefix: Option<Value>,
+    pub prefix: Option<Command>,
     pub stage: &'static str,
     pub choices: Vec<Choice>,
 }
@@ -35,24 +36,23 @@ impl Node {
             if let Some(s)=&c.subject {v["subject"]=json!(s);}v
         }).collect::<Vec<_>>()});
         if let Some(c) = &self.prefix {
-            value["prefix"] = c.clone();
+            value["prefix"] = json!(c);
         }
         value
     }
 }
 pub struct Tree<'a> {
-    pub observation: &'a Value,
-    pub state: State,
+    pub observation: Option<&'a Value>,
+    pub state: Cow<'a, State>,
     pub actor: usize,
     pub catalog: &'a Catalog,
     actions: Vec<Action>,
     nodes: HashMap<Vec<usize>, Rc<Node>>,
     queries: RefCell<crate::inspection::Queries>,
-    pieces: HashMap<String, Unit>,
     targets: Vec<geometry::Target>,
     target_index: HashMap<String, usize>,
-    stats: RefCell<HashMap<String, crate::stats::Stats>>,
-    routes: RefCell<HashMap<(String, String), Vec<String>>>,
+    stats: RefCell<HashMap<crate::entities::EntityHandle, crate::stats::Stats>>,
+    routes: RefCell<HashMap<(crate::entities::EntityHandle, usize), Vec<String>>>,
     pub encoding: OnceCell<Result<crate::encoding::BaseEncoding, String>>,
 }
 impl<'a> Tree<'a> {
@@ -60,13 +60,27 @@ impl<'a> Tree<'a> {
         if ![1, 2].contains(&actor) {
             return Err("invalid training actor".into());
         }
-        let state = actions::position(observation)?;
+        Self::with_position(
+            Some(observation),
+            Cow::Owned(actions::position(observation)?),
+            actor,
+            catalog,
+        )
+    }
+    pub fn from_view(
+        view: &'a crate::runtime::PublicPosition,
+        catalog: &'a Catalog,
+    ) -> Result<Self, String> {
+        Self::with_position(None, Cow::Borrowed(view.position()), view.viewer, catalog)
+    }
+    fn with_position(
+        observation: Option<&'a Value>,
+        state: Cow<'a, State>,
+        actor: usize,
+        catalog: &'a Catalog,
+    ) -> Result<Self, String> {
         let mut queries = crate::inspection::Queries::default();
         let actions = actions::actions(&state, actor, catalog, &mut queries)?;
-        let mut pieces = HashMap::new();
-        for u in state.pieces() {
-            pieces.entry(u.id.clone()).or_insert_with(|| u.fork());
-        }
         let targets = geometry::targets(&state);
         let mut target_index = HashMap::new();
         for (i, t) in targets.iter().enumerate() {
@@ -80,7 +94,6 @@ impl<'a> Tree<'a> {
             actions,
             nodes: HashMap::new(),
             queries: RefCell::new(queries),
-            pieces,
             targets,
             target_index,
             stats: RefCell::new(HashMap::new()),
@@ -88,21 +101,27 @@ impl<'a> Tree<'a> {
             encoding: OnceCell::new(),
         })
     }
-    fn routes(&self, c: &Value) -> Vec<String> {
-        let key = (
-            text(&c["unitId"]).to_string(),
-            text(&c["targetId"]).to_string(),
-        );
+    fn routes(&self, c: &Command) -> Vec<String> {
+        let s = &self.state;
+        let Some(source) = c.unit_id.as_deref().and_then(|id| s.entities.handle(s, id)) else {
+            return vec![];
+        };
+        let Some(target) = c
+            .target_id
+            .as_deref()
+            .and_then(|id| self.target_index.get(id))
+            .copied()
+        else {
+            return vec![];
+        };
+        let key = (source, target);
         if let Some(routes) = self.routes.borrow().get(&key) {
             return routes.clone();
         }
-        let s = &self.state;
-        let Some(u) = self.pieces.get(&key.0) else {
+        let Some(u) = s.entity(source) else {
             return vec![];
         };
-        let Some(t) = self.target_index.get(&key.1).map(|i| &self.targets[*i]) else {
-            return vec![];
-        };
+        let t = &self.targets[target];
         // TS selectableAttackRoutes 有结果时仍来自同一 attackRoutes，否则回退到全方向查询。
         let routes = geometry::attack_routes(s, u, t, self.range(u), u.piercing());
         self.routes.borrow_mut().insert(key, routes.clone());
@@ -111,7 +130,12 @@ impl<'a> Tree<'a> {
     fn range(&self, u: &Unit) -> f64 {
         self.stats
             .borrow_mut()
-            .entry(u.id.clone())
+            .entry(
+                self.state
+                    .entities
+                    .handle(&self.state, &u.id)
+                    .expect("当前只读实体"),
+            )
             .or_insert_with(|| crate::stats::stats(&self.state, u, self.catalog))
             .range
     }
@@ -162,7 +186,7 @@ impl<'a> Tree<'a> {
         if !a.chosen.is_empty() {
             steps.push(Step::new("chosen"));
         }
-        if a.command["type"] == "attack" && a.command.get("path").is_none() {
+        if a.command.kind == "attack" && a.command.path.is_none() {
             steps.push(Step::new("direction"));
         }
         Prefix {
@@ -172,13 +196,15 @@ impl<'a> Tree<'a> {
         }
     }
     fn expand(&self, p: Prefix) -> Result<Vec<Choice>, String> {
+        #[cfg(feature = "kernel-profile")]
+        let _profile = crate::profile::scope(crate::profile::Phase::Candidates);
         let c = &p.command;
         let a = &self.actions[p.action];
         let step = &p.steps[0];
         let s = &self.state;
         let mut result = vec![];
         let mut add = |key: String,
-                       command: Value,
+                       command: Command,
                        subject: Option<String>,
                        repeat: bool|
          -> Result<(), String> {
@@ -199,12 +225,15 @@ impl<'a> Tree<'a> {
         match step.kind {
             "material" => {
                 for id in &a.materials {
-                    if !array(&c["materialIds"]).contains(&json!(id)) {
-                        let mut ids = array(&c["materialIds"]).to_vec();
-                        ids.push(json!(id));
+                    if !c.material_ids.as_deref().unwrap_or(&[]).contains(id) {
+                        let mut ids = c.material_ids.clone().unwrap_or_default();
+                        ids.push(id.clone());
                         add(
                             id.clone(),
-                            extend(c, json!({"materialIds":ids})),
+                            Command {
+                                material_ids: Some(ids),
+                                ..c.clone()
+                            },
                             Some(id.clone()),
                             false,
                         )?;
@@ -215,8 +244,11 @@ impl<'a> Tree<'a> {
                 add("random".into(), c.clone(), None, false)?;
                 for k in &a.chosen {
                     add(
-                        format!("kind:{}", crate::preparation::kind(k).key()),
-                        extend(c, json!({"chosenKind":k})),
+                        format!("kind:{}", k.key()),
+                        Command {
+                            chosen_kind: Some(k.clone()),
+                            ..c.clone()
+                        },
                         None,
                         false,
                     )?;
@@ -233,41 +265,43 @@ impl<'a> Tree<'a> {
                     {
                         continue;
                     }
-                    if step.field == "sacrificeIds" && array(&c[step.field]).contains(&json!(t.id))
+                    if step.field == "sacrificeIds"
+                        && c.sacrifice_ids.as_deref().unwrap_or(&[]).contains(&t.id)
                     {
                         continue;
                     }
                     let mut command = c.clone();
-                    command[step.field] = if step.field == "sacrificeIds" {
-                        let mut ids = array(&c[step.field]).to_vec();
-                        ids.push(json!(t.id));
-                        json!(ids)
-                    } else {
-                        json!(t.id)
-                    };
+                    match step.field {
+                        "sacrificeIds" => command
+                            .sacrifice_ids
+                            .get_or_insert_with(Vec::new)
+                            .push(t.id.clone()),
+                        "secondId" => command.second_id = Some(t.id.clone()),
+                        "targetId" => command.target_id = Some(t.id.clone()),
+                        _ => return Err("unknown target field".into()),
+                    }
                     add(t.id.clone(), command, Some(t.id.clone()), false)?;
                 }
             }
             "point" => {
-                let points = if c["type"] == "synthesize" && array(&c["materialIds"]).len() == 3 {
+                let points = if c.kind == "synthesize"
+                    && c.material_ids.as_deref().unwrap_or(&[]).len() == 3
+                {
                     let r = self
                         .catalog
                         .recipes
                         .iter()
-                        .find(|r| r["id"] == c["recipeId"])
+                        .find(|r| r["id"].as_str() == c.recipe_id.as_deref())
                         .ok_or("unknown recipe")?;
                     crate::synthesis::destinations(
                         s,
                         r,
-                        &array(&c["materialIds"])
-                            .iter()
-                            .map(|v| text(v).to_string())
-                            .collect::<Vec<_>>(),
+                        c.material_ids.as_deref().unwrap_or(&[]),
                         self.catalog,
                     )
-                } else if a.id.split(':').next() == Some("giant") && c.get("targetId").is_some() {
-                    self.pieces
-                        .get(text(&c["targetId"]))
+                } else if a.id.split(':').next() == Some("giant") && c.target_id.is_some() {
+                    self.state
+                        .unit(c.target_id.as_deref().unwrap_or(""))
                         .map(|u| geometry::expansion_anchors(s, u, self.catalog))
                         .unwrap_or_default()
                 } else {
@@ -276,7 +310,11 @@ impl<'a> Tree<'a> {
                 for at in points {
                     add(
                         format!("{},{}", at.x, at.y),
-                        extend(c, json!({"x":at.x,"y":at.y})),
+                        Command {
+                            x: Some(at.x),
+                            y: Some(at.y),
+                            ..c.clone()
+                        },
                         None,
                         false,
                     )?;
@@ -287,7 +325,10 @@ impl<'a> Tree<'a> {
                     let id = text(&d["id"]);
                     add(
                         id.into(),
-                        extend(c, json!({"deathId":id})),
+                        Command {
+                            death_id: Some(id.into()),
+                            ..c.clone()
+                        },
                         Some(id.into()),
                         false,
                     )?;
@@ -295,19 +336,32 @@ impl<'a> Tree<'a> {
             }
             "row" | "column" => {
                 for n in 1..=if step.kind == "row" { 13 } else { 9 } {
-                    add(n.to_string(), extend(c, json!({step.kind:n})), None, false)?;
+                    let mut command = c.clone();
+                    if step.kind == "row" {
+                        command.row = Some(n as f64);
+                    } else {
+                        command.column = Some(n as f64);
+                    }
+                    add(n.to_string(), command, None, false)?;
                 }
             }
             "direction" => {
                 add("auto".into(), c.clone(), None, false)?;
                 for d in self.routes(c) {
-                    add(d.clone(), extend(c, json!({"direction":d})), None, false)?;
+                    add(
+                        d.clone(),
+                        Command {
+                            direction: Some(d),
+                            ..c.clone()
+                        },
+                        None,
+                        false,
+                    )?;
                 }
             }
             "path" => {
-                if let Some(u) = self.pieces.get(text(&c["unitId"])) {
-                    let path: Vec<Point> =
-                        serde_json::from_value(c["path"].clone()).map_err(|e| e.to_string())?;
+                if let Some(u) = self.state.unit(c.unit_id.as_deref().unwrap_or("")) {
+                    let path: &[Point] = c.path.as_deref().unwrap_or(&[]);
                     if !path.is_empty() {
                         add("commit-path".into(), c.clone(), None, false)?;
                     }
@@ -316,12 +370,15 @@ impl<'a> Tree<'a> {
                         .map(|p| geometry::neighbors(*p).collect())
                         .unwrap_or_else(|| geometry::cells(u, u.at()));
                     for at in points {
-                        let mut extended = path.clone();
+                        let mut extended = path.to_vec();
                         extended.push(at);
                         if geometry::valid_attack_route(u, &extended, self.range(u)) {
                             add(
                                 format!("{},{}", at.x, at.y),
-                                extend(c, json!({"path":extended})),
+                                Command {
+                                    path: Some(extended),
+                                    ..c.clone()
+                                },
                                 None,
                                 true,
                             )?;
@@ -334,6 +391,8 @@ impl<'a> Tree<'a> {
         Ok(result)
     }
     pub fn node(&mut self, cursor: &[usize]) -> Result<Rc<Node>, String> {
+        #[cfg(feature = "kernel-profile")]
+        let _profile = crate::profile::scope(crate::profile::Phase::Candidates);
         if cursor.len() > 256 {
             return Err("action cursor too deep".into());
         }

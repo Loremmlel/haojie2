@@ -18,7 +18,7 @@ pub struct Options {
     pub amount: Option<f64>,
     pub weapon_first: Option<bool>,
 }
-struct Prepared {
+pub struct Prepared {
     ally: bool,
     healing: bool,
     stats: Stats,
@@ -26,7 +26,7 @@ struct Prepared {
     can_pierce: bool,
 }
 pub fn healing_attack(u: &Unit, catalog: &Catalog) -> bool {
-    catalog[&u.kind.key()].attack < 0.0
+    catalog.by_kind(&u.kind).attack < 0.0
         || u.signed()
         || (!u.silenced && u.any(&["2", "u21", "s14"]))
 }
@@ -37,13 +37,15 @@ fn prepare(
     o: &Options,
     catalog: &Catalog,
 ) -> Result<Prepared, Failure> {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Preparation);
     let ally = t
         .unit
         .as_ref()
         .map(|v| v.side() == u.owner)
         .unwrap_or(t.owner == u.owner);
     let healing = !o.force_hostile
-        && (catalog[&u.kind.key()].attack < 0.0
+        && (catalog.by_kind(&u.kind).attack < 0.0
             || (!u.silenced && u.has("s14"))
             || if u.signed() {
                 o.mode.as_deref() == Some("heal") || (o.mode.is_none() && ally)
@@ -60,11 +62,11 @@ fn prepare(
     ensure(
         o.mode.as_deref() != Some("heal")
             || healing_attack(u, catalog)
-            || catalog[&u.kind.key()].attack < 0.0,
+            || catalog.by_kind(&u.kind).attack < 0.0,
         "该棋子不能选择治疗。",
     )?;
     let friendly = t.unit.as_ref().is_some_and(|v| {
-        catalog[&u.kind.key()].attack < 0.0
+        catalog.by_kind(&u.kind).attack < 0.0
             || u.signed()
             || (!u.silenced && u.any(&["2", "u21", "sage", "s5", "s14"]))
             || (!v.silenced && v.any(&["16", "s6"]))
@@ -83,7 +85,7 @@ fn prepare(
             || (u.piercing()
                 && t.unit
                     .as_ref()
-                    .is_some_and(|v| catalog[&v.kind.key()].landmark.is_some())),
+                    .is_some_and(|v| catalog.by_kind(&v.kind).landmark.is_some())),
         "非穿透攻击优先命中地标上的友方棋子或叠放栈顶。",
     )?;
     let computed = stats(s, u, catalog);
@@ -97,23 +99,16 @@ fn prepare(
         {
             let r = reserve(u, &kind, catalog);
             ensure(
-                number(&r["readyCharge"]) >= 1.0 && r["chargeType"] == "attack",
+                r.ready_charge >= 1.0 && r.charge_type.as_str() == "attack",
                 "半速攻击需要在回合开始已有1层攻击蓄力。",
             )?;
         }
         ensure(
-            !u.has("4")
-                || u.silenced
-                || number(&reserve(u, &Kind::Number(4), catalog)["readyCharge"]) >= 2.0,
+            !u.has("4") || u.silenced || reserve(u, &Kind::Number(4), catalog).ready_charge >= 2.0,
             "定炮回合开始至少有2层蓄力才可开炮。",
         )?;
         ensure(
-            !u.has("9")
-                || u.silenced
-                || !u.extra["attacked"]
-                    .as_array()
-                    .unwrap()
-                    .contains(&json!(t.id)),
+            !u.has("9") || u.silenced || !u.attacked.contains(&t.id),
             "射手不能重复攻击本回合的同一目标。",
         )?;
     }
@@ -337,6 +332,18 @@ pub fn perform(
     ctx: &mut Resolution,
 ) -> Result<(), Failure> {
     let p = prepare(s, u, t, o, catalog)?;
+    perform_prepared(s, u, t, o, catalog, ctx, p)
+}
+// 预检已经算出的属性和路径直接进入同一次结算；连锁攻击仍各自准备。
+fn perform_prepared(
+    s: &mut State,
+    u: &Unit,
+    t: &Target,
+    o: &Options,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+    p: Prepared,
+) -> Result<(), Failure> {
     let hit_start = ctx.attack_hits.len();
     let previous = ctx.enter(
         u.actor_event(),
@@ -363,7 +370,7 @@ pub fn perform(
             if convert
                 && !u.has("5")
                 && victim.as_ref().is_some_and(|v| {
-                    v.side() == 3 - u.owner && catalog[&v.kind.key()].tier != "shrine"
+                    v.side() == 3 - u.owner && catalog.by_kind(&v.kind).tier != "shrine"
                 })
                 && ctx.attack_hits[hit_start..]
                     .iter()
@@ -422,9 +429,7 @@ fn resolve(
                         path: Some(prefix),
                         no_pierce: true,
                         amount: Some(p.stats.attack),
-                        weapon_first: Some(
-                            current.extra.get("weaponFirstUsed") != Some(&json!(true)),
-                        ),
+                        weapon_first: Some(!current.weapon_first_used),
                         ..o.clone()
                     },
                     catalog,
@@ -435,19 +440,19 @@ fn resolve(
         if u.weapon("u11")
             && let Some(u) = s.unit_mut(&u.id)
         {
-            u.extra.insert("weaponFirstUsed".into(), json!(true));
+            u.weapon_first_used = true;
         }
         return Ok(());
     }
     ctx.retaliations.insert(format!("{}>{}", u.id, t.id));
-    ctx.emit(s,json!({"type":"attack","from":u.actor_event(),"to":t.actor(),"path":p.path,"unitId":u.id,"owner":u.owner,"text":if p.healing{"治疗"}else{"攻击"},"ultimate":catalog[&u.kind.key()].tier!="normal"}),None);
+    ctx.emit(s,json!({"type":"attack","from":u.actor_event(),"to":t.actor(),"path":p.path,"unitId":u.id,"owner":u.owner,"text":if p.healing{"治疗"}else{"攻击"},"ultimate":catalog.by_kind(&u.kind).tier!="normal"}),None);
     let skill = Source::new(u, "skill");
     if p.healing && !o.force_hostile {
         if !protected(s, t, &skill, catalog, ctx)? {
-            let amount = if catalog[&u.kind.key()].attack < 0.0 || u.has("s14") {
+            let amount = if catalog.by_kind(&u.kind).attack < 0.0 || u.has("s14") {
                 20.0
             } else if u.signed() {
-                catalog[&u.kind.key()].attack.abs()
+                catalog.by_kind(&u.kind).attack.abs()
             } else if u.has("2") {
                 20.0
             } else {
@@ -476,7 +481,7 @@ fn resolve(
         let effect = u
             .effects
             .iter()
-            .find(|e| e["type"] == "execute" && s.active_effect(e, Some(u)))
+            .find(|e| e.kind == "execute" && s.active_effect(e, Some(u)))
             .unwrap()
             .clone();
         if let Some(u) = s.unit_mut(&u.id)
@@ -501,18 +506,13 @@ fn resolve(
         .unit
         .as_ref()
         .map(|v| v.effects.clone())
-        .unwrap_or_else(|| {
-            s.extra["baseEffects"][t.owner.to_string()]
-                .as_array()
-                .unwrap()
-                .clone()
-        });
+        .unwrap_or_else(|| s.base_effects[&t.owner.to_string()].clone());
     let marks: Vec<_> = if !p.ally && !u.has("10") {
         target_effects
             .iter()
             .filter(|e| {
-                e["type"] == "mark"
-                    && number(&e["owner"]) == u.owner as f64
+                e.kind == "mark"
+                    && e.owner as f64 == u.owner as f64
                     && s.active_effect(e, t.unit.as_ref())
             })
             .cloned()
@@ -594,7 +594,15 @@ fn resolve(
         );
     }
     if u.has("10") && !u.silenced && !p.ally {
-        let e = json!({"type":"mark","owner":u.owner,"sourceId":u.id,"from":s.ply,"until":s.ply+2.0,"global":true});
+        let e = crate::model::Effect {
+            kind: "mark".into(),
+            owner: u.owner,
+            source_id: Some(u.id.clone()),
+            from: s.ply,
+            until: s.ply + 2.0,
+            global: Some(true),
+            amount: None,
+        };
         let full = t
             .unit
             .as_ref()
@@ -617,8 +625,8 @@ fn resolve(
             if let Some(v) = s.unit_mut(&t.id) {
                 v.effects.push(e);
             } else if t.unit.is_none() {
-                s.extra.get_mut("baseEffects").unwrap()[t.owner.to_string()]
-                    .as_array_mut()
+                s.base_effects
+                    .get_mut(&t.owner.to_string())
                     .unwrap()
                     .push(e);
             }
@@ -644,10 +652,7 @@ fn resolve(
         }
     }
     let drain = lifesteal
-        + if u.weapon("u11")
-            && o.weapon_first
-                .unwrap_or(u.extra.get("weaponFirstUsed") != Some(&json!(true)))
-        {
+        + if u.weapon("u11") && o.weapon_first.unwrap_or(!u.weapon_first_used) {
             1.0
         } else {
             0.0
@@ -665,7 +670,7 @@ fn resolve(
     }
     if let Some(current) = s.unit_mut(&u.id) {
         if u.weapon("u11") && o.weapon_first.is_none() {
-            current.extra.insert("weaponFirstUsed".into(), json!(true));
+            current.weapon_first_used = true;
         }
         if !u.silenced {
             for kind in [Kind::Text("u2".into()), Kind::Number(4)] {
@@ -681,7 +686,7 @@ fn resolve(
             let effect = u
                 .effects
                 .iter()
-                .find(|e| e["type"] == "convert" && s.active_effect(e, Some(u)))
+                .find(|e| e.kind == "convert" && s.active_effect(e, Some(u)))
                 .unwrap()
                 .clone();
             if let Some(u) = s.unit_mut(&u.id)
@@ -692,7 +697,7 @@ fn resolve(
             if !protected(s, t, &skill, catalog, ctx)? {
                 convert_target(s, &t.id, u.owner);
                 let v = s.unit(&t.id).unwrap();
-                ctx.emit(s,json!({"type":"skill","to":v.actor_event(),"owner":u.owner,"action":"conversion","stage":"trigger","text":"策反"}),Some(format!("{}加入{}",catalog[&v.kind.key()].name,crate::resolution::faction(u.owner))));
+                ctx.emit(s,json!({"type":"skill","to":v.actor_event(),"owner":u.owner,"action":"conversion","stage":"trigger","text":"策反"}),Some(format!("{}加入{}",catalog.by_kind(&v.kind).name,crate::resolution::faction(u.owner))));
                 return Ok(());
             }
         }
@@ -705,7 +710,7 @@ fn resolve(
             s.unit_mut(&t.id)
                 .unwrap()
                 .effects
-                .retain(|e| e["type"] != "freeze");
+                .retain(|e| e.kind != "freeze");
             add_effect(
                 s,
                 &t.id,
@@ -724,7 +729,7 @@ fn resolve(
             s.unit_mut(&t.id)
                 .unwrap()
                 .effects
-                .retain(|e| e["type"] != "burn");
+                .retain(|e| e.kind != "burn");
             add_effect(
                 s,
                 &t.id,
@@ -742,7 +747,10 @@ fn resolve(
         }
         if u.has("formless") && !u.silenced && alive(s, &u.id) && !victim.has("5") {
             let source = s.unit(&u.id).unwrap();
-            s.pending.push(json!({"kind":"hit-pull","owner":u.owner,"source":source,"targetId":t.id,"amount":0}));
+            s.pending.push(crate::model::Reaction {
+                target_id: Some(t.id.clone()),
+                ..crate::model::Reaction::new("hit-pull", source, 0.0)
+            });
         }
     } else if t.unit.as_ref().is_some_and(|v| v.side() != 0) && !p.ally && attack_loss > 0.0 {
         let effects: Vec<_> = s
@@ -750,7 +758,7 @@ fn resolve(
             .map(|u| {
                 u.effects
                     .iter()
-                    .filter(|e| !(e["type"] == "convert" && s.active_effect(e, Some(u))))
+                    .filter(|e| !(e.kind == "convert" && s.active_effect(e, Some(u))))
                     .cloned()
                     .collect()
             })
@@ -848,7 +856,7 @@ pub fn prepare_inspection(
     c: &Command,
     u: &Unit,
     catalog: &Catalog,
-) -> Result<(), Failure> {
+) -> Result<Prepared, Failure> {
     let t = attack_target(s, c, u, catalog)?;
     prepare(
         s,
@@ -862,7 +870,6 @@ pub fn prepare_inspection(
         },
         catalog,
     )
-    .map(|_| ())
 }
 /// 只接受经 TS 重建的规范局面；阶段校验后复制，反应/攻击失败均不提交副本。
 /// 成功后统一刷新保护、光环、虹吸与部署行，再检查终局，不驱动 UI 或选招。
@@ -872,6 +879,21 @@ pub fn apply(
     catalog: &Catalog,
     preview: bool,
 ) -> Result<State, Failure> {
+    apply_prepared(previous, c, catalog, preview, None)
+}
+pub fn apply_prepared(
+    previous: &State,
+    c: &Command,
+    catalog: &Catalog,
+    preview: bool,
+    prepared: Option<Prepared>,
+) -> Result<State, Failure> {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(if preview {
+        crate::profile::Phase::Preview
+    } else {
+        crate::profile::Phase::Settlement
+    });
     let mut s = previous.fork();
     s.events.clear();
     normalize_guards(&mut s);
@@ -906,27 +928,19 @@ pub fn apply(
             }
         }
         *s.unit_mut(&u.id).unwrap() = u.clone();
-        perform(
-            &mut s,
-            &u,
-            &t,
-            &Options {
-                mode: c.mode.clone(),
-                direction: c.direction.clone(),
-                path: c.path.clone(),
-                ..Default::default()
-            },
-            catalog,
-            &mut ctx,
-        )?;
+        let options = Options {
+            mode: c.mode.clone(),
+            direction: c.direction.clone(),
+            path: c.path.clone(),
+            ..Default::default()
+        };
+        let p = match prepared {
+            Some(p) => p,
+            None => prepare(&s, &u, &t, &options, catalog)?,
+        };
+        perform_prepared(&mut s, &u, &t, &options, catalog, &mut ctx, p)?;
         if let Some(current) = s.unit_mut(&u.id) {
-            current
-                .extra
-                .get_mut("attacked")
-                .unwrap()
-                .as_array_mut()
-                .unwrap()
-                .extend(hit_ids.into_iter().map(|id| json!(id)));
+            current.attacked.extend(hit_ids);
             current.shots += 1.0;
         }
         if let Some(current) = s.unit(&u.id).cloned()

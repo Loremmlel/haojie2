@@ -1,10 +1,9 @@
 //! 公开动作说明与 TS commands/options、training/queries 对齐；不评分、不裁剪参数域。
 use crate::inspection::Queries;
-use crate::model::{Catalog, Command, Failure, State, Unit, extra_number, number};
+use crate::model::{Catalog, Command, Failure, State, Unit, extra_number};
 use crate::movement::{charge_kind, reserve};
 use crate::preparation::kind;
 use crate::stats::{attack_charge, stats};
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 #[derive(Clone)]
@@ -35,13 +34,13 @@ impl Step {
 #[derive(Clone)]
 pub struct Action {
     pub id: String,
-    pub command: Value,
+    pub command: Command,
     pub steps: Vec<Step>,
     pub free: bool,
     pub materials: Vec<String>,
-    pub chosen: Vec<Value>,
+    pub chosen: Vec<crate::model::Kind>,
 }
-fn action(id: &str, c: Value, steps: Vec<Step>) -> Action {
+fn action(id: &str, c: Command, steps: Vec<Step>) -> Action {
     Action {
         id: id.into(),
         command: c,
@@ -67,6 +66,8 @@ pub fn extend(v: &Value, fields: Value) -> Value {
 
 /// 拒绝权威私有字段；预检使用无 RNG 的公开局面，首次概率分支返回 uncertain。
 pub fn position(observation: &Value) -> Result<State, String> {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Compatibility);
     for key in ["seed", "rng", "log", "events", "past", "future", "present"] {
         if observation.get(key).is_some() {
             return Err(format!("training observation contains {key}"));
@@ -77,43 +78,42 @@ pub fn position(observation: &Value) -> Result<State, String> {
     value["events"] = json!([]);
     serde_json::from_value(value).map_err(|e| e.to_string())
 }
-pub fn permitted(s: &State, actor: usize, c: &Value) -> bool {
+pub fn permitted_command(s: &State, actor: usize, c: &Command) -> bool {
     if ![1, 2].contains(&actor)
-        || c.get("player").is_some_and(|v| v != actor)
+        || c.player.is_some_and(|v| v != actor)
         || s.extra.contains_key("winner")
     {
         return false;
     }
     if let Some(r) = s.pending.first() {
-        return c["type"] == "react" && r["owner"] == actor;
+        return c.kind == "react" && r.owner == actor;
     }
     if s.phase == "shrine-draft" {
-        return c["type"] == "choose-shrine"
+        return c.kind == "choose-shrine"
             && s.extra.get("shrineDraft").unwrap_or(&Value::Null)["committed"][actor.to_string()]
                 != true;
     }
-    let u = c["unitId"].as_str().and_then(|id| s.unit(id));
-    if c.get("unitId").is_some() && u.is_none_or(|u| u.owner != actor) {
+    let u = c.unit_id.as_deref().and_then(|id| s.unit(id));
+    if c.unit_id.is_some() && u.is_none_or(|u| u.owner != actor) {
         return false;
     }
     actor == s.active
-        || (c["type"] == "skill"
+        || (c.kind == "skill"
             && u.is_some_and(|u| {
-                c.get("ability").map_or(u.kind.is("u7"), |a| a == "u7") && u.has("u7")
+                c.ability.as_ref().map_or(u.kind.is("u7"), |a| a.is("u7")) && u.has("u7")
             }))
 }
 pub fn inspect(
     s: &State,
     actor: usize,
-    c: &Value,
+    c: &Command,
     catalog: &Catalog,
     queries: &mut Queries,
 ) -> Result<&'static str, String> {
-    if !permitted(s, actor, c) {
+    if !permitted_command(s, actor, c) {
         return Ok("invalid");
     }
-    let c = Command::deserialize(c).map_err(|e| e.to_string())?;
-    match queries.inspect(s, &c, catalog) {
+    match queries.inspect(s, c, catalog) {
         Ok(_) => Ok("available"),
         Err(Failure::Uncertain) => Ok("uncertain"),
         Err(Failure::Invalid(_) | Failure::InvalidOwned(_)) => Ok("invalid"),
@@ -127,7 +127,7 @@ fn allowed(
     catalog: &Catalog,
     queries: &mut Queries,
 ) -> Result<bool, String> {
-    if !permitted(s, actor, &a.command) {
+    if !permitted_command(s, actor, &a.command) {
         return Ok(false);
     }
     if !a.materials.is_empty() {
@@ -138,7 +138,7 @@ fn allowed(
     }
     let c = &a.command;
     let id = a.id.split(':').next().unwrap();
-    let command = text(&c["type"]);
+    let command = c.kind.as_str();
     if command == "react" {
         return Ok(true);
     }
@@ -154,26 +154,23 @@ fn allowed(
     if s.phase != "play" && command != "reroll" && id != "giant" {
         return Ok(false);
     }
-    let Some(u) = c["unitId"].as_str().and_then(|id| s.unit(id)) else {
+    let Some(u) = c.unit_id.as_deref().and_then(|id| s.unit(id)) else {
         return Ok(true);
     };
     let stats = stats(s, u, catalog);
-    let ability = c.get("ability").map(kind).unwrap_or(u.kind.clone());
+    let ability = c.ability.clone().unwrap_or(u.kind.clone());
     let r = reserve(u, &ability, catalog);
     let borrowed = ability != u.kind;
-    let usage = &u.extra.get("abilityUsage").unwrap_or(&Value::Null)[ability.key()];
+    let usage = u.ability_usage.as_ref().and_then(|m| m.get(&ability.key()));
     let once = if borrowed {
-        usage["once"] == true
+        usage.is_some_and(|v| v.once)
     } else {
-        u.extra.get("onceUsed") == Some(&json!(true))
+        u.once_used
     };
     let free = if borrowed {
-        usage["free"].as_f64().unwrap_or(-1.0)
+        usage.map(|v| v.free).unwrap_or(-1.0)
     } else {
-        u.extra
-            .get("freeUsed")
-            .and_then(Value::as_f64)
-            .unwrap_or(f64::NAN)
+        u.free_used
     };
     if (u.owner != s.active && id != "giant")
         || stats.frozen
@@ -186,8 +183,7 @@ fn allowed(
         return Ok(stats.remaining != 0.0
             && !(u.has("4")
                 && !u.silenced
-                && number(&reserve(u, &crate::model::Kind::Number(4), catalog)["readyCharge"])
-                    < 2.0));
+                && reserve(u, &crate::model::Kind::Number(4), catalog).ready_charge < 2.0));
     }
     if !a.free
         && ((u.mode != "none" && !(command == "move" && u.mode == "move"))
@@ -197,15 +193,14 @@ fn allowed(
     }
     if command == "move"
         && u.mode == "none"
-        && charge_kind(u, catalog)
-            .is_some_and(|k| number(&reserve(u, &k, catalog)["readyCharge"]) < 1.0)
+        && charge_kind(u, catalog).is_some_and(|k| reserve(u, &k, catalog).ready_charge < 1.0)
     {
         return Ok(false);
     }
-    if id == "dash" && (number(&r["readyCharge"]) < 2.0 || u.hp <= 10.0) {
+    if id == "dash" && (r.ready_charge < 2.0 || u.hp <= 10.0) {
         return Ok(false);
     }
-    if id == "cross" && (number(&r["readyCharge"]) < 1.0 || once) {
+    if id == "cross" && (r.ready_charge < 1.0 || once) {
         return Ok(false);
     }
     if id == "siphon"
@@ -229,14 +224,17 @@ fn allowed(
     Ok(true)
 }
 fn unit_actions(s: &State, u: &Unit, catalog: &Catalog) -> Vec<Action> {
-    if catalog[&u.kind.key()].landmark.is_some() && u.hp <= 0.0 {
+    if catalog.by_kind(&u.kind).landmark.is_some() && u.hp <= 0.0 {
         return vec![];
     }
     let mut result = vec![];
     let st = stats(s, u, catalog);
     let point = || Step::new("point");
     let target = |r, only| Step::target(r, "targetId", only);
-    let base = |t| json!({"type":t,"unitId":u.id});
+    let base = |t| Command {
+        unit_id: Some(u.id.clone()),
+        ..Command::new(t)
+    };
     if st.movement > 0.0 {
         result.push(action("move", base("move"), vec![point()]));
     }
@@ -245,12 +243,18 @@ fn unit_actions(s: &State, u: &Unit, catalog: &Catalog) -> Vec<Action> {
         if u.signed() {
             result.push(action(
                 "attack",
-                extend(&c, json!({"mode":"damage"})),
+                Command {
+                    mode: Some("damage".into()),
+                    ..c.clone()
+                },
                 vec![target("any", false)],
             ));
             result.push(action(
                 "heal",
-                extend(&c, json!({"mode":"heal"})),
+                Command {
+                    mode: Some("heal".into()),
+                    ..c.clone()
+                },
                 vec![target("any", true)],
             ));
         } else {
@@ -259,19 +263,27 @@ fn unit_actions(s: &State, u: &Unit, catalog: &Catalog) -> Vec<Action> {
         if crate::combat::healing_attack(u, catalog) {
             result.push(action(
                 "self-heal",
-                extend(&c, json!({"targetId":u.id,"mode":"heal"})),
+                Command {
+                    target_id: Some(u.id.clone()),
+                    mode: Some("heal".into()),
+                    ..c.clone()
+                },
                 vec![],
             ));
         }
         if u.weapon("u28") {
             result.push(action(
                 "attack-path",
-                extend(&c, json!({"mode":"damage","path":[]})),
+                Command {
+                    mode: Some("damage".into()),
+                    path: Some(vec![]),
+                    ..c.clone()
+                },
                 vec![Step::new("path")],
             ));
         }
     }
-    let d = &catalog[&u.kind.key()];
+    let d = catalog.by_kind(&u.kind);
     let ordinal = u
         .kind
         .key()
@@ -326,7 +338,10 @@ fn unit_actions(s: &State, u: &Unit, catalog: &Catalog) -> Vec<Action> {
         if yes {
             result.push(action(
                 id,
-                extend(&base("charge"), json!({"mode":mode})),
+                Command {
+                    mode: Some(mode.into()),
+                    ..base("charge")
+                },
                 vec![],
             ));
         }
@@ -341,7 +356,10 @@ fn unit_actions(s: &State, u: &Unit, catalog: &Catalog) -> Vec<Action> {
             "14" => {
                 add(
                     "sacrifice-summon",
-                    extend(&c, json!({"mode":"summon"})),
+                    Command {
+                        mode: Some("summon".into()),
+                        ..c.clone()
+                    },
                     vec![target("friend", true)],
                 );
                 add(
@@ -369,26 +387,18 @@ fn unit_actions(s: &State, u: &Unit, catalog: &Catalog) -> Vec<Action> {
             "u24" => add("ice-mark", c, vec![point()]),
             _ => {}
         }
-        for k in array(u.extra.get("traits").unwrap_or(&Value::Null)) {
-            let k = kind(k);
+        for k in u.traits.iter().flatten() {
             let mut borrowed = u.clone();
-            borrowed.extra.remove("traits");
-            borrowed
-                .extra
-                .extend(reserve(u, &k, catalog).as_object().unwrap().clone());
+            borrowed.traits = None;
+            borrowed.reserve = reserve(u, k, catalog);
             borrowed.kind = k.clone();
-            let usage = &u.extra.get("abilityUsage").unwrap_or(&Value::Null)[k.key()];
-            borrowed
-                .extra
-                .insert("onceUsed".into(), json!(usage["once"] == true));
-            borrowed.extra.insert(
-                "freeUsed".into(),
-                json!(usage["free"].as_f64().unwrap_or(-1.0)),
-            );
+            let usage = u.ability_usage.as_ref().and_then(|m| m.get(&k.key()));
+            borrowed.once_used = usage.is_some_and(|v| v.once);
+            borrowed.free_used = usage.map(|v| v.free).unwrap_or(-1.0);
             for mut a in unit_actions(s, &borrowed, catalog) {
-                if ["skill", "charge"].contains(&text(&a.command["type"])) {
+                if ["skill", "charge"].contains(&a.command.kind.as_str()) {
                     a.id = format!("{}:{}", a.id, k.key());
-                    a.command["ability"] = json!(k);
+                    a.command.ability = Some(k.clone());
                     result.push(a);
                 }
             }
@@ -398,21 +408,30 @@ fn unit_actions(s: &State, u: &Unit, catalog: &Catalog) -> Vec<Action> {
 }
 fn card_actions(s: &State, card: &Value, catalog: &Catalog) -> Vec<Action> {
     let k = kind(&card["kind"]);
-    let d = &catalog[&k.key()];
-    let base = |t| json!({"type":t,"cardId":card["id"]});
+    let d = catalog.by_kind(&k);
+    let base = |t| Command {
+        card_id: Some(text(&card["id"]).into()),
+        ..Command::new(t)
+    };
     let point = || Step::new("point");
     let target = |r| Step::target(r, "targetId", true);
     let mut result = vec![];
     if d.spell.is_none() && d.weapon.is_none() && !d.aura {
         result.push(action(
             "deploy",
-            extend(&base("deploy"), json!({"charge":false})),
+            Command {
+                charge: Some(false),
+                ..base("deploy")
+            },
             vec![point()],
         ));
         if k.is("1") {
             result.push(action(
                 "deploy-charge",
-                extend(&base("deploy"), json!({"charge":true})),
+                Command {
+                    charge: Some(true),
+                    ..base("deploy")
+                },
                 vec![point()],
             ));
         }
@@ -425,19 +444,28 @@ fn card_actions(s: &State, card: &Value, catalog: &Catalog) -> Vec<Action> {
     } else if k.is("25") {
         result.push(action(
             "reforge-one",
-            extend(&base("cast"), json!({"mode":"single"})),
+            Command {
+                mode: Some("single".into()),
+                ..base("cast")
+            },
             vec![],
         ));
         result.push(action(
             "reforge-two",
-            extend(&base("cast"), json!({"mode":"double"})),
+            Command {
+                mode: Some("double".into()),
+                ..base("cast")
+            },
             vec![Step::target("friend", "sacrificeIds", true); 2],
         ));
     } else if k.is("u9") {
         for (id, mode) in [("storm-row", "row"), ("storm-col", "column")] {
             result.push(action(
                 id,
-                extend(&base("cast"), json!({"mode":mode})),
+                Command {
+                    mode: Some(mode.into()),
+                    ..base("cast")
+                },
                 vec![Step::new(mode)],
             ));
         }
@@ -459,25 +487,28 @@ fn card_actions(s: &State, card: &Value, catalog: &Catalog) -> Vec<Action> {
     for u in mages {
         result.push(action(
             &format!("reroll-{}", u.id),
-            extend(&base("reroll"), json!({"unitId":u.id})),
+            Command {
+                unit_id: Some(u.id.clone()),
+                ..base("reroll")
+            },
             vec![],
         ));
     }
     result
 }
-fn pool<'a>(s: &State, c: &Value, catalog: &'a Catalog) -> Option<&'a str> {
+fn pool<'a>(s: &State, c: &Command, catalog: &'a Catalog) -> Option<&'a str> {
     let card = array(&s.extra["hands"][s.active.to_string()])
         .iter()
-        .find(|v| v["id"] == c["cardId"]);
-    match text(&c["type"]) {
+        .find(|v| v["id"].as_str() == c.card_id.as_deref());
+    match c.kind.as_str() {
         "summon" => Some(
-            if s.extra.get("mode") == Some(&json!("shrine")) || c["ultimate"] == true {
+            if s.extra.get("mode") == Some(&json!("shrine")) || c.ultimate == Some(true) {
                 "ultimate"
             } else {
                 "normal"
             },
         ),
-        "extra-summon" => Some(if c["ultimate"] == false {
+        "extra-summon" => Some(if c.ultimate == Some(false) {
             "normal"
         } else {
             "ultimate"
@@ -516,18 +547,21 @@ pub fn actions(
     queries: &mut Queries,
 ) -> Result<Vec<Action>, String> {
     let mut candidates = vec![];
-    let simple = |c: Value| action(text(&c["type"]), c.clone(), vec![]);
+    let simple = |c: Command| action(&c.kind, c.clone(), vec![]);
     if s.extra.contains_key("winner") {
         return Ok(vec![]);
     }
     if let Some(r) = s.pending.first() {
-        let k = text(&r["kind"]);
+        let k = r.kind.as_str();
         candidates.push(action(
             k,
             if k == "hit-pull" {
-                json!({"type":"react","mode":"pull"})
+                Command {
+                    mode: Some("pull".into()),
+                    ..Command::new("react")
+                }
             } else {
-                json!({"type":"react"})
+                Command::new("react")
             },
             match k {
                 "hit-pull" => vec![],
@@ -535,15 +569,22 @@ pub fn actions(
                 _ => vec![Step::target("any", "targetId", false)],
             },
         ));
-        candidates.push(simple(json!({"type":"react"})));
+        candidates.push(simple(Command::new("react")));
     } else if s.phase == "shrine-draft" {
         for k in
             array(&s.extra.get("shrineDraft").unwrap_or(&Value::Null)["offers"][actor.to_string()])
         {
-            let c = json!({"type":"choose-shrine","player":actor,"shrineKind":k});
+            let c = Command {
+                player: Some(actor),
+                shrine_kind: Some(kind(k)),
+                ..Command::new("choose-shrine")
+            };
             if k == "s9" {
                 for p in ["odd", "even"] {
-                    candidates.push(simple(extend(&c, json!({"parity":p}))));
+                    candidates.push(simple(Command {
+                        parity: Some(p.into()),
+                        ..c.clone()
+                    }));
                 }
             } else {
                 candidates.push(simple(c));
@@ -552,18 +593,22 @@ pub fn actions(
     } else if let Some(offer) = s.extra.get("summonOffer") {
         for i in 0..array(&offer["groups"]).len() {
             for j in i + 1..array(&offer["groups"]).len() {
-                candidates.push(simple(
-                    json!({"type":"choose-summons","offerIndices":[i,j]}),
-                ));
+                candidates.push(simple(Command {
+                    offer_indices: Some(vec![i as f64, j as f64]),
+                    ..Command::new("choose-summons")
+                }));
             }
         }
     } else {
         for t in ["begin", "end", "skip-synthesis", "finish-shrine-setup"] {
-            candidates.push(simple(json!({"type":t})));
+            candidates.push(simple(Command::new(t)));
         }
         for t in ["summon", "extra-summon"] {
             for ultimate in [false, true] {
-                candidates.push(simple(json!({"type":t,"ultimate":ultimate})));
+                candidates.push(simple(Command {
+                    ultimate: Some(ultimate),
+                    ..Command::new(t)
+                }));
             }
         }
         for u in s.pieces().filter(|u| u.owner == actor) {
@@ -575,7 +620,7 @@ pub fn actions(
             }
             candidates.push(action(
                 "clock",
-                json!({"type":"clock"}),
+                Command::new("clock"),
                 vec![Step::target("any", "targetId", true)],
             ));
             if s.phase == "synthesis" {
@@ -586,7 +631,10 @@ pub fn actions(
                     }
                     let mut a = action(
                         &format!("synthesize:{}", text(&r["id"])),
-                        json!({"type":"synthesize","recipeId":r["id"]}),
+                        Command {
+                            recipe_id: Some(text(&r["id"]).into()),
+                            ..Command::new("synthesize")
+                        },
                         if catalog[&kind(&r["result"]).key()].aura {
                             vec![]
                         } else {
@@ -606,7 +654,7 @@ pub fn actions(
     for mut a in candidates {
         if allowed(s, actor, &a, catalog, queries)? {
             if can_choose && let Some(p) = pool(s, &a.command, catalog) {
-                a.chosen = catalog.pools[p].iter().map(|k| json!(k)).collect();
+                a.chosen = catalog.pools[p].clone();
             }
             result.push(a);
         }

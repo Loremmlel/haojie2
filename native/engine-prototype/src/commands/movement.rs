@@ -1,8 +1,8 @@
 use crate::geometry::{can_place, cells, deployment_rows, distance, empty_for};
 use crate::model::{
-    COMMANDS, Catalog, Command, Failure, Kind, Point, State, Unit, ensure, extra_number, number,
+    COMMANDS, Catalog, Command, Failure, Kind, Point, State, Unit, ensure, extra_number,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 
 pub struct Prepared {
     pub to: Point,
@@ -15,28 +15,37 @@ pub struct MoveSource {
     pub charge: Option<Kind>,
     pub moves: f64,
     limit: f64,
+    field: std::cell::OnceCell<crate::geometry::MovementField>,
 }
 
 pub fn charge_kind(u: &Unit, catalog: &Catalog) -> Option<Kind> {
     let native = std::iter::once(u.kind.clone());
-    let inherited = u
-        .extra
-        .get("traits")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .map(|k| serde_json::from_value::<Kind>(k.clone()).expect("入口已校验能力编号"));
+    let inherited = u.traits.iter().flatten().cloned();
     native.chain(inherited).find(|k| {
-        let m = catalog[&k.key()].movement;
+        let m = catalog.by_kind(k).movement;
         m > 0.0 && m.fract() != 0.0
     })
 }
-pub fn reserve(u: &Unit, kind: &Kind, catalog: &Catalog) -> Value {
+pub fn reserve(u: &Unit, kind: &Kind, catalog: &Catalog) -> crate::model::Charge {
     if *kind == u.kind {
-        json!({"charge":u.extra["charge"],"readyCharge":u.extra["readyCharge"],"chargeType":u.extra["chargeType"],"lastCharge":u.extra["lastCharge"]})
+        u.reserve
     } else {
-        u.extra.get("abilityCharges").and_then(|r| r.get(kind.key())).cloned().unwrap_or_else(||
-            json!({"charge":0,"readyCharge":0,"chargeType":if catalog[&kind.key()].movement.fract()!=0.0 {"move"} else if kind.is("21") {"skill"} else {"attack"},"lastCharge":-1}))
+        u.ability_charges
+            .as_ref()
+            .and_then(|r| r.get(&kind.key()))
+            .copied()
+            .unwrap_or_else(|| crate::model::Charge {
+                charge: 0.0,
+                ready_charge: 0.0,
+                charge_type: if catalog.by_kind(kind).movement.fract() != 0.0 {
+                    crate::model::ChargeMode::Move
+                } else if kind.is("21") {
+                    crate::model::ChargeMode::Skill
+                } else {
+                    crate::model::ChargeMode::Attack
+                },
+                last_charge: -1.0,
+            })
     }
 }
 
@@ -44,7 +53,7 @@ pub fn reserve(u: &Unit, kind: &Kind, catalog: &Catalog) -> Value {
 /// 公式和时钟来自 TS，不计算移动入口不读取的攻击、治疗和攻击光环字段。
 pub fn movement_stats(s: &State, u: &Unit, catalog: &Catalog) -> (bool, f64, f64) {
     let age = s.turns[&u.owner.to_string()] + u.offset / 2.0 - u.born;
-    let sleeping = if catalog[&u.kind.key()].landmark.is_some() {
+    let sleeping = if catalog.by_kind(&u.kind).landmark.is_some() {
         u.hp <= 0.0
     } else {
         age <= 0.0 || (!u.silenced && u.has("23") && age < 2.0)
@@ -60,7 +69,7 @@ pub fn movement_stats(s: &State, u: &Unit, catalog: &Catalog) -> (bool, f64, f64
     } else {
         (limit - u.operations).max(0.0)
     };
-    let mut movement = catalog[&u.kind.key()].movement;
+    let mut movement = catalog.by_kind(&u.kind).movement;
     if !u.silenced
         && u.has("12")
         && s.units.iter().any(|v| {
@@ -192,7 +201,10 @@ pub fn prepare_finish(s: &State, c: &Command, catalog: &Catalog) -> Result<(), F
 }
 /// 模式和资源只在当前观察内准备；规则执行复用相同函数，目标和路径仍逐个精确验证。
 pub fn move_source(s: &State, u: Unit, catalog: &Catalog) -> Result<MoveSource, Failure> {
-    ensure(catalog[&u.kind.key()].landmark.is_none(), "地标不能移动。")?;
+    ensure(
+        catalog.by_kind(&u.kind).landmark.is_none(),
+        "地标不能移动。",
+    )?;
     ensure(
         u.mode == "none" || u.mode == "move",
         "本回合已选择另一操作模式，剩余攻击不能换成移动或技能。",
@@ -205,7 +217,7 @@ pub fn move_source(s: &State, u: Unit, catalog: &Catalog) -> Result<MoveSource, 
     let charge = charge_kind(&u, catalog);
     let ready = charge.as_ref().is_some_and(|k| {
         let r = reserve(&u, k, catalog);
-        number(&r["readyCharge"]) >= 1.0 && r["chargeType"] == "move"
+        r.ready_charge >= 1.0 && r.charge_type.as_str() == "move"
     });
     let mut moves = if starting { 0.0 } else { u.moves };
     if u.runner() {
@@ -235,6 +247,7 @@ pub fn move_source(s: &State, u: Unit, catalog: &Catalog) -> Result<MoveSource, 
         charge,
         moves,
         limit,
+        field: Default::default(),
     })
 }
 pub fn move_destination(
@@ -271,8 +284,28 @@ pub fn move_destination(
         )?;
         vec![u.at(), to]
     } else {
-        crate::geometry::movement_with_place(u, to, source.limit, u.has("13") && !u.silenced, place)
-            .ok_or(Failure::Invalid("移动距离、路径、占位或独行侠禁区不合法。"))?
+        (if query.is_some() {
+            source
+                .field
+                .get_or_init(|| {
+                    crate::geometry::MovementField::new(
+                        u,
+                        source.limit,
+                        u.has("13") && !u.silenced,
+                        place,
+                    )
+                })
+                .path(to)
+        } else {
+            crate::geometry::movement_with_place(
+                u,
+                to,
+                source.limit,
+                u.has("13") && !u.silenced,
+                place,
+            )
+        })
+        .ok_or(Failure::Invalid("移动距离、路径、占位或独行侠禁区不合法。"))?
     };
     Ok(Some(path))
 }
@@ -313,18 +346,18 @@ pub fn choose_skill(s: &mut State, id: &str, catalog: &Catalog) -> Result<(), Fa
     Ok(())
 }
 pub fn consume(u: &mut Unit, kind: &Kind, catalog: &Catalog) {
+    let mut r = reserve(u, kind, catalog);
+    r.charge = 0.0;
+    r.ready_charge = 0.0;
     if *kind == u.kind {
-        u.extra.insert("charge".into(), json!(0));
-        u.extra.insert("readyCharge".into(), json!(0));
+        u.reserve = r;
     } else {
-        let mut r = reserve(u, kind, catalog);
-        r["charge"] = json!(0);
-        r["readyCharge"] = json!(0);
-        // TS withAbilityCharge 只回写四个独立资源字段。
-        let r = json!({"charge":r["charge"],"readyCharge":r["readyCharge"],"chargeType":r["chargeType"],"lastCharge":r["lastCharge"]});
-        u.extra.entry("abilityCharges").or_insert_with(|| json!({}))[kind.key()] = r;
+        u.ability_charges
+            .get_or_insert_with(Default::default)
+            .insert(kind.key(), r);
     }
 }
+
 pub fn sync(s: &mut State, catalog: &Catalog) {
     crate::resolution::normalize_guards(s);
     sync_banners(s, catalog);
@@ -339,7 +372,7 @@ pub fn sync_banners(s: &mut State, catalog: &Catalog) {
         }
     }
     for u in s.units.iter_mut().chain(s.landmarks.iter_mut().flatten()) {
-        let eligible = catalog[&u.kind.key()].landmark.is_none() || u.live();
+        let eligible = catalog.by_kind(&u.kind).landmark.is_none() || u.live();
         let next = if eligible && u.side() == u.owner {
             banners[u.owner]
         } else {

@@ -1,3 +1,4 @@
+import { own } from '../runtime/position';
 import { cloneRuleData } from '../core/clone';
 import { memoizePreparation } from './preparation';
 import {
@@ -544,7 +545,7 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
         '敌方叠放目标只能选栈顶。',
       );
       if (!protectedEffect(s, a, source, ctx) && !protectedEffect(s, b, source, ctx))
-        s.siphons.push({
+        own(s, 'siphons').push({
           id: `link${s.serial++}`,
           sourceId: u.id,
           owner: u.owner,
@@ -556,6 +557,7 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
     case 'u19': {
       // 最后一次复活可以耗尽施法者剩余生命上限（25 → 5 → 0）。
       // 先验证全部条件；lowerMax 将献祭归属记为己方。
+      own(s, 'deaths');
       const { record, to } = prepareRevival(s, u, c, range);
       addUnit(
         s,
@@ -602,7 +604,7 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
     case 'u24': {
       const to = point(c.x, c.y);
       ensure(inSquare(u, to), '标记须位于自身11×11区域。');
-      s.iceMarks.push({
+      own(s, 'iceMarks').push({
         id: `ice${s.serial++}`,
         sourceId: u.id,
         owner: u.owner,
@@ -700,7 +702,7 @@ function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
         mage.maxHp += COMBAT_RULES.archmageCounterHealth;
         heal(s, mage, COMBAT_RULES.archmageCounterHealth, ctx);
       }
-      s.hands[owner] = s.hands[owner].filter((v) => v.id !== card.id);
+      own(s, 'hands')[owner] = s.hands[owner].filter((v) => v.id !== card.id);
       emit(
         s,
         {
@@ -763,7 +765,7 @@ function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
     case 'u9': {
       const axis = c.mode as 'row' | 'column',
         line = axis === 'row' ? c.row! : c.column!;
-      s.hazards.push({ id: `hazard${s.serial++}`, owner, axis, line, due: s.ply + 2 });
+      own(s, 'hazards').push({ id: `hazard${s.serial++}`, owner, axis, line, due: s.ply + 2 });
       const victims = targets(s).filter((t) =>
         (t.unit ? cells(t.unit) : [t]).some((p) => (axis === 'row' ? p.y === line : p.x === line)),
       );
@@ -795,7 +797,7 @@ function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
     default:
       ensure(false, '未定义的法术。');
   }
-  s.hands[owner] = s.hands[owner].filter((v) => v.id !== card.id);
+  own(s, 'hands')[owner] = s.hands[owner].filter((v) => v.id !== card.id);
   emit(
     s,
     {
@@ -832,7 +834,7 @@ function resolveEquip(s: GamePosition, c: Command) {
     weaponHealth(card.kind);
   ensure(nextMax > 0, '更换这件武器会使生命上限归零，不能装备。');
   installEquipment(u, card.kind, card.id);
-  s.hands[s.active] = s.hands[s.active].filter((v) => v.id !== card.id);
+  own(s, 'hands')[s.active] = s.hands[s.active].filter((v) => v.id !== card.id);
   emit(s, {
     type: 'shield',
     to: u,
@@ -858,7 +860,7 @@ export function reroll(s: GamePosition, c: Command) {
     '需要一名本回合尚未改判的友方改判小法师，或前五回合刚抽到的自身。',
   );
   if (c.unitId) findUnit(s, c.unitId).rerollUsedPly = s.ply;
-  s.hands[s.active] = s.hands[s.active].filter((v) =>
+  own(s, 'hands')[s.active] = s.hands[s.active].filter((v) =>
     card.group ? v.group !== card.group : v.id !== card.id,
   );
   const cards = draw(s, s.active, 1, summonPool(card) === 'ultimate', c.chosenKind);

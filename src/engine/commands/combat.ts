@@ -1,3 +1,4 @@
+import { own } from '../runtime/position';
 import { chargeFor, consumeCharge, attackChargeKind } from '../core/traits';
 import { cloneRuleData } from '../core/clone';
 import {
@@ -197,7 +198,7 @@ export function kill(
   returnDeathWeapons(s, u);
   u.hp = 0;
   s.units = s.units.filter((v) => v.id !== u.id);
-  s.deaths.push({
+  own(s, 'deaths').push({
     id: `dead${s.serial++}`,
     kind: u.kind,
     owner: u.owner,
@@ -225,7 +226,7 @@ export function kill(
       passive(s, city) &&
       attackPath(s, city, asTarget(snap), getStats(s, city).range)
     )
-      s.pending.push({
+      own(s, 'pending').push({
         kind: 'hut-spawn',
         owner: city.owner,
         source: cloneRuleData(city),
@@ -284,7 +285,7 @@ export function kill(
       grave.size = 1;
     }
     if (hasTrait(u, 2))
-      s.pending.push({ kind: 'death-shot', owner: u.owner, source: snap, amount: 20 });
+      own(s, 'pending').push({ kind: 'death-shot', owner: u.owner, source: snap, amount: 20 });
     if (hasTrait(u, 'sage') && passive(s, snap))
       for (const friend of [...s.units])
         if (allegiance(s, friend) === u.owner) heal(s, friend, friend.maxHp - friend.hp, ctx);
@@ -323,7 +324,7 @@ export function kill(
             r.kind === 'hut-spawn' && r.source.id === hut.id && r.source.lastCharge === s.serial,
         )
       ) {
-        s.pending.push({
+        own(s, 'pending').push({
           kind: 'hut-spawn',
           owner: hut.owner,
           source: cloneRuleData(hut),
@@ -473,7 +474,7 @@ export function damage(
     source.owner === u.owner &&
     source.unit.id !== u.id
   )
-    s.pending.push({ kind: 'reflect', owner: u.owner, source: snap, amount: loss });
+    own(s, 'pending').push({ kind: 'reflect', owner: u.owner, source: snap, amount: loss });
   if (
     loss > 0 &&
     alive(s, u) &&
@@ -617,8 +618,9 @@ export function performAttack(
   t: Target,
   ctx = resolution(),
   options: AttackOptions = {},
+  preparation?: ReturnType<typeof prepareAttack> | false,
 ) {
-  const prepared = prepareAttack(s, u, t, options);
+  const prepared = preparation || prepareAttack(s, u, t, options);
   const hits = options.hits ?? [];
   prepared.options.hits = hits;
   const result = withEventFacts(
@@ -1012,7 +1014,7 @@ function resolveAttack(
       burn(s, t, skillSource, ctx);
     if (!u.silenced && hasTrait(u, 'u20')) knockback(s, u, t, path, ctx);
     if (hasTrait(u, 'formless') && passive(s, u) && alive(s, u) && !isHookImmune(victim))
-      s.pending.push({
+      own(s, 'pending').push({
         kind: 'hit-pull',
         owner: u.owner,
         source: cloneRuleData(u),

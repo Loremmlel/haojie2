@@ -11,7 +11,13 @@ import {
   WIDTH,
 } from '../../engine/core/geometry';
 import { allegiance, ensure, getStats, piercing } from '../../engine/core/state';
-import { allPieces } from '../../engine/core/traits';
+import {
+  entityAt,
+  entityHandle,
+  pieceById,
+  registerPublicPosition,
+  type EntityHandle,
+} from '../../engine/runtime/position';
 import { parseCommand } from '../../engine/online/authority';
 import { SYNTHESIS_RECIPES, synthesisDestinations } from '../../engine/setup/synthesis';
 import type { SelectionStep } from '../../engine/commands/options';
@@ -60,7 +66,12 @@ export function canonicalTrainingCommand(
   actor: Player,
   input: unknown,
 ): Command {
-  const c = parseCommand(input);
+  return canonicalEngineCommand(observation, actor, parseCommand(input));
+}
+
+/** 引擎已经类型化的命令只补齐规则默认值，外部 JSON 校验留在上面的边界。 */
+function canonicalEngineCommand(observation: Observation, actor: Player, input: Command): Command {
+  const c = { ...input };
   if (c.type === 'craft') {
     c.type = 'synthesize';
     c.recipeId = 'firelord';
@@ -91,21 +102,18 @@ export class TrainingActionTree {
   readonly actions: TrainingAction[];
   readonly #nodes = new Map<string, ActionNode>();
   readonly #inspect;
-  readonly #pieces = new Map<string, Unit>();
   readonly #targets: Target[];
-  readonly #targetIndex = new Map<string, Target>();
+  readonly #targetIndex = new Map<string, number>();
   readonly #stats = new Map<Unit, ReturnType<typeof getStats>>();
-  readonly #routeCache = new Map<string, ReturnType<typeof attackRoutes>>();
+  readonly #routeCache = new Map<EntityHandle, Map<number, ReturnType<typeof attackRoutes>>>();
   constructor(
     readonly observation: Observation,
     readonly actor: Player,
   ) {
-    this.position = trainingPosition(observation);
-    for (const unit of allPieces(this.position))
-      if (!this.#pieces.has(unit.id)) this.#pieces.set(unit.id, unit);
+    this.position = registerPublicPosition(trainingPosition(observation));
     this.#targets = targets(this.position);
-    for (const target of this.#targets)
-      if (!this.#targetIndex.has(target.id)) this.#targetIndex.set(target.id, target);
+    for (const [index, target] of this.#targets.entries())
+      if (!this.#targetIndex.has(target.id)) this.#targetIndex.set(target.id, index);
     this.#inspect = createTrainingCommandInspector(observation, actor);
     this.actions = trainingActionSpace(observation, actor, this.#inspect).actions;
   }
@@ -119,17 +127,21 @@ export class TrainingActionTree {
   }
 
   #routes(command: Command) {
-    const key = JSON.stringify([command.unitId, command.targetId]);
-    const cached = this.#routeCache.get(key);
+    const source =
+      command.unitId === undefined ? undefined : entityHandle(this.position, command.unitId);
+    const target = this.#targetIndex.get(command.targetId!);
+    if (source === undefined || target === undefined) return [];
+    const cached = this.#routeCache.get(source)?.get(target);
     if (cached) return cached;
-    const u = this.#pieces.get(command.unitId!);
-    const t = this.#targetIndex.get(command.targetId!);
-    if (!u || !t) return [];
+    const u = entityAt(this.position, source)!;
+    const t = this.#targets[target];
     const selectable = selectableAttackRoutes(this.position, u, t);
     const routes = selectable.length
       ? selectable
       : attackRoutes(this.position, u, t, this.#attributes(u).range, piercing(u));
-    this.#routeCache.set(key, routes);
+    let records = this.#routeCache.get(source);
+    if (!records) this.#routeCache.set(source, (records = new Map()));
+    records.set(target, routes);
     return routes;
   }
   #attributes(u: Unit) {
@@ -152,7 +164,7 @@ export class TrainingActionTree {
   }
 
   #start(action: TrainingAction): Prefix {
-    const command = canonicalTrainingCommand(this.observation, this.actor, action.command);
+    const command = canonicalEngineCommand(this.observation, this.actor, action.command);
     const steps: Step[] = [
       ...Array.from({ length: action.materialCount ?? 0 }, (): Step => ({ kind: 'material' })),
       ...action.steps,
@@ -209,7 +221,7 @@ export class TrainingActionTree {
           const recipe = SYNTHESIS_RECIPES.find((r) => r.id === c.recipeId)!;
           points = synthesisDestinations(this.position, recipe, c.materialIds);
         } else if (action.id.split(':')[0] === 'giant' && c.targetId) {
-          const target = this.#pieces.get(c.targetId);
+          const target = pieceById(this.position, c.targetId);
           points = target ? expansionAnchors(this.position, target) : [];
         }
         for (const p of points) add(`${p.x},${p.y}`, { ...c, ...p });
@@ -229,7 +241,7 @@ export class TrainingActionTree {
           add(route.direction, { ...c, direction: route.direction });
         break;
       case 'path': {
-        const u = this.#pieces.get(c.unitId!);
+        const u = pieceById(this.position, c.unitId);
         if (!u) break;
         const path = c.path ?? [];
         if (path.length) add('commit-path', c);

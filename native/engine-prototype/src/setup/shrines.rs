@@ -30,17 +30,21 @@ pub fn capture_clock(s: &mut State) {
     {
         return;
     }
-    let current = json!({"ply":s.ply,"turns":s.turns,"units":s.units});
-    let f = &mut s
-        .extra
-        .entry("clockFrames")
-        .or_insert_with(|| json!({"1":{},"2":{}}))[s.active.to_string()];
-    if let Some(old) = f.get("current").cloned() {
-        f["previous"] = old;
-    } else {
-        f.as_object_mut().unwrap().remove("previous");
-    }
-    f["current"] = current;
+    let current = std::rc::Rc::new(crate::model::ClockFrame {
+        ply: s.ply,
+        turns: s.turns.clone(),
+        units: s.units.iter().map(Unit::fork).collect(),
+    });
+    let frames = s.clock_frames.get_or_insert_with(|| {
+        [
+            ("1".into(), Default::default()),
+            ("2".into(), Default::default()),
+        ]
+        .into_iter()
+        .collect()
+    });
+    let f = frames.get_mut(&s.active.to_string()).unwrap();
+    f.previous = f.current.replace(current);
 }
 pub fn rebuild(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) {
     for old in s.landmarks().to_vec() {
@@ -53,7 +57,7 @@ pub fn rebuild(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) {
             .get("dormantSince")
             .is_some_and(|v| s.ply > number(v))
         {
-            let limit = number(&catalog[&l.kind.key()].landmark.as_ref().unwrap()["rebuild"]);
+            let limit = number(&catalog.by_kind(&l.kind).landmark.as_ref().unwrap()["rebuild"]);
             let ticks = (l.extra.get("rebuildTicks").map(number).unwrap_or(0.0) + 1.0).min(limit);
             l.extra.insert("rebuildTicks".into(), json!(ticks));
             if ticks >= limit
@@ -67,7 +71,7 @@ pub fn rebuild(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) {
                 l.hp = l.max_hp;
                 l.silenced = false;
                 l.effects.clear();
-                ctx.emit(s,json!({"type":"spawn","to":l.actor_event(),"unitId":l.id,"owner":l.owner,"text":"地标重建"}),Some(format!("{}已重建",catalog[&l.kind.key()].name)));
+                ctx.emit(s,json!({"type":"spawn","to":l.actor_event(),"unitId":l.id,"owner":l.owner,"text":"地标重建"}),Some(format!("{}已重建",catalog.by_kind(&l.kind).name)));
             }
         }
         if l.live() {
@@ -205,50 +209,41 @@ pub fn choose(
 }
 fn restored(s: &State, u: &Unit, catalog: &Catalog) -> Result<Unit, Failure> {
     let frame = s
-        .extra
-        .get("clockFrames")
-        .and_then(|v| v.get(s.active.to_string()))
-        .and_then(|v| v.get("previous"));
-    let old = frame
-        .and_then(|f| f["units"].as_array())
-        .and_then(|a| a.iter().find(|v| v["id"] == u.id));
+        .clock_frames
+        .as_ref()
+        .and_then(|m| m.get(&s.active.to_string()))
+        .and_then(|v| v.previous.as_ref());
+    let old = frame.and_then(|f| f.units.iter().find(|v| v.id == u.id));
     if let (Some(frame), Some(old)) = (frame, old) {
-        let mut v: Unit = serde_json::from_value(old.clone()).unwrap();
-        let shift = s.ply - number(&frame["ply"]);
-        v.born += s.turns[&v.owner.to_string()] - number(&frame["turns"][v.owner.to_string()]);
+        let mut v = old.clone();
+        let shift = s.ply - frame.ply;
+        v.born += s.turns[&v.owner.to_string()] - frame.turns[&v.owner.to_string()];
         for e in &mut v.effects {
-            e["from"] = json!(number(&e["from"]) + shift);
-            e["until"] = json!((number(&e["until"]) + shift).min(9007199254740991.0));
+            e.from += shift;
+            e.until = (e.until + shift).min(9007199254740991.0);
         }
         for key in ["hookReadyAt", "hookExpiresAt", "expiresAt", "rerollUsedPly"] {
             if let Some(n) = v.extra.get_mut(key) {
                 *n = json!(number(n) + shift);
             }
         }
-        for key in ["freeUsed", "lastCharge"] {
-            if let Some(n) = v.extra.get_mut(key).filter(|v| number(v) >= 0.0) {
-                *n = json!(number(n) + shift);
-            }
+        if v.free_used >= 0.0 {
+            v.free_used += shift;
         }
-        if let Some(reserves) = v
-            .extra
-            .get_mut("abilityCharges")
-            .and_then(Value::as_object_mut)
-        {
-            for r in reserves.values_mut().filter(|r| r.is_object()) {
-                if number(&r["lastCharge"]) >= 0.0 {
-                    r["lastCharge"] = json!(number(&r["lastCharge"]) + shift);
+        if v.reserve.last_charge >= 0.0 {
+            v.reserve.last_charge += shift;
+        }
+        if let Some(reserves) = &mut v.ability_charges {
+            for r in reserves.values_mut() {
+                if r.last_charge >= 0.0 {
+                    r.last_charge += shift;
                 }
             }
         }
-        if let Some(usage) = v
-            .extra
-            .get_mut("abilityUsage")
-            .and_then(Value::as_object_mut)
-        {
-            for r in usage.values_mut().filter(|r| r.is_object()) {
-                if number(&r["free"]) >= 0.0 {
-                    r["free"] = json!(number(&r["free"]) + shift);
+        if let Some(usage) = &mut v.ability_usage {
+            for r in usage.values_mut() {
+                if r.free >= 0.0 {
+                    r.free += shift;
                 }
             }
         }
@@ -265,18 +260,19 @@ fn restored(s: &State, u: &Unit, catalog: &Catalog) -> Result<Unit, Failure> {
     }
     ensure(
         u.owner != s.active
-            && frame
-                .is_none_or(|f| crate::model::extra_number(u, "deployedAt") > number(&f["ply"])),
+            && frame.is_none_or(|f| crate::model::extra_number(u, "deployedAt") > f.ply),
         "目标在上一个己方回合没有快照，且不是敌方新召唤棋子。",
     )?;
     let mut v = crate::resolution::template(s, &u.kind.key(), u.owner, u.at(), &u.id, catalog);
     v.born = u.born;
-    for key in ["deployedAt", "chargedOnDeploy", "group"] {
+    v.deployed_at = u.deployed_at;
+    v.charged_on_deploy = u.charged_on_deploy;
+    for key in ["group"] {
         if let Some(value) = u.extra.get(key) {
             v.extra.insert(key.into(), value.clone());
         }
     }
-    if u.kind.is("1") && u.extra.get("chargedOnDeploy") == Some(&json!(true)) {
+    if u.kind.is("1") && u.charged_on_deploy {
         v.max_hp -= 10.0;
         v.hp -= 10.0;
     }
@@ -297,7 +293,7 @@ pub fn prepare_clock(s: &State, c: &Command, catalog: &Catalog) -> Result<(Unit,
     )?;
     let u = crate::abilities::unit(s, c.target_id.as_deref())?;
     ensure(
-        catalog[&u.kind.key()].tier != "shrine" && catalog[&u.kind.key()].landmark.is_none(),
+        catalog.by_kind(&u.kind).tier != "shrine" && catalog.by_kind(&u.kind).landmark.is_none(),
         "时钟不能对神龛或地标生效。",
     )?;
     let restored = restored(s, &u, catalog)?;
@@ -306,7 +302,7 @@ pub fn prepare_clock(s: &State, c: &Command, catalog: &Catalog) -> Result<(Unit,
         "时钟原位置被占或不再合法；未消耗次数。",
     )?;
     for k in &restored.equipment {
-        if catalog[&k.key()].tier != "shrine" {
+        if catalog.by_kind(k).tier != "shrine" {
             continue;
         }
         let id = restored
@@ -448,19 +444,13 @@ pub fn steal(
     else {
         return;
     };
-    let mut traits = killer
-        .extra
-        .get("traits")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let mut traits = killer.traits.clone().unwrap_or_default();
     for k in victim.kinds() {
-        let value = json!(k);
-        if k != killer.kind && !traits.contains(&value) {
-            traits.push(value);
+        if k != killer.kind && !traits.contains(&k) {
+            traits.push(k);
         }
     }
-    killer.extra.insert("traits".into(), json!(traits));
+    killer.traits = Some(traits);
     if let Some(k) = victim
         .equipment
         .first()
@@ -473,7 +463,7 @@ pub fn steal(
                 .iter()
                 .map(crate::preparation::weapon_health)
                 .sum::<f64>();
-        let mage = killer.kinds().iter().any(|k| catalog[&k.key()].mage);
+        let mage = killer.kinds().iter().any(|k| catalog.by_kind(k).mage);
         if without + crate::preparation::weapon_health(&k) > 0.0
             && (!(k.is("u5") || k.is("s16")) || mage)
             && (!k.is("u28") || !mage)
@@ -498,7 +488,7 @@ pub fn steal(
             }
             killer.hp = killer.hp.min(killer.max_hp);
             if k.is("u28") {
-                killer.effects.retain(|e| e["type"] != "freeze");
+                killer.effects.retain(|e| e.kind != "freeze");
             }
             killer.extra.remove("overMaxFromBanner");
             victim.equipment.clear();

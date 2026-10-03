@@ -7,7 +7,7 @@ use crate::model::{Catalog, Command, Failure, Point, State, Unit, ensure, number
 use crate::movement::{consume, finish, sync};
 use crate::resolution::{Resolution, add_unit, normalize_guards, template, terminal};
 use crate::stats::stats;
-use serde_json::{Value, json};
+use serde_json::json;
 
 fn point(c: &Command) -> Result<Point, Failure> {
     let (Some(x), Some(y)) = (c.x, c.y) else {
@@ -119,10 +119,8 @@ pub fn move_runner(
     if alive(&s, &u.id) {
         let u = s.unit(&u.id).unwrap().clone();
         if u.has("u12") && target.is_some() {
-            s.pending.insert(
-                0,
-                json!({"kind":"bounce","owner":u.owner,"source":u,"amount":30}),
-            );
+            s.pending
+                .insert(0, crate::model::Reaction::new("bounce", &u, 30.0));
         } else {
             ensure(
                 empty_for(&s, &u, catalog)
@@ -139,11 +137,11 @@ pub fn move_runner(
 }
 
 /// 与 TS hutSpawnPoints 共用规则顺序；同一公开局面的参数树可复用落点结果。
-pub fn hut_points(s: &State, r: &Value, catalog: &Catalog) -> Vec<Point> {
-    let Some(hut) = s.units.iter().find(|u| r["source"]["id"] == u.id) else {
+pub fn hut_points(s: &State, r: &crate::model::Reaction, catalog: &Catalog) -> Vec<Point> {
+    let Some(hut) = s.units.iter().find(|u| r.source.id == u.id) else {
         return vec![];
     };
-    let owner = number(&r["owner"]) as usize;
+    let owner = r.owner;
     if hut.silenced || hut.owner != owner || hut.max_hp < 10.0 {
         return vec![];
     }
@@ -166,11 +164,11 @@ pub fn hut_points(s: &State, r: &Value, catalog: &Catalog) -> Vec<Point> {
 }
 pub fn prepare_hut(
     s: &State,
-    r: &Value,
+    r: &crate::model::Reaction,
     c: &Command,
     destinations: &[Point],
 ) -> Result<(), Failure> {
-    let Some(hut) = s.units.iter().find(|u| r["source"]["id"] == u.id) else {
+    let Some(hut) = s.units.iter().find(|u| r.source.id == u.id) else {
         return Ok(());
     };
     if destinations.is_empty() {
@@ -196,10 +194,9 @@ pub fn react(
 ) -> Result<(), Failure> {
     ensure(!s.pending.is_empty(), "没有待结算反应。")?;
     let r = s.pending.remove(0);
-    let source: Unit = serde_json::from_value(r["source"].clone())
-        .map_err(|_| Failure::Unsupported("reaction-source"))?;
-    let owner = r["owner"].as_u64().unwrap() as usize;
-    match r["kind"].as_str().unwrap_or("") {
+    let source = r.source.fork();
+    let owner = r.owner;
+    match r.kind.as_str() {
         "bounce" => {
             if let Some(mut u) = s.unit(&source.id).cloned() {
                 let to = point(c)?;
@@ -217,10 +214,8 @@ pub fn react(
                 }
                 if let Some(u) = s.unit(&u.id).cloned() {
                     if target.is_some() || !empty_for(s, &u, catalog) {
-                        s.pending.insert(
-                            0,
-                            json!({"kind":"bounce","owner":u.owner,"source":u,"amount":30}),
-                        );
+                        s.pending
+                            .insert(0, crate::model::Reaction::new("bounce", &u, 30.0));
                     } else {
                         finish_rush(s, &u.id, catalog);
                     }
@@ -230,7 +225,7 @@ pub fn react(
         "hit-pull" => {
             if c.mode.as_deref() == Some("pull") {
                 let u = s.unit(&source.id).cloned();
-                let victim = r["targetId"].as_str().and_then(|id| s.unit(id)).cloned();
+                let victim = r.target_id.as_deref().and_then(|id| s.unit(id)).cloned();
                 let pair = u.zip(victim).filter(|(u, v)| {
                     !v.has("5") && u.owner == owner && !u.silenced && v.side() != owner
                 });
@@ -291,7 +286,7 @@ pub fn react(
             if let Some(target) = c.target_id.as_ref().filter(|id| !id.is_empty()) {
                 let t = crate::geometry::find_target(s, target)
                     .ok_or(Failure::Invalid("请选择有效的目标。"))?;
-                if r["kind"] == "death-shot" {
+                if r.kind == "death-shot" {
                     perform(
                         s,
                         &source,
@@ -325,7 +320,7 @@ pub fn react(
                     damage(
                         s,
                         &t,
-                        number(&r["amount"]),
+                        r.amount,
                         &Source::new(&source, "reflect"),
                         catalog,
                         ctx,

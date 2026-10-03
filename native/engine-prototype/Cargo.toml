@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+kernel-profile = []
+
 [dependencies]
-indexmap = "=2.10.0"
+indexmap = { version = "=2.10.0", features = ["serde"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"

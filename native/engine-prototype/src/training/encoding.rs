@@ -1,6 +1,6 @@
 //! 保留 factorized-v1 的实体顺序、引用重编号和存在掩码；词表及印刷值由 TS 注入。
 use crate::actions::{array, text};
-use crate::model::{Catalog, State};
+use crate::model::{Catalog, Kind, State};
 use crate::tree::{Node, Tree};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -88,10 +88,13 @@ fn no_null(v: &Value) -> Result<(), String> {
     }
 }
 fn js_keys(v: &Value) -> Vec<String> {
-    let mut keys: Vec<_> = v
+    let keys: Vec<_> = v
         .as_object()
         .map(|o| o.keys().cloned().collect())
         .unwrap_or_default();
+    js_key_order(keys)
+}
+fn js_key_order(mut keys: Vec<String>) -> Vec<String> {
     let index = |k: &str| {
         k.parse::<u32>()
             .ok()
@@ -126,12 +129,148 @@ struct Encoder<'a> {
     identities: HashMap<String, usize>,
     base_identities: Option<&'a HashMap<String, usize>>,
 }
+
+#[derive(Default)]
+struct RowMeta<'a> {
+    id: Option<&'a str>,
+    parent: Option<&'a str>,
+    source: Option<&'a str>,
+    target: Option<&'a str>,
+    group: Option<&'a str>,
+    owner: Option<usize>,
+    kind: Option<&'a Kind>,
+    order: usize,
+    selectable: bool,
+}
+struct Row {
+    values: Vec<f64>,
+    kind: usize,
+}
+impl Row {
+    fn number(&mut self, at: usize, value: Option<f64>) -> Result<(), String> {
+        if let Some(v) = value {
+            if !v.is_finite() {
+                return Err("encoding expects finite number".into());
+            }
+            self.values[8 + at] = v.signum() * v.abs().ln_1p() / 8.0;
+            self.present(at);
+        }
+        Ok(())
+    }
+    fn boolean(&mut self, at: usize, value: Option<bool>) {
+        if let Some(v) = value {
+            self.values[8 + at] = f64::from(v);
+            self.present(at);
+        }
+    }
+    fn value(&mut self, at: usize, value: &Value) -> Result<(), String> {
+        match value {
+            Value::Null => Ok(()),
+            Value::Bool(v) => {
+                self.boolean(at, Some(*v));
+                Ok(())
+            }
+            _ => self.number(
+                at,
+                Some(value.as_f64().ok_or("encoding expects finite number")?),
+            ),
+        }
+    }
+    fn present(&mut self, at: usize) {
+        self.values[60 + at / 13] += (1u32 << (at % 13)) as f64 / 8191.0;
+    }
+}
 impl Encoder<'_> {
+    fn reference_id(&mut self, id: Option<&str>) -> Result<usize, String> {
+        let Some(id) = id else {
+            return Ok(0);
+        };
+        if id.is_empty() {
+            return Err("invalid entity reference".into());
+        }
+        if let Some(n) = self.base_identities.and_then(|ids| ids.get(id)) {
+            return Ok(*n);
+        }
+        let n = self.base_identities.map_or(0, HashMap::len) + self.identities.len() + 1;
+        Ok(*self.identities.entry(id.into()).or_insert(n))
+    }
+    fn kind_code(&self, kind: Option<&Kind>) -> Result<usize, String> {
+        let Some(kind) = kind else {
+            return Ok(0);
+        };
+        self.catalog
+            .kind_codes
+            .get(kind)
+            .copied()
+            .ok_or_else(|| format!("unknown kind {}", kind.key()))
+    }
+    fn category_code(&self, value: Option<&str>, vocabulary: &str) -> Result<Option<f64>, String> {
+        value
+            .map(|v| {
+                self.catalog
+                    .vocab_codes
+                    .get(vocabulary)
+                    .and_then(|m| m.get(v))
+                    .map(|i| *i as f64)
+                    .ok_or_else(|| format!("unknown encoding category {v}"))
+            })
+            .transpose()
+    }
+    fn index_id(&self, id: Option<&str>) -> Result<i32, String> {
+        id.map(|id| {
+            self.indices
+                .get(id)
+                .map(|i| *i as i32)
+                .ok_or_else(|| format!("missing entity {id}"))
+        })
+        .unwrap_or(Ok(-1))
+    }
+    fn row(&mut self, role: &str, meta: RowMeta<'_>) -> Result<Row, String> {
+        let role = self.catalog.vocab_codes["roles"]
+            .get(role)
+            .copied()
+            .ok_or("unknown role")?
+            - 1;
+        let mut values = vec![0.0; 64];
+        values[0] = (role + 1) as f64 / 32.0;
+        values[1] = match meta.owner {
+            None => 0.0,
+            Some(p) if p == self.viewer => 1.0,
+            Some(1 | 2) => -1.0,
+            _ => return Err("invalid encoding owner".into()),
+        };
+        for (i, id) in [meta.id, meta.parent, meta.source, meta.target]
+            .into_iter()
+            .enumerate()
+        {
+            values[2 + i] = self.reference_id(id)? as f64 / 256.0;
+        }
+        values[6] =
+            self.reference_id(meta.group.map(|g| format!("group:{g}")).as_deref())? as f64 / 256.0;
+        values[7] = meta.order as f64 / 128.0;
+        if meta.selectable
+            && let Some(id) = meta.id
+        {
+            self.indices
+                .to_mut()
+                .entry(id.into())
+                .or_insert(self.entities.len());
+        }
+        Ok(Row {
+            values,
+            kind: if meta.kind.is_some() {
+                self.kind_code(meta.kind)?
+            } else {
+                128 + role
+            },
+        })
+    }
+    fn push(&mut self, row: Row) {
+        self.entities.push(Rc::new(row.values));
+        self.kinds.push(row.kind);
+    }
     fn vocab(&self, name: &str) -> &[Value] {
         array(&self.catalog.encoding[name])
-    }
-    fn cat(&self, v: &Value, name: &str) -> Result<Value, String> {
-        category(v, self.vocab(name))
     }
     fn kind(&self, k: &Value) -> Result<usize, String> {
         if k.is_null() {
@@ -180,15 +319,6 @@ impl Encoder<'_> {
         let n = self.base_identities.map_or(0, HashMap::len) + self.identities.len() + 1;
         Ok(*self.identities.entry(id.into()).or_insert(n))
     }
-    fn index(&self, v: &Value) -> Result<i32, String> {
-        if v.is_null() {
-            return Ok(-1);
-        }
-        self.indices
-            .get(text(v))
-            .map(|i| *i as i32)
-            .ok_or_else(|| format!("missing entity {v}"))
-    }
     fn add(&mut self, role: &str, o: Value, fields: Vec<Value>) -> Result<(), String> {
         let role = self
             .vocab("roles")
@@ -232,186 +362,303 @@ impl Encoder<'_> {
         Ok(())
     }
     fn printed(&self, k: &Value) -> Result<Vec<Value>, String> {
-        let d = self
-            .catalog
-            .printed
-            .iter()
-            .find(|v| v["id"] == *k)
-            .ok_or("missing printed kind")?;
-        Ok([
-            "attack", "health", "range", "actions", "move", "size", "mage", "spell", "weapon",
-            "aura",
-        ]
-        .iter()
-        .map(|name| {
-            if *name == "size" {
-                d.get(*name).cloned().unwrap_or(json!(1))
-            } else {
-                d[*name].clone()
-            }
-        })
-        .collect())
+        let kind = crate::preparation::kind(k);
+        let d = self.catalog.get_kind(&kind).ok_or("missing printed kind")?;
+        Ok(vec![
+            json!(d.attack),
+            json!(d.health),
+            json!(d.range),
+            json!(d.actions),
+            json!(d.movement),
+            json!(d.size.unwrap_or(1.0)),
+            json!(d.printed_mage),
+            json!(d.spell),
+            json!(d.weapon),
+            json!(d.printed_aura),
+        ])
     }
-    fn effect(&mut self, e: &Value, parent: &str, i: usize) -> Result<(), String> {
-        known(
-            e,
-            &[
-                "type", "from", "until", "owner", "amount", "sourceId", "global",
-            ],
-        )?;
-        self.add(
+    fn effect(&mut self, e: &crate::model::Effect, parent: &str, i: usize) -> Result<(), String> {
+        let mut row = self.row(
             "effect",
-            json!({"owner":e["owner"],"parent":parent,"source":e["sourceId"],"order":i}),
-            vec![
-                self.cat(&e["type"], "effects")?,
-                e["from"].clone(),
-                e["until"].clone(),
-                e["amount"].clone(),
-                e["global"].clone(),
-            ],
-        )
+            RowMeta {
+                owner: Some(e.owner),
+                parent: Some(parent),
+                source: e.source_id.as_deref(),
+                order: i,
+                ..RowMeta::default()
+            },
+        )?;
+        row.number(0, self.category_code(Some(&e.kind), "effects")?)?;
+        row.number(1, Some(e.from))?;
+        row.number(2, Some(e.until))?;
+        row.number(3, e.amount)?;
+        row.boolean(4, e.global);
+        self.push(row);
+        Ok(())
     }
     fn unit(
         &mut self,
-        u: &Value,
+        u: &crate::model::Unit,
         role: &str,
         parent: Option<&str>,
         order: usize,
     ) -> Result<(), String> {
-        let mut keys: Vec<&str> = self.vocab("unit_fields").iter().map(text).collect();
-        keys.extend([
-            "id",
-            "kind",
-            "owner",
-            "attacked",
-            "guardSourceIds",
-            "effects",
-            "equipment",
-            "traits",
-            "abilityUsage",
-            "abilityCharges",
-            "equipmentIds",
-            "receivedDamage",
-            "group",
-        ]);
-        known(u, &keys)?;
-        let mut fields = self
-            .vocab("unit_fields")
-            .iter()
-            .map(|name| {
-                let key = text(name);
-                if ["mode", "chargeType"].contains(&key) {
-                    self.cat(&u[key], "modes")
-                } else {
-                    Ok(u[key].clone())
-                }
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        if role != "snapshot" {
-            let unit = if role == "unit" {
-                self.s.units.get(order)
-            } else {
-                self.s.landmarks().get(order)
+        for key in u.extra.keys() {
+            if !self.vocab("unit_fields").iter().any(|v| v == key)
+                && ![
+                    "attacked",
+                    "guardSourceIds",
+                    "traits",
+                    "abilityUsage",
+                    "abilityCharges",
+                    "equipmentIds",
+                    "receivedDamage",
+                    "group",
+                ]
+                .contains(&key.as_str())
+            {
+                return Err(format!("unencoded field {key}"));
             }
-            .ok_or("entity index mismatch")?;
-            let st = crate::stats::stats(self.s, unit, self.catalog);
-            fields.extend([
-                json!(st.attack),
-                json!(st.range),
-                json!(st.actions),
-                json!(st.remaining),
-                json!(st.movement),
-                json!(st.operation_limit),
-                json!(st.operations_left),
-                json!(st.sleeping),
-                json!(st.frozen),
-                json!(st.stunned),
-            ]);
         }
+        let extra = |key: &str| u.extra.get(key).unwrap_or(&Value::Null);
         let id = if role == "snapshot" {
             format!("{}:snapshot:{order}", parent.unwrap())
         } else {
-            text(&u["id"]).into()
+            u.id.clone()
         };
         self.indices
             .to_mut()
-            .entry(text(&u["id"]).into())
+            .entry(u.id.clone())
             .or_insert(self.entities.len());
-        self.add(role,json!({"id":id,"source":if role=="snapshot"{u["id"].clone()}else{Value::Null},"kind":u["kind"],"owner":u["owner"],"parent":parent,"group":u["group"],"order":order}),fields)?;
-        for (i, e) in array(&u["effects"]).iter().enumerate() {
+        let mut row = self.row(
+            role,
+            RowMeta {
+                id: Some(&id),
+                source: (role == "snapshot").then_some(u.id.as_str()),
+                kind: Some(&u.kind),
+                owner: Some(u.owner),
+                parent,
+                group: extra("group").as_str(),
+                order,
+                ..RowMeta::default()
+            },
+        )?;
+        for (i, n) in [
+            (0, u.x),
+            (1, u.y),
+            (2, u.hp),
+            (3, u.max_hp),
+            (4, u.size),
+            (5, u.born),
+            (6, u.offset),
+            (10, u.operations),
+            (11, u.shots),
+            (12, u.moves),
+            (13, u.bonus_attacks),
+        ] {
+            row.number(i, Some(n))?;
+        }
+        row.number(9, self.category_code(Some(&u.mode), "modes")?)?;
+        row.boolean(14, Some(u.bonus_sequence));
+        row.boolean(26, Some(u.silenced));
+        for (i, n) in [
+            (7, u.deployed_at),
+            (20, u.upgrades),
+            (21, u.kills),
+            (22, u.attack_bonus),
+            (23, u.range_bonus),
+            (27, u.free_used),
+        ] {
+            row.number(i, Some(n))?;
+        }
+        for (i, b) in [
+            (8, u.charged_on_deploy),
+            (15, u.weapon_first_used),
+            (24, u.guard_used),
+            (28, u.once_used),
+        ] {
+            row.boolean(i, Some(b));
+        }
+        for (i, key) in [
+            (25, "rerollUsedPly"),
+            (29, "extraOperations"),
+            (30, "bannerHp"),
+            (31, "overMaxFromBanner"),
+            (32, "bladeQualified"),
+            (33, "expiresAt"),
+            (34, "hookReadyAt"),
+            (35, "hookExpiresAt"),
+            (36, "dormantSince"),
+            (37, "rebuildTicks"),
+        ] {
+            row.value(i, extra(key))?;
+        }
+        row.number(16, Some(u.reserve.charge))?;
+        row.number(17, Some(u.reserve.ready_charge))?;
+        row.number(
+            18,
+            self.category_code(Some(u.reserve.charge_type.as_str()), "modes")?,
+        )?;
+        row.number(19, Some(u.reserve.last_charge))?;
+        if role != "snapshot" {
+            let st = crate::stats::stats(self.s, u, self.catalog);
+            for (i, n) in [
+                st.attack,
+                st.range,
+                st.actions,
+                st.remaining,
+                st.movement,
+                st.operation_limit,
+                st.operations_left,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                row.number(38 + i, Some(n))?;
+            }
+            row.boolean(45, Some(st.sleeping));
+            row.boolean(46, Some(st.frozen));
+            row.boolean(47, Some(st.stunned));
+        }
+        self.push(row);
+        for (i, e) in u.effects.iter().enumerate() {
             self.effect(e, &id, i)?;
         }
-        for (i, t) in array(&u["attacked"]).iter().enumerate() {
-            self.add(
+        for (i, t) in u.attacked.iter().enumerate() {
+            let row = self.row(
                 "attacked",
-                json!({"parent":id,"target":t,"owner":u["owner"],"order":i}),
-                vec![],
+                RowMeta {
+                    parent: Some(&id),
+                    target: Some(t),
+                    owner: Some(u.owner),
+                    order: i,
+                    ..RowMeta::default()
+                },
             )?;
+            self.push(row);
         }
-        for (i, t) in array(&u["guardSourceIds"]).iter().enumerate() {
-            self.add(
-                "guard",
-                json!({"parent":id,"source":t,"owner":u["owner"],"order":i}),
-                vec![],
-            )?;
+        for (role, key, source) in [("guard", "guardSourceIds", true)] {
+            for (i, t) in array(extra(key)).iter().enumerate() {
+                let row = self.row(
+                    role,
+                    RowMeta {
+                        parent: Some(&id),
+                        target: if source { None } else { t.as_str() },
+                        source: if source { t.as_str() } else { None },
+                        owner: Some(u.owner),
+                        order: i,
+                        ..RowMeta::default()
+                    },
+                )?;
+                self.push(row);
+            }
         }
-        for (i, h) in array(&u["receivedDamage"]).iter().enumerate() {
+        for (i, h) in array(extra("receivedDamage")).iter().enumerate() {
             known(h, &["ply", "amount"])?;
-            self.add(
+            let mut row = self.row(
                 "received",
-                json!({"parent":id,"owner":u["owner"],"order":i}),
-                vec![h["ply"].clone(), h["amount"].clone()],
+                RowMeta {
+                    parent: Some(&id),
+                    owner: Some(u.owner),
+                    order: i,
+                    ..RowMeta::default()
+                },
             )?;
+            row.value(0, &h["ply"])?;
+            row.value(1, &h["amount"])?;
+            self.push(row);
         }
-        let mut equipment = array(&u["equipment"]).to_vec();
-        for key in js_keys(&u["equipmentIds"]) {
-            let k = self.kind_from_key(&key)?;
+        let mut equipment = u.equipment.clone();
+        for key in js_keys(extra("equipmentIds")) {
+            let k = crate::preparation::kind(&self.kind_from_key(&key)?);
             if !equipment.contains(&k) {
                 equipment.push(k);
             }
         }
         for (i, k) in equipment.iter().enumerate() {
-            let key = crate::preparation::kind(k).key();
-            let mut fields = vec![json!(array(&u["equipment"]).contains(k))];
-            fields.extend(self.printed(k)?);
-            self.add("equipment",json!({"parent":id,"kind":k,"owner":u["owner"],"id":u["equipmentIds"][key],"order":i}),fields)?;
+            let key = k.key();
+            let mut row = self.row(
+                "equipment",
+                RowMeta {
+                    parent: Some(&id),
+                    kind: Some(k),
+                    owner: Some(u.owner),
+                    id: extra("equipmentIds")[key].as_str(),
+                    order: i,
+                    ..RowMeta::default()
+                },
+            )?;
+            row.boolean(0, Some(u.equipment.contains(k)));
+            self.printed_into(&mut row, 1, k)?;
+            self.push(row);
         }
-        let mut abilities = array(&u["traits"]).to_vec();
-        for field in ["abilityUsage", "abilityCharges"] {
-            for key in js_keys(&u[field]) {
-                let k = self.kind_from_key(&key)?;
-                if !abilities.contains(&k) {
-                    abilities.push(k);
-                }
+        let mut abilities: Vec<Kind> = u.traits.clone().unwrap_or_default();
+        let keys = js_key_order(
+            u.ability_usage
+                .as_ref()
+                .map(|m| m.keys().cloned().collect())
+                .unwrap_or_default(),
+        )
+        .into_iter()
+        .chain(js_key_order(
+            u.ability_charges
+                .as_ref()
+                .map(|m| m.keys().cloned().collect())
+                .unwrap_or_default(),
+        ));
+        for key in keys {
+            let k = crate::preparation::kind(&self.kind_from_key(&key)?);
+            if !abilities.contains(&k) {
+                abilities.push(k);
             }
         }
         for k in abilities {
-            let key = crate::preparation::kind(&k).key();
-            let usage = &u["abilityUsage"][&key];
-            let charge = &u["abilityCharges"][&key];
-            if !usage.is_null() {
-                known(usage, &["once", "free"])?;
-            }
-            if !charge.is_null() {
-                known(
-                    charge,
-                    &["charge", "readyCharge", "chargeType", "lastCharge"],
-                )?;
-            }
-            self.add(
+            let key = k.key();
+            let usage = u.ability_usage.as_ref().and_then(|m| m.get(&key));
+            let charge = u.ability_charges.as_ref().and_then(|m| m.get(&key));
+            let mut row = self.row(
                 "ability",
-                json!({"parent":id,"kind":k,"owner":u["owner"]}),
-                vec![
-                    json!(array(&u["traits"]).contains(&k)),
-                    usage["once"].clone(),
-                    usage["free"].clone(),
-                    charge["charge"].clone(),
-                    charge["readyCharge"].clone(),
-                    self.cat(&charge["chargeType"], "modes")?,
-                    charge["lastCharge"].clone(),
-                ],
+                RowMeta {
+                    parent: Some(&id),
+                    kind: Some(&k),
+                    owner: Some(u.owner),
+                    ..RowMeta::default()
+                },
             )?;
+            row.boolean(0, Some(u.traits.as_ref().is_some_and(|v| v.contains(&k))));
+            row.boolean(1, usage.map(|u| u.once));
+            row.number(2, usage.map(|u| u.free))?;
+            row.number(3, charge.map(|r| r.charge))?;
+            row.number(4, charge.map(|r| r.ready_charge))?;
+            row.number(
+                5,
+                self.category_code(charge.map(|r| r.charge_type.as_str()), "modes")?,
+            )?;
+            row.number(6, charge.map(|r| r.last_charge))?;
+            self.push(row);
         }
+        Ok(())
+    }
+    fn printed_into(&self, row: &mut Row, offset: usize, k: &Kind) -> Result<(), String> {
+        let d = self.catalog.by_kind(k);
+        for (i, n) in [
+            d.attack,
+            d.health,
+            d.range,
+            d.actions,
+            d.movement,
+            d.size.unwrap_or(1.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            row.number(offset + i, Some(n))?;
+        }
+        // 印刷布尔字段的缺失与 false 不等价，直接读取规则包保留的存在性。
+        row.boolean(offset + 6, d.printed_mage);
+        row.number(offset + 7, d.spell)?;
+        row.number(offset + 8, d.weapon)?;
+        row.boolean(offset + 9, d.printed_aura);
         Ok(())
     }
     fn card(
@@ -460,50 +707,51 @@ pub struct BaseEncoding {
 
 /// 只接收公开 Observation；严格拒绝新字段与未共同揭示的对手暗选，不截断任何实体。
 fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
-    let observation = tree.observation;
     let viewer = tree.actor;
     let catalog = tree.catalog;
     validate_schema(&catalog.encoding)?;
-    no_null(observation)?;
     // 树的状态已从同一公开观察构造；像 TS 一样复用只读实体，避免每个参数节点重建整局。
     let s = &tree.state;
-    let v = observation;
-    if ![1, 2].contains(&viewer) || v["version"] != 2 {
+    let v = |key: &str| s.extra.get(key).unwrap_or(&Value::Null);
+    if ![1, 2].contains(&viewer) || s.version != 2 {
         return Err("invalid encoding viewer/version".into());
     }
-    known(
-        v,
-        &[
-            "version",
-            "serial",
-            "ply",
-            "active",
-            "phase",
-            "mode",
-            "landmarks",
-            "auras",
-            "shrineDraft",
-            "shrineSetupDone",
-            "regularSummons",
-            "summonOffer",
-            "clockFrames",
-            "summonSlots",
-            "turns",
-            "bases",
-            "baseEffects",
-            "heads",
-            "hands",
-            "bonus",
-            "deployRows",
-            "units",
-            "pending",
-            "deaths",
-            "hazards",
-            "siphons",
-            "iceMarks",
-            "winner",
-        ],
-    )?;
+    if let Some(observation) = tree.observation {
+        no_null(observation)?;
+        known(
+            observation,
+            &[
+                "version",
+                "serial",
+                "ply",
+                "active",
+                "phase",
+                "mode",
+                "landmarks",
+                "auras",
+                "shrineDraft",
+                "shrineSetupDone",
+                "regularSummons",
+                "summonOffer",
+                "clockFrames",
+                "summonSlots",
+                "turns",
+                "bases",
+                "baseEffects",
+                "heads",
+                "hands",
+                "bonus",
+                "deployRows",
+                "units",
+                "pending",
+                "deaths",
+                "hazards",
+                "siphons",
+                "iceMarks",
+                "winner",
+            ],
+        )?;
+    }
     let mut e = Encoder {
         s,
         catalog,
@@ -519,57 +767,76 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
     for p in sides {
         e.reference(&json!(format!("base-{p}")))?;
     }
-    for u in array(&v["units"]).iter().chain(array(&v["landmarks"])) {
-        e.reference(&u["id"])?;
+    for u in s.units.iter().chain(s.landmarks()) {
+        e.reference_id(Some(&u.id))?;
     }
     for p in &sidekeys {
-        for c in array(&v["hands"][p]) {
+        for c in array(&v("hands")[p]) {
             e.reference(&c["id"])?;
         }
     }
-    for d in array(&v["deaths"]) {
+    for d in array(v("deaths")) {
         e.reference(&d["id"])?;
     }
     for (p, key) in sides.iter().zip(&sidekeys) {
-        for pair in [
-            "turns",
-            "bases",
-            "heads",
-            "hands",
-            "bonus",
-            "baseEffects",
-            "deployRows",
-        ] {
-            known(&v[pair], &["1", "2"])?;
+        for pair in ["heads", "hands", "bonus"] {
+            known(v(pair), &["1", "2"])?;
         }
+        known(&s.bases, &["1", "2"])?;
+        known(&s.deploy_rows, &["1", "2"])?;
         let at = crate::geometry::base_point(*p);
-        let mut fields = vec![
-            json!(at.x),
-            json!(at.y),
-            v["bases"][key].clone(),
-            v["turns"][key].clone(),
-            v["heads"][key].clone(),
-            v["bonus"][key].clone(),
-        ];
-        fields.extend((1..=13).map(|i| json!(array(&v["deployRows"][key]).contains(&json!(i)))));
         let id = format!("base-{p}");
-        e.add("base", json!({"id":id,"owner":p,"selectable":true}), fields)?;
-        for (i, eff) in array(&v["baseEffects"][key]).iter().enumerate() {
+        let mut row = e.row(
+            "base",
+            RowMeta {
+                id: Some(&id),
+                owner: Some(*p),
+                selectable: true,
+                ..RowMeta::default()
+            },
+        )?;
+        row.number(0, Some(at.x))?;
+        row.number(1, Some(at.y))?;
+        row.value(2, &s.bases[key])?;
+        row.number(3, Some(s.turns[key]))?;
+        row.value(4, &v("heads")[key])?;
+        row.value(5, &v("bonus")[key])?;
+        for i in 1..=13 {
+            row.boolean(
+                5 + i,
+                Some(
+                    array(&s.deploy_rows[key])
+                        .iter()
+                        .any(|n| n.as_u64() == Some(i as u64)),
+                ),
+            );
+        }
+        e.push(row);
+        if s.base_effects.keys().any(|k| k != "1" && k != "2") {
+            return Err("unknown base effect side".into());
+        }
+        for (i, eff) in s
+            .base_effects
+            .get(key)
+            .ok_or("missing base effect side")?
+            .iter()
+            .enumerate()
+        {
             e.effect(eff, &id, i)?;
         }
     }
-    for (i, u) in array(&v["units"]).iter().enumerate() {
+    for (i, u) in s.units.iter().enumerate() {
         e.unit(u, "unit", None, i)?;
     }
-    for (i, u) in array(&v["landmarks"]).iter().enumerate() {
+    for (i, u) in s.landmarks().iter().enumerate() {
         e.unit(u, "landmark", None, i)?;
     }
     for (p, key) in sides.iter().zip(&sidekeys) {
-        for (i, c) in array(&v["hands"][key]).iter().enumerate() {
+        for (i, c) in array(&v("hands")[key]).iter().enumerate() {
             e.card(c, &json!(p), "card", None, i)?;
         }
     }
-    for (i, d) in array(&v["deaths"]).iter().enumerate() {
+    for (i, d) in array(v("deaths")).iter().enumerate() {
         known(d, &["id", "kind", "owner", "ply", "revived", "group"])?;
         let mut fields = vec![d["ply"].clone(), d["revived"].clone()];
         fields.extend(e.printed(&d["kind"])?);
@@ -579,7 +846,7 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
             fields,
         )?;
     }
-    for (i, h) in array(&v["hazards"]).iter().enumerate() {
+    for (i, h) in array(v("hazards")).iter().enumerate() {
         known(h, &["id", "owner", "sourceId", "axis", "line", "due"])?;
         e.add(
             "hazard",
@@ -591,11 +858,11 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
             ],
         )?;
     }
-    for (i, l) in array(&v["siphons"]).iter().enumerate() {
+    for (i, l) in s.siphons.iter().enumerate() {
         known(l, &["id", "sourceId", "owner", "fromId", "toId"])?;
         e.add("siphon",json!({"id":l["id"],"owner":l["owner"],"parent":l["fromId"],"source":l["sourceId"],"target":l["toId"],"order":i}),vec![])?;
     }
-    for (i, m) in array(&v["iceMarks"]).iter().enumerate() {
+    for (i, m) in array(v("iceMarks")).iter().enumerate() {
         known(m, &["id", "sourceId", "owner", "due", "x", "y"])?;
         e.add(
             "ice",
@@ -603,19 +870,31 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
             vec![m["x"].clone(), m["y"].clone(), m["due"].clone()],
         )?;
     }
-    for (i, r) in array(&v["pending"]).iter().enumerate() {
-        known(r, &["kind", "targetId", "owner", "source", "amount"])?;
+    for (i, r) in s.pending.iter().enumerate() {
         let id = format!("reaction:{i}");
-        e.add("reaction",json!({"id":id,"owner":r["owner"],"source":r["source"]["id"],"target":r["targetId"],"order":i}),vec![e.cat(&r["kind"],"reactions")?,r["amount"].clone()])?;
-        e.unit(&r["source"], "snapshot", Some(&id), 0)?;
+        let mut row = e.row(
+            "reaction",
+            RowMeta {
+                id: Some(&id),
+                owner: Some(r.owner),
+                source: Some(&r.source.id),
+                target: r.target_id.as_deref(),
+                order: i,
+                ..RowMeta::default()
+            },
+        )?;
+        row.number(0, e.category_code(Some(&r.kind), "reactions")?)?;
+        row.number(1, Some(r.amount))?;
+        e.push(row);
+        e.unit(&r.source, "snapshot", Some(&id), 0)?;
     }
-    for pair in ["auras", "clockFrames"] {
-        if let Some(v) = v.get(pair) {
+    for pair in ["auras"] {
+        if let Some(v) = s.extra.get(pair) {
             known(v, &["1", "2"])?;
         }
     }
     for (p, key) in sides.iter().zip(&sidekeys) {
-        for (i, a) in array(&v["auras"][key]).iter().enumerate() {
+        for (i, a) in array(&v("auras")[key]).iter().enumerate() {
             known(a, &["kind", "parity", "usedPly"])?;
             e.add(
                 "aura",
@@ -623,31 +902,43 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
                 vec![cat(&a["parity"], &["odd", "even"])?, a["usedPly"].clone()],
             )?;
         }
-        let frames = &v["clockFrames"][key];
-        if !frames.is_null() {
-            known(frames, &["current", "previous"])?;
-        }
-        for (i, name) in ["current", "previous"].iter().enumerate() {
-            if let Some(f) = frames.get(*name) {
-                known(f, &["ply", "turns", "units"])?;
-                known(&f["turns"], &["1", "2"])?;
-                let id = format!("frame:{p}:{name}");
-                e.add(
-                    "frame",
-                    json!({"id":id,"owner":p,"order":i}),
-                    vec![
-                        f["ply"].clone(),
-                        f["turns"][&sidekeys[0]].clone(),
-                        f["turns"][&sidekeys[1]].clone(),
-                    ],
-                )?;
-                for (j, u) in array(&f["units"]).iter().enumerate() {
-                    e.unit(u, "snapshot", Some(&id), j)?;
+        if let Some(all) = &s.clock_frames {
+            if all.keys().any(|k| k != "1" && k != "2") {
+                return Err("unknown clock frame side".into());
+            }
+            if let Some(frames) = all.get(key) {
+                for (i, (name, frame)) in
+                    [("current", &frames.current), ("previous", &frames.previous)]
+                        .into_iter()
+                        .enumerate()
+                {
+                    if let Some(f) = frame {
+                        if f.turns.keys().any(|k| k != "1" && k != "2") {
+                            return Err("unknown clock turn side".into());
+                        }
+                        let id = format!("frame:{p}:{name}");
+                        let mut row = e.row(
+                            "frame",
+                            RowMeta {
+                                id: Some(&id),
+                                owner: Some(*p),
+                                order: i,
+                                ..RowMeta::default()
+                            },
+                        )?;
+                        row.number(0, Some(f.ply))?;
+                        row.number(1, f.turns.get(&sidekeys[0]).copied())?;
+                        row.number(2, f.turns.get(&sidekeys[1]).copied())?;
+                        e.push(row);
+                        for (j, u) in f.units.iter().enumerate() {
+                            e.unit(u, "snapshot", Some(&id), j)?;
+                        }
+                    }
                 }
             }
         }
     }
-    let draft = &v["shrineDraft"];
+    let draft = v("shrineDraft");
     if !draft.is_null() {
         known(draft, &["offers", "committed", "choices", "revealed"])?;
         for key in ["offers", "committed", "choices"] {
@@ -670,7 +961,7 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
             }
         }
     }
-    if let Some(offer) = v.get("summonOffer") {
+    if let Some(offer) = s.extra.get("summonOffer") {
         known(offer, &["owner", "groups", "count"])?;
         for (i, g) in array(&offer["groups"]).iter().enumerate() {
             for (j, c) in array(g).iter().enumerate() {
@@ -684,41 +975,50 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
             }
         }
     }
-    let mut globals = vec![viewer as f64 / 2.0, e.owner(&v["active"])?];
-    globals.extend(
-        e.vocab("phases")
-            .iter()
-            .map(|p| if *p == v["phase"] { 1.0 } else { 0.0 }),
-    );
-    globals.push(if v["mode"] == "shrine" { 1.0 } else { 0.0 });
+    let mut globals = vec![
+        viewer as f64 / 2.0,
+        if s.active == viewer { 1.0 } else { -1.0 },
+    ];
+    globals.extend(e.vocab("phases").iter().map(|p| {
+        if p.as_str() == Some(s.phase.as_str()) {
+            1.0
+        } else {
+            0.0
+        }
+    }));
+    globals.push(if v("mode") == "shrine" { 1.0 } else { 0.0 });
     for value in [
-        &v["ply"],
-        &v["summonSlots"],
-        &v["turns"][&sidekeys[0]],
-        &v["turns"][&sidekeys[1]],
-        &v["bases"][&sidekeys[0]],
-        &v["bases"][&sidekeys[1]],
-        &v["heads"][&sidekeys[0]],
-        &v["heads"][&sidekeys[1]],
-        &v["bonus"][&sidekeys[0]],
-        &v["bonus"][&sidekeys[1]],
-        v.get("regularSummons").unwrap_or(&json!(0)),
+        s.ply,
+        s.summon_slots,
+        s.turns[&sidekeys[0]],
+        s.turns[&sidekeys[1]],
+        crate::model::number(&s.bases[&sidekeys[0]]),
+        crate::model::number(&s.bases[&sidekeys[1]]),
+        crate::model::number(&v("heads")[&sidekeys[0]]),
+        crate::model::number(&v("heads")[&sidekeys[1]]),
+        crate::model::number(&v("bonus")[&sidekeys[0]]),
+        crate::model::number(&v("bonus")[&sidekeys[1]]),
+        crate::model::number(v("regularSummons")),
     ] {
-        globals.push(num(value)?);
+        globals.push(value.signum() * value.abs().ln_1p() / 8.0);
     }
     globals.extend([
-        if v["winner"].is_null() || v["winner"] == "draw" {
+        if v("winner").is_null() || v("winner") == "draw" {
             0.0
         } else {
-            e.owner(&v["winner"])?
+            e.owner(v("winner"))?
         },
-        if v.get("winner").is_some() { 1.0 } else { 0.0 },
-        num(&json!(array(&v["pending"]).len()))?,
-        num(&json!(array(&v["hands"][&sidekeys[0]]).len()))?,
-        num(&json!(array(&v["hands"][&sidekeys[1]]).len()))?,
+        if s.extra.get("winner").is_some() {
+            1.0
+        } else {
+            0.0
+        },
+        (s.pending.len() as f64).ln_1p() / 8.0,
+        num(&json!(array(&v("hands")[&sidekeys[0]]).len()))?,
+        num(&json!(array(&v("hands")[&sidekeys[1]]).len()))?,
     ]);
     for p in sides {
-        globals.push(if array(&v["shrineSetupDone"]).contains(&json!(p)) {
+        globals.push(if array(v("shrineSetupDone")).contains(&json!(p)) {
             1.0
         } else {
             0.0
@@ -733,8 +1033,8 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
     }
     globals.extend([
         if draft["revealed"] == true { 1.0 } else { 0.0 },
-        num(v["summonOffer"].get("count").unwrap_or(&json!(0)))?,
-        e.owner(&v["summonOffer"]["owner"])?,
+        num(v("summonOffer").get("count").unwrap_or(&json!(0)))?,
+        e.owner(&v("summonOffer")["owner"])?,
         0.0,
     ]);
     Ok(BaseEncoding {
@@ -754,6 +1054,8 @@ pub fn encode_sampling(tree: &Tree<'_>, node: &Node) -> Result<Input, String> {
     encode_mode(tree, node, true)
 }
 fn encode_mode(tree: &Tree<'_>, node: &Node, borrow: bool) -> Result<Input, String> {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Encoding);
     if node.choices.is_empty() {
         return Err("empty action branch requires backtracking".into());
     }
@@ -764,7 +1066,6 @@ fn encode_mode(tree: &Tree<'_>, node: &Node, borrow: bool) -> Result<Input, Stri
         .map_err(Clone::clone)?;
     let viewer = tree.actor;
     let catalog = tree.catalog;
-    let v = tree.observation;
     let mut e = Encoder {
         s: &tree.state,
         catalog,
@@ -790,181 +1091,201 @@ fn encode_mode(tree: &Tree<'_>, node: &Node, borrow: bool) -> Result<Input, Stri
         },
         base_identities: borrow.then_some(&base.identities),
     };
-    let recipes: Vec<Value> = catalog.recipes.iter().map(|r| r["id"].clone()).collect();
+    // 命令直接写固定数值缓冲；不构造 JSON 字段数组或再次解析内部命令。
+    let direction = |v: Option<&str>| -> Result<Option<f64>, String> {
+        v.map(|v| {
+            ["up", "down", "left", "right"]
+                .iter()
+                .position(|w| *w == v)
+                .map(|i| (i + 1) as f64)
+                .ok_or_else(|| "unknown direction".to_string())
+        })
+        .transpose()
+    };
+    let parity = |v: Option<&str>| -> Result<Option<f64>, String> {
+        match v {
+            None => Ok(None),
+            Some("odd") => Ok(Some(1.0)),
+            Some("even") => Ok(Some(2.0)),
+            _ => Err("unknown parity".into()),
+        }
+    };
+    let recipe = |v: Option<&str>| -> Result<Option<f64>, String> {
+        v.map(|v| {
+            catalog
+                .recipes
+                .iter()
+                .position(|r| r["id"] == v)
+                .map(|i| (i + 1) as f64)
+                .ok_or_else(|| "unknown recipe".to_string())
+        })
+        .transpose()
+    };
     if let Some(c) = &node.prefix {
-        let optional_kind = |k: &str| -> Result<Value, String> {
-            if c[k].is_null() {
-                Ok(Value::Null)
-            } else {
-                Ok(json!(e.kind(&c[k])?))
-            }
-        };
-        let fields = vec![
-            e.cat(&c["type"], "commands")?,
-            e.cat(&c["mode"], "modes")?,
-            c["x"].clone(),
-            c["y"].clone(),
-            c["row"].clone(),
-            c["column"].clone(),
-            c["ultimate"].clone(),
-            c["charge"].clone(),
-            cat(&c["direction"], &["up", "down", "left", "right"])?,
-            optional_kind("ability")?,
-            optional_kind("chosenKind")?,
-            optional_kind("shrineKind")?,
-            cat(&c["parity"], &["odd", "even"])?,
-            category(&c["recipeId"], &recipes)?,
-            if c["player"].is_null() {
-                Value::Null
-            } else {
-                json!(e.owner(&c["player"])?)
+        let mut row = e.row(
+            "prefix",
+            RowMeta {
+                id: Some("prefix"),
+                owner: Some(viewer),
+                source: c.unit_id.as_deref().or(c.card_id.as_deref()),
+                target: c.target_id.as_deref(),
+                ..RowMeta::default()
             },
-        ];
-        e.add("prefix",json!({"id":"prefix","owner":viewer,"source":c.get("unitId").unwrap_or(&c["cardId"]),"target":c["targetId"]}),fields)?;
-        for (f, key) in [
-            "secondId",
-            "deathId",
-            "materialIds",
-            "cardIds",
-            "sacrificeIds",
+        )?;
+        row.number(0, e.category_code(Some(&c.kind), "commands")?)?;
+        row.number(1, e.category_code(c.mode.as_deref(), "modes")?)?;
+        row.number(2, c.x)?;
+        row.number(3, c.y)?;
+        row.number(4, c.row)?;
+        row.number(5, c.column)?;
+        row.boolean(6, c.ultimate);
+        row.boolean(7, c.charge);
+        row.number(8, direction(c.direction.as_deref())?)?;
+        for (i, k) in [
+            c.ability.as_ref(),
+            c.chosen_kind.as_ref(),
+            c.shrine_kind.as_ref(),
         ]
-        .iter()
+        .into_iter()
         .enumerate()
         {
-            let ids = if f < 2 {
-                c.get(*key).map(|v| vec![v.clone()]).unwrap_or_default()
-            } else {
-                array(&c[*key]).to_vec()
-            };
-            for (i, id) in ids.iter().enumerate() {
-                e.add(
-                    "argument",
-                    json!({"parent":"prefix","target":id,"order":i}),
-                    vec![json!(f + 1)],
-                )?;
+            row.number(
+                9 + i,
+                k.map(|k| e.kind_code(Some(k)).map(|n| n as f64))
+                    .transpose()?,
+            )?;
+        }
+        row.number(12, parity(c.parity.as_deref())?)?;
+        row.number(13, recipe(c.recipe_id.as_deref())?)?;
+        row.number(14, c.player.map(|p| if p == viewer { 1.0 } else { -1.0 }))?;
+        e.push(row);
+        let mut argument = |id: &str, field: usize, order: usize| -> Result<(), String> {
+            let mut row = e.row(
+                "argument",
+                RowMeta {
+                    parent: Some("prefix"),
+                    target: Some(id),
+                    order,
+                    ..RowMeta::default()
+                },
+            )?;
+            row.number(0, Some(field as f64))?;
+            e.push(row);
+            Ok(())
+        };
+        if let Some(id) = &c.second_id {
+            argument(id, 1, 0)?;
+        }
+        if let Some(id) = &c.death_id {
+            argument(id, 2, 0)?;
+        }
+        for (field, ids) in [
+            (3, &c.material_ids),
+            (4, &c.card_ids),
+            (5, &c.sacrifice_ids),
+        ] {
+            for (i, id) in ids.as_deref().unwrap_or(&[]).iter().enumerate() {
+                argument(id, field, i)?;
             }
         }
-        for (i, p) in array(&c["path"]).iter().enumerate() {
-            e.add(
+        for (i, p) in c.path.as_deref().unwrap_or(&[]).iter().enumerate() {
+            let mut row = e.row(
                 "path",
-                json!({"parent":"prefix","order":i}),
-                vec![p["x"].clone(), p["y"].clone()],
+                RowMeta {
+                    parent: Some("prefix"),
+                    order: i,
+                    ..RowMeta::default()
+                },
             )?;
+            row.number(0, Some(p.x))?;
+            row.number(1, Some(p.y))?;
+            e.push(row);
         }
-        for (i, n) in array(&c["offerIndices"]).iter().enumerate() {
-            e.add(
+        for (i, n) in c.offer_indices.as_deref().unwrap_or(&[]).iter().enumerate() {
+            let mut row = e.row(
                 "argument",
-                json!({"parent":"prefix","order":i}),
-                vec![json!(6), n.clone()],
+                RowMeta {
+                    parent: Some("prefix"),
+                    order: i,
+                    ..RowMeta::default()
+                },
             )?;
+            row.number(0, Some(6.0))?;
+            row.number(1, Some(*n))?;
+            e.push(row);
         }
     }
     let mut globals = base.globals.clone();
-    globals[31] = if node.prefix.is_some() { 1.0 } else { 0.0 };
-    let mut candidates = vec![];
-    let mut sources = vec![];
-    let mut targets = vec![];
+    globals[31] = f64::from(node.prefix.is_some());
+    let mut candidates = Vec::with_capacity(node.choices.len());
+    let mut sources = Vec::with_capacity(node.choices.len());
+    let mut targets = Vec::with_capacity(node.choices.len());
+    let stage = e
+        .category_code(Some(node.stage), "decision_stages")?
+        .unwrap()
+        / 16.0;
     for choice in &node.choices {
         let c = &choice.command;
         let mut row = vec![0.0; 64];
-        let ci = e
-            .cat(&c["type"], "commands")?
-            .as_u64()
-            .ok_or("missing command category")? as usize;
-        row[ci - 1] = 1.0;
-        if !c["mode"].is_null() {
-            row[23 + e.cat(&c["mode"], "modes")?.as_u64().unwrap() as usize - 1] = 1.0;
+        row[e.category_code(Some(&c.kind), "commands")?.unwrap() as usize - 1] = 1.0;
+        if let Some(n) = e.category_code(c.mode.as_deref(), "modes")? {
+            row[23 + n as usize - 1] = 1.0;
         }
-        for (i, key, div) in [
-            (36, "x", 9.0),
-            (37, "y", 13.0),
-            (38, "row", 13.0),
-            (39, "column", 9.0),
-        ] {
-            row[i] = c[key].as_f64().unwrap_or(0.0) / div;
-        }
-        for (i, key) in [(40, "ultimate"), (41, "charge")] {
-            row[i] = if c[key].is_null() {
-                -1.0
-            } else if c[key] == true {
-                1.0
-            } else {
-                0.0
-            };
-        }
-        row[42] = cat(&c["direction"], &["up", "down", "left", "right"])?
-            .as_f64()
-            .unwrap_or(0.0)
-            / 4.0;
-        for (i, key) in [(43, "ability"), (44, "chosenKind"), (45, "shrineKind")] {
-            row[i] = e.kind(&c[key])? as f64 / 128.0;
-        }
-        row[46] = category(&c["recipeId"], &recipes)?.as_f64().unwrap_or(0.0) / 8.0;
-        row[47] = if c["parity"] == "odd" {
-            1.0
-        } else if c["parity"] == "even" {
-            -1.0
-        } else {
-            0.0
+        row[36] = c.x.unwrap_or(0.0) / 9.0;
+        row[37] = c.y.unwrap_or(0.0) / 13.0;
+        row[38] = c.row.unwrap_or(0.0) / 13.0;
+        row[39] = c.column.unwrap_or(0.0) / 9.0;
+        row[40] = c.ultimate.map_or(-1.0, f64::from);
+        row[41] = c.charge.map_or(-1.0, f64::from);
+        row[42] = direction(c.direction.as_deref())?.unwrap_or(0.0) / 4.0;
+        row[43] = e.kind_code(c.ability.as_ref())? as f64 / 128.0;
+        row[44] = e.kind_code(c.chosen_kind.as_ref())? as f64 / 128.0;
+        row[45] = e.kind_code(c.shrine_kind.as_ref())? as f64 / 128.0;
+        row[46] = recipe(c.recipe_id.as_deref())?.unwrap_or(0.0) / 8.0;
+        row[47] = match parity(c.parity.as_deref())? {
+            Some(1.0) => 1.0,
+            Some(_) => -1.0,
+            None => 0.0,
         };
-        row[48] = e
-            .cat(&json!(node.stage), "decision_stages")?
-            .as_f64()
-            .unwrap()
-            / 16.0;
-        row[49] = if choice.status != "parameter" {
-            1.0
-        } else {
-            0.0
-        };
-        row[50] = if choice.status == "uncertain" {
-            1.0
-        } else {
-            0.0
-        };
+        row[48] = stage;
+        row[49] = f64::from(choice.status != "parameter");
+        row[50] = f64::from(choice.status == "uncertain");
         for i in 0..2 {
-            row[51 + i] = c["offerIndices"][i]
-                .as_f64()
-                .map(|n| n / 16.0)
-                .unwrap_or(-1.0);
+            row[51 + i] = c
+                .offer_indices
+                .as_deref()
+                .unwrap_or(&[])
+                .get(i)
+                .map_or(-1.0, |n| n / 16.0);
         }
-        for (i, key, div) in [
-            (53, "materialIds", 3.0),
-            (54, "sacrificeIds", 2.0),
-            (55, "path", 117.0),
-        ] {
-            row[i] = array(&c[key]).len() as f64 / div;
+        row[53] = c.material_ids.as_deref().unwrap_or(&[]).len() as f64 / 3.0;
+        row[54] = c.sacrifice_ids.as_deref().unwrap_or(&[]).len() as f64 / 2.0;
+        row[55] = c.path.as_deref().unwrap_or(&[]).len() as f64 / 117.0;
+        row[56] = e.reference_id(c.second_id.as_deref())? as f64 / 256.0;
+        row[57] = e.reference_id(c.death_id.as_deref())? as f64 / 256.0;
+        row[58] = f64::from(choice.key == "commit-path");
+        row[59] = c
+            .player
+            .map_or(0.0, |p| if p == viewer { 1.0 } else { -1.0 });
+        if let Some(p) = c.path.as_deref().unwrap_or(&[]).last() {
+            row[60] = p.x / 9.0;
+            row[61] = p.y / 13.0;
         }
-        row[56] = e.reference(&c["secondId"])? as f64 / 256.0;
-        row[57] = e.reference(&c["deathId"])? as f64 / 256.0;
-        row[58] = if choice.key == "commit-path" {
-            1.0
-        } else {
-            0.0
-        };
-        row[59] = e.owner(&c["player"])?;
-        if let Some(p) = array(&c["path"]).last() {
-            row[60] = p["x"].as_f64().unwrap_or(0.0) / 9.0;
-            row[61] = p["y"].as_f64().unwrap_or(0.0) / 13.0;
-        }
-        let source = c
-            .get("unitId")
-            .or_else(|| c.get("cardId"))
-            .unwrap_or_else(|| {
-                if c["type"] == "react" {
-                    &v["pending"][0]["source"]["id"]
-                } else {
-                    &Value::Null
-                }
-            });
-        sources.push(e.index(source)?);
-        let subject = choice.subject.as_ref().map(|s| json!(s));
+        let source = c.unit_id.as_deref().or(c.card_id.as_deref()).or_else(|| {
+            if c.kind == "react" {
+                tree.state.pending.first().map(|r| r.source.id.as_str())
+            } else {
+                None
+            }
+        });
+        sources.push(e.index_id(source)?);
         targets.push(
-            e.index(
-                subject
-                    .as_ref()
-                    .or_else(|| c.get("targetId"))
-                    .unwrap_or(&c["deathId"]),
+            e.index_id(
+                choice
+                    .subject
+                    .as_deref()
+                    .or(c.target_id.as_deref())
+                    .or(c.death_id.as_deref()),
             )?,
         );
         candidates.push(row);

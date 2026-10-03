@@ -1,3 +1,4 @@
+import { own } from '../runtime/position';
 import { grantLaoqian } from './shrines';
 import { hasAura } from '../core/traits';
 /** 作者指定的合成配方；资格及原子落位由界面与 AI 共用。 */
@@ -79,7 +80,7 @@ export function synthesize(s: GamePosition, c: Command) {
       (l) => ![l.sourceId, l.fromId, l.toId].some((id) => ids.includes(id)),
     );
     s.iceMarks = s.iceMarks.filter((m) => !ids.includes(m.sourceId));
-  } else s.hands[s.active] = s.hands[s.active].filter((v) => !ids.includes(v.id));
+  } else own(s, 'hands')[s.active] = s.hands[s.active].filter((v) => !ids.includes(v.id));
   if (recipe.result === 'laoqian') {
     grantLaoqian(s);
     if (!availableSyntheses(s).length) s.phase = 'summon';

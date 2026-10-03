@@ -3,7 +3,7 @@ use crate::model::{Catalog, Failure, State, Unit, extra_number, number};
 use crate::movement::sync_banners as sync;
 use crate::resolution::{Resolution, active_target, add_unit, faction, guardian};
 use crate::stats::stats;
-use serde_json::{Value, json};
+use serde_json::json;
 
 #[derive(Clone)]
 pub struct Source {
@@ -78,7 +78,7 @@ pub fn freeze(
     s.unit_mut(&t.id)
         .unwrap()
         .effects
-        .retain(|e| e["type"] != "freeze");
+        .retain(|e| e.kind != "freeze");
     crate::resolution::add_effect(
         s,
         &t.id,
@@ -115,24 +115,19 @@ pub fn area_damage(
     }
     Ok(())
 }
-fn effects(s: &State, t: &Target) -> Vec<Value> {
+fn effects(s: &State, t: &Target) -> Vec<crate::model::Effect> {
     t.unit
         .as_ref()
         .map(|u| u.effects.clone())
-        .unwrap_or_else(|| {
-            s.extra["baseEffects"][t.owner.to_string()]
-                .as_array()
-                .unwrap()
-                .clone()
-        })
+        .unwrap_or_else(|| s.base_effects[&t.owner.to_string()].clone())
 }
-pub fn set_effects(s: &mut State, t: &Target, e: Vec<Value>) {
+pub fn set_effects(s: &mut State, t: &Target, e: Vec<crate::model::Effect>) {
     if t.unit.is_some() {
         if let Some(u) = s.unit_mut(&t.id) {
             u.effects = e;
         }
     } else {
-        s.extra.get_mut("baseEffects").unwrap()[t.owner.to_string()] = json!(e);
+        s.base_effects.insert(t.owner.to_string(), e);
     }
 }
 pub fn protected(
@@ -209,7 +204,7 @@ pub fn heal(
                 "{}回复{}生命",
                 t.unit
                     .as_ref()
-                    .map(|u| catalog[&u.kind.key()].name.as_str())
+                    .map(|u| catalog.by_kind(&u.kind).name.as_str())
                     .unwrap_or("基地"),
                 gain
             )),
@@ -224,7 +219,7 @@ pub fn heal(
     if full {
         for e in effects(s, &t)
             .into_iter()
-            .filter(|e| e["type"] == "mark")
+            .filter(|e| e.kind == "mark")
             .collect::<Vec<_>>()
         {
             if !s.active_effect(&e, t.unit.as_ref()) {
@@ -239,9 +234,10 @@ pub fn heal(
                     .collect(),
             );
             let source = Source {
-                owner: e["owner"].as_u64().unwrap() as usize,
-                unit: e["sourceId"]
-                    .as_str()
+                owner: e.owner,
+                unit: e
+                    .source_id
+                    .as_deref()
                     .and_then(|id| s.units.iter().find(|u| u.id == id).cloned()),
                 kind: "status",
                 path: vec![],
@@ -280,7 +276,7 @@ pub fn kill(
         .find(|u| u.id == victim.id)
         .unwrap()
         .clone();
-    if catalog[&u.kind.key()].landmark.is_some() {
+    if catalog.by_kind(&u.kind).landmark.is_some() {
         let ply = s.ply;
         let l = s
             .landmarks
@@ -293,7 +289,7 @@ pub fn kill(
         l.extra.insert("dormantSince".into(), json!(ply));
         l.extra.insert("rebuildTicks".into(), json!(0));
         l.mode = "none".into();
-        ctx.emit(s,json!({"type":"death","to":u.actor_event(),"unitId":u.id,"owner":u.owner,"text":"地标休眠"}),Some(format!("{}被摧毁，等待重建",catalog[&u.kind.key()].name)));
+        ctx.emit(s,json!({"type":"death","to":u.actor_event(),"unitId":u.id,"owner":u.owner,"text":"地标休眠"}),Some(format!("{}被摧毁，等待重建",catalog.by_kind(&u.kind).name)));
         sync(s, catalog);
         return Ok(());
     }
@@ -332,7 +328,7 @@ pub fn kill(
                 .as_array_mut()
                 .unwrap()
                 .push(card);
-            ctx.emit(s,json!({"type":"skill","owner":u.owner,"text":format!("{}返回储存区",catalog[&k.key()].name)}),None);
+            ctx.emit(s,json!({"type":"skill","owner":u.owner,"text":format!("{}返回储存区",catalog.by_kind(k).name)}),None);
         }
     }
     s.units.retain(|v| v.id != u.id);
@@ -352,7 +348,7 @@ pub fn kill(
         Some(format!(
             "{}的{}离场",
             faction(u.owner),
-            catalog[&u.kind.key()].name
+            catalog.by_kind(&u.kind).name
         )),
     );
     s.siphons
@@ -395,7 +391,7 @@ pub fn kill(
         .collect();
     for city in cities {
         s.pending
-            .push(json!({"kind":"hut-spawn","owner":city.owner,"source":city,"amount":0}));
+            .push(crate::model::Reaction::new("hut-spawn", &city, 0.0));
     }
     sync(s, catalog);
     if !group_final {
@@ -434,7 +430,7 @@ pub fn kill(
     {
         let k = s.unit_mut(&killer.id).unwrap();
         let kills = extra_number(k, "kills") + 1.0;
-        k.extra.insert("kills".into(), json!(kills));
+        k.kills = kills;
         if k.has("26") {
             match (kills as i64 - 1) % 3 {
                 0 => {
@@ -442,17 +438,17 @@ pub fn kill(
                 }
                 1 => {
                     let bonus = extra_number(k, "attackBonus") + 5.0;
-                    k.extra.insert("attackBonus".into(), json!(bonus));
+                    k.attack_bonus = bonus;
                 }
                 _ => {
                     let bonus = extra_number(k, "rangeBonus") + 1.0;
-                    k.extra.insert("rangeBonus".into(), json!(bonus));
+                    k.range_bonus = bonus;
                 }
             }
         }
         if k.has("u8") && kills == 5.0 {
             let bonus = extra_number(k, "rangeBonus") + 1.0;
-            k.extra.insert("rangeBonus".into(), json!(bonus));
+            k.range_bonus = bonus;
         }
         if k.has("u23") {
             let now = s.ply + killer.offset;
@@ -479,7 +475,7 @@ pub fn kill(
         }
         if u.has("2") {
             s.pending
-                .push(json!({"kind":"death-shot","owner":u.owner,"source":snap,"amount":20}));
+                .push(crate::model::Reaction::new("death-shot", &snap, 20.0));
         }
         if u.has("sage") || u.has("u21") {
             let friends: Vec<_> = s
@@ -550,12 +546,12 @@ pub fn kill(
         .collect();
     for hut in huts {
         if !s.pending.iter().any(|r| {
-            r["kind"] == "hut-spawn"
-                && r["source"]["id"] == hut.id
-                && number(&r["source"]["lastCharge"]) == s.serial as f64
+            r.kind == "hut-spawn"
+                && r.source.id == hut.id
+                && r.source.reserve.last_charge == s.serial as f64
         }) {
             s.pending
-                .push(json!({"kind":"hut-spawn","owner":hut.owner,"source":hut,"amount":0}));
+                .push(crate::model::Reaction::new("hut-spawn", &hut, 0.0));
         }
     }
     Ok(())
@@ -581,7 +577,7 @@ pub fn damage(
             && source
                 .unit
                 .as_ref()
-                .is_some_and(|u| u.kinds().iter().any(|k| catalog[&k.key()].mage)))
+                .is_some_and(|u| u.kinds().iter().any(|k| catalog.by_kind(k).mage)))
     {
         bonus += 15.0
             * s.pieces()
@@ -610,7 +606,7 @@ pub fn damage(
         return Ok(0.0);
     }
     let u = t.unit.as_ref().unwrap();
-    if catalog[&u.kind.key()].landmark.is_some()
+    if catalog.by_kind(&u.kind).landmark.is_some()
         && source.owner != u.owner
         && ["attack", "collision"].contains(&source.kind)
         && !source.unit.as_ref().is_some_and(Unit::piercing)
@@ -661,7 +657,7 @@ pub fn damage(
             .as_array_mut()
             .unwrap()
             .push(json!(guard));
-        v.extra.insert("guardUsed".into(), json!(true));
+        v.guard_used = true;
     } else {
         v.hp = ((v.hp - amount) * 1e6).round().max(0.0) / 1e6;
     }
@@ -671,7 +667,7 @@ pub fn damage(
         ctx.emit(s,json!({"type":"shield","to":u.actor_event(),"owner":u.owner,"action":"ward","stage":"blocked","text":"名刀","actor":g.actor_event(),"ability":3}),None);
     }
     if loss != 0.0 {
-        ctx.emit(s,json!({"type":"damage","to":u.actor_event(),"unitId":u.id,"amount":loss,"owner":u.owner}),Some(format!("{}受到{}伤害",catalog[&u.kind.key()].name,loss)));
+        ctx.emit(s,json!({"type":"damage","to":u.actor_event(),"unitId":u.id,"amount":loss,"owner":u.owner}),Some(format!("{}受到{}伤害",catalog.by_kind(&u.kind).name,loss)));
     }
     let ply = s.ply;
     let v = s
@@ -699,7 +695,7 @@ pub fn damage(
     }
     if loss > 0.0 && !v.silenced && v.has("u10") {
         let bonus = extra_number(v, "attackBonus") + 15.0;
-        v.extra.insert("attackBonus".into(), json!(bonus));
+        v.attack_bonus = bonus;
     }
     let snap = v.clone();
     let origin = source
@@ -738,7 +734,7 @@ pub fn damage(
         && source.unit.as_ref().is_some_and(|v| v.id != snap.id)
     {
         s.pending
-            .push(json!({"kind":"reflect","owner":snap.owner,"source":snap,"amount":loss}));
+            .push(crate::model::Reaction::new("reflect", &snap, loss));
     }
     if loss > 0.0
         && alive(s, &snap.id)

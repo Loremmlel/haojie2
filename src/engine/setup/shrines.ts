@@ -1,3 +1,4 @@
+import { own } from '../runtime/position';
 /** 神龛模式、地标及光环的规则实现，不包含渲染器或 AI 策略。 */
 import { cloneRuleData } from '../core/clone';
 import { summonPool } from './summoning';
@@ -230,6 +231,7 @@ export function validateShrineChoice(s: GamePosition, c: Command) {
   return { draft: d, player: p, kind: c.shrineKind };
 }
 export function chooseShrine(s: GamePosition, c: Command) {
+  own(s, 'shrineDraft');
   const { draft: d, player: p, kind } = validateShrineChoice(s, c);
   d.choices[p] = { kind, ...(c.shrineKind === 's9' ? { parity: c.parity } : {}) };
   d.committed[p] = true;
@@ -245,7 +247,7 @@ export function chooseShrine(s: GamePosition, c: Command) {
   s.phase = 'shrine-setup';
   for (const owner of [1, 2] as Player[]) {
     const choice = d.choices[owner]!;
-    s.hands[owner].push({
+    own(s, 'hands')[owner].push({
       id: `c${s.serial++}`,
       kind: choice.kind,
       drawnAt: 0,
@@ -266,14 +268,14 @@ export function activateAura(s: GamePosition, c: Command) {
   s.auras ??= { 1: [], 2: [] };
   const entry: Aura = { kind: card.kind, ...(card.parity ? { parity: card.parity } : {}) };
   if (card.kind === 's9') ensure(entry.parity, '玉碎的开局奇偶选择缺失。');
-  s.auras[s.active].push(entry);
-  s.hands[s.active] = s.hands[s.active].filter((v) => v.id !== card.id);
+  own(s, 'auras')![s.active].push(entry);
+  own(s, 'hands')[s.active] = s.hands[s.active].filter((v) => v.id !== card.id);
   emit(s, { type: 'skill', owner: s.active, text: `永久光环 · ${definition(card.kind).name}` });
 }
 export function grantLaoqian(s: GamePosition) {
   s.auras ??= { 1: [], 2: [] };
   ensure(!hasAura(s, s.active, 'laoqian'), '牢千K光环已经存在，不能重复消耗材料。');
-  s.auras[s.active].push({ kind: 'laoqian' });
+  own(s, 'auras')![s.active].push({ kind: 'laoqian' });
   emit(
     s,
     { type: 'skill', owner: s.active, text: '合成 · 牢千K' },
@@ -290,6 +292,7 @@ export const canChooseSummon = (s: GamePosition, p: Player = s.active) => {
 export function consumeChosenSummon(s: GamePosition, owner: Player, kind: Kind, ultimate: boolean) {
   ensure(canChooseSummon(s, owner), '本回合牢千K自选召唤已使用，或尚未获得光环。');
   ensure(selectableSummons(ultimate).includes(kind), '自选结果必须属于本次召唤的来源池。');
+  own(s, 'auras');
   aura(s, owner, 'laoqian')!.usedPly = s.ply;
 }
 export function prepareSummon(s: GamePosition, c: Command) {
@@ -316,7 +319,7 @@ export function summon(s: GamePosition, c: Command) {
     for (let i = 0; i < count; i++)
       groups.push(draw(s, s.active, 1, true, i === 0 ? c.chosenKind : undefined));
     const ids = new Set(groups.flat().map((v) => v.id));
-    s.hands[s.active] = s.hands[s.active].filter((v) => !ids.has(v.id));
+    own(s, 'hands')[s.active] = s.hands[s.active].filter((v) => !ids.has(v.id));
     s.summonOffer = { owner: s.active, groups, count: 2 };
     s.summonSlots -= 2;
     s.regularSummons = 0;
@@ -336,7 +339,7 @@ export function chooseSummons(s: GamePosition, c: Command) {
       indices.every((i) => Number.isInteger(i) && i >= 0 && i < offer.groups.length),
     '请选择两个不同的完整召唤结果。',
   );
-  for (const index of indices) s.hands[s.active].push(...offer.groups[index]);
+  for (const index of indices) own(s, 'hands')[s.active].push(...offer.groups[index]);
   delete s.summonOffer;
   emit(s, { type: 'summon', owner: s.active, text: '老千K · 选定两个结果' });
 }
@@ -365,7 +368,7 @@ export function captureClockFrame(s: GamePosition) {
   )
     return;
   s.clockFrames ??= { 1: {}, 2: {} };
-  const f = s.clockFrames[s.active];
+  const f = own(s, 'clockFrames')![s.active];
   if (f.current) f.previous = f.current;
   else delete f.previous;
   f.current = { ply: s.ply, turns: { ...s.turns }, units: cloneRuleData(s.units) };
@@ -438,6 +441,7 @@ export function canRestoreClock(s: GamePosition, u: Unit): boolean {
   }
 }
 export function clockRestore(s: GamePosition, c: Command, ctx: Resolution) {
+  own(s, 'auras');
   const { a, u, restored } = prepareClockRestore(s, c);
   a.usedPly = s.ply;
   if (!protectedEffect(s, asTarget(u), { owner: s.active, kind: 'skill' }, ctx)) {
@@ -547,7 +551,7 @@ export function stealOnKill(s: GamePosition, killer: Unit, victim: Unit) {
 export function returnDeathWeapons(s: GamePosition, u: Unit) {
   for (const k of u.equipment)
     if (k === 's2' || (k === 's15' && u.bladeQualified)) {
-      s.hands[u.owner].push({
+      own(s, 'hands')[u.owner].push({
         id: u.equipmentIds?.[k] ?? `c${s.serial++}`,
         kind: k,
         drawnAt: s.turns[u.owner],

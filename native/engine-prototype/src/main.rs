@@ -6,10 +6,14 @@ mod actions;
 mod boundary;
 #[path = "commands/combat.rs"]
 mod combat;
+#[path = "core/command.rs"]
+mod command;
 #[path = "commands/damage.rs"]
 mod damage;
 #[path = "training/encoding.rs"]
 mod encoding;
+#[path = "core/entities.rs"]
+mod entities;
 #[path = "core/geometry.rs"]
 mod geometry;
 #[path = "commands/inspection.rs"]
@@ -23,6 +27,9 @@ mod movement;
 mod policy;
 #[path = "commands/preparation.rs"]
 mod preparation;
+#[cfg(feature = "kernel-profile")]
+#[path = "core/profile.rs"]
+mod profile;
 #[path = "commands/reactions.rs"]
 mod reactions;
 #[path = "training/records.rs"]
@@ -58,6 +65,12 @@ use std::time::Instant;
 
 /// 已完成公共阶段检查；预检与正式连续运行共用同一个规则内核。
 fn execute(s: &State, c: &Command, catalog: &Catalog, preview: bool) -> Result<State, Failure> {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(if preview {
+        crate::profile::Phase::Preview
+    } else {
+        crate::profile::Phase::Settlement
+    });
     match c.kind.as_str() {
         "attack" | "react" => combat::apply(s, c, catalog, preview),
         "move"
@@ -186,11 +199,8 @@ fn jobs(value: Value, catalog: &Catalog) -> Result<Vec<Job>, String> {
                 return Err("unsupported-state: unit geometry/owner".into());
             }
             let mut kinds = vec![u.kind.clone()];
-            if let Some(traits) = u.extra.get("traits") {
-                kinds.extend(
-                    serde_json::from_value::<Vec<model::Kind>>(traits.clone())
-                        .map_err(|e| e.to_string())?,
-                );
+            if let Some(traits) = &u.traits {
+                kinds.extend(traits.iter().cloned());
             }
             if kinds.iter().any(|k| !catalog.contains_key(&k.key())) {
                 return Err("unknown-catalog-kind".into());
@@ -220,8 +230,10 @@ fn handle(
             let definitions: Vec<Definition> =
                 serde_json::from_value(request["catalog"].take()).map_err(|e| e.to_string())?;
             let mut entries = BTreeMap::new();
-            for d in definitions {
-                if entries.insert(d.id.key(), d).is_some() {
+            for (mut d, p) in definitions.into_iter().zip(&printed) {
+                d.printed_mage = p.get("mage").and_then(Value::as_bool);
+                d.printed_aura = p.get("aura").and_then(Value::as_bool);
+                if entries.insert(d.id.key(), std::rc::Rc::new(d)).is_some() {
                     return Err("duplicate catalog kind".into());
                 }
             }
@@ -295,18 +307,60 @@ fn handle(
                 encoding::validate_schema(&encoding)?;
             }
             *catalog = Some(Catalog {
+                numbers: std::array::from_fn(|i| entries.get(&i.to_string()).cloned()),
+                kind_codes: encoding
+                    .get("kinds")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .map(|(i, k)| (crate::preparation::kind(k), i + 1))
+                    .collect(),
+                vocab_codes: encoding
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(key, value)| {
+                        value.as_array().map(|vs| {
+                            (
+                                key.clone(),
+                                vs.iter()
+                                    .enumerate()
+                                    .filter_map(|(i, v)| v.as_str().map(|v| (v.to_owned(), i + 1)))
+                                    .collect(),
+                            )
+                        })
+                    })
+                    .collect(),
                 entries,
                 combat,
                 pools,
                 recipes,
-                printed,
                 encoding,
             });
             Ok(
                 json!({"protocol":PROTOCOL,"ruleset":RULESET,"commands":COMMANDS,"completeEngine":true}),
             )
         }
-        "sample-game" => sampler::game(&request, catalog.as_ref().ok_or("initialize first")?),
+        "sample-game" => {
+            #[cfg(feature = "kernel-profile")]
+            let kernel = {
+                profile::start();
+                profile::scope(profile::Phase::Kernel)
+            };
+            let result = sampler::game(&request, catalog.as_ref().ok_or("initialize first")?);
+            #[cfg(feature = "kernel-profile")]
+            {
+                drop(kernel);
+                let profile = profile::finish();
+                result.map(|mut v| {
+                    v["kernelProfile"] = profile;
+                    v
+                })
+            }
+            #[cfg(not(feature = "kernel-profile"))]
+            result
+        }
         "training-nodes" => {
             let catalog = catalog.as_ref().ok_or("initialize first")?;
             let actor = request["actor"].as_u64().ok_or("actor required")? as usize;

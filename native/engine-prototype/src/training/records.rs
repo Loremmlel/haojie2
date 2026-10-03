@@ -24,6 +24,8 @@ pub fn rules_hash() -> String {
 }
 /// 类型标签；长度 u64 LE；数值统一有限 f64 LE（-0 归 0）；对象按 UTF-8 键排序。
 pub fn hash(value: &Value) -> String {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Hash);
     fn encode(v: &Value, h: &mut Sha256) {
         match v {
             Value::Null => h.update([0]),
@@ -62,6 +64,8 @@ pub fn hash(value: &Value) -> String {
     format!("{:x}", h.finalize())
 }
 pub fn state_hash(s: &State) -> Result<String, String> {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Hash);
     Ok(hash(&serde_json::to_value(s).map_err(|e| e.to_string())?))
 }
 
@@ -163,8 +167,8 @@ pub fn examples(
     if path.is_empty() || path.len() > 256 {
         return Err("invalid decision path".into());
     }
-    let observation = runtime::observe(s, actor)?;
-    let mut tree = Tree::new(&observation, actor, catalog)?;
+    let observation = runtime::public_view(s, actor)?;
+    let mut tree = Tree::from_view(&observation, catalog)?;
     for (step, &selected) in path.iter().enumerate() {
         let node = tree.node(&path[..step])?;
         let choice = node
@@ -174,7 +178,9 @@ pub fn examples(
         if (step + 1 == path.len()) != choice.next.is_none() {
             return Err("incomplete decision path".into());
         }
-        if step + 1 == path.len() && choice.command != *command {
+        if step + 1 == path.len()
+            && serde_json::to_value(&choice.command).map_err(|e| e.to_string())? != *command
+        {
             return Err("decision command mismatch".into());
         }
         let mut input = encoding::encode_sampling(&tree, &node)?;
@@ -328,9 +334,10 @@ pub fn audit(
                     serde_json::from_value(body["path"].clone()).map_err(|e| e.to_string())?;
                 let optional = body["optional"].as_bool().ok_or("optional flag missing")?;
                 let mut primary = runtime::viewer(s);
-                let observation = runtime::observe(s, primary)?;
-                if observation["phase"] == "shrine-draft"
-                    && observation["shrineDraft"]["committed"][primary.to_string()] == true
+                let observation = runtime::public_view(s, primary)?;
+                if observation.position().phase == "shrine-draft"
+                    && observation.position().extra["shrineDraft"]["committed"][primary.to_string()]
+                        == true
                 {
                     primary = 3 - primary;
                 }

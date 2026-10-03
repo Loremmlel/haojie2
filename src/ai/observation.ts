@@ -2,6 +2,31 @@ import { visibleShrineDraft } from '../engine/online/player-view';
 import { deploymentRows } from '../engine/core/geometry';
 import type { GameState, Player } from '../engine/types';
 import type { Observation } from './types';
+import { registerPublicPosition } from '../engine/runtime/position';
+import type { GamePosition } from '../engine/types';
+const publicPositions = new WeakMap<Observation, GamePosition>();
+const frozen = new WeakSet<object>();
+
+/** 冻结共享的公开子树一次；视图无权威根引用，下一条命令通过独立运行分支写入。 */
+function freezePublic<T>(value: T): T {
+  if (!value || typeof value !== 'object' || frozen.has(value)) return value;
+  frozen.add(value);
+  for (const child of Object.values(value)) freezePublic(child);
+  return Object.freeze(value);
+}
+
+export function publicPositionView(s: GameState, viewer: Player = decisionOwner(s)): Observation {
+  const view = freezePublic(fields(s, viewer));
+  // 只共享公开身份与数字槽；登记表没有权威根或随机状态的反向引用。
+  const position = registerPublicPosition(freezePublic({ ...view, log: [], events: [] }), s);
+  publicPositions.set(view, position);
+  return view;
+}
+
+/** 只接受由白名单入口登记的视图；普通外部观察仍在训练查询入口验证。 */
+export function viewPosition(view: Observation): GamePosition | undefined {
+  return publicPositions.get(view);
+}
 export const decisionOwner = (s: Pick<GameState, 'pending' | 'active'>): Player =>
   s.pending[0]?.owner ?? s.active;
 function fields(s: GameState, viewer: Player = decisionOwner(s)): Observation {

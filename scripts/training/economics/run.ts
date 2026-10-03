@@ -11,7 +11,7 @@ import { setImmediate } from 'node:timers/promises';
 import { fingerprint } from '../../../src/ai/observation';
 import { trainingPosition } from '../../../src/ai/training/queries';
 import { allPieces, hasTrait } from '../../../src/engine/core/traits';
-import type { Player } from '../../../src/engine/types';
+import type { Command, Player } from '../../../src/engine/types';
 import { TrainingEnvironment } from '../../../src/match/training';
 import type { TrainingOptions, TrainingStatus } from '../../../src/match/training';
 import type { Observation } from '../../../src/ai/types';
@@ -37,7 +37,9 @@ export interface SamplingEnvironment {
   limits(): { maxCommands: number; maxPlies: number };
   status(): TrainingStatus;
   observation(viewer?: Player): Observation | Promise<Observation>;
+  view?(viewer?: Player): Observation | Promise<Observation>;
   step(actor: Player, input: unknown): TrainingStatus | Promise<TrainingStatus>;
+  stepTyped?(actor: Player, command: Command): TrainingStatus | Promise<TrainingStatus>;
 }
 
 /**
@@ -84,6 +86,8 @@ export async function sampleWorker(
         },
       });
       const metrics = emptyMetrics();
+      const observationFor = (viewer?: Player) =>
+        env.view ? env.view(viewer) : env.observation(viewer);
       const gameStart = performance.now();
       const commandTypes: Record<string, number> = {};
       await emit({
@@ -112,10 +116,10 @@ export async function sampleWorker(
         }
         let actor = env.status().toPlay!;
         let start = performance.now();
-        let observation = await env.observation(actor);
+        let observation = await observationFor(actor);
         if (observation.phase === 'shrine-draft' && observation.shrineDraft?.committed[actor]) {
           actor = (3 - actor) as Player;
-          observation = await env.observation(actor);
+          observation = await observationFor(actor);
         }
         metrics.observationMs += performance.now() - start;
         try {
@@ -132,7 +136,7 @@ export async function sampleWorker(
           metrics.treeMs += performance.now() - start;
           if (offTurn) {
             start = performance.now();
-            const interruptObservation = await env.observation(other);
+            const interruptObservation = await observationFor(other);
             metrics.observationMs += performance.now() - start;
             selected = sampleCommand(interruptObservation, other, policy, random, metrics, true);
             if (selected.command) {
@@ -153,7 +157,8 @@ export async function sampleWorker(
           metrics.recordMs += performance.now() - start;
           const index = env.status().commands;
           start = performance.now();
-          await env.step(actor, selected.command);
+          if (env.stepTyped) await env.stepTyped(actor, selected.command);
+          else await env.step(actor, selected.command);
           metrics.stepMs += performance.now() - start;
           commandTypes[selected.command.type] = (commandTypes[selected.command.type] ?? 0) + 1;
           start = performance.now();

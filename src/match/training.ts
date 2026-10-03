@@ -2,8 +2,9 @@ import { createGame, applyRuntimeCommand } from '../engine/commands/game';
 import { actorCommandError, parseCommand } from '../engine/online/authority';
 import { HAOJIE_RULESET } from '../engine/online/player-view';
 import { ensure } from '../engine/core/state';
-import type { GameState, Player } from '../engine/types';
-import { decisionOwner, observe } from '../ai/observation';
+import type { Command, GameState, Player } from '../engine/types';
+import { decisionOwner, observe, publicPositionView } from '../ai/observation';
+import { importRuntimePosition } from '../engine/runtime/position';
 
 export interface TrainingOptions {
   seed?: number;
@@ -48,7 +49,7 @@ export class TrainingEnvironment {
     ensure(rules === 'classic' || rules === 'shrine', 'rules 必须是 classic 或 shrine。');
     for (const n of [maxCommands, maxPlies])
       ensure(Number.isSafeInteger(n) && n > 0, '训练上限必须是正整数。');
-    this.#state = createGame(seed, rules);
+    this.#state = importRuntimePosition(createGame(seed, rules));
     this.#state.log = [];
     this.#state.events = [];
     this.#initialPly = this.#state.ply;
@@ -62,7 +63,7 @@ export class TrainingEnvironment {
     limits: Pick<TrainingOptions, 'maxCommands' | 'maxPlies'> = {},
   ) {
     const env = new TrainingEnvironment(limits);
-    env.#state = structuredClone({ ...state, log: [], events: [] });
+    env.#state = importRuntimePosition({ ...state, log: [], events: [] });
     env.#initialPly = state.ply;
     return env;
   }
@@ -106,6 +107,12 @@ export class TrainingEnvironment {
     return observe(this.#state, viewer);
   }
 
+  /** 策略内部只读视图；外部 observation 继续返回可独立修改的导出数据。 */
+  view(viewer: Player = decisionOwner(this.#state)) {
+    ensure(viewer === 1 || viewer === 2, 'viewer 必须是 1 或 2。');
+    return publicPositionView(this.#state, viewer);
+  }
+
   frame(viewer: Player = decisionOwner(this.#state)) {
     return { ...this.status(), viewer, observation: this.observation(viewer) };
   }
@@ -114,7 +121,13 @@ export class TrainingEnvironment {
   step(actor: Player, input: unknown): TrainingStatus {
     const status = this.status();
     ensure(!status.terminated && !status.truncated, '训练对局已终止或截断，请显式 reset。');
-    const command = parseCommand(input);
+    return this.stepTyped(actor, parseCommand(input));
+  }
+
+  /** 内部动作树产生的类型化命令直接进入规则；外部输入仍从 step 解析，权限不绕过。 */
+  stepTyped(actor: Player, command: Command): TrainingStatus {
+    const status = this.status();
+    ensure(!status.terminated && !status.truncated, '训练对局已终止或截断，请显式 reset。');
     const error = actorCommandError(this.#state, actor, command);
     ensure(!error, error ?? '操作者无权执行命令。');
     const next = applyRuntimeCommand(

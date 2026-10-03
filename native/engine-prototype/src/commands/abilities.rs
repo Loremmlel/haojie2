@@ -41,7 +41,7 @@ fn enemy(
     ensure(
         t.unit
             .as_ref()
-            .is_some_and(|v| catalog[&v.kind.key()].landmark.is_none() && v.side() != u.owner)
+            .is_some_and(|v| catalog.by_kind(&v.kind).landmark.is_none() && v.side() != u.owner)
             && top_target(s, &t, catalog),
         "请选择敌方或中立的栈顶随从。",
     )?;
@@ -59,7 +59,15 @@ fn move_to(s: &mut State, id: &str, to: Point) {
 }
 fn extra(s: &mut State, id: &str, key: &str, value: Value) {
     if let Some(u) = s.unit_mut(id) {
-        u.extra.insert(key.into(), value);
+        match key {
+            "charge" => u.reserve.charge = number(&value),
+            "readyCharge" => u.reserve.ready_charge = number(&value),
+            "onceUsed" => u.once_used = value == true,
+            "freeUsed" => u.free_used = number(&value),
+            _ => {
+                u.extra.insert(key.into(), value);
+            }
+        }
     }
 }
 fn delayed_attack(s: &mut State, v: &Unit, owner: usize, source: &str) {
@@ -74,8 +82,8 @@ fn delayed_attack(s: &mut State, v: &Unit, owner: usize, source: &str) {
         false,
     );
     let e = s.unit_mut(&v.id).unwrap().effects.last_mut().unwrap();
-    e["from"] = json!(number(&e["from"]) + 2.0);
-    e["until"] = json!(number(&e["until"]) + 2.0);
+    e.from += 2.0;
+    e.until += 2.0;
 }
 fn prepare_hook(
     s: &State,
@@ -307,24 +315,10 @@ fn project_resources(s: &mut State, raw: &Unit, k: &crate::model::Kind, catalog:
     let r = reserve(raw, k, catalog);
     let key = k.key();
     let u = s.unit_mut(&raw.id).unwrap();
-    for field in ["charge", "readyCharge", "chargeType", "lastCharge"] {
-        u.extra.insert(field.into(), r[field].clone());
-    }
-    let usage = raw.extra.get("abilityUsage").and_then(|v| v.get(&key));
-    u.extra.insert(
-        "onceUsed".into(),
-        usage
-            .and_then(|v| v.get("once"))
-            .cloned()
-            .unwrap_or(json!(false)),
-    );
-    u.extra.insert(
-        "freeUsed".into(),
-        usage
-            .and_then(|v| v.get("free"))
-            .cloned()
-            .unwrap_or(json!(-1)),
-    );
+    u.reserve = r;
+    let usage = raw.ability_usage.as_ref().and_then(|v| v.get(&key));
+    u.once_used = usage.is_some_and(|v| v.once);
+    u.free_used = usage.map(|v| v.free).unwrap_or(-1.0);
 }
 pub fn skill(
     s: &mut State,
@@ -363,16 +357,20 @@ pub fn skill(
     let links: Vec<_> = s.siphons.iter().map(|l| l["id"].clone()).collect();
     resolve_skill(s, c, &key, catalog, ctx)?;
     if inherited && let Some(u) = s.unit_mut(&raw.id) {
-        let usage = json!({"once":u.extra["onceUsed"],"free":u.extra["freeUsed"]});
-        let charge = json!({"charge":u.extra["charge"],"readyCharge":u.extra["readyCharge"],"chargeType":u.extra["chargeType"],"lastCharge":u.extra["lastCharge"]});
-        u.extra.entry("abilityUsage").or_insert_with(|| json!({}))[&key] = usage;
-        u.extra.entry("abilityCharges").or_insert_with(|| json!({}))[&key] = charge;
-        for field in ["charge", "readyCharge", "chargeType", "lastCharge"] {
-            u.extra.insert(field.into(), native[field].clone());
-        }
-        for field in ["onceUsed", "freeUsed"] {
-            u.extra.insert(field.into(), raw.extra[field].clone());
-        }
+        let usage = crate::model::AbilityUsage {
+            once: u.once_used,
+            free: u.free_used,
+        };
+        let charge = u.reserve;
+        u.ability_usage
+            .get_or_insert_with(Default::default)
+            .insert(key.clone(), usage);
+        u.ability_charges
+            .get_or_insert_with(Default::default)
+            .insert(key.clone(), charge);
+        u.reserve = native;
+        u.once_used = raw.once_used;
+        u.free_used = raw.free_used;
     }
     if let Some(t) = a.as_mut()
         && let Some(u) = s.unit(&t.id)
@@ -531,7 +529,7 @@ fn resolve_skill(
         }
         "21" => {
             ensure(
-                extra_number(&u, "readyCharge") >= 2.0 && u.extra["chargeType"] == "skill",
+                extra_number(&u, "readyCharge") >= 2.0 && u.reserve.charge_type.as_str() == "skill",
                 "回合开始需要已经持有两层技能蓄力。",
             )?;
             ensure(u.hp > 10.0, "突袭扣10血后必须存活。")?;
@@ -567,9 +565,9 @@ fn resolve_skill(
         }
         "u6" => {
             ensure(
-                u.extra["onceUsed"] != true
+                !u.once_used
                     && extra_number(&u, "readyCharge") >= 1.0
-                    && u.extra["chargeType"] == "skill",
+                    && u.reserve.charge_type.as_str() == "skill",
                 "十字浩劫需要前一回合蓄力，且一生只能发动一次。",
             )?;
             let p = point(c)?;
@@ -607,7 +605,7 @@ fn resolve_skill(
             extra(s, &u.id, "readyCharge", json!(0));
         }
         "u7" => {
-            ensure(u.extra["onceUsed"] != true, "巨大化一生只能用一次。")?;
+            ensure(!u.once_used, "巨大化一生只能用一次。")?;
             let v = unit(s, c.target_id.as_deref())?;
             let at = if c.x.is_none() && c.y.is_none() {
                 v.at()
@@ -619,7 +617,7 @@ fn resolve_skill(
             ensure(
                 v.id != u.id
                     && v.size == 1.0
-                    && catalog[&v.kind.key()].landmark.is_none()
+                    && catalog.by_kind(&v.kind).landmark.is_none()
                     && [
                         v.at(),
                         Point {
@@ -645,10 +643,7 @@ fn resolve_skill(
             )?;
             let caster = s.unit_mut(&u.id).unwrap();
             caster.hp -= 10.0;
-            caster.extra.insert(
-                "attackBonus".into(),
-                json!(extra_number(&u, "attackBonus") - 10.0),
-            );
+            caster.attack_bonus = extra_number(&u, "attackBonus") - 10.0;
             if !protected(s, &Target::from(&v), &source, catalog, ctx)? {
                 let v = s.unit_mut(&v.id).unwrap();
                 v.x = at.x;
@@ -763,7 +758,7 @@ fn resolve_skill(
         finish(v);
     }
     let current = s.unit(&u.id).unwrap_or(&u);
-    ctx.emit(s,json!({"type":"skill","to":current.actor_event(),"owner":u.owner,"text":catalog[k].skill.as_deref().unwrap_or("技能"),"ultimate":catalog[&u.kind.key()].tier!="normal"}),Some(format!("{}施放技能",catalog[&u.kind.key()].name)));
+    ctx.emit(s,json!({"type":"skill","to":current.actor_event(),"owner":u.owner,"text":catalog[k].skill.as_deref().unwrap_or("技能"),"ultimate":catalog.by_kind(&u.kind).tier!="normal"}),Some(format!("{}施放技能",catalog.by_kind(&u.kind).name)));
     prune_siphons(s, catalog);
     Ok(())
 }

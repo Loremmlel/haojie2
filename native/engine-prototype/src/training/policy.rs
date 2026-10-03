@@ -14,6 +14,8 @@ struct EntityProjection {
 }
 impl Decision<'_> {
     pub fn logits(&mut self, input: &Input) -> Vec<f64> {
+        #[cfg(feature = "kernel-profile")]
+        let _profile = crate::profile::scope(crate::profile::Phase::Policy);
         // 释放已失效前缀对应的计算结果；固定行仍由树编码持有。
         self.rows
             .retain(|_, projection| projection.row.strong_count() > 0);
@@ -54,6 +56,8 @@ fn layer(input: &[f64], weights: &[f32]) -> Vec<f32> {
 }
 impl TinyPolicy {
     pub fn new(seed: u32) -> Self {
+        #[cfg(feature = "kernel-profile")]
+        let _profile = crate::profile::scope(crate::profile::Phase::Policy);
         let mut random = Random::new(seed);
         let mut matrix = |inputs: usize, outputs: usize| -> Vec<f32> {
             (0..(inputs + 1) * outputs)
@@ -69,6 +73,8 @@ impl TinyPolicy {
         }
     }
     pub fn logits(&self, input: &Input) -> Vec<f64> {
+        #[cfg(feature = "kernel-profile")]
+        let _profile = crate::profile::scope(crate::profile::Phase::Policy);
         self.evaluate(input, None)
     }
     pub fn decision(&self) -> Decision<'_> {

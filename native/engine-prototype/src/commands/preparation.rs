@@ -87,7 +87,7 @@ pub fn draw(
     } else {
         None
     };
-    let d = &catalog[&k.key()];
+    let d = catalog.by_kind(&k);
     let mut cards = vec![];
     for _ in 0..if group.is_some() { 8 } else { 1 } {
         let mut card = json!({"id":format!("c{}",s.serial),"kind":k,"drawnAt":s.turns[&s.active.to_string()],"summonedPly":s.ply,"summonPool":if ultimate {"ultimate"} else {"normal"}});
@@ -272,7 +272,7 @@ pub fn prepare_charge(
     s: &State,
     c: &Command,
     catalog: &Catalog,
-) -> Result<(Kind, Value, f64), Failure> {
+) -> Result<(Kind, crate::model::Charge, f64), Failure> {
     let u = s
         .unit(c.unit_id.as_deref().unwrap_or(""))
         .ok_or(Failure::Invalid("请选择仍在场上的随从。"))?;
@@ -286,14 +286,15 @@ pub fn prepare_charge(
     if u.mode == "none" {
         ensure(movement_stats(s, u, catalog).1 > 0.0, "本回合操作已用完。")?;
     }
-    let d = &catalog[&k.key()];
+    let d = catalog.by_kind(&k);
     let mode = c.mode.as_deref().unwrap_or("");
     let once = if u.kind.is("u6") {
-        u.extra.get("onceUsed") == Some(&json!(true))
+        u.once_used
     } else {
-        u.extra
-            .get("abilityUsage")
-            .is_some_and(|v| v["u6"]["once"] == true)
+        u.ability_usage
+            .as_ref()
+            .and_then(|v| v.get("u6"))
+            .is_some_and(|v| v.once)
     };
     let max = if (mode == "move" && d.movement.fract() != 0.0)
         || (mode == "attack" && d.actions == 0.5)
@@ -314,10 +315,10 @@ pub fn prepare_charge(
     };
     ensure(max > 0.0, "这枚随从没有此类蓄力。")?;
     let r = reserve(u, &k, catalog);
-    let value = number(&r["charge"]);
+    let value = r.charge;
     ensure(value < max, "该类蓄力已满。")?;
     ensure(
-        value == 0.0 || r["chargeType"] == mode,
+        value == 0.0 || r.charge_type.as_str() == mode,
         "当前蓄力属于另一模式。",
     )?;
     Ok((k, r, max))
@@ -330,17 +331,19 @@ fn charge(
 ) -> Result<(), Failure> {
     let (k, mut r, max) = prepare_charge(s, c, catalog)?;
     let u = s.unit(c.unit_id.as_deref().unwrap()).unwrap();
-    let value = number(&r["charge"]);
-    r["chargeType"] = json!(c.mode.as_deref().unwrap_or(""));
-    r["charge"] = json!(value + 1.0);
-    r["lastCharge"] = json!(s.ply + u.offset);
+    let value = r.charge;
+    r.charge_type = crate::model::ChargeMode::parse(c.mode.as_deref().unwrap_or(""));
+    r.charge = value + 1.0;
+    r.last_charge = s.ply + u.offset;
     ctx.facts = Some(json!({"action":"charge","actor":u.actor_event()}));
     let u = s.unit_mut(c.unit_id.as_deref().unwrap()).unwrap();
     if k == u.kind {
-        u.extra.extend(r.as_object().unwrap().clone());
+        u.reserve = r;
     } else {
         // 与 withAbilityCharge 一样只回写四个资源字段，原生蓄力保持独立。
-        u.extra.entry("abilityCharges").or_insert_with(|| json!({}))[k.key()] = json!({"charge":r["charge"],"readyCharge":r["readyCharge"],"chargeType":r["chargeType"],"lastCharge":r["lastCharge"]});
+        u.ability_charges
+            .get_or_insert_with(Default::default)
+            .insert(k.key(), r);
     }
     finish(u);
     let event = json!({"type":"skill","to":u.actor_event(),"owner":u.owner,"text":format!("蓄力 {}/{}",value+1.0,max)});
@@ -371,17 +374,15 @@ fn equip(
         .unit(c.target_id.as_deref().unwrap_or(""))
         .ok_or(Failure::Invalid("请选择仍在场上的随从。"))?;
     ensure(
-        u.side() == s.active && catalog[&u.kind.key()].landmark.is_none(),
+        u.side() == s.active && catalog.by_kind(&u.kind).landmark.is_none(),
         "只能给非中立的友方随从装备武器。",
     )?;
     ensure(!u.any(&["10", "s7"]), "投石机与YYF不能装备武器。")?;
-    let mage = u.kinds().iter().any(|k| catalog[&k.key()].mage);
+    let mage = u.kinds().iter().any(|k| catalog.by_kind(k).mage);
     ensure(!(k.is("u5") || k.is("s16")) || mage, "这件法杖仅限法师。")?;
     ensure(!k.is("u28") || !mage, "炎魔之心仅限非法师。")?;
     ensure(
-        !k.is("u28")
-            || u.extra["chargedOnDeploy"] != true
-            || extra_number(u, "deployedAt") != s.ply,
+        !k.is("u28") || !u.charged_on_deploy || extra_number(u, "deployedAt") != s.ply,
         "冲锋随从部署当回合不能装备炎魔之心。",
     )?;
     let without = u.max_hp - u.equipment.iter().map(weapon_health).sum::<f64>();
@@ -402,10 +403,10 @@ fn equip(
     }
     u.hp = u.hp.min(u.max_hp);
     if k.is("u28") {
-        u.effects.retain(|e| e["type"] != "freeze");
+        u.effects.retain(|e| e.kind != "freeze");
     }
     u.extra.remove("overMaxFromBanner");
-    let event = json!({"type":"shield","to":u.actor_event(),"owner":u.owner,"text":format!("装备 · {}",catalog[&k.key()].name),"ultimate":true});
+    let event = json!({"type":"shield","to":u.actor_event(),"owner":u.owner,"text":format!("装备 · {}",catalog.by_kind(&k).name),"ultimate":true});
     remove_card(s, &card);
     ctx.facts = Some(json!({"action":"equip","ability":k}));
     ctx.emit(s, event, None);
@@ -442,7 +443,7 @@ fn aura(
     .unwrap()
     .push(entry);
     remove_card(s, &card);
-    ctx.emit(s,json!({"type":"skill","owner":s.active,"text":format!("永久光环 · {}",catalog[&k.key()].name)}),None);
+    ctx.emit(s,json!({"type":"skill","owner":s.active,"text":format!("永久光环 · {}",catalog.by_kind(&k).name)}),None);
     Ok(())
 }
 fn reroll(
@@ -528,7 +529,7 @@ fn reroll(
     ctx.emit(
         s,
         json!({"type":"skill","owner":s.active,"text":"改判"}),
-        Some(format!("{}重新召唤", catalog[&k.key()].name)),
+        Some(format!("{}重新召唤", catalog.by_kind(&k).name)),
     );
     Ok(())
 }

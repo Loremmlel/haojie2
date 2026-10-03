@@ -20,6 +20,7 @@ import {
   ROLES,
   UNIT_FIELDS,
   valuesInto,
+  valueInto,
   type EntityRole,
 } from './schema';
 
@@ -80,6 +81,7 @@ const UNIT_KEYS = [
   'receivedDamage',
   'group',
 ];
+const roleIndices = new Map(ROLES.map((role, i) => [role, i]));
 type Scalar = number | boolean | undefined;
 interface RecordOptions {
   id?: string;
@@ -126,22 +128,20 @@ function positionRows(viewer: Player, base?: PositionRows, borrowFixed = false) 
   };
   const add = (role: EntityRole, o: RecordOptions = {}) => {
     const row = Array<number>(64).fill(0);
-    row.splice(
-      0,
-      8,
-      (ROLES.indexOf(role) + 1) / 32,
-      owner(o.owner),
-      reference(o.id) / 256,
-      reference(o.parent) / 256,
-      reference(o.source) / 256,
-      reference(o.target) / 256,
-      reference(o.group === undefined ? undefined : `group:${o.group}`) / 256,
-      (o.order ?? 0) / 128,
-    );
+    const roleIndex = roleIndices.get(role)!;
+    row[0] = (roleIndex + 1) / 32;
+    row[1] = owner(o.owner);
+    row[2] = reference(o.id) / 256;
+    row[3] = reference(o.parent) / 256;
+    row[4] = reference(o.source) / 256;
+    row[5] = reference(o.target) / 256;
+    row[6] = reference(o.group === undefined ? undefined : `group:${o.group}`) / 256;
+    row[7] = (o.order ?? 0) / 128;
     valuesInto(row, o.fields ?? []);
     if (o.selectable && o.id && !indices.has(o.id)) indices.set(o.id, entities.length);
     entities.push(row);
-    kinds.push(o.kind === undefined ? 128 + ROLES.indexOf(role) : kindIndex(o.kind));
+    kinds.push(o.kind === undefined ? 128 + roleIndex : kindIndex(o.kind));
+    return row;
   };
   return { entities, kinds, indices, identities, reference, owner, add };
 }
@@ -191,30 +191,9 @@ function encodeBasePosition(observation: Observation, viewer: Player) {
     order = 0,
   ) => {
     knownKeys(u, UNIT_KEYS, 'Unit');
-    const data = u as unknown as Record<string, Scalar | string>;
-    const fields = UNIT_FIELDS.map((name) =>
-      name === 'mode' || name === 'chargeType'
-        ? category(data[name] as string | undefined, MODES)
-        : (data[name] as Scalar),
-    );
-    if (role !== 'snapshot') {
-      const st = getStats(s, u);
-      fields.push(
-        st.attack,
-        st.range,
-        st.actions,
-        st.remaining,
-        st.move,
-        st.operationLimit,
-        st.operationsLeft,
-        st.sleeping,
-        st.frozen,
-        st.stunned,
-      );
-    }
     const instance = role === 'snapshot' ? `${parent}:snapshot:${order}` : u.id;
     if (!indices.has(u.id)) indices.set(u.id, entities.length);
-    add(role, {
+    const row = add(role, {
       id: instance,
       source: role === 'snapshot' ? u.id : undefined,
       kind: u.kind,
@@ -222,8 +201,58 @@ function encodeBasePosition(observation: Observation, viewer: Player) {
       parent,
       group: u.group,
       order,
-      fields,
     });
+    valueInto(row, 0, u.x);
+    valueInto(row, 1, u.y);
+    valueInto(row, 2, u.hp);
+    valueInto(row, 3, u.maxHp);
+    valueInto(row, 4, u.size);
+    valueInto(row, 5, u.born);
+    valueInto(row, 6, u.offset);
+    valueInto(row, 7, u.deployedAt);
+    valueInto(row, 8, u.chargedOnDeploy);
+    valueInto(row, 9, category(u.mode, MODES));
+    valueInto(row, 10, u.operations);
+    valueInto(row, 11, u.shots);
+    valueInto(row, 12, u.moves);
+    valueInto(row, 13, u.bonusAttacks);
+    valueInto(row, 14, u.bonusSequence);
+    valueInto(row, 15, u.weaponFirstUsed);
+    valueInto(row, 16, u.charge);
+    valueInto(row, 17, u.readyCharge);
+    valueInto(row, 18, category(u.chargeType, MODES));
+    valueInto(row, 19, u.lastCharge);
+    valueInto(row, 20, u.upgrades);
+    valueInto(row, 21, u.kills);
+    valueInto(row, 22, u.attackBonus);
+    valueInto(row, 23, u.rangeBonus);
+    valueInto(row, 24, u.guardUsed);
+    valueInto(row, 25, u.rerollUsedPly);
+    valueInto(row, 26, u.silenced);
+    valueInto(row, 27, u.freeUsed);
+    valueInto(row, 28, u.onceUsed);
+    valueInto(row, 29, u.extraOperations);
+    valueInto(row, 30, u.bannerHp);
+    valueInto(row, 31, u.overMaxFromBanner);
+    valueInto(row, 32, u.bladeQualified);
+    valueInto(row, 33, u.expiresAt);
+    valueInto(row, 34, u.hookReadyAt);
+    valueInto(row, 35, u.hookExpiresAt);
+    valueInto(row, 36, (u as Landmark).dormantSince);
+    valueInto(row, 37, (u as Landmark).rebuildTicks);
+    if (role !== 'snapshot') {
+      const st = getStats(s, u);
+      valueInto(row, 38, st.attack);
+      valueInto(row, 39, st.range);
+      valueInto(row, 40, st.actions);
+      valueInto(row, 41, st.remaining);
+      valueInto(row, 42, st.move);
+      valueInto(row, 43, st.operationLimit);
+      valueInto(row, 44, st.operationsLeft);
+      valueInto(row, 45, st.sleeping);
+      valueInto(row, 46, st.frozen);
+      valueInto(row, 47, st.stunned);
+    }
     u.effects.forEach((e, i) => effect(e, instance, i));
     u.attacked.forEach((id, i) =>
       add('attacked', { parent: instance, target: id, owner: u.owner, order: i }),

@@ -1,6 +1,7 @@
 import { allPieces, hasTrait, isLandmark } from './traits';
 import { landmarkAt, landmarkSquare, liveLandmark } from '../setup/shrines';
 import { definition } from '../catalog';
+import { pieceById } from '../runtime/position';
 import { allegiance, getStats, has, passive, piercing, hasWeapon } from './state';
 import type { AttackDirection, GamePosition, Player, Point, Target, Unit } from '../types';
 export const WIDTH = 9,
@@ -51,8 +52,7 @@ export function targets(s: GamePosition): Target[] {
 }
 /** 按普通棋子、有效地标、基地的原顺序定位，只为命中目标创建包装；unit 保持原引用。 */
 export function targetById(s: GamePosition, id?: string): Target | undefined {
-  const unit =
-    s.units.find((u) => u.id === id) ?? s.landmarks?.find((u) => u.id === id && liveLandmark(u));
+  const unit = pieceById(s, id);
   if (unit) return { id: unit.id, owner: unit.owner, x: unit.x, y: unit.y, unit };
   const owner = id === 'base-1' ? 1 : id === 'base-2' ? 2 : undefined;
   return owner ? { id: `base-${owner}`, owner, ...basePoint(owner) } : undefined;
@@ -110,6 +110,8 @@ export function createPlacementQuery(s: GamePosition) {
     canPlace: place,
     movementPath: (u: Unit, to: Point, limit: number, straight = false) =>
       movement(s, u, to, limit, straight, place),
+    movementField: (u: Unit, limit: number, straight = false) =>
+      movementField(u, limit, straight, (p) => place(u, p)),
   };
 }
 export function canPlace(
@@ -131,8 +133,7 @@ function placement(
 ): boolean {
   const occupied = (p: Point) =>
     context ? context.occupants[(p.y - 1) * 9 + p.x - 1] : occupants(s, p);
-  const moved = { ...u, ...at },
-    footprint = cells(moved);
+  const footprint = cells({ kind: u.kind, size: u.size, x: at.x, y: at.y });
   if (footprint.some((p) => !inside(p) || equal(p, basePoint(1)) || equal(p, basePoint(2))))
     return false;
   if (isLandmark(u)) {
@@ -207,6 +208,53 @@ export const neighbors = (p: Point): Point[] =>
     { x: p.x + 1, y: p.y },
     { x: p.x - 1, y: p.y },
   ].filter(inside);
+
+/**
+ * 同一来源的所有落点共用一棵广搜树；格号、前驱和距离是紧凑数值缓冲。
+ * 保留旧的下/上/右/左入队顺序及分数距离上界，只在取出可行路径时分配坐标。
+ * 占位约束在这次同步查询内不变；冲撞、多格逐步移动由调用者保留专用规则。
+ */
+function movementField(u: Unit, limit: number, straight: boolean, place: (p: Point) => boolean) {
+  const parent = new Int16Array(117).fill(-1);
+  const depth = new Int16Array(117);
+  const queue = new Int16Array(117);
+  const source = (u.y - 1) * WIDTH + u.x - 1;
+  const pointAt = (cell: number): Point => ({
+    x: (cell % WIDTH) + 1,
+    y: Math.floor(cell / WIDTH) + 1,
+  });
+  if (inside(u)) {
+    parent[source] = source;
+    queue[0] = source;
+    let tail = 1;
+    for (let head = 0; head < tail; head++) {
+      const cell = queue[head];
+      if (straight ? depth[cell] >= 3 : depth[cell] >= limit) continue;
+      const at = pointAt(cell);
+      for (const p of neighbors(at)) {
+        if (straight && p.x !== u.x && p.y !== u.y) continue;
+        const next = (p.y - 1) * WIDTH + p.x - 1;
+        if (parent[next] !== -1 || !place(p)) continue;
+        parent[next] = cell;
+        depth[next] = depth[cell] + 1;
+        queue[tail++] = next;
+      }
+    }
+  }
+  return (to: Point): Point[] | null => {
+    if (!inside(to) || equal(u, to)) return null;
+    let cell = (to.y - 1) * WIDTH + to.x - 1;
+    if (parent[cell] === -1 || (straight && depth[cell] !== 3)) return null;
+    const path: Point[] = [];
+    while (cell !== source) {
+      path.push(pointAt(cell));
+      cell = parent[cell];
+    }
+    path.push({ x: u.x, y: u.y });
+    path.reverse();
+    return path;
+  };
+}
 export function movementPath(
   s: GamePosition,
   u: Unit,
@@ -258,49 +306,13 @@ export function attackPath(
   direction?: AttackDirection,
   pierce = false,
 ): Point[] | null {
-  const t = 'id' in target ? target : undefined,
-    ends = t?.unit ? cells(t.unit) : [target],
-    starts = cells(u);
-  if (
-    ends.every((to) => starts.every((from) => distance(from, to) > Math.max(0, Math.ceil(limit))))
-  )
-    return null;
   if (direction !== undefined)
     return (
       attackRoutes(s, u, target, limit, pierce).find((r) => r.direction === direction)?.path ?? null
     );
-  const blocked = new Set<string>();
-  for (const v of allPieces(s))
-    if (!pierce && v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
-      for (const p of cells(v)) blocked.add(key(p));
-  // 攻击叠放目标时，同一目标格的其他成员不算中途阻挡。
-  for (const end of ends) blocked.delete(key(end));
-  if (t?.id !== `base-${other(u.owner)}`) blocked.add(key(basePoint(other(u.owner))));
-  const queue = starts.map((p) => [p]),
-    seen = new Set(starts.map(key));
-  let fallback: Point[] | null = null;
-  for (let i = 0; i < queue.length; i++) {
-    const path = queue[i],
-      depth = path.length - 1;
-    if (ends.some((p) => equal(p, path[depth]))) return path;
-    if (depth >= limit || (fallback && depth >= fallback.length - 1)) continue;
-    for (const p of neighbors(path[depth])) {
-      if (blocked.has(key(p))) continue;
-      const next = [...path, p];
-      if (ends.some((e) => equal(e, p))) {
-        fallback ??= next;
-        if (!t?.unit || !hasTrait(t.unit, 24) || t.unit.silenced || frontal(next, t.owner))
-          return next;
-        continue;
-      }
-      if (!seen.has(key(p))) {
-        seen.add(key(p));
-        queue.push(next);
-      }
-    }
-  }
-  return fallback;
+  return attackSearch(s, u, target, limit, pierce, false).best;
 }
+
 export function frontal(path: Point[], owner: Player) {
   if (path.length < 2) return false;
   const a = path.at(-2)!,
@@ -348,6 +360,19 @@ export function attackRoutes(
   limit: number,
   pierce = false,
 ): AttackRoute[] {
+  return attackSearch(s, u, target, limit, pierce, true).routes;
+}
+
+/** 用数字前驱替代每个 BFS 节点的拥有型路径；到达结果时才展开坐标，保留精确遍历顺序。 */
+function attackSearch(
+  s: GamePosition,
+  u: Unit,
+  target: Target | Point,
+  limit: number,
+  pierce: boolean,
+  allRoutes: boolean,
+) {
+  const result: { best: Point[] | null; routes: AttackRoute[] } = { best: null, routes: [] };
   const t = 'id' in target ? target : undefined,
     endCells = t?.unit ? cells(t.unit) : [target],
     starts = cells(u);
@@ -356,33 +381,92 @@ export function attackRoutes(
       starts.every((from) => distance(from, to) > Math.max(0, Math.ceil(limit))),
     )
   )
-    return [];
-  const ends = new Set(endCells.map(key)),
-    blocked = new Set<string>();
+    return result;
+  const index = (p: Point) => (p.y - 1) * WIDTH + p.x - 1;
+  const point = (cell: number): Point => ({
+    x: (cell % WIDTH) + 1,
+    y: Math.floor(cell / WIDTH) + 1,
+  });
+  const ends = new Uint8Array(117),
+    blocked = new Uint8Array(117);
+  for (const p of endCells) if (inside(p)) ends[index(p)] = 1;
   for (const v of allPieces(s))
     if (!pierce && v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
-      for (const p of cells(v)) blocked.add(key(p));
-  for (const end of ends) blocked.delete(end);
-  if (t?.id !== `base-${other(u.owner)}`) blocked.add(key(basePoint(other(u.owner))));
-  const queue = starts.filter((p) => !ends.has(key(p))).map((p) => [p]),
-    seen = new Set(queue.map((p) => key(p[0]))),
-    result = new Map<AttackDirection, Point[]>();
-  for (let i = 0; i < queue.length && result.size < 4; i++) {
-    const path = queue[i];
-    if (path.length - 1 >= limit) continue;
-    for (const p of neighbors(path.at(-1)!)) {
-      if (blocked.has(key(p))) continue;
-      const next = [...path, p];
-      if (ends.has(key(p))) {
-        const direction = pathDirection(next)!;
-        if (!result.has(direction)) result.set(direction, next);
-      } else if (!seen.has(key(p))) {
-        seen.add(key(p));
-        queue.push(next);
+      for (const p of cells(v)) if (inside(p)) blocked[index(p)] = 1;
+  for (const p of endCells) if (inside(p)) blocked[index(p)] = 0;
+  if (t?.id !== `base-${other(u.owner)}`) blocked[index(basePoint(other(u.owner)))] = 1;
+  const parent = new Int16Array(117).fill(-1),
+    depth = new Uint8Array(117),
+    queue = new Uint8Array(117);
+  let tail = 0,
+    directions = 0,
+    fallbackDepth = Infinity;
+  for (const p of starts) {
+    const cell = index(p);
+    if (allRoutes && ends[cell]) continue;
+    parent[cell] = cell;
+    queue[tail++] = cell;
+  }
+  const path = (cell: number, end?: number) => {
+    const points: Point[] = end === undefined ? [] : [point(end)];
+    for (;;) {
+      points.push(point(cell));
+      if (parent[cell] === cell) break;
+      cell = parent[cell];
+    }
+    return points.reverse();
+  };
+  for (let head = 0; head < tail; head++) {
+    const cell = queue[head],
+      n = depth[cell];
+    if (!allRoutes && ends[cell]) {
+      result.best = path(cell);
+      return result;
+    }
+    if (n >= limit || (!allRoutes && n >= fallbackDepth)) continue;
+    for (let dir = 0; dir < 4; dir++) {
+      if (
+        (dir === 0 && cell >= 108) ||
+        (dir === 1 && cell < 9) ||
+        (dir === 2 && cell % 9 === 8) ||
+        (dir === 3 && cell % 9 === 0)
+      )
+        continue;
+      const next = cell + (dir === 0 ? 9 : dir === 1 ? -9 : dir === 2 ? 1 : -1);
+      if (blocked[next]) continue;
+      if (ends[next]) {
+        if (allRoutes) {
+          if (!(directions & (1 << dir))) {
+            directions |= 1 << dir;
+            result.routes.push({
+              direction: dir === 0 ? 'down' : dir === 1 ? 'up' : dir === 2 ? 'right' : 'left',
+              path: path(cell, next),
+            });
+            if (directions === 15) return result;
+          }
+        } else {
+          if (result.best === null) {
+            result.best = path(cell, next);
+            fallbackDepth = n + 1;
+          }
+          if (
+            !t?.unit ||
+            !hasTrait(t.unit, 24) ||
+            t.unit.silenced ||
+            (t.owner === 1 ? dir === 1 : dir === 0)
+          ) {
+            result.best = path(cell, next);
+            return result;
+          }
+        }
+      } else if (parent[next] === -1) {
+        parent[next] = cell;
+        depth[next] = n + 1;
+        queue[tail++] = next;
       }
     }
   }
-  return [...result].map(([direction, path]) => ({ direction, path }));
+  return result;
 }
 /** 方向敏感能力在界面与 AI 中共用同一有界候选集合。 */
 export function selectableAttackRoutes(s: GamePosition, u: Unit, t: Target): AttackRoute[] {

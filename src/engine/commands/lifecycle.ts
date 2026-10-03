@@ -1,3 +1,4 @@
+import { own } from '../runtime/position';
 import { emptyFor } from './movement';
 import { allPieces, hasTrait } from '../core/traits';
 import { captureClockFrame, endShrines, rebuildLandmarks, syncBanners } from '../setup/shrines';
@@ -84,7 +85,7 @@ export function beginTurn(s: GamePosition, ctx: Resolution) {
   }
   for (const p of [1, 2] as Player[])
     s.baseEffects[p] = s.baseEffects[p].filter((e) => e.until > s.ply);
-  s.hands[owner] = s.hands[owner].filter((c) => {
+  own(s, 'hands')[owner] = s.hands[owner].filter((c) => {
     if (c.expiresAt !== undefined && c.expiresAt <= s.turns[owner]) {
       emit(s, { type: 'skill', owner, text: '储存到期' }, `${definition(c.kind).name}已过期`);
       return false;
@@ -170,7 +171,7 @@ export function endTurn(s: GamePosition, ctx: Resolution) {
       `${definition(c.kind).name}无合法格，自动弃置`,
     );
   }
-  s.hands[s.active] = s.hands[s.active].filter((c) => isStored(definition(c.kind)));
+  own(s, 'hands')[s.active] = s.hands[s.active].filter((c) => isStored(definition(c.kind)));
   // 按规则约定，在每一方回合结束时结算持续伤害与连接。
   for (const u of [...allPieces(s)])
     for (const e of [...u.effects])

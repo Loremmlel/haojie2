@@ -47,7 +47,7 @@ fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0
 }
 pub enum Selected {
-    Command(Value),
+    Command(Box<Command>),
     Pass,
     Empty,
 }
@@ -129,7 +129,7 @@ impl Sampling<'_> {
             let c = &node.choices[i];
             if c.next.is_none() {
                 self.trace.insert(0, i);
-                return Ok(Selected::Command(c.command.clone()));
+                return Ok(Selected::Command(Box::new(c.command.clone())));
             }
             let mut next = cursor.to_vec();
             next.push(i);
@@ -144,7 +144,7 @@ impl Sampling<'_> {
     }
 }
 fn sample(
-    observation: &Value,
+    observation: &runtime::PublicPosition,
     actor: usize,
     policy: Option<&TinyPolicy>,
     random: &mut Random,
@@ -153,7 +153,10 @@ fn sample(
     optional: bool,
 ) -> Result<Selected, String> {
     let t = Instant::now();
-    let mut tree = Tree::new(observation, actor, catalog)?;
+    if observation.viewer != actor {
+        return Err("public view actor mismatch".into());
+    }
+    let mut tree = Tree::from_view(observation, catalog)?;
     metrics.tree_ms += ms(t);
     Sampling {
         random,
@@ -168,7 +171,7 @@ fn sample(
 }
 /// 正式模型沿用同一 Gumbel 排序与空分支回溯；不声称路径概率等于各节点概率乘积。
 pub fn external(
-    observation: &Value,
+    observation: &runtime::PublicPosition,
     actor: usize,
     inference: &mut dyn Inference,
     random: &mut Random,
@@ -176,7 +179,10 @@ pub fn external(
     optional: bool,
 ) -> Result<(Selected, Vec<usize>, Metrics), String> {
     let start = Instant::now();
-    let mut tree = Tree::new(observation, actor, catalog)?;
+    if observation.viewer != actor {
+        return Err("public view actor mismatch".into());
+    }
+    let mut tree = Tree::from_view(observation, catalog)?;
     let mut metrics = Metrics {
         tree_ms: ms(start),
         ..Metrics::default()
@@ -224,6 +230,8 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
     };
     let start = Instant::now();
     // 固定工作集从宿主导入权威起点；策略仍只接收 observe 白名单。
+    #[cfg(feature = "kernel-profile")]
+    let importing = crate::profile::scope(crate::profile::Phase::StateImport);
     let mut state = if let Some(initial) = request.get("initialState") {
         serde_json::from_value(initial.clone()).map_err(|e| e.to_string())?
     } else {
@@ -231,6 +239,8 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
     };
     state.events.clear();
     state.extra.insert("log".into(), json!([]));
+    #[cfg(feature = "kernel-profile")]
+    drop(importing);
     let initial_ply = state.ply;
     let mut random = Random::new(sampler_seed);
     let mut metrics = Metrics::default();
@@ -241,21 +251,22 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
         && commands.len() < max_commands
         && state.ply - initial_ply < max_plies
     {
-        let selected = (|| -> Result<(usize, Value), String> {
+        let selected = (|| -> Result<(usize, Command), String> {
             let t = Instant::now();
             let mut actor = runtime::viewer(&state);
-            let mut observation = runtime::observe(&state, actor)?;
-            if observation["phase"] == "shrine-draft"
-                && observation["shrineDraft"]["committed"][actor.to_string()] == true
+            let mut observation = runtime::public_view(&state, actor)?;
+            if observation.position().phase == "shrine-draft"
+                && observation.position().extra["shrineDraft"]["committed"][actor.to_string()]
+                    == true
             {
                 actor = 3 - actor;
-                observation = runtime::observe(&state, actor)?;
+                observation = runtime::public_view(&state, actor)?;
             }
             metrics.observation_ms += ms(t);
             let other = 3 - actor;
             let mut selected = Selected::Empty;
             let t = Instant::now();
-            let public = actions::position(&observation)?;
+            let public = observation.position();
             let interrupt = offer_interrupt
                 && public.pending.is_empty()
                 && public.phase != "shrine-draft"
@@ -263,7 +274,7 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
             metrics.tree_ms += ms(t);
             if interrupt {
                 let t = Instant::now();
-                let off_observation = runtime::observe(&state, other)?;
+                let off_observation = runtime::public_view(&state, other)?;
                 metrics.observation_ms += ms(t);
                 selected = sample(
                     &off_observation,
@@ -297,7 +308,7 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
                 offer_interrupt = true;
             }
             match selected {
-                Selected::Command(c) => Ok((actor, c)),
+                Selected::Command(c) => Ok((actor, *c)),
                 _ => Err("没有完整合法命令".into()),
             }
         })();
@@ -309,12 +320,12 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
             }
         };
         let t = Instant::now();
-        let c: Command = serde_json::from_value(command.clone()).map_err(|e| e.to_string())?;
-        if !actions::permitted(&state, actor, &command) {
+        let c = &command;
+        if !actions::permitted_command(&state, actor, &command) {
             error = Some("selected unauthorized command".into());
             break;
         }
-        match crate::apply_runtime(&state, &c, catalog) {
+        match crate::apply_runtime(&state, c, catalog) {
             Ok(mut next) => {
                 next.events.clear();
                 next.extra.insert("log".into(), json!([]));
@@ -347,6 +358,8 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
         Value::Null
     };
     let elapsed_ms = ms(start);
+    #[cfg(feature = "kernel-profile")]
+    let _exporting = crate::profile::scope(crate::profile::Phase::StateExport);
     Ok(
         json!({"seed":seed,"rules":rules,"policySeed":policy_seed,"samplerSeed":sampler_seed,"parameters":if policy.is_some(){12929}else{0},"commands":commands,"metrics":metrics,"elapsedMs":elapsed_ms,"status":{"commands":commands.len(),"ply":state.ply,"phase":state.phase,"terminated":terminated,"truncated":truncation.is_some(),"truncation":truncation,"winner":winner,"returns":returns},"error":error,"state":state,"observations":[runtime::observe(&state,1)?,runtime::observe(&state,2)?]}),
     )

@@ -1,5 +1,5 @@
 use crate::geometry::{Target, attack_path, cells, distance};
-use crate::model::{Catalog, Kind, State, Unit, extra_number, number};
+use crate::model::{Catalog, Kind, State, Unit, extra_number};
 use crate::movement::{movement_stats, reserve};
 use serde::Serialize;
 
@@ -22,7 +22,7 @@ pub struct Stats {
 pub fn attack_charge(u: &Unit, catalog: &Catalog) -> Option<Kind> {
     u.kinds()
         .into_iter()
-        .find(|k| catalog[&k.key()].actions == 0.5)
+        .find(|k| catalog.by_kind(k).actions == 0.5)
 }
 pub fn banner_count(s: &State, owner: usize) -> usize {
     s.landmarks()
@@ -33,7 +33,9 @@ pub fn banner_count(s: &State, owner: usize) -> usize {
 
 /// 完整属性查询与 TS getStats 对照；攻击光环只读印刷射程，禁止递归求攻击力。
 pub fn stats(s: &State, u: &Unit, catalog: &Catalog) -> Stats {
-    let d = &catalog[&u.kind.key()];
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Attributes);
+    let d = catalog.by_kind(&u.kind);
     let enabled = !u.silenced;
     let age = s.turns[&u.owner.to_string()] + u.offset / 2.0 - u.born;
     let frozen = s.effect(u, "freeze");
@@ -64,18 +66,18 @@ pub fn stats(s: &State, u: &Unit, catalog: &Catalog) -> Stats {
         attack = (40.0 - 5.0 * n).max(0.0) + extra_number(u, "attackBonus");
         range = n + extra_number(u, "rangeBonus");
     }
-    if enabled && u.has("4") && number(&reserve(u, &Kind::Number(4), catalog)["charge"]) >= 5.0 {
+    if enabled && u.has("4") && reserve(u, &Kind::Number(4), catalog).charge >= 5.0 {
         range += 1.0;
     }
     if enabled && u.has("15") {
         let r = reserve(u, &Kind::Number(15), catalog);
-        if r["chargeType"] == "attack" {
-            attack += number(&r["charge"]) * catalog.rule("/accumulator/attack");
-            range += number(&r["charge"]) * catalog.rule("/accumulator/range");
+        if r.charge_type.as_str() == "attack" {
+            attack += r.charge * catalog.rule("/accumulator/attack");
+            range += r.charge * catalog.rule("/accumulator/range");
         }
     }
     if enabled && u.has("u2") {
-        attack += number(&reserve(u, &Kind::Text("u2".into()), catalog)["charge"]) * 15.0;
+        attack += reserve(u, &Kind::Text("u2".into()), catalog).charge * 15.0;
     }
     if enabled && u.has("u6") && u.weapon("u5") {
         attack = 10.0 + extra_number(u, "attackBonus");
@@ -104,8 +106,8 @@ pub fn stats(s: &State, u: &Unit, catalog: &Catalog) -> Stats {
     attack += u
         .effects
         .iter()
-        .filter(|e| e["type"] == "attack" && s.active_effect(e, Some(u)))
-        .map(|e| number(&e["amount"]))
+        .filter(|e| e.kind == "attack" && s.active_effect(e, Some(u)))
+        .map(|e| e.amount.unwrap_or(0.0))
         .sum::<f64>();
     if !u.any(&["10", "s7"]) && u.side() == u.owner {
         let sources = s
@@ -119,7 +121,7 @@ pub fn stats(s: &State, u: &Unit, catalog: &Catalog) -> Stats {
                         s,
                         v,
                         &Target::from(u),
-                        catalog[&v.kind.key()].range
+                        catalog.by_kind(&v.kind).range
                             + extra_number(v, "rangeBonus")
                             + if v.weapon("u5") || v.weapon("s16") {
                                 1.0
@@ -145,7 +147,7 @@ pub fn stats(s: &State, u: &Unit, catalog: &Catalog) -> Stats {
     let reserve = attack_charge(u, catalog).map(|k| reserve(u, &k, catalog));
     let half_locked = reserve
         .as_ref()
-        .is_some_and(|r| r["chargeType"] != "attack" || number(&r["readyCharge"]) < 1.0);
+        .is_some_and(|r| r.charge_type.as_str() != "attack" || r.ready_charge < 1.0);
     let remaining = if locked || half_locked || (enabled && u.has("firelord")) {
         0.0
     } else if u.mode == "attack" {

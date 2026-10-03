@@ -107,25 +107,20 @@ pub fn reset_unit(ply: f64, u: &mut Unit) {
     u.moves = 0.0;
     u.bonus_attacks = 0.0;
     u.bonus_sequence = false;
-    u.extra.insert("attacked".into(), json!([]));
-    u.extra.insert("weaponFirstUsed".into(), json!(false));
-    let charge = u.extra["charge"].clone();
-    u.extra.insert("readyCharge".into(), charge);
+    u.attacked.clear();
+    u.weapon_first_used = false;
+    u.reserve.ready_charge = u.reserve.charge;
     if u.extra.contains_key("extraOperations") {
         u.extra.insert("extraOperations".into(), json!(0));
     }
-    if let Some(reserves) = u
-        .extra
-        .get_mut("abilityCharges")
-        .and_then(Value::as_object_mut)
-    {
-        for reserve in reserves.values_mut().filter(|v| v.is_object()) {
-            reserve["readyCharge"] = reserve["charge"].clone();
+    if let Some(reserves) = &mut u.ability_charges {
+        for reserve in reserves.values_mut() {
+            reserve.ready_charge = reserve.charge;
         }
     }
     let offset = u.offset;
     u.effects
-        .retain(|e| number(&e["until"]) > ply + if e["global"] == true { 0.0 } else { offset });
+        .retain(|e| e.until > ply + if e.global == Some(true) { 0.0 } else { offset });
 }
 pub fn active_target(s: &State, t: &Target) -> Target {
     s.unit(&t.id).map(Target::from).unwrap_or_else(|| t.clone())
@@ -145,16 +140,15 @@ pub fn add_effect(
     let ply = s.ply;
     if let Some(u) = s.unit_mut(id) {
         let start = ply + if global { 0.0 } else { u.offset };
-        let mut e = json!({"type":kind,"owner":owner,"from":start,"until":start+duration});
-        if let Some(amount) = amount {
-            e["amount"] = json!(amount);
-        }
-        if let Some(source) = source {
-            e["sourceId"] = json!(source);
-        }
-        if global {
-            e["global"] = json!(true);
-        }
+        let e = crate::model::Effect {
+            kind: kind.into(),
+            owner,
+            from: start,
+            until: start + duration,
+            amount,
+            source_id: source.map(str::to_owned),
+            global: global.then_some(true),
+        };
         u.effects.push(e);
     }
 }
@@ -166,8 +160,7 @@ pub fn normalize_guards(s: &mut State) {
         .map(|u| (u.owner, u.id.clone()))
         .collect();
     for u in &mut s.units {
-        if u.extra.get("guardUsed") == Some(&json!(true)) && !u.extra.contains_key("guardSourceIds")
-        {
+        if u.guard_used && !u.extra.contains_key("guardSourceIds") {
             let owner = u.owner;
             u.extra.insert(
                 "guardSourceIds".into(),
@@ -206,8 +199,7 @@ pub fn guardian(s: &State, u: &Unit, catalog: &Catalog) -> Option<String> {
                 .is_some()
         })
         .collect();
-    sources
-        .sort_by(|a, b| number(&a.extra["deployedAt"]).total_cmp(&number(&b.extra["deployedAt"])));
+    sources.sort_by(|a, b| a.deployed_at.total_cmp(&b.deployed_at));
     sources.first().map(|u| u.id.clone())
 }
 pub fn template(
@@ -219,10 +211,55 @@ pub fn template(
     catalog: &Catalog,
 ) -> Unit {
     let d = &catalog[kind];
-    serde_json::from_value(json!({"id":id,"kind":d.id,"owner":owner,"x":at.x,"y":at.y,"hp":d.health,"maxHp":d.health,"size":d.size.unwrap_or(1.0),
-        "born":s.turns[&owner.to_string()],"offset":0,"deployedAt":0,"chargedOnDeploy":(["u1","u12","u12p"].contains(&kind)),"mode":"none","operations":0,"shots":0,"moves":0,"attacked":[],
-        "bonusAttacks":0,"bonusSequence":false,"weaponFirstUsed":false,"charge":0,"readyCharge":0,"chargeType":if d.movement.fract()!=0.0{"move"}else if kind=="21"{"skill"}else{"attack"},"lastCharge":-1,
-        "upgrades":0,"kills":0,"attackBonus":0,"rangeBonus":0,"guardUsed":false,"effects":[],"equipment":[],"silenced":false,"freeUsed":-1,"onceUsed":false})).unwrap()
+    use crate::model::{Charge, ChargeMode, UnitData};
+    Unit::new(UnitData {
+        id: id.into(),
+        kind: d.id.clone(),
+        owner,
+        x: at.x,
+        y: at.y,
+        hp: d.health,
+        max_hp: d.health,
+        size: d.size.unwrap_or(1.0),
+        born: s.turns[&owner.to_string()],
+        offset: 0.0,
+        deployed_at: 0.0,
+        charged_on_deploy: ["u1", "u12", "u12p"].contains(&kind),
+        mode: "none".into(),
+        operations: 0.0,
+        shots: 0.0,
+        moves: 0.0,
+        attacked: vec![],
+        bonus_attacks: 0.0,
+        bonus_sequence: false,
+        weapon_first_used: false,
+        reserve: Charge {
+            charge: 0.0,
+            ready_charge: 0.0,
+            charge_type: if d.movement.fract() != 0.0 {
+                ChargeMode::Move
+            } else if kind == "21" {
+                ChargeMode::Skill
+            } else {
+                ChargeMode::Attack
+            },
+            last_charge: -1.0,
+        },
+        upgrades: 0.0,
+        kills: 0.0,
+        attack_bonus: 0.0,
+        range_bonus: 0.0,
+        guard_used: false,
+        effects: vec![],
+        equipment: vec![],
+        silenced: false,
+        free_used: -1.0,
+        once_used: false,
+        traits: None,
+        ability_usage: None,
+        ability_charges: None,
+        extra: Default::default(),
+    })
 }
 pub fn add_unit(
     s: &mut State,
@@ -251,7 +288,7 @@ pub fn deploy_unit(
     let id = format!("u{}", s.serial);
     s.serial += 1;
     let mut u = template(s, kind, owner, at, &id, catalog);
-    u.extra.insert("deployedAt".into(), json!(s.ply));
+    u.deployed_at = s.ply;
     if let Some(group) = group {
         u.extra.insert("group".into(), json!(group));
     }
@@ -262,7 +299,7 @@ pub fn deploy_unit(
         u.hp -= 10.0;
         u.max_hp -= 10.0;
         u.born -= 1.0;
-        u.extra.insert("chargedOnDeploy".into(), json!(true));
+        u.charged_on_deploy = true;
     }
     if catalog[kind].landmark.is_some() {
         s.landmarks.get_or_insert_default().push(u);
@@ -276,10 +313,10 @@ pub fn deploy_unit(
         });
         let accelerated = landmark.is_some_and(|l| !l.silenced);
         if accelerated {
-            let was_charge = u.extra["chargedOnDeploy"] == true;
+            let was_charge = u.charged_on_deploy;
             u.offset += 2.0;
             // 新模板的操作、蓄力和效果均为空；resetUnit 在这里不会产生其他变化。
-            u.extra.insert("chargedOnDeploy".into(), json!(true));
+            u.charged_on_deploy = true;
             if was_charge {
                 u.extra.insert("extraOperations".into(), json!(1));
             }

@@ -1,3 +1,4 @@
+import { own } from '../runtime/position';
 import { chargeFor, consumeCharge, moveChargeKind, hasTrait, isLandmark } from '../core/traits';
 import { cloneRuleData } from '../core/clone';
 import { landmarkAt } from '../setup/shrines';
@@ -153,10 +154,11 @@ function moveDestinations(
     );
     if (limit % 1) limit *= 2;
   }
+  let field: ((to: Point) => Point[] | null) | undefined;
   return (to: Point) => {
     const straight = hasTrait(u, 13) && !u.silenced;
     const path = query
-      ? query.movementPath(u, to, limit, straight)
+      ? (field ??= query.movementField(u, limit, straight))(to)
       : movementPath(s, u, to, limit, straight);
     ensure(path, '移动距离、路径、占位或独行侠禁区不合法。');
     return { to, starting, charged, moves: u.moves, path };
@@ -186,7 +188,12 @@ function resolveMove(
     if (t) damage(s, t, 30, { owner: u.owner, unit: u, kind: 'collision' }, ctx);
     if (!alive(s, u)) return;
     if (hasTrait(u, 'u12') && t) {
-      s.pending.unshift({ kind: 'bounce', owner: u.owner, source: cloneRuleData(u), amount: 30 });
+      own(s, 'pending').unshift({
+        kind: 'bounce',
+        owner: u.owner,
+        source: cloneRuleData(u),
+        amount: 30,
+      });
     } else
       ensure(
         emptyFor(s, u) || (u.moves > 0 && reachableExit(s, u, u.moves)),
@@ -253,7 +260,7 @@ export function prepareHutSpawn(
   return { hut, to };
 }
 export function react(s: GamePosition, c: Command, ctx: Resolution) {
-  const r = s.pending.shift();
+  const r = own(s, 'pending').shift();
   ensure(r, '没有待结算反应。');
   if (r.kind === 'bounce') {
     const u = s.units.find((u) => u.id === r.source.id);
@@ -274,7 +281,7 @@ export function react(s: GamePosition, c: Command, ctx: Resolution) {
     if (t) damage(s, t, 30, { owner: u.owner, unit: u, kind: 'collision' }, ctx);
     if (!alive(s, u)) return;
     if (t || !emptyFor(s, u)) {
-      s.pending.unshift({
+      own(s, 'pending').unshift({
         kind: 'bounce',
         owner: u.owner,
         source: cloneRuleData(u),

@@ -5,6 +5,8 @@ import type { Command, Kind } from '../../../engine/types';
 /** 编码语义变化必须更换版本；词表随数据文件保存并核对，不能静默重排旧模型输入。 */
 export const ENCODING = 'haojie-entities-factorized-v1';
 export const KIND_VOCAB = CATALOG.map((d) => d.id);
+const kindIndices = new Map(KIND_VOCAB.map((kind, i) => [kind, i + 1]));
+const kindKeys = new Map(KIND_VOCAB.map((kind) => [String(kind), kind]));
 export const ROLES = [
   'base',
   'unit',
@@ -129,13 +131,16 @@ export const UNIT_FIELDS = [
 
 export function kindIndex(kind: Kind | undefined): number {
   if (kind === undefined) return 0;
-  const index = KIND_VOCAB.indexOf(kind);
-  ensure(index >= 0 && index < 128, `编码词表不支持棋子 ${String(kind)}，请升级编码版本。`);
-  return index + 1;
+  const index = kindIndices.get(kind);
+  ensure(
+    index !== undefined && index <= 128,
+    `编码词表不支持棋子 ${String(kind)}，请升级编码版本。`,
+  );
+  return index;
 }
 
 export function kindFromKey(key: string): Kind {
-  const kind = KIND_VOCAB.find((k) => String(k) === key);
+  const kind = kindKeys.get(key);
   ensure(kind !== undefined, `未知能力/装备词表键 ${key}。`);
   return kind;
 }
@@ -166,11 +171,15 @@ export function numeric(value: number | boolean): number {
 export function valuesInto(row: number[], values: (number | boolean | undefined)[]): void {
   ensure(values.length <= 52, '实体字段超过52项，请升级编码结构，禁止截断。');
   for (let i = 0; i < values.length; i++) {
-    const value = values[i];
-    if (value === undefined) continue;
-    row[8 + i] = numeric(value);
-    row[60 + Math.floor(i / 13)] += 2 ** (i % 13) / 8191;
+    valueInto(row, i, values[i]);
   }
+}
+
+/** 直接写入目标行，保留旧缩放及逐字段存在掩码的加法顺序。 */
+export function valueInto(row: number[], i: number, value: number | boolean | undefined): void {
+  if (value === undefined) return;
+  row[8 + i] = numeric(value);
+  row[60 + Math.floor(i / 13)] += 2 ** (i % 13) / 8191;
 }
 
 export const ENCODING_SCHEMA = {

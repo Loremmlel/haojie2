@@ -1,3 +1,4 @@
+import { own, isRuntimePosition, exportOwnedPosition } from '../runtime/position';
 import { emptyFor } from './movement';
 import { attackPath, piercingTargets, validAttackRoute } from '../core/geometry';
 import {
@@ -177,12 +178,12 @@ function prepareInspection(s: GamePosition, c: Command, queries?: InspectionQuer
       break;
     case 'attack': {
       const u = queries ? queries.attacker(c.unitId) : projectedAttacker(s, c.unitId);
-      prepareAttack(s, u, attackTarget(s, c, u), {
+      const attack = prepareAttack(s, u, attackTarget(s, c, u), {
         direction: c.direction,
         mode: c.mode,
         path: c.path,
       });
-      break;
+      return { attack };
     }
   }
   return false;
@@ -276,7 +277,8 @@ function transition<S extends GamePosition>(
       s.phase === 'play' || s.phase === 'shrine-setup' || giant,
       '先完成回合开始的召唤选择，再进入行动阶段。',
     );
-  if (preview && prepareInspection(s, c, queries)) return previous;
+  const prepared = preview ? prepareInspection(s, c, queries) : false;
+  if (prepared === true) return previous;
   s = queries ? (queries.fork() as S) : forkPosition(previous, !preview);
   normalizeLegacyGuards(s);
   s.events = [];
@@ -300,7 +302,8 @@ function transition<S extends GamePosition>(
         break;
       case 'finish-shrine-setup':
         preparePhase(s, c.type);
-        (s.shrineSetupDone ??= []).push(s.active);
+        s.shrineSetupDone ??= [];
+        own(s, 'shrineSetupDone')!.push(s.active);
         if (s.active === 1) s.active = 2;
         else {
           s.active = 1;
@@ -349,7 +352,7 @@ function transition<S extends GamePosition>(
       case 'deploy': {
         const { card, to } = prepareDeploy(s, c);
         addUnit(s, card.kind, s.active, to, card.group, !!c.charge);
-        s.hands[s.active] = s.hands[s.active].filter((v) => v.id !== card.id);
+        own(s, 'hands')[s.active] = s.hands[s.active].filter((v) => v.id !== card.id);
         break;
       }
       case 'move':
@@ -367,7 +370,14 @@ function transition<S extends GamePosition>(
                 c.path ?? attackPath(s, u, t, getStats(s, u).range, c.direction, true) ?? [],
               ).map((v) => v.target.id)
             : [];
-        performAttack(s, u, t, ctx, { direction: c.direction, mode: c.mode, path: c.path });
+        performAttack(
+          s,
+          u,
+          t,
+          ctx,
+          { direction: c.direction, mode: c.mode, path: c.path },
+          prepared && prepared.attack,
+        );
         u.attacked.push(...new Set([t.id, ...hitIds]));
         u.shots++;
         if (u.shots >= getStats(s, u).actions) finishOperation(u);
@@ -412,7 +422,11 @@ function transition<S extends GamePosition>(
   // 正式成功结果导出独立纯数据；预检和失败都丢弃分支，与 Rust 一致。
   if (preview) return next;
   const committed = commitPosition(next);
-  return exportSnapshot ? clonePosition(committed) : committed;
+  return exportSnapshot
+    ? isRuntimePosition(previous)
+      ? clonePosition(committed)
+      : exportOwnedPosition(committed)
+    : committed;
 }
 function hasRandomState(s: GamePosition): s is GameState {
   return 'seed' in s && typeof s.seed === 'number' && 'rng' in s && typeof s.rng === 'number';
@@ -518,7 +532,7 @@ export function createDemoGame(): GameState {
   for (const kind of [1, 8, 18, 'u5', 'u9', 'u17', 'u28'] as Kind[]) {
     const d = definition(kind),
       limit = d.spell ?? d.weapon;
-    s.hands[1].push({
+    own(s, 'hands')[1].push({
       id: `demo-${kind}`,
       kind,
       drawnAt: 3,

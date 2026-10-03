@@ -76,7 +76,7 @@ pub fn piercing_targets(
                 && (top_target(s, t, catalog)
                     || t.unit
                         .as_ref()
-                        .is_some_and(|v| catalog[&v.kind.key()].landmark.is_some()))
+                        .is_some_and(|v| catalog.by_kind(&v.kind).landmark.is_some()))
         })
         .collect();
     let mut hits: Vec<(Target, Vec<Point>)> = vec![];
@@ -177,7 +177,7 @@ pub fn top_target(s: &State, t: &Target, catalog: &Catalog) -> bool {
         return true;
     };
     let over = s.units.iter().find(|v| covers(v, t.at));
-    if catalog[&u.kind.key()].landmark.is_some() {
+    if catalog.by_kind(&u.kind).landmark.is_some() {
         over.is_none_or(|v| v.side() != t.owner)
     } else {
         over.is_some_and(|v| v.id == t.id)
@@ -185,19 +185,6 @@ pub fn top_target(s: &State, t: &Target, catalog: &Catalog) -> bool {
 }
 fn index(p: Point) -> usize {
     (p.y as usize - 1) * 9 + p.x as usize - 1
-}
-pub fn direction(path: &[Point]) -> &'static str {
-    let a = path[path.len() - 2];
-    let b = path[path.len() - 1];
-    if b.y < a.y {
-        "up"
-    } else if b.y > a.y {
-        "down"
-    } else if b.x < a.x {
-        "left"
-    } else {
-        "right"
-    }
 }
 
 /// 完全沿用 TS 最短路径/方向候选顺序；正面优先只影响普通攻击的路径选择。
@@ -209,84 +196,9 @@ pub fn attack_path(
     wanted: Option<&str>,
     pierce: bool,
 ) -> Option<Vec<Point>> {
-    let ends = t.footprint();
-    let starts = cells(u, u.at());
-    if ends.iter().all(|&to| {
-        starts
-            .iter()
-            .all(|&from| distance(from, to) > limit.ceil().max(0.0))
-    }) {
-        return None;
-    }
-    let mut blocked = [false; 117];
-    for v in s.pieces() {
-        if !pierce && v.id != u.id && v.id != t.id && v.side() != u.owner {
-            for p in cells(v, v.at()) {
-                blocked[index(p)] = true;
-            }
-        }
-    }
-    for &p in &ends {
-        blocked[index(p)] = false;
-    }
-    if t.id != format!("base-{}", 3 - u.owner) {
-        blocked[index(base_point(3 - u.owner))] = true;
-    }
-    let mut queue: Vec<Vec<Point>> = starts
-        .into_iter()
-        .filter(|p| wanted.is_none() || !ends.contains(p))
-        .map(|p| vec![p])
-        .collect();
-    let mut seen = [false; 117];
-    for path in &queue {
-        seen[index(path[0])] = true;
-    }
-    let mut fallback: Option<Vec<Point>> = None;
-    let mut i = 0;
-    while i < queue.len() {
-        let path = queue[i].clone();
-        i += 1;
-        let depth = path.len() - 1;
-        if wanted.is_none() && ends.contains(&path[depth]) {
-            return Some(path);
-        }
-        if depth as f64 >= limit
-            || (wanted.is_none() && fallback.as_ref().is_some_and(|p| depth >= p.len() - 1))
-        {
-            continue;
-        }
-        for p in neighbors(path[depth]) {
-            if blocked[index(p)] {
-                continue;
-            }
-            let mut next = path.clone();
-            next.push(p);
-            if ends.contains(&p) {
-                if let Some(wanted) = wanted {
-                    if direction(&next) == wanted {
-                        return Some(next);
-                    }
-                } else {
-                    if fallback.is_none() {
-                        fallback = Some(next.clone());
-                    }
-                    if t.unit
-                        .as_ref()
-                        .is_none_or(|v| !v.has("24") || v.silenced || frontal(&next, t.owner))
-                    {
-                        return Some(next);
-                    }
-                }
-                continue;
-            }
-            if !seen[index(p)] {
-                seen[index(p)] = true;
-                queue.push(next);
-            }
-        }
-    }
-    if wanted.is_none() { fallback } else { None }
+    attack_search(s, u, t, limit, pierce, wanted, false).0
 }
+
 fn base(p: Point) -> bool {
     p.x == 5.0 && (p.y == 1.0 || p.y == 13.0)
 }
@@ -325,6 +237,20 @@ pub fn all_cells() -> impl Iterator<Item = Point> {
 }
 /// 按 BFS 首次到达顺序保留每个入射方向，与 TS attackRoutes 的 Map 插入顺序一致。
 pub fn attack_routes(s: &State, u: &Unit, t: &Target, limit: f64, pierce: bool) -> Vec<String> {
+    attack_search(s, u, t, limit, pierce, None, true).1
+}
+/// 与 TS attackSearch 相同的数字前驱广搜；路径仅在确定结果时展开。
+fn attack_search(
+    s: &State,
+    u: &Unit,
+    t: &Target,
+    limit: f64,
+    pierce: bool,
+    wanted: Option<&str>,
+    all_routes: bool,
+) -> (Option<Vec<Point>>, Vec<String>) {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Paths);
     let ends = t.footprint();
     let starts = cells(u, u.at());
     if ends.iter().all(|&to| {
@@ -332,9 +258,15 @@ pub fn attack_routes(s: &State, u: &Unit, t: &Target, limit: f64, pierce: bool) 
             .iter()
             .all(|&from| distance(from, to) > limit.ceil().max(0.0))
     }) {
-        return vec![];
+        return (None, vec![]);
     }
+    let mut end = [false; 117];
     let mut blocked = [false; 117];
+    for p in &ends {
+        if inside(*p) {
+            end[index(*p)] = true;
+        }
+    }
     for v in s.pieces() {
         if !pierce && v.id != u.id && v.id != t.id && v.side() != u.owner {
             for p in cells(v, v.at()) {
@@ -342,50 +274,175 @@ pub fn attack_routes(s: &State, u: &Unit, t: &Target, limit: f64, pierce: bool) 
             }
         }
     }
-    for &p in &ends {
-        blocked[index(p)] = false;
+    for p in &ends {
+        if inside(*p) {
+            blocked[index(*p)] = false;
+        }
     }
     if t.id != format!("base-{}", 3 - u.owner) {
         blocked[index(base_point(3 - u.owner))] = true;
     }
-    let mut queue: Vec<Vec<Point>> = starts
-        .into_iter()
-        .filter(|p| !ends.contains(p))
-        .map(|p| vec![p])
-        .collect();
-    let mut seen = [false; 117];
-    for path in &queue {
-        seen[index(path[0])] = true;
-    }
-    let mut result = vec![];
-    let mut i = 0;
-    while i < queue.len() && result.len() < 4 {
-        let path = queue[i].clone();
-        i += 1;
-        if (path.len() - 1) as f64 >= limit {
+    let directional = all_routes || wanted.is_some();
+    let mut parent = [-1_i16; 117];
+    let mut depth = [0_u8; 117];
+    let mut queue = [0_usize; 117];
+    let mut tail = 0;
+    for p in starts {
+        let cell = index(p);
+        if directional && end[cell] {
             continue;
         }
-        for p in neighbors(*path.last().unwrap()) {
-            if blocked[index(p)] {
+        parent[cell] = cell as i16;
+        queue[tail] = cell;
+        tail += 1;
+    }
+    let mut best = None;
+    let mut routes = vec![];
+    let mut directions = 0_u8;
+    let mut fallback_depth = usize::MAX;
+    let mut head = 0;
+    while head < tail {
+        let cell = queue[head];
+        head += 1;
+        let n = depth[cell] as usize;
+        if !directional && end[cell] {
+            return (Some(grid_path(&parent, cell, None)), routes);
+        }
+        if n as f64 >= limit || (!directional && n >= fallback_depth) {
+            continue;
+        }
+        for dir in 0..4 {
+            let Some(next) = neighbor_cell(cell, dir) else {
+                continue;
+            };
+            if blocked[next] {
                 continue;
             }
-            let mut next = path.clone();
-            next.push(p);
-            if ends.contains(&p) {
-                let d = direction(&next).to_string();
-                if !result.contains(&d) {
-                    result.push(d);
+            if end[next] {
+                if directional {
+                    if directions & (1 << dir) == 0 {
+                        directions |= 1 << dir;
+                        let direction = ["down", "up", "right", "left"][dir];
+                        if wanted == Some(direction) {
+                            return (Some(grid_path(&parent, cell, Some(next))), routes);
+                        }
+                        routes.push(direction.to_string());
+                        if directions == 15 {
+                            return (best, routes);
+                        }
+                    }
+                } else {
+                    if best.is_none() {
+                        best = Some(grid_path(&parent, cell, Some(next)));
+                        fallback_depth = n + 1;
+                    }
+                    if t.unit.as_ref().is_none_or(|v| {
+                        !v.has("24") || v.silenced || if t.owner == 1 { dir == 1 } else { dir == 0 }
+                    }) {
+                        return (Some(grid_path(&parent, cell, Some(next))), routes);
+                    }
                 }
-            } else if !seen[index(p)] {
-                seen[index(p)] = true;
-                queue.push(next);
+            } else if parent[next] == -1 {
+                parent[next] = cell as i16;
+                depth[next] = depth[cell] + 1;
+                queue[tail] = next;
+                tail += 1;
             }
         }
     }
-    result
+    (best, routes)
 }
+fn neighbor_cell(cell: usize, dir: usize) -> Option<usize> {
+    match dir {
+        0 => (cell < 108).then(|| cell + 9),
+        1 => (cell >= 9).then(|| cell - 9),
+        2 => (cell % 9 < 8).then(|| cell + 1),
+        _ => (!cell.is_multiple_of(9)).then(|| cell - 1),
+    }
+}
+fn grid_point(cell: usize) -> Point {
+    Point {
+        x: (cell % 9 + 1) as f64,
+        y: (cell / 9 + 1) as f64,
+    }
+}
+fn grid_path(parent: &[i16; 117], mut cell: usize, end: Option<usize>) -> Vec<Point> {
+    let mut path = vec![];
+    if let Some(end) = end {
+        path.push(grid_point(end));
+    }
+    loop {
+        path.push(grid_point(cell));
+        if parent[cell] == cell as i16 {
+            break;
+        }
+        cell = parent[cell] as usize;
+    }
+    path.reverse();
+    path
+}
+pub struct MovementField {
+    parent: [i16; 117],
+    depth: [u8; 117],
+    source: usize,
+    straight: bool,
+}
+impl MovementField {
+    pub fn new(u: &Unit, limit: f64, straight: bool, place: impl Fn(Point) -> bool) -> Self {
+        let mut f = Self {
+            parent: [-1; 117],
+            depth: [0; 117],
+            source: index(u.at()),
+            straight,
+        };
+        let mut queue = [0; 117];
+        queue[0] = f.source;
+        f.parent[f.source] = f.source as i16;
+        let mut tail = 1;
+        let mut head = 0;
+        while head < tail {
+            let cell = queue[head];
+            head += 1;
+            if if straight {
+                f.depth[cell] >= 3
+            } else {
+                f.depth[cell] as f64 >= limit
+            } {
+                continue;
+            }
+            for dir in 0..4 {
+                let Some(next) = neighbor_cell(cell, dir) else {
+                    continue;
+                };
+                let p = grid_point(next);
+                if (straight && p.x != u.x && p.y != u.y) || f.parent[next] != -1 || !place(p) {
+                    continue;
+                }
+                f.parent[next] = cell as i16;
+                f.depth[next] = f.depth[cell] + 1;
+                queue[tail] = next;
+                tail += 1;
+            }
+        }
+        f
+    }
+    pub fn path(&self, to: Point) -> Option<Vec<Point>> {
+        if !inside(to) {
+            return None;
+        }
+        let cell = index(to);
+        if cell == self.source
+            || self.parent[cell] == -1
+            || (self.straight && self.depth[cell] != 3)
+        {
+            return None;
+        }
+        Some(grid_path(&self.parent, cell, None))
+    }
+}
+
 pub fn expansion_anchors(s: &State, u: &Unit, catalog: &Catalog) -> Vec<Point> {
-    if u.size != 1.0 || catalog[&u.kind.key()].landmark.is_some() {
+    if u.size != 1.0 || catalog.by_kind(&u.kind).landmark.is_some() {
         return vec![];
     }
     let mut giant = u.clone();
@@ -475,11 +532,13 @@ fn placement(
     deployment: bool,
     query: Option<&PlacementQuery>,
 ) -> bool {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Paths);
     let footprint = cells(u, at);
     if footprint.iter().any(|&p| !inside(p) || base(p)) {
         return false;
     }
-    if let Some(rule) = &catalog[&u.kind.key()].landmark {
+    if let Some(rule) = &catalog.by_kind(&u.kind).landmark {
         if !deployment {
             return u.at() == at;
         }
@@ -589,6 +648,8 @@ pub fn movement_with_place(
     straight: bool,
     place: impl Fn(Point) -> bool,
 ) -> Option<Vec<Point>> {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Paths);
     if !inside(to) || u.at() == to || !place(to) {
         return None;
     }

@@ -71,10 +71,20 @@ pub fn step(
     catalog: &Catalog,
 ) -> Result<State, String> {
     let command = command(value, catalog)?;
-    if !crate::actions::permitted(state, actor, value) {
+    step_typed(state, actor, &command, catalog)
+}
+
+/// 已由内部动作树构造的类型化命令；权限与正式结算仍在宿主执行，不回到 JSON 解析。
+pub fn step_typed(
+    state: &State,
+    actor: usize,
+    command: &Command,
+    catalog: &Catalog,
+) -> Result<State, String> {
+    if !crate::actions::permitted_command(state, actor, command) {
         return Err("unauthorized actor".into());
     }
-    let mut next = crate::apply_runtime(state, &command, catalog)
+    let mut next = crate::apply_runtime(state, command, catalog)
         .map_err(|e| format!("rule rejected command: {e:?}"))?;
     next.events.clear();
     next.extra.insert("log".into(), serde_json::json!([]));
