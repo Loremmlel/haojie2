@@ -10,7 +10,9 @@ TS 手工教师、restricted PUCT、旧记录转换和历史改善/连续实验�
 
 环境内部使用类型化实体、命令、反应与时钟快照；公开只读视图直接进入动作树与编码，连续模拟不再经过 `Observation Value → State`。外部存档、观察、记录及控制消息仍遵守原协议。原生发送缓冲在同步写入完成后复用，Python 接收的张量仍独立拥有。现有二进制协议与就绪调度没有换版。
 
-2026-10-03 在 Node 不在 PATH 的环境中重新完成真实终局采样、非空标签、0→2→4 更新、恢复与连续四步相等及新权重审核。完整规则、固定编码、RNG、私有信息和旧记录规范哈希均通过冻结旧版及 TS 差分。实现对应见[运行内核](../docs/ai/performance/kernel/ARCHITECTURE.md)，性能边界和复现见[实测报告](../docs/ai/performance/kernel/RESULTS.md)。本轮不改变模型、优化器、监督语义或训练安装依赖。
+2026-10-03 的正式原生 CI 从源码交付包在独立 Linux 容器构建并安装，运行根不挂载宿主仓库、关闭网络、扫描整个文件系统并核对安装与运行的实际 execve；不是仅从 PATH 删除 Node。非空标签、0→2→4 更新、45 个参数张量变化、另进程恢复与连续四步逐张量相等及新权重采样/审核均通过。Windows/Linux 的规则、候选、编码、RNG、私有信息和规范哈希继续由 TS 独立参照验证。
+
+基础表示对应见[运行内核](../docs/ai/performance/kernel/ARCHITECTURE.md)；当前优化、性能边界、原始证据与复现入口统一见[正式引擎任务记录](../docs/ai/performance/engine/README.md)。固定实体编码区、节点追加区及最终发送帧在同步消费完成后复用；类型化状态直接进入既有规范哈希，成功提交后的哈希才可用于下一条记录。模型、优化器、监督语义和训练安装依赖保持不变。
 
 ## 独立安装与运行
 
@@ -71,12 +73,12 @@ python scripts/training/native/pipeline/package.py --starts <已验证前缀.jso
 python scripts/training/native/pipeline/accept.py --engine ENGINE --starts fixtures/late-starts.json --output <新验收目录>
 ```
 
-阶段状态和证据见[任务记录](../docs/ai/performance/native-training/README.md)。
+当前阶段状态和证据见[正式引擎任务记录](../docs/ai/performance/engine/README.md)。此前训练宿主接线的历史结果保留于[原生训练报告](../docs/ai/performance/native-training/README.md)。
 
 ## 并发与测量边界
 
 每个环境持有一个Rust进程和最多一个在途模型请求。Python收到首个完成请求后合并已经就绪的节点，不等待其他环境的规则查询；相同环境的响应与后续请求仍串行。前向异常、版本错误或取消会关闭本批自己启动的进程，成功命令前缀保留。这里没有共享可变张量、跨权重缓存或新的Rust专用查询算法。
 
-`scripts/training/native/pipeline/measure.py` 在独立Linux PID命名空间测量冻结检查点，`--parallel` 批量运行全部起点，省略时逐局单环境运行；`--prepare` 加入独立审核、再次审核并编码分片、加载、两步AdamW和全验证集损失评估。独立审核与准备中的审核都计费，不能把减少审核算作优化。输出包含工作量、文件哈希、阶段墙钟、累计CPU和100ms采样RSS；RSS不是连续精确峰值，Rust推理等待包含Python前向及传输，不能与前向耗时相加。
+`scripts/training/native/pipeline/measure.py` 在独立 Linux PID 命名空间测量冻结检查点，`--parallel` 批量运行全部起点，省略时逐局单环境运行；`--prepare` 加入独立审核、再次审核并编码分片、加载、两步 AdamW 和全验证集损失评估。这一严格流程的两次审核都计费；推荐单遍流程另记账，不能把减少阶段算作等价内核加速。输出包含工作量、文件哈希、阶段墙钟、累计 CPU 和 100ms 采样 RSS；RSS 不是连续精确峰值，Rust 推理等待包含 Python 前向及传输，不能与前向耗时相加。本轮交错成对测量使用 `scripts/training/performance/kernel/application.py`，CPU/RSS 的具体边界见任务记录。
 
 性能报告只适用于注明的检查点、尺寸、设备与环境并发数。小模型两步更新的占比不代表长期训练；并发切片也不代表自然开局或整机最大吞吐。

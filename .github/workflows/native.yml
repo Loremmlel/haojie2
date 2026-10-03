@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       endurance:
-        description: Run four seeded natural games and full TS/Rust replay
+        description: Verify eight fixed seeds, seven terminal games and one exact unknown prefix
         type: boolean
         default: true
 permissions:

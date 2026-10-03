@@ -41,7 +41,7 @@ node --import tsx scripts/training/native/validate.ts --fixtures-only --output a
 node --import tsx scripts/training/native/sampling/validate.ts --output artifacts/native-encoding
 ```
 
-两个差分命令可用 `--executable` 显式指定程序。Python 原生测试必须设置 `HAOJIE_NATIVE`；缺程序立即失败。包内自带已核验的压缩晚盘前缀和规则/哈希向量，不依赖开发机 artifacts。包的来源及成员哈希在旁边 manifest；交付包不含 Node、TS、模型或训练产物。Linux 隔离验收见 `scripts/training/native/ci/Dockerfile`，容器只挂证据输出目录、关闭网络；扫描整个根并核对实际 execve，不允许绝对路径或回退脚本绕回宿主。
+两个差分命令可用 `--executable` 显式指定程序。Python 原生测试必须设置 `HAOJIE_NATIVE`；缺程序立即失败。包内自带已核验的晚盘前缀和规则/哈希向量，不依赖开发机 artifacts；前缀在仓库以 gzip 保存，打包时解压为 `fixtures/late-starts.json`。包的来源及成员哈希在旁边 manifest；交付包不含 Node、TS、模型或训练产物。Linux 隔离验收见 `scripts/training/native/ci/Dockerfile`，容器只挂证据输出目录、关闭网络；扫描整个根并核对实际 execve，不允许绝对路径或回退脚本绕回宿主。
 
 ## 维护、升级与排错
 
