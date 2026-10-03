@@ -33,6 +33,15 @@ PYTHON -m haojie_training.native --engine ENGINE sample --checkpoint restored.pt
 
 ## 版本与边界
 
+| 契约           | 版本                                             |
+| -------------- | ------------------------------------------------ |
+| 规则           | `3.0-feedback5-live-deployment-2026-09-23`       |
+| 提交规则包     | `haojie-rules-package-v1`                        |
+| 记录           | `haojie-native-record-v1`                        |
+| 常驻二进制接口 | `haojie-training-binary-v1`                      |
+| 编码           | `haojie-entities-factorized-v1`                  |
+| 模型 / 检查点  | `entity-transformer-v2` / `haojie-checkpoint-v1` |
+
 - 单一权威仍是 TS 的 catalog/combat/recipes/pools/schema。开发时显式运行 `node --import tsx scripts/training/native/rules-package.ts` 生成提交包，`npm run train:rules:check` 检查过期。安装、缺缓存启动和新数据预处理不调用生成器。`data/rules.json` 固定字节 SHA256、规则/编码版本随 manifest 提交并嵌入二进制；Git 不转换规则包换行。
 - `haojie-training-binary-v1` 使用 JSON 行控制，随后发送 LE f32 特征、LE i64 索引、u8 掩码。顺序是 entities/globals/candidates/kinds/sources/targets/entity_mask/candidate_mask，维度与旧模型一致。Python 复制为独立拥有张量，异步批处理不借用可被覆盖的内存。Rust 保存局面与递归上下文。
 - 模型请求带递增 id 和检查点文件 SHA256；核对规则/完整编码/规则包、有限权重及 logits。错误/过期响应明确失败，不回退教师或随机策略。换权重创建新模型及环境，不复用 TinyPolicy 投影。
@@ -43,7 +52,7 @@ PYTHON -m haojie_training.native --engine ENGINE sample --checkpoint restored.pt
 
 ## 恢复与来源
 
-检查点原子保存模型、AdamW、AMP、累计步骤/更新、CPU/设备随机源和来源。固定学习率；数据索引由种子和累计步骤确定。续训严格要求相同数据哈希、划分、损失与参数；行为模型哈希列表进入数据和检查点。训练/验证按规则和原始开局种子族隔离，拒绝重复游戏身份。
+检查点原子保存模型、AdamW、AMP、累计步骤/更新、CPU/设备随机源和来源。固定学习率；数据索引由种子和累计步骤确定。续训严格要求相同数据哈希、划分、损失与参数；行为模型哈希列表进入数据和检查点。训练/验证按规则和原始开局种子族隔离，拒绝重复游戏身份。身份由规则包、起点及命令前缀、模型、策略随机源和采样算法组成；改变命令或回合预算不能把旧前缀变成新数据。
 
 支持最近完整学习阶段恢复和已记录成功前缀审核，**不支持从半局精确恢复采样递归栈**。重启采样须新输出路径，旧前缀保留为 unknown；合并相同游戏身份时拒绝重复。取消不自动结束回合。需要新采样阶段时显式选择种子与输出，不把半成品标作成功。
 
@@ -55,3 +64,11 @@ python scripts/training/native/pipeline/accept.py --engine ENGINE --starts fixtu
 ```
 
 阶段状态和证据见[任务记录](../docs/ai/performance/native-training/README.md)。
+
+## 并发与测量边界
+
+每个环境持有一个Rust进程和最多一个在途模型请求。Python收到首个完成请求后合并已经就绪的节点，不等待其他环境的规则查询；相同环境的响应与后续请求仍串行。前向异常、版本错误或取消会关闭本批自己启动的进程，成功命令前缀保留。这里没有共享可变张量、跨权重缓存或新的Rust专用查询算法。
+
+`scripts/training/native/pipeline/measure.py` 在独立Linux PID命名空间测量冻结检查点，`--parallel` 批量运行全部起点，省略时逐局单环境运行；`--prepare` 加入独立审核、再次审核并编码分片、加载、两步AdamW和全验证集损失评估。独立审核与准备中的审核都计费，不能把减少审核算作优化。输出包含工作量、文件哈希、阶段墙钟、累计CPU和100ms采样RSS；RSS不是连续精确峰值，Rust推理等待包含Python前向及传输，不能与前向耗时相加。
+
+性能报告只适用于注明的检查点、尺寸、设备与环境并发数。小模型两步更新的占比不代表长期训练；并发切片也不代表自然开局或整机最大吞吐。

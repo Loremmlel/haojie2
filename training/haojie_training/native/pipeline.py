@@ -4,7 +4,7 @@ import hashlib
 import json
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 import torch
@@ -84,7 +84,7 @@ def example(inputs, selected=0):
 def sample(
     executable, checkpoint, starts, output, commands=2000, plies=200, device="cpu", seed=20261003
 ):
-    """每个环境一个常驻进程；每轮最多收齐一个节点/环境再一次批量前向，无逐属性 RPC。"""
+    """每环境一个常驻进程和在途请求；就绪节点批量前向，不等待其他环境或逐属性 RPC。"""
     output.mkdir(parents=True, exist_ok=False)
     clients = []
     started = time.perf_counter()
@@ -112,10 +112,13 @@ def sample(
         results = [None] * len(clients)
         executor = ThreadPoolExecutor(max_workers=len(clients))
         try:
-            while active:
-                messages = list(executor.map(lambda i: clients[i].receive(), active))
+            waiting = {executor.submit(clients[i].receive): i for i in active}
+            while waiting:
+                ready, _ = wait(waiting, return_when=FIRST_COMPLETED)
+                # 每环境只保留一个请求；其他环境继续查询，已就绪输入按环境序号形成批次。
+                messages = sorted((waiting.pop(future), future.result()) for future in ready)
                 pending = []
-                for i, message in zip(active, messages):
+                for i, message in messages:
                     if message["type"] == "done":
                         results[i] = message
                         if message.get("error"):
@@ -144,7 +147,8 @@ def sample(
                                 "logits": logits[row, : message["candidates"]].tolist(),
                             }
                         )
-                active = [i for i, _ in pending]
+                for i, _ in pending:
+                    waiting[executor.submit(clients[i].receive)] = i
         finally:
             # 中断先关闭自己启动的环境，唤醒阻塞读取；不等待九百秒超时才处理 Ctrl+C。
             for client in clients:
@@ -204,8 +208,7 @@ def prepare(executable, paths, output, shard_size=64):
             group = f"{meta['ruleset']}:{header['start']['rules']}:{header['start']['seed']}"
             # 改变截断预算不产生新轨迹身份，防止同一前缀在恢复后重复计样。
             lineage = {
-                k: header[k]
-                for k in ("rulesHash", "start", "model", "samplerSeed", "policyKind")
+                k: header[k] for k in ("rulesHash", "start", "model", "samplerSeed", "policyKind")
             }
             identity = hashlib.sha256(
                 json.dumps(lineage, sort_keys=True, separators=(",", ":")).encode()

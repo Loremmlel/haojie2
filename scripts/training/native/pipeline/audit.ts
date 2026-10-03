@@ -6,9 +6,11 @@ import { observe } from '../../../../src/ai/observation';
 import { TrainingActionTree } from '../../../../src/ai/training/action-tree';
 import { encodeDecision } from '../../../../src/ai/training/encoding/decision';
 import type { GameState, Player } from '../../../../src/engine/types';
+import { cells } from '../../../../src/engine/core/geometry';
 import { nativeHash } from './hash';
 
 const [input, output] = process.argv.slice(2);
+const summaryOnly = process.argv.includes('--summary-only');
 assert.ok(input && output);
 const lines = readFileSync(input, 'utf8')
   .trim()
@@ -18,6 +20,15 @@ let state: GameState | undefined,
   previous = '',
   commands = 0;
 const examples: unknown[] = [];
+const coverage = {
+  reactions: 0,
+  maxPending: 0,
+  deaths: 0,
+  personalClocks: 0,
+  multiCell: 0,
+  stacked: 0,
+  optional: 0,
+};
 const clean = (s: GameState) => {
   s.log = [];
   s.events = [];
@@ -43,6 +54,15 @@ for (const envelope of lines) {
     assert.ok(state);
     assert.equal(row.index, commands);
     assert.equal(nativeHash(state), row.before, 'before');
+    // 只统计正式采样命令前的实局，不把预置前缀或成功回放次数算作采样工作量。
+    coverage.reactions += Number(state.pending.length > 0);
+    coverage.maxPending = Math.max(coverage.maxPending, state.pending.length);
+    coverage.deaths += Number(state.deaths.length > 0);
+    coverage.personalClocks += Number(state.units.some((u) => u.offset !== 0));
+    coverage.multiCell += Number(state.units.some((u) => u.size > 1));
+    coverage.optional += Number(row.optional);
+    const occupied = state.units.flatMap((u) => cells(u).map((p) => `${p.x},${p.y}`));
+    coverage.stacked += Number(new Set(occupied).size < occupied.length);
     const observation = observe(state, row.actor),
       tree = new TrainingActionTree(observation, row.actor);
     for (let depth = 0; depth < row.path.length; depth++) {
@@ -50,6 +70,7 @@ for (const envelope of lines) {
       assert.ok(node.choices[row.path[depth]]);
       if (depth === row.path.length - 1)
         assert.deepEqual(node.choices[row.path[depth]].command, row.command);
+      if (summaryOnly) continue;
       const encoded = encodeDecision(observation, row.actor, node);
       if (row.optional && depth === 0) {
         const pass = Array(64).fill(0);
@@ -71,5 +92,7 @@ for (const envelope of lines) {
     assert.equal(row.winner, state.winner ?? null);
   }
 }
-writeFileSync(output, JSON.stringify({ commands, examples }), { flag: 'wx' });
-console.log(JSON.stringify({ commands, examples: examples.length, finalHash: nativeHash(state) }));
+writeFileSync(output, JSON.stringify({ commands, examples, coverage }), { flag: 'wx' });
+console.log(
+  JSON.stringify({ commands, examples: examples.length, coverage, finalHash: nativeHash(state) }),
+);

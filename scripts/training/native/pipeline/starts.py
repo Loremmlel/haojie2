@@ -10,6 +10,7 @@ def main():
     parser.add_argument("--workset", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--tail", type=int, default=20)
+    parser.add_argument("--slices", action="store_true")
     args = parser.parse_args()
     starts = []
     for rules, seed in (
@@ -18,19 +19,26 @@ def main():
         ("shrine", 741270001),
         ("shrine", 741270019),
     ):
+        if args.slices and seed not in (731270001, 741270001):
+            continue
         path = args.workset / f"{rules}-{seed}.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
         commands = payload["decisions"]
-        starts.append(
-            {
-                "seed": seed,
-                "rules": rules,
-                "prelude": [
-                    {"actor": p["actor"], "command": p["command"]}
-                    for p in commands[: -args.tail]
-                ],
-            }
+        positions = (
+            [0, 1000, 3000] if args.slices and seed in (731270001, 741270001) else []
         )
+        positions.append(len(commands) - args.tail)
+        for position in positions:
+            starts.append(
+                {
+                    "seed": seed,
+                    "rules": rules,
+                    "prelude": [
+                        {"actor": p["actor"], "command": p["command"]}
+                        for p in commands[:position]
+                    ],
+                }
+            )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x", encoding="utf-8") as file:
         json.dump(starts, file, separators=(",", ":"))

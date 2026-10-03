@@ -16,12 +16,15 @@ def main():
     files = [
         *root.glob("training/haojie_training/**/*.py"),
         root / "training/pyproject.toml",
+        root / "training/NATIVE.md",
+        root / "docs/ai/performance/native-training/README.md",
         *root.glob("native/engine-prototype/src/**/*.rs"),
         *root.glob("native/engine-prototype/data/*.json"),
         root / "native/engine-prototype/Cargo.toml",
         root / "native/engine-prototype/Cargo.lock",
         root / "training/tests/test_native.py",
         Path(__file__).with_name("accept.py"),
+        Path(__file__).with_name("measure.py"),
     ]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with (
