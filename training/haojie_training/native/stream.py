@@ -165,13 +165,25 @@ def prepare_pool(executable, source, output, shard_size=64):
     totals = {
         "valid_terminal": 0,
         "attempts": 0,
+        "missing_attempts": 0,
         "samples": 0,
         "value_labels": 0,
         "record_bytes": 0,
         "feature_bytes": 0,
         "shard_bytes": 0,
     }
+    scheduled = db.execute("SELECT count(*) FROM attempts").fetchone()[0]
+
+    def progress():
+        # 积压留在磁盘，不排成内存队列；原子快照供外部监控读取。
+        totals["pending_attempts"] = scheduled - totals["attempts"] - totals["missing_attempts"]
+        totals["seconds"] = time.perf_counter() - started
+        temporary = output / "progress.json.partial"
+        temporary.write_text(json.dumps(totals), encoding="utf-8")
+        temporary.replace(output / "progress.json")
+
     try:
+        progress()
         with (
             Client(executable) as client,
             (output / "audits.jsonl").open("x", encoding="utf-8") as stream,
@@ -182,6 +194,10 @@ def prepare_pool(executable, source, output, shard_size=64):
             ):
                 actual = Path(path) if Path(path).exists() else Path(path + ".partial")
                 if not actual.exists():
+                    if status in {"terminal", "commands", "plies", "decode-budget"}:
+                        raise ValueError(f"已完成尝试缺少记录: {task}/{attempt}")
+                    totals["missing_attempts"] += 1
+                    progress()
                     continue
                 eligible = attempt == latest and status != "error"
                 if eligible:
@@ -216,6 +232,7 @@ def prepare_pool(executable, source, output, shard_size=64):
                 ):
                     totals[key] += result.get(key, 0)
                 del result
+                progress()
         totals["seconds"] = time.perf_counter() - started
         (output / "report.json").write_text(json.dumps(totals, indent=2), encoding="utf-8")
         return totals

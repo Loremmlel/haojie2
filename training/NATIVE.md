@@ -10,7 +10,7 @@ TS 手工教师、restricted PUCT、旧记录转换和历史改善/连续实验�
 
 2026-10-04 已接通 Python 执行优化：推理专用输入/策略头、拥有型帧视图、连续页锁定组批、直接就绪队列、分片长度索引、单批预取和 CUDA fused AdamW。模型、损失及原生协议不变。默认 11,695,874 参数模型的 CUDA 实测、数值误差、失败路线和复现入口见[执行链路报告](../docs/ai/performance/execution/README.md)。
 
-采样推荐 `--device cuda --precision fp32`、1 个 PyTorch 宿主线程和最多 8 环境，`--batch-wait-ms` 默认 0；CLI 的 `--device auto` 保留无加速器时 CPU 回退。训练推荐 `--device cuda --precision bf16 --threads 1`，`--optimizer auto` 在 CUDA FP32/BF16 使用融合 AdamW，FP16/CPU/XPU 使用 foreach。`--prefetch` 默认开启，`--no-prefetch` 可做参考对照；不改变样本权重或按累计步骤确定的随机源。
+采样使用 `--device cuda --precision fp32`、1 个 PyTorch 宿主线程，`--batch-wait-ms` 默认 0；旧 `sample` 保留最多 8 起点短测，新 `resident` 的环境数独立配置。32 环境的固定默认模型自然局实测见[常驻采样报告](../docs/ai/performance/resident/README.md)。CLI 的 `--device auto` 保留无加速器时 CPU 回退。训练推荐 `--device cuda --precision bf16 --threads 1`，`--optimizer auto` 在 CUDA FP32/BF16 使用融合 AdamW，FP16/CPU/XPU 使用 foreach。`--prefetch` 默认开启，`--no-prefetch` 可做参考对照；不改变样本权重或按累计步骤确定的随机源。
 
 要求同设备逐位恢复时，新阶段使用 `--deterministic`；续训省略此开关会继承检查点的确定性和矩阵精度设置。非确定性 CUDA 的连续/恢复结果允许存在舍入差异。融合优化器检查点须在 CUDA 原执行模式恢复；`--optimizer auto` 恢复实际保存的优化器执行方式，显式不匹配会失败。训练报告另列加载、前后全量指标评估及保存耗时，不用两步烟雾测试代表更新吞吐。
 
@@ -46,6 +46,23 @@ PYTHON -m haojie_training.native --engine ENGINE sample --checkpoint restored.pt
 
 ## 版本与边界
 
+### 常驻工作池
+
+```sh
+PYTHON -m haojie_training.native --engine ENGINE --threads 1 resident --checkpoint initial.pt --output resident-new --environments 32 --target 64 --seconds 3600 --drain-seconds 120 --seed 2026100407 --rules mixed --commands 20000 --plies 1000 --device cuda --precision fp32
+PYTHON -m haojie_training.native --engine ENGINE --threads 1 audit-pool --source resident-new --output resident-data-new --shard-size 32
+```
+
+`resident` 不读取 starts.json。`--tasks` 可限制总任务编号数量；`--target` 是累计真实终局目标，达到后停止接新任务，在途局仍可完成，因此可能略超目标。每个槽位独立补位，模型、推理缓冲、规则宿主和调度器持续复用。默认经典/神龛按任务编号各半，游戏种子和策略随机源不依赖并发或完成顺序。
+
+在输出目录创建 `STOP` 文件或按一次 Ctrl+C 停止接新任务，最多用 `--drain-seconds` 排空且不超过原总预算；再次 Ctrl+C 强制退出，保留前缀。移除 STOP 后，用相同参数和输出目录追加 `--resume`。可调整环境数、任务/终局目标和本次运行时限；模型、实际引擎哈希、规则模式、主种子、精度和单局上限必须相同。半局会从原种子重跑，使用新尝试编号，旧前缀不覆盖；已完成身份跳过。账本出现规则/协议错误时拒绝恢复，不能靠换槽位或不断重开绕过错误。
+
+SQLite 的 tasks/attempts/runs 保存任务清单、完成身份、下一编号所需状态、尝试记录、配置与哈希；独占进程锁防止同目录双写。完成文件发布与账本提交之间的崩溃通过原生审核补记。仅偶发 EOF/断管可重建槽位，每次运行最多两次；规则和协议错误立即中止。`telemetry-*.jsonl` 每约5秒记录有界窗口和累计量，`report-*` 或 `failure-*` 保存结束状态。错误退出留下的数据库 running 状态表示待恢复任务，不表示子进程仍存活。
+
+`audit-pool` 串行审核全部尝试，每次最多32个样本（以上命令）和客户端双帧队列；消费不过来时读取线程背压，不积存整局张量。输出目录的 `progress.json` 原子更新累计计数及 `pending_attempts`，积压记录留在磁盘。旧尝试和错误局只审核，不重复进入训练；当前有效尝试逐片准备，只有原始字节身份及结束回执确认后才发布。未完成前缀只保留策略标签。每局 `shards.jsonl` 列出带哈希的独立 `.pt` 分片，兼容 `load_dataset`；集合由 `audits.jsonl` 索引，按种子族稳定划分训练/验证。这里没有把百万局合成一个常驻内存索引；训练器的跨集合取数不在本轮扩展。
+
+采样算法标记为 `model-gumbel-backtracking-v2`：公开 `uncertain` 候选被权威执行明确拒绝后，沿当前 Gumbel 排序继续回溯，不重新抽样，不预读私有 RNG，不排除整个 uncertain 动作域。失败原子性保证旧状态和正式 RNG 不变；每次参数决策最多64次拒绝。拒绝尝试单独写入 `rejected` 行，原生审核重新验证公开路径、权限、真实拒绝与前后状态哈希，不生成已执行动作监督。4,096节点/256深度解码保护耗尽时记 `decode-budget` 截断并补位，绝不计完整局或补终局收益。权限、available 候选执行失败、未实现或协议错误仍中止。旧 v1 记录继续按原语义审核，历史文件不改写。TS 参照沿同一算法同步。
+
 | 契约           | 版本                                             |
 | -------------- | ------------------------------------------------ |
 | 规则           | `3.0-feedback5-live-deployment-2026-09-23`       |
@@ -70,7 +87,7 @@ PYTHON -m haojie_training.native --engine ENGINE sample --checkpoint restored.pt
 
 检查点原子保存模型、AdamW、AMP、累计步骤/更新、CPU/设备随机源和来源。固定学习率；数据索引由种子和累计步骤确定。续训严格要求相同数据哈希、划分、损失与参数；行为模型哈希列表进入数据和检查点。训练/验证按规则和原始开局种子族隔离，拒绝重复游戏身份。身份由规则包、起点及命令前缀、模型、策略随机源和采样算法组成；改变命令或回合预算不能把旧前缀变成新数据。
 
-支持最近完整学习阶段恢复和已记录成功前缀审核，**不支持从半局精确恢复采样递归栈**。重启采样须新输出路径，旧前缀保留为 unknown；合并相同游戏身份时拒绝重复。取消不自动结束回合。需要新采样阶段时显式选择种子与输出，不把半成品标作成功。
+支持最近完整学习阶段恢复和已记录成功前缀审核，**不支持从半局精确恢复采样递归栈**。单批 `sample` 重启须新输出路径；常驻 `resident --resume` 在原目录以新尝试编号从原种子重跑，旧前缀保留为 unknown，完成身份不重复计数。取消不自动结束回合。新采样阶段显式选择种子与输出，不把半成品标作成功。
 
 纯包验收脚本检查0→2→4更新、参数变化、有限优化器、另进程恢复与连续4步逐张量相等，再用恢复权重实际采样和审核：
 

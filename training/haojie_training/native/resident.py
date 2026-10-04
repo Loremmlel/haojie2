@@ -98,7 +98,9 @@ class Ledger:
                         "terminal"
                         if report["outcome"]["terminated"]
                         else (
-                            reason if reason in {"commands", "plies", "decode-budget"} else "pending"
+                            reason
+                            if reason in {"commands", "plies", "decode-budget"}
+                            else "pending"
                         )
                     )
                     if report["outcome"]["reason"] == "error":
@@ -108,6 +110,8 @@ class Ledger:
                         {"reason": "interrupted", "prefix": str(path) + ".partial"},
                         "pending",
                     )
+                # 恢复只补充分类，保留上次停止时已经落账的请求数与历时。
+                result = {**json.loads(attempt["result"] or "{}"), **result}
                 self.db.execute(
                     "UPDATE tasks SET status=?,result=? WHERE id=?",
                     (status, json.dumps(result), row["id"]),
@@ -161,7 +165,8 @@ class Ledger:
             folder / f"game-{task['id']:09d}-attempt-{task['attempt']:03d}.jsonl"
         ).resolve()
         self.db.execute(
-            "UPDATE tasks SET status='running',attempt=? WHERE id=?", (task["attempt"], task["id"])
+            "UPDATE tasks SET status='running',attempt=?,result=NULL WHERE id=?",
+            (task["attempt"], task["id"]),
         )
         self.db.execute(
             "INSERT INTO attempts VALUES (?,?,?,?,?,NULL)",

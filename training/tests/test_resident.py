@@ -2,6 +2,7 @@
 
 import gc
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -17,7 +18,7 @@ from haojie_training.native.execution import PolicyInference
 from haojie_training.native.pipeline import BatchJobs
 from haojie_training.native.pool import Pool
 from haojie_training.native.resident import Ledger, task_identity
-from haojie_training.native.stream import prepare_record
+from haojie_training.native.stream import prepare_pool, prepare_record
 
 
 class ZeroPolicy:
@@ -46,7 +47,7 @@ class ResidentTests(unittest.TestCase):
         for payload, kind in (
             (b'{"type":"infer"', RuntimeError),
             (b'{"bytes":10,"entities":1,"candidates":1}\nabc', RuntimeError),
-            (b'{bad json}\n', ValueError),
+            (b"{bad json}\n", ValueError),
         ):
             client = Client.__new__(Client)
             client.process = SimpleNamespace(stdout=io.BytesIO(payload))
@@ -101,12 +102,27 @@ class ResidentTests(unittest.TestCase):
             ledger = Ledger(output, config, tasks=3)
             ledger.begin({})
             first = ledger.claim()
+            ledger.db.execute(
+                "UPDATE attempts SET result=? WHERE task=? AND attempt=1",
+                (json.dumps({"requests": 7, "seconds": 1.25}), first["id"]),
+            )
+            ledger.db.commit()
             # 模拟账本提交后、宿主启动前退出；恢复必须新尝试编号、同一身份。
             ledger.close()
             ledger = Ledger(output, config, resume=True, tasks=3)
             ledger.recover(self.engine)
+            previous_attempt = json.loads(
+                ledger.db.execute("SELECT result FROM attempts WHERE attempt=1").fetchone()[0]
+            )
+            self.assertEqual(previous_attempt["requests"], 7)
+            self.assertEqual(previous_attempt["seconds"], 1.25)
             ledger.begin({})
             again = ledger.claim()
+            self.assertIsNone(
+                ledger.db.execute("SELECT result FROM tasks WHERE id=?", (again["id"],)).fetchone()[
+                    0
+                ]
+            )
             self.assertEqual(first["start"], again["start"])
             self.assertEqual(first["sampler_seed"], again["sampler_seed"])
             self.assertEqual(again["attempt"], 2)
@@ -183,6 +199,29 @@ class ResidentTests(unittest.TestCase):
             self.assertEqual(report["finished"], 3)
             self.assertEqual(ledger.summary()["attempts"]["process-exit"], 1)
             ledger.close()
+
+    def test_missing_completed_record_is_not_silently_skipped(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "run"
+            ledger = Ledger(
+                output, {"seed": 81, "rules": "classic", "commands": 3, "plies": 100}, tasks=1
+            )
+            ledger.begin({})
+            self.pool(1).run(ledger)
+            path = Path(ledger.db.execute("SELECT path FROM attempts").fetchone()[0])
+            ledger.close()
+            prepared = Path(folder) / "audit-complete"
+            prepare_pool(self.engine, output, prepared, shard_size=3)
+            progress = json.loads((prepared / "progress.json").read_text(encoding="utf-8"))
+            self.assertEqual(progress["attempts"], 1)
+            self.assertEqual(progress["pending_attempts"], 0)
+            path.unlink()
+            with self.assertRaisesRegex(ValueError, "已完成尝试缺少记录"):
+                prepare_pool(self.engine, output, Path(folder) / "audit")
+            progress = json.loads(
+                (Path(folder) / "audit/progress.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(progress["pending_attempts"], 1)
 
     def test_published_record_recovered_and_error_not_skipped(self):
         with tempfile.TemporaryDirectory() as folder:
