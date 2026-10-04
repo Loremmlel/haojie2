@@ -20,6 +20,22 @@ from haojie_training.model import ModelConfig
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_due_evaluation_survives_pause_but_explicit_pending_cancel_is_respected(self):
+        c = Controller.__new__(Controller)
+        c.config = {**defaults(), "eval_games": 4}
+        c.counts, c.trainer = {"games": 8}, SimpleNamespace(updates=256)
+        c.eval_games, c.eval_step = 4, 128
+        c.cancel, c.eval_cancel, c.wake = (threading.Event() for _ in range(3))
+        c.lock = threading.RLock()
+        c.want_run, c.want_eval = False, True
+        c.evaluation = c.candidate = None
+        self.assertFalse(c._due_evaluation())
+        c.want_run = True
+        self.assertTrue(c._due_evaluation())
+        c.command("cancel-evaluation")
+        self.assertFalse(c.want_eval)
+        self.assertFalse(c._due_evaluation())
+
     def test_rare_pass_survives_retention_and_is_consumed_with_its_actor_return(self):
         torch.set_num_threads(1)
         inputs = synthetic_batch(ModelConfig.tiny(), size=1, entities=4, actions=2)

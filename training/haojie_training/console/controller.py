@@ -326,6 +326,9 @@ class Controller:
             elif action == "cancel-evaluation":
                 self.want_eval = False
                 self.eval_cancel.set()
+                if not self.evaluation:
+                    self.eval_games = self.counts["games"]
+                    self.eval_step = self.trainer.updates if self.trainer else 0
                 if self.candidate:
                     self.candidate["confirm"] = False
             elif action == "confirm-candidate":
@@ -669,6 +672,15 @@ class Controller:
             if not self.evaluation or self.cancel.is_set() or self.eval_cancel.is_set():
                 break
 
+    def _due_evaluation(self):
+        return (
+            self.want_run
+            and not self.cancel.is_set()
+            and ready()
+            and self.trainer.updates > self.eval_step
+            and self.counts["games"] - self.eval_games >= self.config["eval_games"]
+        )
+
     def _close_pool(self):
         if self.pool:
             self.pool.close()
@@ -737,6 +749,9 @@ class Controller:
                     self.log(f"导出完成（受管，仅保留最新一份）：{self.store.root / name}")
                 if self.want_save:
                     self._save()
+                # 更新完成后即使先暂停，继续时也先兑现到期评测，不再额外等待长采样轮。
+                if self._due_evaluation():
+                    self.want_eval = True
                 if (self.want_eval or self.evaluation) and not self.cancel.is_set():
                     self._evaluate()
                 if self.want_run and not self.cancel.is_set():
@@ -745,14 +760,6 @@ class Controller:
                         self._update()
                         if self._due_save():
                             self._save()
-                        if (
-                            not self.cancel.is_set()
-                            and self.want_run
-                            and ready()
-                            and self.trainer.updates > self.eval_step
-                            and self.counts["games"] - self.eval_games >= self.config["eval_games"]
-                        ):
-                            self.want_eval = True
                 if (not self.want_run and not self.evaluation) or self.cancel.is_set():
                     self._pause()
             except Exception as error:

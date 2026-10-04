@@ -70,6 +70,23 @@ try {
     assert.equal(restored.version, saved.version);
     assert.equal(restored.pool.consumed, saved.pool.consumed);
     await save('natural-final-restored', restored);
+    await page.getByRole('button', { name: '开始 / 继续', exact: true }).click();
+    const periodic = await wait((s) => s.evaluation_job?.completed_tasks >= 1, 10);
+    assert.equal(periodic.evaluation_job.model, restored.version);
+    assert.equal(periodic.counts.tasks, restored.counts.tasks);
+    await save('natural-periodic-triggered', periodic);
+    await page.getByRole('button', { name: '暂停', exact: true }).click();
+    await wait((s) => s.state === 'paused' && !s.evaluation_job, 2);
+    await page.getByRole('button', { name: '开始 / 继续', exact: true }).click();
+    const continued = await wait((s) => s.runtime.active.some((g) => g.commands >= 2), 3);
+    assert.equal(continued.version, restored.version);
+    assert.equal(continued.updates, restored.updates);
+    await save('natural-memory-resumed-final', continued);
+    await page.getByRole('button', { name: '暂停', exact: true }).click();
+    await wait((s) => s.state === 'paused', 2);
+    const savedAt = (await status()).saved_at;
+    await page.getByRole('button', { name: '保存恢复点', exact: true }).click();
+    await wait((s) => s.saved_at > savedAt && s.state === 'paused', 2);
   }
   if (phase === 'full') {
     await page.getByRole('button', { name: '新建训练', exact: true }).click();
