@@ -148,7 +148,7 @@ npm run bench:training -- --games 2 --plies 100 --commands 3000 --nodes 100
 
 区分clone、observe、JSON编码、applyCommand、独立随机转移并输出观察、公开预检、动作空间查询，以及相同79条实录的引擎/训练/Session序列化/协议编码开销。Session测试不含磁盘IO和教师trace，协议编码测试不含OS管道传输，均明确标记。演示局是压力样例，不是自然对局分布。教师测试另测经典/神龛实际对弈，报告完成、截断、命令数与模拟数，不计算对作者胜率。
 
-本机结果与Node是否足够的判断见[Node性能评估](TRAINING-NODE-2026-09-22.md)；11.55M网络的CPU/XPU与精度对比见[PyTorch训练性能](TRAINING-PYTORCH-2026-09-22.md)。不在CI中用机器耗时写脆弱阈值；TypeScript行为测试在tests/training，沿用npm test自动运行，Python测试命令见训练子项目说明。
+本机结果与Node是否足够的判断见[Node性能评估](https://github.com/Loremmlel/haojie2/blob/146ad89d274ec404cd16070a0e77b98703c7a8b1/docs/ai/TRAINING-NODE-2026-09-22.md)；11.55M网络的CPU/XPU与精度对比见[PyTorch训练性能](https://github.com/Loremmlel/haojie2/blob/146ad89d274ec404cd16070a0e77b98703c7a8b1/docs/ai/TRAINING-PYTORCH-2026-09-22.md)。不在CI中用机器耗时写脆弱阈值；TypeScript行为测试在tests/training，沿用npm test自动运行，Python测试命令见训练子项目说明。
 
 最终80%目标需冻结规则、模型和推理预算，使用未参与训练的种子、平衡先后手，并让作者熟悉模型打法。近似独立且条件稳定时，100局80胜的95% Wilson区间约71%–87%，不足以可靠断言真实胜率至少80%。不得把短局、自对弈或固定种子回放等同于对作者胜率。
 

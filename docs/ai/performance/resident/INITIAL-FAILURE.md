@@ -51,7 +51,7 @@ v2自然局复测在1,019.309秒核心墙钟时因任务8触及固定4,096节点
 其他规则、权限或协议错误继续中止；没有提高预算绕过长分支。
 
 源码修复提交 `ab1e8b7`；冻结引擎 `engine-budget.exe` SHA256 `ad7bcb33090f2e5f4c17001dc164a4008d1078d36de304891c745972f0d770ab`。
-一次性 `budget_repair.py` 只接受已知旧二进制哈希，核对新旧规则、schema及协议相同，取得目录锁并备份 `tasks.before-budget-repair.sqlite` 后迁移配置绑定。
+已退役的一次性 [budget_repair.py](https://github.com/Loremmlel/haojie2/blob/146ad89d274ec404cd16070a0e77b98703c7a8b1/scripts/training/performance/resident/budget_repair.py) 只接受已知旧二进制哈希，核对新旧规则、schema及协议相同，取得目录锁并备份 `tasks.before-budget-repair.sqlite` 后迁移配置绑定。
 只有已确认的任务8改为预算截断；原始错误文件和attempt状态不改写。22个完成身份跳过，31个旧前缀保留并使用新attempt编号重跑。
 `budget-repair.json` 保存前后配置与迁移任务。普通 `--resume` 仍严格拒绝未授权的引擎变化和规则/协议错误。
 

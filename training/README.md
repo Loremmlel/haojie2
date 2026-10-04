@@ -28,7 +28,7 @@ training/.venv/Scripts/python.exe -m pip install --no-deps -e training
 training/.venv/Scripts/python.exe -c "import torch; print(torch.__version__, torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
 ```
 
-无需激活环境，直接使用上述Python路径即可。训练指定`--device cuda --precision bf16`；基准指定`--devices cuda`，因为基准默认设备仍为CPU/XPU。RTX 3060 Laptop与历史CPU/XPU的对照见[CUDA实测](../docs/ai/TRAINING-PYTORCH-2026-09-22.md#cuda补测rtx-3060-laptop)。
+无需激活环境，直接使用上述Python路径即可。训练指定`--device cuda --precision bf16`；基准指定`--devices cuda`，因为基准默认设备仍为CPU/XPU。RTX 3060 Laptop与历史CPU/XPU的对照见[CUDA实测](https://github.com/Loremmlel/haojie2/blob/146ad89d274ec404cd16070a0e77b98703c7a8b1/docs/ai/TRAINING-PYTORCH-2026-09-22.md#cuda补测rtx-3060-laptop)。
 
 ## 网络骨架
 
@@ -170,7 +170,7 @@ training/.venv/Scripts/python.exe -X utf8 -m haojie_training.benchmark --devices
 
 报告检查实际矩阵输出dtype、权重变化、参数/梯度/loss有限性、跳过更新数，并在训练前比较相同FP32权重的输出差异。随机模型短测的误差和top1一致率不代表训练收敛或游戏棋力。使用eager模式，没有torch.compile；后续编译优化需分别报告编译成本与稳态速度。
 
-本机Core Ultra 5 225H / Arc 130T的原11.55M骨架测量见[训练性能报告](../docs/ai/TRAINING-PYTORCH-2026-09-22.md)；v2在batch 32、256实体、117候选下的新版对照见[历史进度](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)：CPU FP32约23.93样本/秒，XPU BF16约84.88样本/秒。两次形状/网络不同，不能直接比较绝对吞吐。命令中的8线程来自本机CPU预试，换机器应重新选择。
+本机Core Ultra 5 225H / Arc 130T的原11.55M骨架测量见[训练性能报告](https://github.com/Loremmlel/haojie2/blob/146ad89d274ec404cd16070a0e77b98703c7a8b1/docs/ai/TRAINING-PYTORCH-2026-09-22.md)；v2在batch 32、256实体、117候选下的新版对照见[历史进度](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)：CPU FP32约23.93样本/秒，XPU BF16约84.88样本/秒。两次形状/网络不同，不能直接比较绝对吞吐。命令中的8线程来自本机CPU预试，换机器应重新选择。
 
 ## 浏览器推理验收
 

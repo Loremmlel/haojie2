@@ -20,6 +20,7 @@ pub struct Wire<R, W> {
     input: R,
     output: W,
     model: String,
+    actor: usize,
     id: u64,
     command_index: usize,
     ply: f64,
@@ -74,7 +75,7 @@ impl<R: BufRead, W: Write> Inference for Wire<R, W> {
         self.id += 1;
         self.tensor(
             json!({"type":"infer","id":self.id,"model":self.model,
-                "commandIndex":self.command_index,"ply":self.ply}),
+                "commandIndex":self.command_index,"ply":self.ply,"actor":self.actor}),
             input,
         )?;
         let mut response = self.read()?;
@@ -97,7 +98,14 @@ impl<R: BufRead, W: Write> Inference for Wire<R, W> {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Request {
     op: String,
+    #[serde(default)]
     record: String,
+    #[serde(default)]
+    memory: bool,
+    #[serde(default)]
+    models: Option<[String; 2]>,
+    #[serde(default)]
+    teacher: Option<usize>,
     start: Start,
     model: String,
     sampler_seed: u32,
@@ -115,6 +123,8 @@ fn sample<R: BufRead, W: Write>(
         crate::profile::scope(crate::profile::Phase::Kernel)
     };
     let request: Request = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    let valid_model =
+        |model: &str| model.len() == 64 && model.bytes().all(|c| c.is_ascii_hexdigit());
     if request.op != "sample"
         || request.model.len() != 64
         || !request.model.bytes().all(|c| c.is_ascii_hexdigit())
@@ -122,6 +132,14 @@ fn sample<R: BufRead, W: Write>(
         || request.max_commands > 20000
         || request.max_plies == 0
         || request.max_plies > 1000
+        || (request.memory && !request.record.is_empty())
+        || (!request.memory && request.record.is_empty())
+        || (!request.memory && (request.models.is_some() || request.teacher.is_some()))
+        || request
+            .models
+            .as_ref()
+            .is_some_and(|models| models.iter().any(|m| !valid_model(m)))
+        || request.teacher.is_some_and(|side| side != 1 && side != 2)
     {
         return Err("invalid sampling configuration".into());
     }
@@ -135,10 +153,19 @@ fn sample<R: BufRead, W: Write>(
     if state.extra.contains_key("winner") {
         return Err("sampling start already terminal".into());
     }
-    let mut writer = Writer::new(Path::new(&request.record))?;
+    let mut writer = if request.memory {
+        None
+    } else {
+        Some(Writer::new(Path::new(&request.record))?)
+    };
     let mut current_hash = records::state_hash(&state)?;
-    writer.push(json!({"type":"game","format":records::FORMAT,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],"model":request.model,"start":request.start,"initialHash":current_hash,"samplerSeed":request.sampler_seed,"policyKind":"model-gumbel-backtracking-v2","maxCommands":request.max_commands,"maxPlies":request.max_plies}))?;
-    wire.model = request.model;
+    if let Some(writer) = writer.as_mut() {
+        writer.push(json!({"type":"game","format":records::FORMAT,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],"model":request.model,"start":request.start,"initialHash":current_hash,"samplerSeed":request.sampler_seed,"policyKind":"model-gumbel-backtracking-v2","maxCommands":request.max_commands,"maxPlies":request.max_plies}))?;
+    }
+    wire.model = request.model.clone();
+    let models = request
+        .models
+        .unwrap_or([request.model.clone(), request.model.clone()]);
     let mut random = Random::new(request.sampler_seed);
     let mut count = 0;
     let mut offer = true;
@@ -164,8 +191,30 @@ fn sample<R: BufRead, W: Write>(
                 observation = runtime::public_view(&state, actor)?;
             }
             let other = 3 - actor;
+            wire.actor = actor;
+            wire.model = models[actor - 1].clone();
+            // 教师仅收到所属方公开观察；权威状态始终留在原生引擎。
+            if request.teacher == Some(actor) {
+                wire.id += 1;
+                wire.send(
+                    &json!({"type":"teacher","id":wire.id,"actor":actor,"observation":runtime::observe(&state, actor)?}),
+                )?;
+                let response = wire.read()?;
+                encoding::known(&response, &["id", "command", "cancel"])?;
+                if response["id"] != wire.id {
+                    return Err("stale teacher response".into());
+                }
+                if response["cancel"] == true {
+                    return Err("cancelled".into());
+                }
+                state = boundary::step(&state, actor, &response["command"], catalog)?;
+                count += 1;
+                offer = true;
+                return Ok(());
+            }
             let public = observation.position();
             let optional = offer
+                && request.teacher != Some(other)
                 && public.pending.is_empty()
                 && public.phase != "shrine-draft"
                 && public.pieces().any(|u| u.owner == other && u.has("u7"));
@@ -192,7 +241,9 @@ fn sample<R: BufRead, W: Write>(
                     }
                     Err(error) => {
                         let record = Instant::now();
-                        writer.push(json!({"type":"rejected","index":count,"actor":actor,"command":command,"path":path,"optional":optional,"before":current_hash,"after":current_hash,"model":model,"samplerState":sampler_state,"error":error}))?;
+                        if let Some(writer) = writer.as_mut() {
+                            writer.push(json!({"type":"rejected","index":count,"actor":actor,"command":command,"path":path,"optional":optional,"before":current_hash,"after":current_hash,"model":model,"samplerState":sampler_state,"error":error}))?;
+                        }
                         rejection_record_ms += record.elapsed().as_secs_f64() * 1000.0;
                         Ok(false)
                     }
@@ -200,6 +251,8 @@ fn sample<R: BufRead, W: Write>(
             };
             metrics.observation_ms += observed.elapsed().as_secs_f64() * 1000.0;
             if optional {
+                wire.actor = other;
+                wire.model = models[other - 1].clone();
                 let observed = Instant::now();
                 let other_observation = runtime::public_view(&state, other)?;
                 metrics.observation_ms += observed.elapsed().as_secs_f64() * 1000.0;
@@ -225,6 +278,8 @@ fn sample<R: BufRead, W: Write>(
                 }
             }
             if !matches!(selected, Selected::Command(_)) {
+                wire.actor = actor;
+                wire.model = models[actor - 1].clone();
                 let (choice, trace, costs) = sampler::external(
                     &observation,
                     actor,
@@ -246,8 +301,29 @@ fn sample<R: BufRead, W: Write>(
             metrics.step_ms += step_ms;
             metrics.record_ms += rejection_record_ms;
             let record = Instant::now();
-            let after_hash = records::state_hash(&next)?;
-            writer.push(json!({"type":"sample","index":count,"actor":actor,"command":command,"path":path,"optional":off_turn,"before":current_hash,"after":after_hash,"model":wire.model,"samplerState":random.0}))?;
+            let after_hash = if request.memory {
+                String::new()
+            } else {
+                records::state_hash(&next)?
+            };
+            if let Some(writer) = writer.as_mut() {
+                writer.push(json!({"type":"sample","index":count,"actor":actor,"command":command,"path":path,"optional":off_turn,"before":current_hash,"after":after_hash,"model":wire.model,"samplerState":random.0}))?;
+            } else if request.teacher.is_none() {
+                // 只有权威接受的路径可以编码。与完整记录审核共享编码/路径验证，
+                // 不传拒绝试探或每步权威快照；终局收益由 done 统一确认。
+                let command = serde_json::to_value(&command).map_err(|e| e.to_string())?;
+                records::examples(
+                    &state,
+                    actor,
+                    &path,
+                    off_turn,
+                    &command,
+                    catalog,
+                    |step, stage, selected, input| {
+                        wire.tensor(json!({"type":"example","index":count,"step":step,"stage":stage,"actor":actor,"model":models[actor-1],"selected":selected}), input)
+                    },
+                )?;
+            }
             metrics.record_ms += record.elapsed().as_secs_f64() * 1000.0;
             state = next;
             // 哈希随已提交的拥有型状态推进；跨请求、载入和失败不共享缓存。
@@ -270,8 +346,14 @@ fn sample<R: BufRead, W: Write>(
         }
     }
     let outcome = records::outcome(&state, count, reason);
-    writer.push(outcome.clone())?;
-    writer.finish()?;
+    if let Some(mut writer) = writer {
+        writer.push(outcome.clone())?;
+        writer.finish()?;
+    }
+    if request.memory {
+        current_hash = records::state_hash(&state)?;
+    }
+    wire.model = request.model;
     let result = json!({"type":"done","outcome":outcome,"ply":state.ply,"error":error,"elapsedMs":start.elapsed().as_secs_f64()*1000.0,"finalHash":current_hash,"model":wire.model,"metrics":metrics});
     #[cfg(feature = "kernel-profile")]
     {
@@ -301,13 +383,14 @@ pub fn serve() -> Result<(), String> {
         input: io::stdin().lock(),
         output: io::BufWriter::new(io::stdout().lock()),
         model: String::new(),
+        actor: 1,
         id: 0,
         command_index: 0,
         ply: 0.0,
         tensor_bytes: Vec::new(),
         control_bytes: Vec::new(),
     };
-    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe()}))?;
+    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe(),"capabilities":["memory-examples-v1","actor-model-routing-v1","teacher-v1"]}))?;
     loop {
         let request = wire.read()?;
         let result = match request["op"].as_str() {

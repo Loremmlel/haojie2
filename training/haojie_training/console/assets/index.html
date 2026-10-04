@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>浩劫 · 训练室</title>
+    <link rel="stylesheet" href="/tokens.css" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body class="hj-game">
+    <main class="console-shell">
+      <header>
+        <div class="brand">
+          <h1>浩劫<span>训练室</span></h1>
+          <span id="device">发现设备中</span>
+        </div>
+        <nav aria-label="控制台页面">
+          <a href="#overview" data-page-target="overview" aria-current="page">概览</a
+          ><a href="#evaluation" data-page-target="evaluation">评测</a
+          ><a href="#resources" data-page-target="resources">资源</a
+          ><a href="#settings" data-page-target="settings">设置</a
+          ><a href="#logs" data-page-target="logs">日志</a>
+        </nav>
+        <div class="connection" id="connection" role="status">正在连接服务…</div>
+      </header>
+      <section class="command-bar" aria-label="训练控制">
+        <span id="state" class="state">空闲</span>
+        <div class="actions">
+          <button type="button" disabled data-action="start" class="primary">开始 / 继续</button
+          ><button type="button" disabled data-action="pause">暂停</button
+          ><button type="button" disabled data-action="save">保存恢复点</button
+          ><button type="button" disabled data-action="evaluate">立即评测</button
+          ><button type="button" disabled data-action="cancel-evaluation">取消评测</button>
+        </div>
+      </section>
+      <div class="notice">
+        <p id="feedback" role="status" aria-live="polite"></p>
+        <p id="error" role="alert" hidden></p>
+      </div>
+      <div id="workspace">
+        <section data-page="overview" class="page overview">
+          <div class="method">
+            <h2 id="method">分解动作 MC 收益回归 · 实验</h2>
+            <p id="learning-status">自对弈数据与训练接口已接通，策略改进实验尚未完成</p>
+          </div>
+          <section class="numbers" aria-label="训练概览">
+            <article>
+              <span>有效训练终局</span><strong id="games">0</strong
+              ><small id="discarded">截断 0 · 丢弃 0</small>
+            </article>
+            <article>
+              <span>累计参数更新</span><strong id="updates">0</strong
+              ><small id="update-progress">尚未更新</small>
+            </article>
+            <article>
+              <span>可训练样本</span><strong id="samples">0</strong
+              ><small id="retention">等待真实终局</small>
+            </article>
+            <article>
+              <span>已保存更新</span><strong id="saved">0</strong
+              ><small id="save-time">暂无恢复点</small>
+            </article>
+          </section>
+          <div class="overview-body">
+            <section class="panel loss-panel">
+              <div class="section-head">
+                <h2>训练损失</h2>
+                <span>横轴：累计更新</span>
+              </div>
+              <p id="loss-description">候选收益误差与状态价值误差</p>
+              <div id="loss-chart" class="chart" aria-label="训练损失曲线"></div>
+              <p class="legend">
+                <span class="teal">候选 / 策略</span><span class="ember">状态价值</span
+                ><span>下降不等于棋力提升</span>
+              </p>
+            </section>
+            <section class="panel glance">
+              <div class="section-head">
+                <h2>运行快照</h2>
+                <span>实时</span>
+              </div>
+              <div>
+                <h3>当前计算</h3>
+                <p id="quick-runtime">等待开始</p>
+              </div>
+              <div>
+                <h3>资源余量</h3>
+                <p id="quick-resource">等待读取</p>
+              </div>
+              <div>
+                <h3>外部棋力</h3>
+                <p id="quick-evaluation">尚未评测</p>
+                <a href="#evaluation" data-page-target="evaluation">查看对战结果 →</a>
+              </div>
+            </section>
+          </div>
+          <section class="recovery">
+            <div>
+              <h2>学习状态留在服务中</h2>
+              <p id="rollback">刷新或关闭页面不影响训练。</p>
+            </div>
+            <p id="next-work"></p>
+          </section>
+        </section>
+        <section data-page="evaluation" class="page" hidden>
+          <div class="page-heading">
+            <h2>外部棋力评测</h2>
+            <p id="eval-ready">检测评测组件</p>
+          </div>
+          <div class="columns evaluation-layout">
+            <section class="panel">
+              <div class="section-head">
+                <h2>对真实各档 AI 的得分率</h2>
+                <span>只连接同一评测系列</span>
+              </div>
+              <div id="strength-chart" class="chart" aria-label="各档AI得分率曲线"></div>
+              <table>
+                <caption>
+                  小样本仅作趋势；胜率 / 和棋计半分的得分率
+                </caption>
+                <thead>
+                  <tr>
+                    <th>对手</th>
+                    <th>胜率</th>
+                    <th>得分率</th>
+                    <th>有效 / 计划</th>
+                  </tr>
+                </thead>
+                <tbody id="strength"></tbody>
+              </table>
+            </section>
+            <section class="panel">
+              <h2>最近一轮</h2>
+              <p>真实终局才计胜负；超限、取消、错误单列。</p>
+              <div id="evaluation-details">尚未评测。点击顶部“立即评测”开始。</div>
+            </section>
+          </div>
+        </section>
+        <section data-page="resources" class="page" hidden>
+          <div class="page-heading">
+            <h2>资源与存储</h2>
+            <p>普通样本驻留 RAM；受管训练产物统一上限20GB。</p>
+          </div>
+          <section class="panel resources">
+            <div class="resource-grid">
+              <div>
+                <h3>统一磁盘配额</h3>
+                <p id="disk-label">— / 20 GB</p>
+                <meter
+                  id="disk-meter"
+                  min="0"
+                  max="20000000000"
+                  value="0"
+                  aria-label="受管磁盘占用"
+                ></meter>
+                <p id="disk-detail"></p>
+                <p id="disk-categories"></p>
+              </div>
+              <div>
+                <h3>内存与计算</h3>
+                <p id="memory"></p>
+                <p id="compute"></p>
+                <p id="inflight"></p>
+              </div>
+              <div>
+                <h3>版本与恢复</h3>
+                <p id="version"></p>
+                <p id="opponents"></p>
+                <p id="checkpoints"></p>
+                <p id="best"></p>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            <h2>存储边界</h2>
+            <p id="managed-root" class="path"></p>
+            <div id="external"></div>
+            <p>
+              显式纳管旧目录可在启动时使用
+              --adopt；原件受保护，不自动删除。恢复点与原子保存临时副本均计入同一额度。
+            </p>
+          </section>
+        </section>
+        <section data-page="settings" class="page" hidden>
+          <div class="page-heading">
+            <h2>训练设置</h2>
+            <p>先暂停再修改；下一次恢复点保存设置。评测配置变化建立新系列。</p>
+          </div>
+          <form id="settings" class="panel" novalidate>
+            <div class="form-grid">
+              <label
+                >并行环境数<input
+                  name="environments"
+                  type="number"
+                  min="1"
+                  max="16"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >每轮采样局数<input
+                  name="games_per_round"
+                  type="number"
+                  min="1"
+                  max="128"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >每轮更新步数<input
+                  name="updates_per_round"
+                  type="number"
+                  min="1"
+                  max="1000"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >更新批量<input
+                  name="batch_size"
+                  type="number"
+                  min="1"
+                  max="32"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >RAM样本池（MiB）<input
+                  name="pool_mib"
+                  type="number"
+                  min="16"
+                  max="4096"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >自动保存间隔（秒）<input
+                  name="save_seconds"
+                  type="number"
+                  min="10"
+                  max="86400"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >新增终局保存间隔（0关闭）<input
+                  name="save_games"
+                  type="number"
+                  min="0"
+                  max="100000"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >评测间隔（新增终局）<input
+                  name="eval_games"
+                  type="number"
+                  min="1"
+                  max="100000"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >每档每规则的交换对数<input
+                  name="eval_pairs"
+                  type="number"
+                  min="1"
+                  max="20"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >单轮评测预算（秒）<input
+                  name="eval_seconds"
+                  type="number"
+                  min="2"
+                  max="7200"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >历史池容量<input
+                  name="history_size"
+                  type="number"
+                  min="4"
+                  max="8"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >历史纳入间隔（更新步）<input
+                  name="history_every"
+                  type="number"
+                  min="1"
+                  max="100000"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >每局命令上限<input
+                  name="max_commands"
+                  type="number"
+                  min="1"
+                  max="20000"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >每局回合上限<input
+                  name="max_plies"
+                  type="number"
+                  min="1"
+                  max="1000"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >探索温度<input
+                  name="temperature"
+                  type="number"
+                  min="0.05"
+                  max="2"
+                  step="0.05"
+                  aria-describedby="form-error"
+                  required
+              /></label>
+              <label
+                >训练方法<select name="method">
+                  <option value="decomposed-mc-q-v1">MC 收益回归（实验）</option>
+                  <option value="sampled-action-imitation">动作模仿（接线基线）</option>
+                </select></label
+              >
+            </div>
+            <p id="form-error" role="alert"></p>
+            <button type="submit">应用设置</button>
+            <p class="setting-note">
+              初始化后学习方法固定。历史对手动作不作为当前策略训练样本；MC候选评分直接参与后续选招。
+            </p>
+          </form>
+        </section>
+        <section data-page="logs" class="page" hidden>
+          <div class="page-heading">
+            <h2>运行日志</h2>
+            <p>最近100条；指标低频合并保存，页面刷新不写盘。</p>
+          </div>
+          <section class="panel"><ol id="logs" aria-label="最近100条日志"></ol></section>
+        </section>
+      </div>
+      <footer>
+        本地服务 · 127.0.0.1
+        <span>关闭页面不停止训练 · 暂停取消在途局 · 完整记录研究模式另行保留</span>
+      </footer>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -20,10 +20,12 @@ class Pool:
         batch_wait_ms=0,
         *,
         inference=None,
+        frame_limit=256 * 1024 * 1024,
     ):
         if not 1 <= environments <= 128 or not 0 <= batch_wait_ms <= 10:
             raise ValueError("环境数须为1至128，组批等待须为0至10毫秒")
         self.started = time.perf_counter()
+        self.frame_limit = frame_limit
         self.events = queue.Queue(maxsize=2 * environments)
         self.executable, self.clients, self.slots = executable, [], {}
         self.generations = [0] * environments
@@ -55,7 +57,12 @@ class Pool:
             raise
 
     def new_client(self, i):
-        return Client(self.executable, events=self.events, identity=(i, self.generations[i]))
+        return Client(
+            self.executable,
+            events=self.events,
+            identity=(i, self.generations[i]),
+            frame_limit=self.frame_limit,
+        )
 
     def close(self):
         for client in self.clients:
@@ -122,7 +129,17 @@ class Pool:
             ],
         }
 
-    def run(self, jobs, *, seconds=None, drain_seconds=120, stop_file=None, snapshot=None):
+    def run(
+        self,
+        jobs,
+        *,
+        seconds=None,
+        drain_seconds=120,
+        stop_file=None,
+        snapshot=None,
+        cancel_event=None,
+        keep_open=False,
+    ):
         """jobs 负责耐久任务事务；错误立即停止。deadline 包含加载、填满和排空。
 
         请求通过独占管道绑定当前任务，并校验进程代次与跨局递增 ID。仅 EOF/断管
@@ -148,20 +165,26 @@ class Pool:
             )
             self.slots[i] = task
             self.assigned += 1
-            self.clients[i].send(
-                {
-                    "op": "sample",
-                    "record": str(task["record"]),
-                    "start": task["start"],
-                    "model": self.model_hash,
-                    "samplerSeed": task["sampler_seed"],
-                    "maxCommands": jobs.commands,
-                    "maxPlies": jobs.plies,
-                }
-            )
+            request = {
+                "op": "sample",
+                "start": task["start"],
+                "model": self.model_hash,
+                "samplerSeed": task["sampler_seed"],
+                "maxCommands": jobs.commands,
+                "maxPlies": jobs.plies,
+            }
+            if getattr(jobs, "memory", False):
+                request.update(memory=True, models=task["models"])
+                if task.get("teacher"):
+                    request["teacher"] = task["teacher"]
+            else:
+                request["record"] = str(task["record"])
+            self.clients[i].send(request)
             return True
 
         def restart(i, error):
+            if getattr(jobs, "memory", False):
+                raise RuntimeError("内存任务工作进程退出；丢弃未完成局") from error
             task = self.slots.pop(i)
             # 进程可能在发布完成文件后、送出回执前退出；先核对已发布文件。
             if task["record"].exists():
@@ -197,6 +220,9 @@ class Pool:
 
         try:
             while True:
+                if cancel_event and cancel_event.is_set():
+                    cancel = True
+                    break
                 now = time.perf_counter()
                 self.active_seconds += (now - previous) * previous_active
                 previous = now
@@ -276,7 +302,14 @@ class Pool:
                         jobs.finish(task, message)
                         if message.get("error") and message["outcome"]["reason"] != "cancelled":
                             raise RuntimeError(message["error"])
-                    elif message["type"] == "infer" and message.get("model") == self.model_hash:
+                    elif message["type"] == "example" and getattr(jobs, "memory", False):
+                        jobs.example(task, message)
+                    elif message["type"] == "teacher" and getattr(jobs, "memory", False):
+                        command = jobs.teacher_next(message)
+                        self.clients[i].send({"id": message["id"], "command": command})
+                    elif message["type"] == "infer" and message.get("model") in task.get(
+                        "models", [self.model_hash]
+                    ):
                         if type(message.get("id")) is not int or message["id"] <= self.last_ids[i]:
                             raise ValueError("过期或重复的模型请求")
                         self.last_ids[i] = message["id"]
@@ -295,15 +328,24 @@ class Pool:
                         len(pending),
                     )
                     group, pending = pending[:count], pending[count:]
+                    cancel = cancel or bool(cancel_event and cancel_event.is_set())
                     cancel = cancel or time.perf_counter() >= deadline - min(
                         5, seconds / 10 if seconds else 5
                     )
-                    logits = None if cancel else self.inference([m["input"] for _, _, m in group])
+                    logits = (
+                        None
+                        if cancel
+                        else (
+                            jobs.infer([m for _, _, m in group])
+                            if getattr(jobs, "memory", False)
+                            else self.inference([m["input"] for _, _, m in group])
+                        )
+                    )
                     for row, (i, task_id, message) in enumerate(group):
                         if self.slots[i]["id"] != task_id:
                             raise ValueError("响应归属已改变")
                         sent = time.perf_counter()
-                        response = {"id": message["id"], "model": self.model_hash}
+                        response = {"id": message["id"], "model": message["model"]}
                         response.update(
                             {"cancel": True}
                             if cancel
@@ -321,5 +363,7 @@ class Pool:
         finally:
             for task in self.slots.values():
                 jobs.unfinished(task)
-            self.close()
+            self.slots.clear()
+            if not keep_open or cancel:
+                self.close()
         return self.metrics()

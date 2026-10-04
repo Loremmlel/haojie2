@@ -27,6 +27,8 @@ cargo fmt --manifest-path native/engine/Cargo.toml --check
 
 训练协议 `haojie-training-binary-v1`：JSON 行控制加 LE 张量；握手附完整引擎身份。记录为 `haojie-native-record-v1`，编码为 `haojie-entities-factorized-v1`，规则包为 `haojie-rules-package-v1`。具体安装、命令、张量所有权和恢复约束见 [training/NATIVE.md](../../training/NATIVE.md)。
 
+控制台能力通过训练握手 `capabilities` 显式协商：`memory-examples-v1`、`actor-model-routing-v1`、`teacher-v1`。`sample` 可选 `memory:true`（禁止同时传记录路径）、`models:[先手哈希,后手哈希]`、`teacher:1|2`（仅内存模式）。模型请求附实际 `actor` 与该方固定 `model`；权威接受后才发送同一 `records::examples` 生成的 `example` 张量及 index/step/stage/selected/actor/model。拒绝试探不输出标签。教师消息只有该方公开 `observation`，回复命令仍由权威引擎校验；评测不输出训练样本。省略字段保持完整记录CLI行为，编码/规则/记录版本未改变。流式恢复另用 `haojie-stream-recovery-v1`，见[控制台协议与生命周期](../../training/CONSOLE.md)。
+
 审核器 `haojie-native-audit-v1` 的完成回执绑定同一次读取的原始字节 SHA256、规则包、完整编码 schema 和审核器源码身份。Python 的已审核对象只在当前可信进程内复用，不能从外部文件加载为缓存凭据；复用前还核对实际二进制内容与当前记录内容。来源替换之后不重新打开文件生成张量。`audit --prepare` 是推荐的单遍出口；单独 `audit` 保留，独立 TS 规则审核继续在宿主 CI 执行。
 
 开发协议仍为 `haojie-native-engine-v4`，先 `init` 提交规则、图鉴、战斗参数、抽取池、配方与可选编码 schema。保留 `run/load/bench`、`create/observe/reset/step/export`、`training-nodes`、`sample-game`；客户端在 [scripts/training/native/client.ts](../../scripts/training/native/client.ts)。`step` 检查 revision，逐条提交成功前缀，非法命令不提交资源/RNG；规则拒绝为 invalid，预检抵达随机边界为 uncertain，unsupported 必须使完整规则验收失败。权威 export 绝不能作为模型输入。

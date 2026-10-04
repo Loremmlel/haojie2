@@ -52,12 +52,17 @@ class Trainer:
         lr=3e-4,
         value_weight=1.0,
         optimizer="auto",
+        objective="sampled-action-imitation",
     ):
         if precision not in {"fp32", "bf16", "fp16"}:
             raise ValueError("未知训练精度")
         if not math.isfinite(value_weight) or value_weight < 0:
             raise ValueError("价值权重必须是有限非负数")
         self.value_weight = value_weight
+        if objective not in {"sampled-action-imitation", "decomposed-mc-q-v1"}:
+            raise ValueError("未知学习目标")
+        self.objective = objective
+        self.last_losses = {}
         self.device, self.precision = device, precision
         self.model = model.to(device).train()
         if optimizer not in {"auto", "foreach", "fused"}:
@@ -85,7 +90,28 @@ class Trainer:
     def step(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         self.optimizer.zero_grad(set_to_none=True)
         with autocast(self.device, self.precision):
-            loss = policy_value_loss(self.model(batch), batch, self.value_weight)
+            output = self.model(batch)
+            logits, value = output
+            known = batch["value_mask"].float()
+            value_loss = ((value - batch["value"]).square() * known).sum() / known.sum().clamp_min(
+                1
+            )
+            if self.objective == "decomposed-mc-q-v1":
+                # 分解节点已执行候选的 MC 收益回归；不是策略梯度，不需要回溯概率。
+                chosen = logits.gather(1, batch["policy"].argmax(-1, keepdim=True)).squeeze(1)
+                policy_loss = (
+                    (chosen.tanh() - batch["value"]).square() * known
+                ).sum() / known.sum().clamp_min(1)
+                loss = policy_loss + self.value_weight * value_loss
+            else:
+                loss = policy_value_loss(output, batch, self.value_weight)
+                policy_loss = loss - self.value_weight * value_loss
+            self.last_losses = {
+                "policy": float(policy_loss.detach()),
+                "value": float(value_loss.detach()),
+            }
+        if not torch.isfinite(loss):
+            raise FloatingPointError("非有限损失，未执行更新")
         self.scaler.scale(loss).backward()
         self.scaler.unscale_(self.optimizer)
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0, foreach=True)
@@ -115,7 +141,13 @@ class Trainer:
     def save(self, path: Path, metadata: dict) -> None:
         """CPU可加载的张量检查点；保存训练随机状态，不接受或保存游戏正式PRNG。"""
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        torch.save(self.checkpoint(metadata), temporary)
+        temporary.replace(path)
+
+    def checkpoint(self, metadata):
+        """供统一配额出口使用；调用者必须在更新边界消费，不能并发修改参数。"""
+        return {
             "format": "haojie-checkpoint-v1",
             "network": NETWORK_VERSION,
             "config": asdict(self.model.config),
@@ -137,12 +169,12 @@ class Trainer:
                 "matmul_precision": torch.get_float32_matmul_precision(),
             },
         }
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        torch.save(payload, temporary)
-        temporary.replace(path)
 
     def restore(self, path: Path, metadata: dict) -> None:
         payload = torch.load(path, map_location="cpu", weights_only=True)
+        self.restore_payload(payload, metadata)
+
+    def restore_payload(self, payload, metadata):
         if (
             payload.get("format") != "haojie-checkpoint-v1"
             or payload.get("network") != NETWORK_VERSION
