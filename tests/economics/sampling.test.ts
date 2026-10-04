@@ -13,6 +13,28 @@ import { withRecordOutput } from '../../scripts/training/records/io';
 import { recordHeader, readTrainingRecords } from '../../scripts/training/records/replay';
 import { fixture, add } from '../helpers';
 
+test('拒绝候选恢复原排序，保留随机流与预算，致命执行错误不吞掉', () => {
+  const view = new TrainingEnvironment({ seed: 90, rules: 'shrine' }).observation(1);
+  const first = sampleCommand(view, 1, null, randomStream(421), emptyMetrics());
+  const metrics = emptyMetrics();
+  const attempted: unknown[] = [];
+  const accepted = sampleCommand(view, 1, null, randomStream(421), metrics, false, (command) => {
+    attempted.push(command);
+    return attempted.length > 1;
+  });
+  assert.deepEqual(attempted[0], first.command);
+  assert.deepEqual(attempted[1], accepted.command);
+  assert.notDeepEqual(attempted[0], attempted[1]);
+  assert.equal(metrics.rejected, 1);
+  assert.throws(
+    () =>
+      sampleCommand(view, 1, null, randomStream(421), emptyMetrics(), false, () => {
+        throw new Error('protocol failure');
+      }),
+    /protocol failure/,
+  );
+});
+
 test('独立小网络对候选换序等变；只读观察与随机流可重复', () => {
   const env = new TrainingEnvironment({ seed: 90, rules: 'shrine' });
   const observation = env.observation(1);

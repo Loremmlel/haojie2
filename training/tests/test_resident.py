@@ -167,6 +167,32 @@ class ResidentTests(unittest.TestCase):
             self.assertEqual(ledger.summary()["attempts"]["process-exit"], 1)
             ledger.close()
 
+    def test_published_record_recovered_and_error_not_skipped(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "run"
+            config = {"seed": 81, "rules": "classic", "commands": 6, "plies": 100}
+            ledger = Ledger(output, config, tasks=1)
+            ledger.begin({})
+            finish = ledger.finish
+
+            def interrupted_finish(task, result):
+                raise RuntimeError("模拟发布完成文件后退出")
+
+            ledger.finish = interrupted_finish
+            with self.assertRaisesRegex(RuntimeError, "模拟发布"):
+                self.pool(1).run(ledger)
+            ledger.finish = finish
+            ledger.close()
+            ledger = Ledger(output, config, resume=True, tasks=1)
+            ledger.recover(self.engine)
+            self.assertIsNone(ledger.claim())
+            self.assertEqual(ledger.summary()["task_states"], {"commands": 1})
+            ledger.db.execute("UPDATE tasks SET status='error'")
+            ledger.db.commit()
+            with self.assertRaisesRegex(ValueError, "拒绝跳过"):
+                ledger.recover(self.engine)
+            ledger.close()
+
 
 if __name__ == "__main__":
     unittest.main()

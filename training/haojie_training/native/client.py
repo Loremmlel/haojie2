@@ -94,10 +94,18 @@ class Client:
                 pass
 
     def send(self, value):
-        self.process.stdin.write(
-            json.dumps(value, allow_nan=False, separators=(",", ":")).encode() + b"\n"
-        )
-        self.process.stdin.flush()
+        try:
+            self.process.stdin.write(
+                json.dumps(value, allow_nan=False, separators=(",", ":")).encode() + b"\n"
+            )
+            self.process.stdin.flush()
+        except OSError as error:
+            # Windows 退出中的匿名管道也可能报 EINVAL；仅确认进程退出后归为断管。
+            try:
+                self.process.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                raise error
+            raise BrokenPipeError("原生进程已退出") from error
 
     def receive(self):
         try:
@@ -122,7 +130,12 @@ class Client:
         self.reader.join(timeout=2)
         self.stderr_reader.join(timeout=2)
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
-            stream.close()
+            try:
+                stream.close()
+            except OSError:
+                # 进程已经退出；BufferedWriter 关闭时冲刷旧字节可能再次报断管。
+                if self.process.poll() is None:
+                    raise
 
     def __enter__(self):
         return self

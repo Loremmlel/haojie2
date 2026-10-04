@@ -183,7 +183,8 @@ def prepare_pool(executable, source, output, shard_size=64):
                 actual = Path(path) if Path(path).exists() else Path(path + ".partial")
                 if not actual.exists():
                     continue
-                if attempt == latest:
+                eligible = attempt == latest and status != "error"
+                if eligible:
                     result = prepare_record(
                         client,
                         actual,
@@ -197,7 +198,7 @@ def prepare_pool(executable, source, output, shard_size=64):
                         "audit": client.receive()["report"],
                         "record_bytes": actual.stat().st_size,
                     }
-                result.update(task=task, attempt=attempt, status=status, eligible=attempt == latest)
+                result.update(task=task, attempt=attempt, status=status, eligible=eligible)
                 stream.write(json.dumps(result) + "\n")
                 stream.flush()
                 totals["attempts"] += 1

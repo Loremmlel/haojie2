@@ -171,6 +171,8 @@ pub fn audit(
     let mut state = None;
     let mut previous = String::new();
     let mut count = 0;
+    let mut rejected = 0;
+    let mut rejection_policy = false;
     let mut complete = false;
     let mut summary = Value::Null;
     let mut model = String::new();
@@ -242,10 +244,14 @@ pub fn audit(
                     || body["rulesHash"] != rules_hash()
                     || body["ruleset"] != crate::model::RULESET
                     || body["encoding"] != catalog.encoding["encoding"]
-                    || body["policyKind"] != "model-gumbel-backtracking-v1"
+                    || !matches!(
+                        body["policyKind"].as_str(),
+                        Some("model-gumbel-backtracking-v1" | "model-gumbel-backtracking-v2")
+                    )
                 {
                     return Err("record version mismatch".into());
                 }
+                rejection_policy = body["policyKind"] == "model-gumbel-backtracking-v2";
                 let start: Start =
                     serde_json::from_value(body["start"].clone()).map_err(|e| e.to_string())?;
                 #[cfg(feature = "kernel-profile")]
@@ -279,7 +285,8 @@ pub fn audit(
                 emit(body.clone(), None)?;
                 state = Some(s);
             }
-            Some("sample") => {
+            Some("sample" | "rejected") => {
+                let is_rejected = body["type"] == "rejected";
                 encoding::known(
                     body,
                     &[
@@ -293,6 +300,7 @@ pub fn audit(
                         "after",
                         "model",
                         "samplerState",
+                        "error",
                     ],
                 )?;
                 let s = state.as_ref().ok_or("missing game")?;
@@ -324,6 +332,48 @@ pub fn audit(
                 }
                 if optional != (actor != primary) {
                     return Err("optional decision actor mismatch".into());
+                }
+                if is_rejected {
+                    if !rejection_policy
+                        || path.is_empty()
+                        || path.len() > 256
+                        || body["after"] != current_hash
+                    {
+                        return Err("invalid rejection record".into());
+                    }
+                    let observation = runtime::public_view(s, actor)?;
+                    let mut tree = Tree::from_view(&observation, catalog)?;
+                    for (depth, &index) in path.iter().enumerate() {
+                        let node = tree.node(&path[..depth])?;
+                        let choice = node.choices.get(index).ok_or("rejected path index")?;
+                        if (depth + 1 == path.len()) != choice.next.is_none() {
+                            return Err("incomplete rejected path".into());
+                        }
+                        if depth + 1 == path.len() {
+                            if choice.status != "uncertain"
+                                || serde_json::to_value(&choice.command)
+                                    .map_err(|e| e.to_string())?
+                                    != body["command"]
+                            {
+                                return Err("rejected command mismatch".into());
+                            }
+                            match boundary::attempt(
+                                s,
+                                actor,
+                                &choice.command,
+                                choice.status,
+                                catalog,
+                            )? {
+                                Err(error) if body["error"] == error => {}
+                                _ => return Err("false authority rejection".into()),
+                            }
+                        }
+                    }
+                    rejected += 1;
+                    continue;
+                }
+                if body.get("error").is_some() {
+                    return Err("error on accepted sample".into());
                 }
                 let next = boundary::step(s, actor, &body["command"], catalog)?;
                 let after_hash = state_hash(&next)?;
@@ -381,7 +431,7 @@ pub fn audit(
         emit(summary.clone(), None)?;
     }
     Ok(
-        json!({"outcome":summary,"complete":complete,"incompleteTail":incomplete_tail,"finalHash":current_hash,"commands":count,"ply":s.ply,
+        json!({"outcome":summary,"complete":complete,"incompleteTail":incomplete_tail,"finalHash":current_hash,"commands":count,"rejected":rejected,"ply":s.ply,
             "inputSha256":format!("{:x}",input_hash.finalize()),"auditor":auditor(catalog)}),
     )
 }

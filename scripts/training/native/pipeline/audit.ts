@@ -7,6 +7,7 @@ import { TrainingActionTree } from '../../../../src/ai/training/action-tree';
 import { encodeDecision } from '../../../../src/ai/training/encoding/decision';
 import type { GameState, Player } from '../../../../src/engine/types';
 import { cells } from '../../../../src/engine/core/geometry';
+import { RuleError } from '../../../../src/engine/core/state';
 import { nativeHash } from './hash';
 
 const [input, output] = process.argv.slice(2);
@@ -85,6 +86,19 @@ for (const envelope of lines) {
     step(row.actor, row.command);
     assert.equal(nativeHash(state), row.after, 'after');
     commands++;
+  } else if (row.type === 'rejected') {
+    assert.ok(state);
+    assert.equal(row.index, commands);
+    assert.equal(nativeHash(state), row.before);
+    assert.equal(row.after, row.before);
+    const tree = new TrainingActionTree(observe(state, row.actor), row.actor);
+    const choice = tree.node(row.path.slice(0, -1)).choices[row.path.at(-1)];
+    assert.equal(choice.status, 'uncertain');
+    assert.equal(choice.next, undefined);
+    assert.deepEqual(choice.command, row.command);
+    assert.equal(actorCommandError(state, row.actor, choice.command), null);
+    assert.throws(() => applyRuntimeCommand(state!, choice.command), RuleError);
+    assert.equal(nativeHash(state), row.before);
   } else {
     assert.ok(state);
     assert.equal(row.commands, commands);

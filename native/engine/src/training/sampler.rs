@@ -24,6 +24,7 @@ pub struct Metrics {
     evaluations: usize,
     forced: usize,
     backtracks: usize,
+    pub rejected: usize,
     max_entities: usize,
     max_candidates: usize,
     pub off_turn_commands: usize,
@@ -39,6 +40,7 @@ impl Metrics {
         self.evaluations += other.evaluations;
         self.forced += other.forced;
         self.backtracks += other.backtracks;
+        self.rejected += other.rejected;
         self.max_entities = self.max_entities.max(other.max_entities);
         self.max_candidates = self.max_candidates.max(other.max_candidates);
     }
@@ -58,8 +60,11 @@ struct Sampling<'a> {
     optional: bool,
     nodes: usize,
     external: Option<&'a mut dyn Inference>,
+    rejected: usize,
     trace: Vec<usize>,
+    accept: &'a mut Acceptance<'a>,
 }
+pub type Acceptance<'a> = dyn FnMut(&Command, &[usize], &str, u32) -> Result<bool, String> + 'a;
 pub trait Inference {
     fn logits(&mut self, input: &encoding::Input) -> Result<Vec<f64>, String>;
 }
@@ -128,6 +133,17 @@ impl Sampling<'_> {
             }
             let c = &node.choices[i];
             if c.next.is_none() {
+                let mut path = cursor.to_vec();
+                path.push(i);
+                if !(self.accept)(&c.command, &path, c.status, self.random.0)? {
+                    self.metrics.rejected += 1;
+                    self.rejected += 1;
+                    self.metrics.backtracks += 1;
+                    if self.rejected >= 64 {
+                        return Err("authority rejection budget exhausted".into());
+                    }
+                    continue;
+                }
                 self.trace.insert(0, i);
                 return Ok(Selected::Command(Box::new(c.command.clone())));
             }
@@ -145,17 +161,14 @@ impl Sampling<'_> {
 }
 fn sample(
     observation: &runtime::PublicPosition,
-    actor: usize,
     policy: Option<&TinyPolicy>,
     random: &mut Random,
     metrics: &mut Metrics,
     catalog: &Catalog,
     optional: bool,
+    accept: &mut Acceptance<'_>,
 ) -> Result<Selected, String> {
     let t = Instant::now();
-    if observation.viewer != actor {
-        return Err("public view actor mismatch".into());
-    }
     let mut tree = Tree::from_view(observation, catalog)?;
     metrics.tree_ms += ms(t);
     Sampling {
@@ -165,7 +178,9 @@ fn sample(
         nodes: 0,
         projections: policy.map(TinyPolicy::decision),
         external: None,
+        rejected: 0,
         trace: vec![],
+        accept,
     }
     .visit(&mut tree, &[])
 }
@@ -177,6 +192,7 @@ pub fn external(
     random: &mut Random,
     catalog: &Catalog,
     optional: bool,
+    accept: &mut Acceptance<'_>,
 ) -> Result<(Selected, Vec<usize>, Metrics), String> {
     let start = Instant::now();
     if observation.viewer != actor {
@@ -194,7 +210,9 @@ pub fn external(
         optional,
         nodes: 0,
         external: Some(inference),
+        rejected: 0,
         trace: vec![],
+        accept,
     };
     let selected = sampling.visit(&mut tree, &[])?;
     Ok((selected, sampling.trace, metrics))
@@ -251,6 +269,7 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
         && commands.len() < max_commands
         && state.ply - initial_ply < max_plies
     {
+        let mut committed = None;
         let selected = (|| -> Result<(usize, Command), String> {
             let t = Instant::now();
             let mut actor = runtime::viewer(&state);
@@ -278,12 +297,20 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
                 metrics.observation_ms += ms(t);
                 selected = sample(
                     &off_observation,
-                    other,
                     policy.as_ref(),
                     &mut random,
                     &mut metrics,
                     catalog,
                     true,
+                    &mut |command, _, status, _| match crate::boundary::attempt(
+                        &state, other, command, status, catalog,
+                    )? {
+                        Ok(next) => {
+                            committed = Some(next);
+                            Ok(true)
+                        }
+                        Err(_) => Ok(false),
+                    },
                 )?;
                 match selected {
                     Selected::Command(_) => {
@@ -298,12 +325,20 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
             if !matches!(selected, Selected::Command(_)) {
                 selected = sample(
                     &observation,
-                    actor,
                     policy.as_ref(),
                     &mut random,
                     &mut metrics,
                     catalog,
                     false,
+                    &mut |command, _, status, _| match crate::boundary::attempt(
+                        &state, actor, command, status, catalog,
+                    )? {
+                        Ok(next) => {
+                            committed = Some(next);
+                            Ok(true)
+                        }
+                        Err(_) => Ok(false),
+                    },
                 )?;
                 offer_interrupt = true;
             }
@@ -320,22 +355,7 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
             }
         };
         let t = Instant::now();
-        let c = &command;
-        if !actions::permitted_command(&state, actor, &command) {
-            error = Some("selected unauthorized command".into());
-            break;
-        }
-        match crate::apply_runtime(&state, c, catalog) {
-            Ok(mut next) => {
-                next.events.clear();
-                next.extra.insert("log".into(), json!([]));
-                state = next;
-            }
-            Err(e) => {
-                error = Some(format!("selected command failed: {e:?}"));
-                break;
-            }
-        }
+        state = committed.ok_or("accepted command missing state")?;
         metrics.step_ms += ms(t);
         let t = Instant::now();
         commands.push(json!({"actor":actor,"command":command}));

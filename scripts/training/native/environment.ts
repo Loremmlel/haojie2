@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { RuleError } from '../../../src/engine/core/state';
 import { nativeClient } from './client';
 import { actorCommandError, parseCommand } from '../../../src/engine/online/authority';
 import { HAOJIE_RULESET } from '../../../src/engine/online/player-view';
@@ -79,6 +80,7 @@ export async function nativeEnvironment(
         clearHistory: true,
         observe: true,
       });
+      if (reply.results[0].status === 'invalid') throw new RuleError(reply.results[0].message);
       assert.equal(reply.results[0].status, 'available', JSON.stringify(reply.results));
       revision = reply.revision;
       observation = reply.observation;

@@ -30,6 +30,8 @@ def task_identity(seed, number, rules="mixed"):
 class Ledger:
     def __init__(self, output, config, *, resume=False, tasks=None, target=None):
         self.output = Path(output).resolve()
+        if resume and not (self.output / "tasks.sqlite").is_file():
+            raise ValueError("恢复目录缺少任务账本")
         self.output.mkdir(parents=True, exist_ok=resume)
         self.lock = (self.output / "owner.lock").open("a+b")
         self.lock.write(b"0")
@@ -78,6 +80,8 @@ class Ledger:
         self.next_id = self.db.execute("SELECT coalesce(max(id)+1,0) FROM tasks").fetchone()[0]
 
     def recover(self, executable):
+        if self.db.execute("SELECT 1 FROM tasks WHERE status='error' LIMIT 1").fetchone():
+            raise ValueError("账本已有规则/协议错误，拒绝跳过错误后继续恢复")
         # 完成文件先发布、账本后提交；崩溃夹缝通过原生审核补记，绝不覆盖旧前缀。
         with Client(executable) as client:
             for row in self.db.execute("SELECT * FROM tasks WHERE status='running'").fetchall():
@@ -204,7 +208,12 @@ class Ledger:
             "UPDATE attempts SET result=? WHERE task=? AND attempt=?",
             (
                 json.dumps(
-                    {"requests": task["requests"], "seconds": time.perf_counter() - task["began"]}
+                    {
+                        "requests": task["requests"],
+                        "seconds": time.perf_counter() - task["began"],
+                        "commands": task.get("commands"),
+                        "ply": task.get("ply"),
+                    }
                 ),
                 task["id"],
                 task["attempt"],
@@ -331,7 +340,8 @@ def resident(
         }
         if pool:
             report["pool"] = pool.metrics()
-        (output / f"failure-{ledger.run}.json").write_text(
+        failure_id = ledger.run if ledger.run is not None else f"preflight-{time.time_ns()}"
+        (output / f"failure-{failure_id}.json").write_text(
             json.dumps(report, indent=2), encoding="utf-8"
         )
         raise

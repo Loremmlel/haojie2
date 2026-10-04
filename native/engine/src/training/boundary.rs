@@ -90,3 +90,36 @@ pub fn step_typed(
     next.extra.insert("log".into(), serde_json::json!([]));
     Ok(next)
 }
+
+/// 仅公开树标为 uncertain 的正式规则拒绝可回溯；权限和未实现错误仍为致命错误。
+pub fn attempt(
+    state: &State,
+    actor: usize,
+    command: &Command,
+    status: &str,
+    catalog: &Catalog,
+) -> Result<Result<State, String>, String> {
+    if !crate::actions::permitted_command(state, actor, command) {
+        return Err("unauthorized actor".into());
+    }
+    match crate::apply_runtime(state, command, catalog) {
+        Ok(mut next) => {
+            next.events.clear();
+            next.extra.insert("log".into(), serde_json::json!([]));
+            Ok(Ok(next))
+        }
+        Err(e) => {
+            let message = format!("rule rejected command: {e:?}");
+            if status == "uncertain"
+                && matches!(
+                    e,
+                    crate::model::Failure::Invalid(_) | crate::model::Failure::InvalidOwned(_)
+                )
+            {
+                Ok(Err(message))
+            } else {
+                Err(message)
+            }
+        }
+    }
+}

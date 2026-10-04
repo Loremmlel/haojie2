@@ -137,7 +137,7 @@ fn sample<R: BufRead, W: Write>(
     }
     let mut writer = Writer::new(Path::new(&request.record))?;
     let mut current_hash = records::state_hash(&state)?;
-    writer.push(json!({"type":"game","format":records::FORMAT,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],"model":request.model,"start":request.start,"initialHash":current_hash,"samplerSeed":request.sampler_seed,"policyKind":"model-gumbel-backtracking-v1","maxCommands":request.max_commands,"maxPlies":request.max_plies}))?;
+    writer.push(json!({"type":"game","format":records::FORMAT,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],"model":request.model,"start":request.start,"initialHash":current_hash,"samplerSeed":request.sampler_seed,"policyKind":"model-gumbel-backtracking-v2","maxCommands":request.max_commands,"maxPlies":request.max_plies}))?;
     wire.model = request.model;
     let mut random = Random::new(request.sampler_seed);
     let mut count = 0;
@@ -172,13 +172,46 @@ fn sample<R: BufRead, W: Write>(
             let mut selected = Selected::Empty;
             let mut path = vec![];
             let mut off_turn = false;
+            let mut committed = None;
+            let mut step_ms = 0.0;
+            let mut rejection_record_ms = 0.0;
+            let model = wire.model.clone();
+            let mut accept = |actor,
+                              optional,
+                              command: &crate::model::Command,
+                              path: &[usize],
+                              status: &str,
+                              sampler_state| {
+                let step = Instant::now();
+                let result = boundary::attempt(&state, actor, command, status, catalog)?;
+                step_ms += step.elapsed().as_secs_f64() * 1000.0;
+                match result {
+                    Ok(next) => {
+                        committed = Some(next);
+                        Ok(true)
+                    }
+                    Err(error) => {
+                        let record = Instant::now();
+                        writer.push(json!({"type":"rejected","index":count,"actor":actor,"command":command,"path":path,"optional":optional,"before":current_hash,"after":current_hash,"model":model,"samplerState":sampler_state,"error":error}))?;
+                        rejection_record_ms += record.elapsed().as_secs_f64() * 1000.0;
+                        Ok(false)
+                    }
+                }
+            };
             metrics.observation_ms += observed.elapsed().as_secs_f64() * 1000.0;
             if optional {
                 let observed = Instant::now();
                 let other_observation = runtime::public_view(&state, other)?;
                 metrics.observation_ms += observed.elapsed().as_secs_f64() * 1000.0;
-                let (choice, trace, costs) =
-                    sampler::external(&other_observation, other, wire, &mut random, catalog, true)?;
+                let (choice, trace, costs) = sampler::external(
+                    &other_observation,
+                    other,
+                    wire,
+                    &mut random,
+                    catalog,
+                    true,
+                    &mut |c, p, s, r| accept(other, true, c, p, s, r),
+                )?;
                 selected = choice;
                 path = trace;
                 metrics.merge(costs);
@@ -192,8 +225,15 @@ fn sample<R: BufRead, W: Write>(
                 }
             }
             if !matches!(selected, Selected::Command(_)) {
-                let (choice, trace, costs) =
-                    sampler::external(&observation, actor, wire, &mut random, catalog, false)?;
+                let (choice, trace, costs) = sampler::external(
+                    &observation,
+                    actor,
+                    wire,
+                    &mut random,
+                    catalog,
+                    false,
+                    &mut |c, p, s, r| accept(actor, false, c, p, s, r),
+                )?;
                 selected = choice;
                 path = trace;
                 metrics.merge(costs);
@@ -202,9 +242,9 @@ fn sample<R: BufRead, W: Write>(
             let Selected::Command(command) = selected else {
                 return Err("no complete legal command".into());
             };
-            let step = Instant::now();
-            let next = boundary::step_typed(&state, actor, &command, catalog)?;
-            metrics.step_ms += step.elapsed().as_secs_f64() * 1000.0;
+            let next = committed.ok_or("accepted command missing state")?;
+            metrics.step_ms += step_ms;
+            metrics.record_ms += rejection_record_ms;
             let record = Instant::now();
             let after_hash = records::state_hash(&next)?;
             writer.push(json!({"type":"sample","index":count,"actor":actor,"command":command,"path":path,"optional":off_turn,"before":current_hash,"after":after_hash,"model":wire.model,"samplerState":random.0}))?;

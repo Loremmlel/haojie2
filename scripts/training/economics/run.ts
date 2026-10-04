@@ -11,6 +11,8 @@ import { setImmediate } from 'node:timers/promises';
 import { fingerprint } from '../../../src/ai/observation';
 import { trainingPosition } from '../../../src/ai/training/queries';
 import { allPieces, hasTrait } from '../../../src/engine/core/traits';
+import { RuleError } from '../../../src/engine/core/state';
+import { actorCommandError } from '../../../src/engine/online/authority';
 import type { Command, Player } from '../../../src/engine/types';
 import { TrainingEnvironment } from '../../../src/match/training';
 import type { TrainingOptions, TrainingStatus } from '../../../src/match/training';
@@ -18,7 +20,7 @@ import type { Observation } from '../../../src/ai/types';
 import { withRecordOutput, hashRecordFile } from '../records/io';
 import { readTrainingRecords, recordHeader } from '../records/replay';
 import { TinyPolicy, randomStream } from './policy';
-import { sampleCommand, emptyMetrics } from './sample';
+import { sampleCommand, sampleChoices, emptyMetrics } from './sample';
 
 export interface Options {
   seconds: number;
@@ -123,6 +125,39 @@ export async function sampleWorker(
         }
         metrics.observationMs += performance.now() - start;
         try {
+          const index = env.status().commands;
+          const select = async (view: Observation, player: Player, optional = false) => {
+            const choices = sampleChoices(view, player, policy, random, metrics, optional);
+            let next = choices.next();
+            while (!next.done) {
+              const candidate = next.value;
+              assert.equal(
+                actorCommandError({ ...view, events: [], log: [] }, player, candidate.command),
+                null,
+              );
+              const stepStart = performance.now();
+              let accepted = true;
+              try {
+                if (env.stepTyped) await env.stepTyped(player, candidate.command);
+                else await env.step(player, candidate.command);
+              } catch (error) {
+                if (!(error instanceof RuleError) || candidate.status !== 'uncertain') throw error;
+                accepted = false;
+                await emit({
+                  type: 'rejected',
+                  game,
+                  index,
+                  actor: player,
+                  ...candidate,
+                  before: recordMode === 'replayable' ? fingerprint(view) : undefined,
+                  error: error.message,
+                });
+              }
+              metrics.stepMs += performance.now() - stepStart;
+              next = choices.next(accepted);
+            }
+            return next.value;
+          };
           let selected: ReturnType<typeof sampleCommand> | undefined;
           const other = (3 - actor) as Player;
           start = performance.now();
@@ -138,7 +173,7 @@ export async function sampleWorker(
             start = performance.now();
             const interruptObservation = await observationFor(other);
             metrics.observationMs += performance.now() - start;
-            selected = sampleCommand(interruptObservation, other, policy, random, metrics, true);
+            selected = await select(interruptObservation, other, true);
             if (selected.command) {
               actor = other;
               observation = interruptObservation;
@@ -148,18 +183,13 @@ export async function sampleWorker(
             else throw new Error(selected.error);
           }
           if (!selected?.command) {
-            selected = sampleCommand(observation, actor, policy, random, metrics);
+            selected = await select(observation, actor);
             offerInterrupt = true;
           }
           assert.ok(selected.command, selected.error ?? '常规决策不能pass');
           start = performance.now();
           const before = recordMode === 'replayable' ? fingerprint(observation) : undefined;
           metrics.recordMs += performance.now() - start;
-          const index = env.status().commands;
-          start = performance.now();
-          if (env.stepTyped) await env.stepTyped(actor, selected.command);
-          else await env.step(actor, selected.command);
-          metrics.stepMs += performance.now() - start;
           commandTypes[selected.command.type] = (commandTypes[selected.command.type] ?? 0) + 1;
           start = performance.now();
           await emit({
