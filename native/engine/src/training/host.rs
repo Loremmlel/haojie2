@@ -21,6 +21,8 @@ pub struct Wire<R, W> {
     output: W,
     model: String,
     id: u64,
+    command_index: usize,
+    ply: f64,
     tensor_bytes: Vec<u8>,
     control_bytes: Vec<u8>,
 }
@@ -71,7 +73,8 @@ impl<R: BufRead, W: Write> Inference for Wire<R, W> {
         let _profile = crate::profile::scope(crate::profile::Phase::Protocol);
         self.id += 1;
         self.tensor(
-            json!({"type":"infer","id":self.id,"model":self.model}),
+            json!({"type":"infer","id":self.id,"model":self.model,
+                "commandIndex":self.command_index,"ply":self.ply}),
             input,
         )?;
         let mut response = self.read()?;
@@ -143,6 +146,8 @@ fn sample<R: BufRead, W: Write>(
     let mut error = None;
     let mut metrics = sampler::Metrics::default();
     while !state.extra.contains_key("winner") && count < request.max_commands {
+        wire.command_index = count;
+        wire.ply = state.ply;
         if state.ply - initial_ply >= request.max_plies as f64 {
             reason = "plies";
             break;
@@ -223,7 +228,7 @@ fn sample<R: BufRead, W: Write>(
     let outcome = records::outcome(&state, count, reason);
     writer.push(outcome.clone())?;
     writer.finish()?;
-    let result = json!({"type":"done","outcome":outcome,"error":error,"elapsedMs":start.elapsed().as_secs_f64()*1000.0,"finalHash":current_hash,"model":wire.model,"metrics":metrics});
+    let result = json!({"type":"done","outcome":outcome,"ply":state.ply,"error":error,"elapsedMs":start.elapsed().as_secs_f64()*1000.0,"finalHash":current_hash,"model":wire.model,"metrics":metrics});
     #[cfg(feature = "kernel-profile")]
     {
         drop(kernel);
@@ -253,6 +258,8 @@ pub fn serve() -> Result<(), String> {
         output: io::BufWriter::new(io::stdout().lock()),
         model: String::new(),
         id: 0,
+        command_index: 0,
+        ply: 0.0,
         tensor_bytes: Vec::new(),
         control_bytes: Vec::new(),
     };

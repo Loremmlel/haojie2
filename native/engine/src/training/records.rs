@@ -381,7 +381,7 @@ pub fn audit(
         emit(summary.clone(), None)?;
     }
     Ok(
-        json!({"outcome":summary,"complete":complete,"incompleteTail":incomplete_tail,"finalHash":current_hash,"commands":count,
+        json!({"outcome":summary,"complete":complete,"incompleteTail":incomplete_tail,"finalHash":current_hash,"commands":count,"ply":s.ply,
             "inputSha256":format!("{:x}",input_hash.finalize()),"auditor":auditor(catalog)}),
     )
 }

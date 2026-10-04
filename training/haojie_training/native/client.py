@@ -19,6 +19,7 @@ class Client:
         self.timeout = timeout
         self.events, self.identity = events, identity
         self._handshake = True
+        self._closed = threading.Event()
         self.read_seconds = self.decode_seconds = 0.0
         self.tensor_bytes = 0
         self.process = subprocess.Popen(
@@ -30,8 +31,10 @@ class Client:
         )
         self.messages = queue.Queue(maxsize=2)
         self.errors = bytearray()
-        threading.Thread(target=self._read, daemon=True).start()
-        threading.Thread(target=self._stderr, daemon=True).start()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.stderr_reader = threading.Thread(target=self._stderr, daemon=True)
+        self.reader.start()
+        self.stderr_reader.start()
         try:
             self.ready = self.receive()
             if self.ready.get("protocol") != "haojie-training-binary-v1":
@@ -79,9 +82,16 @@ class Client:
             message["received_at"] = time.perf_counter()
         if self._handshake or self.events is None:
             self._handshake = False
-            self.messages.put(message)
+            destination, value = self.messages, message
         else:
-            self.events.put((self.identity, message))
+            destination, value = self.events, (self.identity, message)
+        # 背压只保留当前帧；关闭时必须能解除阻塞并释放张量。
+        while not self._closed.is_set():
+            try:
+                destination.put(value, timeout=0.1)
+                break
+            except queue.Full:
+                pass
 
     def send(self, value):
         self.process.stdin.write(
@@ -105,9 +115,12 @@ class Client:
         return value
 
     def close(self):
+        self._closed.set()
         if self.process.poll() is None:
             self.process.terminate()
             self.process.wait(timeout=10)
+        self.reader.join(timeout=2)
+        self.stderr_reader.join(timeout=2)
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             stream.close()
 

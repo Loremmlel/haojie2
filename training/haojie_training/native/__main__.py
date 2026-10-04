@@ -9,6 +9,7 @@ import torch
 from .client import Client
 from .pipeline import audit as audit_record
 from .pipeline import initialize, prepare, sample
+from .resident import resident
 
 
 def main():
@@ -30,6 +31,26 @@ def main():
     sampling.add_argument("--precision", choices=["fp32", "bf16", "fp16"], default="fp32")
     sampling.add_argument("--batch-wait-ms", type=float, default=0.0)
     sampling.add_argument("--seed", type=int, default=20261003)
+    continuous = sub.add_parser("resident", help="常驻补位采样；STOP文件或Ctrl+C停止接新任务")
+    continuous.add_argument("--checkpoint", type=Path, required=True)
+    continuous.add_argument("--output", type=Path, required=True)
+    continuous.add_argument("--environments", type=int, default=8)
+    continuous.add_argument("--tasks", type=int)
+    continuous.add_argument("--target", type=int, default=64)
+    continuous.add_argument("--seconds", type=float, default=3600)
+    continuous.add_argument("--drain-seconds", type=float, default=120)
+    continuous.add_argument("--seed", type=int, default=20261004)
+    continuous.add_argument("--rules", choices=["mixed", "classic", "shrine"], default="mixed")
+    continuous.add_argument("--commands", type=int, default=20000)
+    continuous.add_argument("--plies", type=int, default=1000)
+    continuous.add_argument("--device", choices=["cuda", "cpu", "auto", "xpu"], default="cuda")
+    continuous.add_argument("--precision", choices=["fp32", "bf16", "fp16"], default="fp32")
+    continuous.add_argument("--batch-wait-ms", type=float, default=0)
+    continuous.add_argument("--resume", action="store_true")
+    pool_audit = sub.add_parser("audit-pool", help="有界单遍审核及逐片准备工作池产物")
+    pool_audit.add_argument("--source", type=Path, required=True)
+    pool_audit.add_argument("--output", type=Path, required=True)
+    pool_audit.add_argument("--shard-size", type=int, default=64)
     audit = sub.add_parser("audit")
     audit.add_argument("records", nargs="+", type=Path)
     audit.add_argument("--prepare", type=Path, help="在同一次审核中编码并准备数据，不重复重放")
@@ -45,6 +66,21 @@ def main():
     torch.set_num_interop_threads(1)
     if args.op == "init":
         result = initialize(args.engine, args.checkpoint, args.seed, args.tiny)
+    elif args.op == "audit-pool":
+        from .stream import prepare_pool
+
+        result = prepare_pool(args.engine, args.source, args.output, args.shard_size)
+    elif args.op == "resident":
+        result = resident(
+            args.engine,
+            args.checkpoint,
+            args.output,
+            **{
+                key: value
+                for key, value in vars(args).items()
+                if key not in {"engine", "checkpoint", "output", "op", "threads"}
+            },
+        )
     elif args.op == "sample":
         starts = json.loads(args.starts.read_text(encoding="utf-8"))
         if not isinstance(starts, list) or not 1 <= len(starts) <= 8:
