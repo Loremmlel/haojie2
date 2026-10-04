@@ -10,6 +10,13 @@ package-lock.json
 index.html
 # 确定字节规则包，哈希由生成器维护。
 rules.json
+# 构建生成的教师、色板镜像和规范指纹向量；由对应生成器检查。
+**/console/assets/teacher.js
+**/console/assets/teacher.json
+**/console/assets/tokens.css
+**/data/hash-vectors.json
+# 保留已提交实测证据原始字节。
+**/performance/resident/results.json
 
 # 保留作者提供的实战观察原文作为证据。
 docs/ai/AI-HARD-PLAYTEST-2026-09-07.md

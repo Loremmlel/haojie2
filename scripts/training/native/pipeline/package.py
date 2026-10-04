@@ -16,12 +16,18 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[4]
     starts = args.starts or root / "tests/fixtures/native/late-starts.json.gz"
-    starts_bytes = gzip.decompress(starts.read_bytes()) if starts.suffix == ".gz" else starts.read_bytes()
+    starts_bytes = (
+        gzip.decompress(starts.read_bytes())
+        if starts.suffix == ".gz"
+        else starts.read_bytes()
+    )
     json.loads(starts_bytes)
     files = [
         *root.glob("training/haojie_training/**/*.py"),
+        *root.glob("training/haojie_training/console/assets/*"),
         root / "training/pyproject.toml",
         root / "training/NATIVE.md",
+        root / "training/CONSOLE.md",
         *root.glob("native/engine/src/**/*.rs"),
         *root.glob("native/engine/data/*"),
         root / "native/engine/Cargo.toml",
@@ -30,6 +36,7 @@ def main():
         root / "native/engine/README.md",
         *root.glob("training/tests/test_native*.py"),
         root / "training/tests/test_resident.py",
+        *root.glob("training/tests/console/*.py"),
         Path(__file__).with_name("accept.py"),
         Path(__file__).with_name("measure.py"),
         *root.glob("scripts/training/native/ci/*.py"),

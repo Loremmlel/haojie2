@@ -1,0 +1,512 @@
+.hj-game {
+  background: var(--paper);
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  overflow: hidden;
+}
+[hidden] {
+  display: none !important;
+}
+.console-shell {
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: 76px auto auto minmax(0, 1fr) 32px;
+  max-width: 1800px;
+  margin: auto;
+  padding: 0 28px;
+}
+header,
+.brand,
+nav,
+.command-bar,
+.actions,
+.section-head,
+.method,
+.recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.brand {
+  gap: 20px;
+}
+.hj-game h1 {
+  font:
+    28px 'STSong',
+    'SimSun',
+    serif;
+  margin: 0;
+  white-space: nowrap;
+}
+h1 span {
+  font:
+    14px 'Microsoft YaHei',
+    sans-serif;
+  margin-left: 14px;
+}
+#device,
+.connection,
+.section-head > span {
+  font-size: 12px;
+  color: var(--ink);
+}
+.connection {
+  color: var(--teal);
+}
+nav {
+  gap: 4px;
+}
+button,
+input,
+select {
+  font: inherit;
+}
+.hj-game button {
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: 4px;
+  padding: 9px 14px;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.hj-game button:hover:not(:disabled) {
+  background: var(--panel);
+  border-color: var(--teal);
+}
+.hj-game button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.hj-game a:focus-visible,
+.hj-game button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
+}
+.hj-game nav a {
+  text-decoration: none;
+  color: var(--ink);
+  padding: 9px 14px;
+  border: 1px solid transparent;
+  border-color: transparent;
+}
+.hj-game nav a[aria-current='page'] {
+  color: var(--teal);
+  border-bottom-color: var(--teal);
+  border-radius: 0;
+}
+.hj-game .primary {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: var(--paper);
+}
+.command-bar {
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.state {
+  font-weight: 700;
+  min-width: 80px;
+}
+.actions {
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.notice {
+  min-height: 30px;
+  font-size: 12px;
+  padding: 6px 0;
+}
+.notice p {
+  margin: 0;
+}
+#error,
+#form-error {
+  color: var(--ember);
+}
+#workspace {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+.page {
+  padding: 0 8px 18px 0;
+}
+.overview {
+  height: 100%;
+  min-height: 520px;
+  display: grid;
+  grid-template-rows: auto auto minmax(160px, 1fr) auto;
+  gap: 16px;
+  padding-bottom: 8px;
+}
+.method {
+  align-items: baseline;
+}
+.hj-game h2 {
+  font-size: 16px;
+  margin: 0;
+  font-weight: 600;
+}
+.hj-game h3 {
+  font-size: 12px;
+  margin: 0 0 8px;
+  color: var(--ink);
+}
+.hj-game p {
+  font-size: 13px;
+  line-height: 1.65;
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}
+.method p {
+  font-size: 12px;
+  margin: 0;
+  max-width: 55%;
+  text-align: right;
+  color: var(--ink);
+}
+.numbers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--line);
+}
+.numbers article {
+  min-width: 0;
+  padding: 18px 20px;
+  border-right: 1px solid var(--line);
+}
+.numbers article:last-child {
+  border: 0;
+}
+.numbers span,
+.numbers small {
+  display: block;
+  font-size: 12px;
+  color: var(--ink);
+}
+.numbers strong {
+  display: block;
+  font-size: 34px;
+  font-weight: 500;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.numbers small {
+  min-height: 32px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.overview-body {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.panel {
+  border: 1px solid var(--line);
+  padding: 20px;
+  margin-bottom: 16px;
+  min-width: 0;
+}
+.overview-body .panel {
+  margin: 0;
+}
+.loss-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.chart {
+  min-height: 175px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--ink);
+}
+.loss-panel .chart {
+  flex: 1;
+  min-height: 90px;
+}
+.chart svg {
+  width: 100%;
+  height: 100%;
+  max-height: 270px;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 12px;
+}
+.teal {
+  color: var(--teal);
+}
+.ember {
+  color: var(--ember);
+}
+.glance {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+}
+.glance h3 {
+  margin: 0;
+}
+.glance p {
+  margin-top: 4px;
+}
+.hj-game .glance a {
+  text-decoration: none;
+  padding: 4px 0;
+  border: 0;
+  color: var(--teal);
+  font-size: 12px;
+}
+.recovery {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  align-items: flex-start;
+}
+.recovery h2 {
+  font-size: 13px;
+}
+.recovery p {
+  font-size: 12px;
+  margin-top: 4px;
+  color: var(--ink);
+}
+#next-work {
+  max-width: 40%;
+  text-align: right;
+}
+.page-heading {
+  margin: 12px 0 24px;
+}
+.page-heading h2 {
+  font-size: 22px;
+}
+.columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.resource-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 28px;
+}
+meter {
+  width: 100%;
+  height: 16px;
+  margin-top: 10px;
+}
+.path,
+#external {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.8;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+caption {
+  caption-side: bottom;
+  text-align: left;
+  font-size: 12px;
+  padding-top: 12px;
+  color: var(--ink);
+}
+th,
+td {
+  padding: 12px 6px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+}
+th:first-child,
+td:first-child {
+  text-align: left;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+}
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.form-grid input,
+.form-grid select {
+  width: 100%;
+  padding: 10px;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+[aria-invalid='true'] {
+  border-color: var(--ember) !important;
+}
+#settings > button {
+  margin-top: 20px;
+}
+#logs {
+  margin: 0;
+  padding-left: 24px;
+  font:
+    12px/1.8 'Consolas',
+    monospace;
+}
+#logs li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+footer {
+  font-size: 11px;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+}
+@media (max-width: 1100px) {
+  .console-shell {
+    padding: 0 16px;
+  }
+  #device {
+    display: none;
+  }
+  .brand {
+    gap: 8px;
+  }
+  nav {
+    gap: 0;
+  }
+  .hj-game nav a {
+    padding: 8px 10px;
+  }
+  .numbers article {
+    padding: 14px;
+  }
+  .panel {
+    padding: 16px;
+  }
+}
+@media (max-width: 700px) {
+  .console-shell {
+    grid-template-rows: auto auto auto minmax(0, 1fr) 28px;
+    padding: 0 12px;
+  }
+  header {
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 16px 0 12px;
+  }
+  nav {
+    order: 3;
+    width: 100%;
+    justify-content: space-between;
+  }
+  .hj-game h1 {
+    font-size: 24px;
+  }
+  .connection {
+    font-size: 10px;
+    max-width: 45%;
+    text-align: right;
+  }
+  .command-bar {
+    gap: 8px;
+    align-items: flex-start;
+    padding: 10px;
+  }
+  .state {
+    min-width: 42px;
+    font-size: 12px;
+    padding-top: 8px;
+  }
+  .actions {
+    gap: 6px;
+  }
+  .hj-game .actions button {
+    padding: 8px;
+    font-size: 12px;
+  }
+  .overview {
+    height: auto;
+    min-height: 100%;
+    gap: 12px;
+  }
+  .method {
+    display: block;
+  }
+  .method p {
+    max-width: none;
+    text-align: left;
+    margin-top: 6px;
+  }
+  .numbers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .numbers article {
+    padding: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .numbers article:nth-child(2) {
+    border-right: 0;
+  }
+  .numbers article:nth-child(3) {
+    border-bottom: 0;
+  }
+  .numbers strong {
+    font-size: 28px;
+  }
+  .overview-body,
+  .columns,
+  .resource-grid,
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .loss-panel .chart {
+    min-height: 150px;
+  }
+  .glance {
+    gap: 20px;
+  }
+  .recovery {
+    display: block;
+  }
+  #next-work {
+    max-width: none;
+    text-align: left;
+    margin-top: 10px;
+  }
+  .page-heading {
+    margin-top: 6px;
+  }
+  .form-grid {
+    gap: 20px;
+  }
+  footer {
+    font-size: 10px;
+  }
+}

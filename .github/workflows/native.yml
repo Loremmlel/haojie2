@@ -58,6 +58,17 @@ jobs:
       - run: npm run native:check
       - run: npm run native:build
       - run: npm run train:rules:check
+      - run: npm run train:teacher:check
+      - name: Install Python console and execution tests
+        run: |
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
+          python -m pip install ./training
+      - name: Memory console, real teacher and recovery checks
+        shell: pwsh
+        run: |
+          $env:HAOJIE_NATIVE = if ($IsWindows) { "$PWD/artifacts/native-target/release/haojie-engine.exe" } else { "$PWD/artifacts/native-target/release/haojie-engine" }
+          python -m unittest discover -s training/tests -p 'test_*.py'
+          exit $LASTEXITCODE
       - name: Release identity and representative rule / candidate / encoding differential
         shell: pwsh
         run: |

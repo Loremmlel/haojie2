@@ -50,6 +50,7 @@ class ResidentTests(unittest.TestCase):
             (b"{bad json}\n", ValueError),
         ):
             client = Client.__new__(Client)
+            client.frame_limit = 256 * 1024 * 1024
             client.process = SimpleNamespace(stdout=io.BytesIO(payload))
             results = []
             client._publish = results.append

@@ -22,12 +22,49 @@ def main():
     env.pop("PYTHONPATH", None)
     for argv in (
         [source / "scripts/training/native/ci/verify.py", "--engine", args.engine],
-        ["-m", "unittest", "discover", "-s", source / "training/tests", "-p", "test_native*.py", "-v"],
-        ["-m", "unittest", "discover", "-s", source / "training/tests", "-p", "test_resident.py", "-v"],
-        [source / "scripts/training/native/pipeline/accept.py", "--engine", args.engine,
-         "--starts", source / "fixtures/late-starts.json", "--output", args.output],
+        [
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            source / "training/tests",
+            "-p",
+            "test_native*.py",
+            "-v",
+        ],
+        [
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            source / "training/tests",
+            "-p",
+            "test_resident.py",
+            "-v",
+        ],
+        [
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            source / "training/tests/console",
+            "-p",
+            "test_*.py",
+            "-v",
+        ],
+        [
+            source / "scripts/training/native/pipeline/accept.py",
+            "--engine",
+            args.engine,
+            "--starts",
+            source / "fixtures/late-starts.json",
+            "--output",
+            args.output,
+        ],
     ):
-        subprocess.run([sys.executable, *map(str, argv)], env=env, check=True, timeout=1200)
+        subprocess.run(
+            [sys.executable, *map(str, argv)], env=env, check=True, timeout=1200
+        )
 
 
 if __name__ == "__main__":

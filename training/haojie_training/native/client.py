@@ -15,8 +15,11 @@ from ..model import ModelConfig
 
 
 class Client:
-    def __init__(self, executable, timeout=900, *, events=None, identity=None):
+    def __init__(
+        self, executable, timeout=900, *, events=None, identity=None, frame_limit=256 * 1024 * 1024
+    ):
         self.timeout = timeout
+        self.frame_limit = frame_limit
         self.events, self.identity = events, identity
         self._handshake = True
         self._closed = threading.Event()
@@ -58,7 +61,7 @@ class Client:
                 meta = json.loads(line)
                 if "bytes" in meta:
                     size = meta["bytes"]
-                    if type(size) is not int or not 0 < size <= 256 * 1024 * 1024:
+                    if type(size) is not int or not 0 < size <= self.frame_limit:
                         raise ValueError("张量消息长度无效")
                     data = bytearray(size)
                     started = time.perf_counter()
