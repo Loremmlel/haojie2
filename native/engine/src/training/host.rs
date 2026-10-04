@@ -21,6 +21,8 @@ pub struct Wire<R, W> {
     output: W,
     model: String,
     id: u64,
+    command_index: usize,
+    ply: f64,
     tensor_bytes: Vec<u8>,
     control_bytes: Vec<u8>,
 }
@@ -71,7 +73,8 @@ impl<R: BufRead, W: Write> Inference for Wire<R, W> {
         let _profile = crate::profile::scope(crate::profile::Phase::Protocol);
         self.id += 1;
         self.tensor(
-            json!({"type":"infer","id":self.id,"model":self.model}),
+            json!({"type":"infer","id":self.id,"model":self.model,
+                "commandIndex":self.command_index,"ply":self.ply}),
             input,
         )?;
         let mut response = self.read()?;
@@ -134,7 +137,7 @@ fn sample<R: BufRead, W: Write>(
     }
     let mut writer = Writer::new(Path::new(&request.record))?;
     let mut current_hash = records::state_hash(&state)?;
-    writer.push(json!({"type":"game","format":records::FORMAT,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],"model":request.model,"start":request.start,"initialHash":current_hash,"samplerSeed":request.sampler_seed,"policyKind":"model-gumbel-backtracking-v1","maxCommands":request.max_commands,"maxPlies":request.max_plies}))?;
+    writer.push(json!({"type":"game","format":records::FORMAT,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],"model":request.model,"start":request.start,"initialHash":current_hash,"samplerSeed":request.sampler_seed,"policyKind":"model-gumbel-backtracking-v2","maxCommands":request.max_commands,"maxPlies":request.max_plies}))?;
     wire.model = request.model;
     let mut random = Random::new(request.sampler_seed);
     let mut count = 0;
@@ -143,6 +146,8 @@ fn sample<R: BufRead, W: Write>(
     let mut error = None;
     let mut metrics = sampler::Metrics::default();
     while !state.extra.contains_key("winner") && count < request.max_commands {
+        wire.command_index = count;
+        wire.ply = state.ply;
         if state.ply - initial_ply >= request.max_plies as f64 {
             reason = "plies";
             break;
@@ -167,13 +172,46 @@ fn sample<R: BufRead, W: Write>(
             let mut selected = Selected::Empty;
             let mut path = vec![];
             let mut off_turn = false;
+            let mut committed = None;
+            let mut step_ms = 0.0;
+            let mut rejection_record_ms = 0.0;
+            let model = wire.model.clone();
+            let mut accept = |actor,
+                              optional,
+                              command: &crate::model::Command,
+                              path: &[usize],
+                              status: &str,
+                              sampler_state| {
+                let step = Instant::now();
+                let result = boundary::attempt(&state, actor, command, status, catalog)?;
+                step_ms += step.elapsed().as_secs_f64() * 1000.0;
+                match result {
+                    Ok(next) => {
+                        committed = Some(next);
+                        Ok(true)
+                    }
+                    Err(error) => {
+                        let record = Instant::now();
+                        writer.push(json!({"type":"rejected","index":count,"actor":actor,"command":command,"path":path,"optional":optional,"before":current_hash,"after":current_hash,"model":model,"samplerState":sampler_state,"error":error}))?;
+                        rejection_record_ms += record.elapsed().as_secs_f64() * 1000.0;
+                        Ok(false)
+                    }
+                }
+            };
             metrics.observation_ms += observed.elapsed().as_secs_f64() * 1000.0;
             if optional {
                 let observed = Instant::now();
                 let other_observation = runtime::public_view(&state, other)?;
                 metrics.observation_ms += observed.elapsed().as_secs_f64() * 1000.0;
-                let (choice, trace, costs) =
-                    sampler::external(&other_observation, other, wire, &mut random, catalog, true)?;
+                let (choice, trace, costs) = sampler::external(
+                    &other_observation,
+                    other,
+                    wire,
+                    &mut random,
+                    catalog,
+                    true,
+                    &mut |c, p, s, r| accept(other, true, c, p, s, r),
+                )?;
                 selected = choice;
                 path = trace;
                 metrics.merge(costs);
@@ -187,8 +225,15 @@ fn sample<R: BufRead, W: Write>(
                 }
             }
             if !matches!(selected, Selected::Command(_)) {
-                let (choice, trace, costs) =
-                    sampler::external(&observation, actor, wire, &mut random, catalog, false)?;
+                let (choice, trace, costs) = sampler::external(
+                    &observation,
+                    actor,
+                    wire,
+                    &mut random,
+                    catalog,
+                    false,
+                    &mut |c, p, s, r| accept(actor, false, c, p, s, r),
+                )?;
                 selected = choice;
                 path = trace;
                 metrics.merge(costs);
@@ -197,9 +242,9 @@ fn sample<R: BufRead, W: Write>(
             let Selected::Command(command) = selected else {
                 return Err("no complete legal command".into());
             };
-            let step = Instant::now();
-            let next = boundary::step_typed(&state, actor, &command, catalog)?;
-            metrics.step_ms += step.elapsed().as_secs_f64() * 1000.0;
+            let next = committed.ok_or("accepted command missing state")?;
+            metrics.step_ms += step_ms;
+            metrics.record_ms += rejection_record_ms;
             let record = Instant::now();
             let after_hash = records::state_hash(&next)?;
             writer.push(json!({"type":"sample","index":count,"actor":actor,"command":command,"path":path,"optional":off_turn,"before":current_hash,"after":after_hash,"model":wire.model,"samplerState":random.0}))?;
@@ -213,17 +258,21 @@ fn sample<R: BufRead, W: Write>(
         if let Err(e) = result {
             reason = if e == "cancelled" {
                 "cancelled"
+            } else if e == sampler::DECODE_BUDGET {
+                "decode-budget"
             } else {
                 "error"
             };
-            error = Some(e);
+            if reason != "decode-budget" {
+                error = Some(e);
+            }
             break;
         }
     }
     let outcome = records::outcome(&state, count, reason);
     writer.push(outcome.clone())?;
     writer.finish()?;
-    let result = json!({"type":"done","outcome":outcome,"error":error,"elapsedMs":start.elapsed().as_secs_f64()*1000.0,"finalHash":current_hash,"model":wire.model,"metrics":metrics});
+    let result = json!({"type":"done","outcome":outcome,"ply":state.ply,"error":error,"elapsedMs":start.elapsed().as_secs_f64()*1000.0,"finalHash":current_hash,"model":wire.model,"metrics":metrics});
     #[cfg(feature = "kernel-profile")]
     {
         drop(kernel);
@@ -253,6 +302,8 @@ pub fn serve() -> Result<(), String> {
         output: io::BufWriter::new(io::stdout().lock()),
         model: String::new(),
         id: 0,
+        command_index: 0,
+        ply: 0.0,
         tensor_bytes: Vec::new(),
         control_bytes: Vec::new(),
     };

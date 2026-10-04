@@ -19,6 +19,7 @@ class Client:
         self.timeout = timeout
         self.events, self.identity = events, identity
         self._handshake = True
+        self._closed = threading.Event()
         self.read_seconds = self.decode_seconds = 0.0
         self.tensor_bytes = 0
         self.process = subprocess.Popen(
@@ -30,8 +31,10 @@ class Client:
         )
         self.messages = queue.Queue(maxsize=2)
         self.errors = bytearray()
-        threading.Thread(target=self._read, daemon=True).start()
-        threading.Thread(target=self._stderr, daemon=True).start()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.stderr_reader = threading.Thread(target=self._stderr, daemon=True)
+        self.reader.start()
+        self.stderr_reader.start()
         try:
             self.ready = self.receive()
             if self.ready.get("protocol") != "haojie-training-binary-v1":
@@ -48,8 +51,10 @@ class Client:
     def _read(self):
         try:
             while line := self.process.stdout.readline(16 * 1024 * 1024 + 1):
-                if len(line) > 16 * 1024 * 1024 or not line.endswith(b"\n"):
-                    raise ValueError("控制消息过长或不完整")
+                if len(line) > 16 * 1024 * 1024:
+                    raise ValueError("控制消息过长")
+                if not line.endswith(b"\n"):
+                    raise RuntimeError("原生进程已退出")
                 meta = json.loads(line)
                 if "bytes" in meta:
                     size = meta["bytes"]
@@ -62,7 +67,7 @@ class Client:
                     while offset < size:
                         count = self.process.stdout.readinto(view[offset:])
                         if not count:
-                            raise ValueError("张量消息不完整")
+                            raise RuntimeError("原生进程已退出")
                         offset += count
                     self.read_seconds += time.perf_counter() - started
                     self.tensor_bytes += size
@@ -79,15 +84,30 @@ class Client:
             message["received_at"] = time.perf_counter()
         if self._handshake or self.events is None:
             self._handshake = False
-            self.messages.put(message)
+            destination, value = self.messages, message
         else:
-            self.events.put((self.identity, message))
+            destination, value = self.events, (self.identity, message)
+        # 背压只保留当前帧；关闭时必须能解除阻塞并释放张量。
+        while not self._closed.is_set():
+            try:
+                destination.put(value, timeout=0.1)
+                break
+            except queue.Full:
+                pass
 
     def send(self, value):
-        self.process.stdin.write(
-            json.dumps(value, allow_nan=False, separators=(",", ":")).encode() + b"\n"
-        )
-        self.process.stdin.flush()
+        try:
+            self.process.stdin.write(
+                json.dumps(value, allow_nan=False, separators=(",", ":")).encode() + b"\n"
+            )
+            self.process.stdin.flush()
+        except OSError as error:
+            # Windows 退出中的匿名管道也可能报 EINVAL；仅确认进程退出后归为断管。
+            try:
+                self.process.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                raise error
+            raise BrokenPipeError("原生进程已退出") from error
 
     def receive(self):
         try:
@@ -105,11 +125,19 @@ class Client:
         return value
 
     def close(self):
+        self._closed.set()
         if self.process.poll() is None:
             self.process.terminate()
             self.process.wait(timeout=10)
+        self.reader.join(timeout=2)
+        self.stderr_reader.join(timeout=2)
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
-            stream.close()
+            try:
+                stream.close()
+            except OSError:
+                # 进程已经退出；BufferedWriter 关闭时冲刷旧字节可能再次报断管。
+                if self.process.poll() is None:
+                    raise
 
     def __enter__(self):
         return self

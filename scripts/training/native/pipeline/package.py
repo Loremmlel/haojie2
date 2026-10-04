@@ -29,6 +29,7 @@ def main():
         root / "native/engine/build.rs",
         root / "native/engine/README.md",
         *root.glob("training/tests/test_native*.py"),
+        root / "training/tests/test_resident.py",
         Path(__file__).with_name("accept.py"),
         Path(__file__).with_name("measure.py"),
         *root.glob("scripts/training/native/ci/*.py"),
