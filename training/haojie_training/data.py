@@ -2,6 +2,7 @@
 
 import hashlib
 from bisect import bisect_right
+from math import prod
 from pathlib import Path
 
 import torch
@@ -65,6 +66,19 @@ class TensorShards:
             raise ValueError("分片为空或记录数不匹配")
         self.small = {"value": torch.cat(values), "value_mask": torch.cat(masks)}
         self.counts = {"entity_mask": torch.cat(entities), "candidate_mask": torch.cat(candidates)}
+        self.order = torch.argsort(self.counts["entity_mask"], stable=True)
+        # 有孔遮罩按最后有效位置裁剪，不能把有效数量误当作尾部位置。
+        self.lengths = []
+        for batch in self.shards:
+            self.lengths.append(
+                {
+                    mask: (batch[mask] * torch.arange(1, batch[mask].shape[1] + 1))
+                    .amax(1)
+                    .clamp_min(1)
+                    .tolist()
+                    for mask in ("entity_mask", "candidate_mask")
+                }
+            )
 
     def __getitem__(self, key):
         return self.small[key]
@@ -78,12 +92,12 @@ class TensorShards:
             local = index - (self.ends[shard - 1] if shard else 0)
             example = {key: value[local] for key, value in self.shards[shard].items()}
             for mask, keys in (("entity_mask", ENTITY_KEYS), ("candidate_mask", ACTION_KEYS)):
-                used = example[mask].nonzero()
-                length = int(used[-1, 0]) + 1 if used.numel() else 1
+                length = self.lengths[shard][mask][local]
                 for key in keys:
                     example[key] = example[key][:length]
             examples.append(example)
-        return collate_examples(examples, self.config)
+        # 文件哈希及全部张量已在加载边界校验；内部仅裁剪和填充。
+        return _collate(examples, FLOAT_KEYS | MASK_KEYS | INDEX_KEYS)
 
 
 def token_counts(dataset, mask):
@@ -100,25 +114,61 @@ def sample_indices(dataset, size, rng, bucket_size=0):
     anchor = int(torch.randint(count, (1,), generator=rng))
     start = anchor // bucket_size * bucket_size
     indices = start + torch.randint(min(bucket_size, count - start), (size,), generator=rng)
-    order = torch.argsort(token_counts(dataset, "entity_mask"), stable=True)
+    order = (
+        dataset.order
+        if isinstance(dataset, TensorShards)
+        else torch.argsort(token_counts(dataset, "entity_mask"), stable=True)
+    )
     return order[indices]
 
 
 def collate_examples(examples: list[dict[str, Tensor]], config: ModelConfig) -> dict[str, Tensor]:
     """按本组最大长度填充，无截断；来源/目标保持样本内索引，填充指针使用全局token。"""
+    batch = _collate(examples, FLOAT_KEYS | MASK_KEYS | INDEX_KEYS)
+    validate_batch(batch, config)
+    return batch
+
+
+def collate_inputs(examples: list[dict[str, Tensor]], config: ModelConfig) -> dict[str, Tensor]:
+    """外部推理入口仍完整校验，只构造公开模型输入。"""
+    batch = _collate(examples, INPUT_KEYS)
+    validate_inputs(batch, config)
+    return batch
+
+
+def _collate(examples, keys, *, buffers=None, pin_memory=False):
+    """共用填充约定；可选容量由同步推理持有，训练默认返回独立批次。"""
     if not examples:
         raise ValueError("没有可训练样本")
     batch = {}
-    for key in FLOAT_KEYS | MASK_KEYS | INDEX_KEYS:
+    for key in keys:
         values = [example[key] for example in examples]
-        batch[key] = (
-            pad_sequence(
-                values, batch_first=True, padding_value=-1 if key in {"sources", "targets"} else 0
+        padding = -1 if key in {"sources", "targets"} else 0
+        variable = key in ENTITY_KEYS | ACTION_KEYS
+        if buffers is None:
+            batch[key] = (
+                pad_sequence(values, batch_first=True, padding_value=padding)
+                if variable
+                else torch.stack(values)
             )
-            if key in ENTITY_KEYS | ACTION_KEYS
-            else torch.stack(values)
-        )
-    validate_batch(batch, config)
+            continue
+        first = values[0]
+        length = max(len(value) for value in values) if variable else None
+        shape = (len(values), length, *first.shape[1:]) if variable else (len(values), *first.shape)
+        elements = prod(shape)
+        old = buffers.get(key)
+        if old is None or old.numel() < elements:
+            buffers[key] = torch.empty(elements, dtype=first.dtype, pin_memory=pin_memory)
+        # 一维容量区的前缀始终连续；多维切片会让to()暗中生成非页锁定副本。
+        target = buffers[key][:elements].view(shape)
+        if variable:
+            target.fill_(padding)
+        for i, value in enumerate(values):
+            if variable:
+                target[i, : len(value)].copy_(value)
+            else:
+                target[i].copy_(value)
+        batch[key] = target
     return batch
 
 

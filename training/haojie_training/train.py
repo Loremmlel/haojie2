@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -10,7 +11,8 @@ from pathlib import Path
 
 import torch
 
-from .data import load_dataset, sample_indices, select_batch, synthetic_batch
+from .batching import training_batches
+from .data import load_dataset, select_batch
 from .evaluate import evaluate, validate_split, value_baselines
 from .model import NETWORK_VERSION, ModelConfig, PolicyValueNet
 from .runtime import Trainer, checkpoint_config, resolve_device, synchronize
@@ -52,6 +54,7 @@ def initialize_weights(
 
 
 def main():
+    run_started = time.perf_counter()
     parser = argparse.ArgumentParser(description=__doc__)
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--synthetic", action="store_true")
@@ -76,6 +79,9 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--value-weight", type=float, default=1.0)
     parser.add_argument("--length-bucket-size", type=int, default=0)
+    parser.add_argument("--optimizer", choices=["auto", "foreach", "fused"], default="auto")
+    parser.add_argument("--prefetch", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--overfit-examples", type=int, default=0)
     args = parser.parse_args()
     if min(args.steps, args.batch_size, args.threads, args.entities, args.actions) < 1:
@@ -92,6 +98,20 @@ def main():
         parser.error("拒绝覆盖已有检查点；续训请显式指定同一文件为--resume")
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
+    saved_execution = (
+        torch.load(args.resume, map_location="cpu", weights_only=True).get("execution", {})
+        if args.resume
+        else {}
+    )
+    deterministic = (
+        saved_execution.get("deterministic", False)
+        if args.deterministic is None
+        else args.deterministic
+    )
+    if deterministic:
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(deterministic)
+    torch.set_float32_matmul_precision(saved_execution.get("matmul_precision", "highest"))
     torch.manual_seed(args.seed)
     config = (
         checkpoint_config(args.resume or args.initialize_from)
@@ -145,6 +165,7 @@ def main():
         args.precision,
         lr=args.learning_rate,
         value_weight=args.value_weight,
+        optimizer=args.optimizer,
     )
     if args.resume:
         # 同数据续训保留已记录的初始化来源，其余元数据仍由restore严格比较。
@@ -185,20 +206,31 @@ def main():
             )
         return result
 
+    load_seconds = time.perf_counter() - run_started
+    validation_started = time.perf_counter()
     before = metrics()
+    validation_before_seconds = time.perf_counter() - validation_started
     print(json.dumps({"before": before}, ensure_ascii=False), flush=True)
     started = time.perf_counter()
     try:
-        for _ in range(args.steps):
-            if dataset is None:
-                batch = synthetic_batch(
-                    config, args.batch_size, args.entities, args.actions, args.seed + trainer.steps
-                )
-            else:
-                rng = torch.Generator().manual_seed(args.seed + trainer.steps)
-                indices = sample_indices(dataset, args.batch_size, rng, args.length_bucket_size)
-                batch = select_batch(dataset, indices)
-            batch = {key: value.to(device) for key, value in batch.items()}
+        batches = training_batches(
+            dataset,
+            config,
+            seed=args.seed,
+            start=trainer.steps,
+            steps=args.steps,
+            size=args.batch_size,
+            entities=args.entities,
+            actions=args.actions,
+            bucket_size=args.length_bucket_size,
+            prefetch=args.prefetch,
+            pin_memory=device.type == "cuda",
+        )
+        for batch in batches:
+            batch = {
+                key: value.to(device, non_blocking=device.type == "cuda")
+                for key, value in batch.items()
+            }
             loss = trainer.step(batch)
             if not torch.isfinite(loss):
                 raise FloatingPointError("训练loss非有限；未保存损坏的检查点")
@@ -222,10 +254,16 @@ def main():
         or not trainer.updates
     ):
         raise FloatingPointError(f"训练数值检查失败：{health}")
+    save_started = time.perf_counter()
     trainer.save(args.checkpoint, metadata)
+    save_seconds = time.perf_counter() - save_started
+    validation_started = time.perf_counter()
+    after = metrics()
+    validation_after_seconds = time.perf_counter() - validation_started
     source_hash = hashlib.sha256()
-    for path in sorted(Path(__file__).parent.glob("*.py")):
-        source_hash.update(path.name.encode())
+    package = Path(__file__).parent
+    for path in sorted(package.rglob("*.py")):
+        source_hash.update(path.relative_to(package).as_posix().encode())
         source_hash.update(path.read_bytes())
     report = {
         "format": "haojie-training-run-v1",
@@ -243,11 +281,20 @@ def main():
         "updates": trainer.updates,
         "loss": float(loss),
         "training_seconds": training_seconds,
+        "load_seconds": load_seconds,
+        "save_seconds": save_seconds,
+        "validation_before_seconds": validation_before_seconds,
+        "validation_after_seconds": validation_after_seconds,
+        "optimizer_execution": "fused"
+        if trainer.optimizer.param_groups[0].get("fused")
+        else "foreach",
+        "prefetch": args.prefetch,
+        "deterministic": deterministic,
         "checkpoint": str(args.checkpoint),
         "metadata": metadata,
         "health": health,
         "before": before,
-        "after": metrics(),
+        "after": after,
     }
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)

@@ -2,9 +2,9 @@
 
 import hashlib
 import json
+import queue
 import tempfile
 import time
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 import torch
@@ -12,9 +12,10 @@ import torch
 from ..data import collate_examples
 from ..model import ModelConfig, PolicyValueNet
 from ..prepare import digest, save_split
-from ..runtime import Trainer, checkpoint_config
-from .client import Client
+from ..runtime import Trainer, checkpoint_config, resolve_device
 from .audit import audit, validate_audited
+from .client import Client
+from .execution import PolicyInference
 
 
 def metadata(ready):
@@ -83,7 +84,17 @@ def example(inputs, selected=0):
 
 
 def sample(
-    executable, checkpoint, starts, output, commands=2000, plies=200, device="cpu", seed=20261003
+    executable,
+    checkpoint,
+    starts,
+    output,
+    commands=2000,
+    plies=200,
+    device="cpu",
+    seed=20261003,
+    *,
+    precision="fp32",
+    batch_wait_ms=0.0,
 ):
     """每环境一个常驻进程和在途请求；就绪节点批量前向，不等待其他环境或逐属性 RPC。"""
     output.mkdir(parents=True, exist_ok=False)
@@ -91,10 +102,17 @@ def sample(
     started = time.perf_counter()
     forwards = 0
     inference_seconds = 0.0
+    device = resolve_device(str(device))
+    if not 0 <= batch_wait_ms <= 10:
+        raise ValueError("组批等待须在0至10毫秒之间")
+    events = queue.Queue()
+    queue_seconds = send_seconds = 0.0
+    response_times = []
     try:
-        for _ in starts:
-            clients.append(Client(executable))
+        for i, _ in enumerate(starts):
+            clients.append(Client(executable, events=events, identity=i))
         model, model_hash = model_from(checkpoint, clients[0].ready, device)
+        inference = PolicyInference(model, device, precision)
         for i, (client, start) in enumerate(zip(clients, starts)):
             if client.ready != clients[0].ready:
                 raise ValueError("工作进程版本不一致")
@@ -109,58 +127,78 @@ def sample(
                     "maxPlies": plies,
                 }
             )
-        active = list(range(len(clients)))
+        active = set(range(len(clients)))
         results = [None] * len(clients)
-        executor = ThreadPoolExecutor(max_workers=len(clients))
-        try:
-            waiting = {executor.submit(clients[i].receive): i for i in active}
-            while waiting:
-                ready, _ = wait(waiting, return_when=FIRST_COMPLETED)
-                # 每环境只保留一个请求；其他环境继续查询，已就绪输入按环境序号形成批次。
-                messages = sorted((waiting.pop(future), future.result()) for future in ready)
-                pending = []
-                for i, message in messages:
-                    if message["type"] == "done":
-                        results[i] = message
-                        if message.get("error"):
-                            raise RuntimeError(message["error"])
-                    elif message["type"] == "infer" and message["model"] == model_hash:
-                        pending.append((i, message))
-                    else:
-                        raise ValueError("未知或过期模型请求")
-                if pending:
-                    batch = collate_examples(
-                        [example(m["input"]) for _, m in pending], model.config
+        while active:
+            before = time.perf_counter()
+            try:
+                messages = [events.get(timeout=900)]
+            except queue.Empty:
+                raise TimeoutError("原生请求超过保护时间") from None
+            deadline = time.perf_counter() + batch_wait_ms / 1000
+            while len(messages) < len(active):
+                try:
+                    messages.append(events.get(timeout=max(0, deadline - time.perf_counter())))
+                except queue.Empty:
+                    break
+            queue_seconds += time.perf_counter() - before
+            pending = []
+            for i, raw in messages:
+                message = clients[i].checked(raw)
+                if i not in active:
+                    raise ValueError("已结束环境重复响应")
+                if message["type"] == "done":
+                    results[i] = message
+                    active.remove(i)
+                    if message.get("error"):
+                        raise RuntimeError(message["error"])
+                elif message["type"] == "infer" and message["model"] == model_hash:
+                    pending.append((i, message))
+                else:
+                    raise ValueError("未知或过期模型请求")
+            # 就绪请求按实体长度分组，最大实体填充倍率不超过2；不等未就绪环境。
+            pending.sort(key=lambda item: item[1]["entities"])
+            while pending:
+                limit = pending[0][1]["entities"] * 2
+                count = next(
+                    (j for j, (_, m) in enumerate(pending) if m["entities"] > limit), len(pending)
+                )
+                group, pending = pending[:count], pending[count:]
+                logits = inference([m["input"] for _, m in group])
+                forwards += 1
+                for row, (i, message) in enumerate(group):
+                    sent = time.perf_counter()
+                    clients[i].send(
+                        {
+                            "id": message["id"],
+                            "model": model_hash,
+                            "logits": logits[row, : message["candidates"]].tolist(),
+                        }
                     )
-                    before = time.perf_counter()
-                    with torch.inference_mode():
-                        logits, values = model({k: v.to(device) for k, v in batch.items()})
-                        logits, values = logits.cpu(), values.cpu()
-                    inference_seconds += time.perf_counter() - before
-                    if not torch.isfinite(logits).all() or not torch.isfinite(values).all():
-                        raise ValueError("模型输出非有限")
-                    forwards += 1
-                    for row, (i, message) in enumerate(pending):
-                        clients[i].send(
-                            {
-                                "id": message["id"],
-                                "model": model_hash,
-                                "logits": logits[row, : message["candidates"]].tolist(),
-                            }
-                        )
-                for i, _ in pending:
-                    waiting[executor.submit(clients[i].receive)] = i
-        finally:
-            # 中断先关闭自己启动的环境，唤醒阻塞读取；不等待九百秒超时才处理 Ctrl+C。
-            for client in clients:
-                client.close()
-            executor.shutdown(wait=True, cancel_futures=True)
+                    send_seconds += time.perf_counter() - sent
+                    response_times.append(time.perf_counter() - message["received_at"])
+        inference_seconds = inference.execution_seconds
         report = {
             "games": results,
             "model": model_hash,
-            "device": device,
+            "device": str(device),
+            "precision": precision,
+            "batch_wait_ms": batch_wait_ms,
             "forwards": forwards,
             "inference_seconds": inference_seconds,
+            "collation_seconds": inference.collation_seconds,
+            "queue_seconds": queue_seconds,
+            "send_seconds": send_seconds,
+            "tensor_read_seconds": sum(c.read_seconds for c in clients),
+            "decode_validate_seconds": sum(c.decode_seconds for c in clients),
+            "tensor_bytes": sum(c.tensor_bytes for c in clients),
+            "requests": inference.requests,
+            "mean_batch": inference.requests / max(1, forwards),
+            "entity_fill": inference.entities / max(1, inference.entity_slots),
+            "candidate_fill": inference.candidates / max(1, inference.candidate_slots),
+            "response_p95_seconds": sorted(response_times)[int((len(response_times) - 1) * 0.95)]
+            if response_times
+            else 0,
             "seconds": time.perf_counter() - started,
         }
         (output / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

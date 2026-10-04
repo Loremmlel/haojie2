@@ -51,6 +51,7 @@ class Trainer:
         precision="fp32",
         lr=3e-4,
         value_weight=1.0,
+        optimizer="auto",
     ):
         if precision not in {"fp32", "bf16", "fp16"}:
             raise ValueError("未知训练精度")
@@ -59,8 +60,17 @@ class Trainer:
         self.value_weight = value_weight
         self.device, self.precision = device, precision
         self.model = model.to(device).train()
+        if optimizer not in {"auto", "foreach", "fused"}:
+            raise ValueError("optimizer必须是auto、foreach或fused")
+        self.requested_optimizer = optimizer
+        # FP16沿用GradScaler可准确跳步的foreach路径，避免融合step钩子把溢出算成更新。
+        fused = optimizer == "fused" or (
+            optimizer == "auto" and device.type == "cuda" and precision != "fp16"
+        )
+        if fused and (device.type != "cuda" or precision == "fp16"):
+            raise ValueError("融合AdamW仅用于CUDA FP32/BF16；FP16请使用foreach")
         self.optimizer = torch.optim.AdamW(
-            model.parameters(), lr=lr, weight_decay=0.01, foreach=True
+            model.parameters(), lr=lr, weight_decay=0.01, foreach=not fused, fused=fused
         )
         self.scaler = torch.amp.GradScaler(
             device.type, enabled=precision == "fp16", init_scale=1024
@@ -122,6 +132,10 @@ class Trainer:
             if self.device.type == "cpu"
             else getattr(torch, self.device.type).get_rng_state(self.device),
             "device_type": self.device.type,
+            "execution": {
+                "deterministic": torch.are_deterministic_algorithms_enabled(),
+                "matmul_precision": torch.get_float32_matmul_precision(),
+            },
         }
         temporary = path.with_suffix(path.suffix + ".tmp")
         torch.save(payload, temporary)
@@ -138,6 +152,18 @@ class Trainer:
             or payload.get("value_weight", 1.0) != self.value_weight
         ):
             raise ValueError("检查点的模型、数据来源、精度或损失权重与当前训练不一致")
+        saved_fused = payload["optimizer"]["param_groups"][0].get("fused", False)
+        execution = {
+            "deterministic": torch.are_deterministic_algorithms_enabled(),
+            "matmul_precision": torch.get_float32_matmul_precision(),
+        }
+        if payload.get("execution", execution) != execution:
+            raise ValueError("续训确定性/矩阵精度执行设置不匹配")
+        saved_mode = "fused" if saved_fused else "foreach"
+        if self.requested_optimizer != "auto" and self.requested_optimizer != saved_mode:
+            raise ValueError("续训优化器执行方式不匹配；使用auto恢复检查点模式")
+        if saved_fused and (self.device.type != "cuda" or self.precision == "fp16"):
+            raise ValueError("此融合优化器检查点须使用原CUDA执行模式恢复")
         self.model.load_state_dict(payload["model"])
         self.optimizer.load_state_dict(payload["optimizer"])
         self.scaler.load_state_dict(payload["scaler"])

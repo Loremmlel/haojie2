@@ -93,7 +93,8 @@ class PolicyValueNet(nn.Module):
             nn.Tanh(),
         )
 
-    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
+    def encode(self, batch: dict[str, Tensor]) -> Tensor:
+        """训练与策略推理共用主干，动作前缀仍完整参与编码。"""
         entities = self.entity_projection(batch["entities"]) + self.kind_embedding(batch["kinds"])
         entities = self.entity_context(batch, entities)
         global_token = self.global_projection(batch["globals"]).unsqueeze(1)
@@ -104,7 +105,9 @@ class PolicyValueNet(nn.Module):
         allowed = self.attention_mask(batch, valid)
         for block in self.blocks:
             x = block(x, allowed)
-        x = self.norm(x)
+        return self.norm(x)
+
+    def score_policy(self, batch: dict[str, Tensor], x: Tensor) -> Tensor:
         action_count = batch["candidates"].shape[1]
         context = x[:, :1].expand(-1, action_count, -1)
         sources = x.gather(1, (batch["sources"] + 1).unsqueeze(-1).expand(-1, -1, x.shape[-1]))
@@ -119,7 +122,15 @@ class PolicyValueNet(nn.Module):
             )
             logits = self.policy(action_context).squeeze(-1)
         logits = logits.masked_fill(~batch["candidate_mask"], -1e9)
-        return logits, self.value(x[:, 0]).squeeze(-1).float()
+        return logits
+
+    def policy_logits(self, batch: dict[str, Tensor]) -> Tensor:
+        """原生采样只消费策略，不计算或传回价值头。"""
+        return self.score_policy(batch, self.encode(batch))
+
+    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
+        x = self.encode(batch)
+        return self.score_policy(batch, x), self.value(x[:, 0]).squeeze(-1).float()
 
     def entity_context(self, batch: dict[str, Tensor], entities: Tensor) -> Tensor:
         """默认保持原实体投影；研究模型可展开已有公开字段，不更改旧检查点参数。"""

@@ -7,7 +7,8 @@ from pathlib import Path
 import torch
 
 from .client import Client
-from .pipeline import audit as audit_record, initialize, prepare, sample
+from .pipeline import audit as audit_record
+from .pipeline import initialize, prepare, sample
 
 
 def main():
@@ -25,7 +26,9 @@ def main():
     sampling.add_argument("--output", type=Path, required=True)
     sampling.add_argument("--commands", type=int, default=2000)
     sampling.add_argument("--plies", type=int, default=200)
-    sampling.add_argument("--device", choices=["cpu", "cuda", "xpu"], default="cpu")
+    sampling.add_argument("--device", choices=["auto", "cpu", "cuda", "xpu"], default="auto")
+    sampling.add_argument("--precision", choices=["fp32", "bf16", "fp16"], default="fp32")
+    sampling.add_argument("--batch-wait-ms", type=float, default=0.0)
     sampling.add_argument("--seed", type=int, default=20261003)
     audit = sub.add_parser("audit")
     audit.add_argument("records", nargs="+", type=Path)
@@ -55,6 +58,8 @@ def main():
             args.plies,
             args.device,
             args.seed,
+            precision=args.precision,
+            batch_wait_ms=args.batch_wait_ms,
         )
     elif args.op == "prepare":
         if args.shard_size < 1:
@@ -64,8 +69,12 @@ def main():
         if args.shard_size < 1:
             parser.error("分片大小必须为正")
         audited = [audit_record(args.engine, path) for path in args.records]
-        result = {"audits": [r.report for r in audited],
-                  "prepared": prepare(args.engine, args.records, args.prepare, args.shard_size, audited=audited)}
+        result = {
+            "audits": [r.report for r in audited],
+            "prepared": prepare(
+                args.engine, args.records, args.prepare, args.shard_size, audited=audited
+            ),
+        }
     else:
         result = []
         with Client(args.engine) as client:

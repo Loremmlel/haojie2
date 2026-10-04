@@ -1,6 +1,6 @@
 # AI / 训练当前状态
 
-核对日期：2026-10-03。远端 `main` 仍为 `7cc64224a4fcc5188e9445bc16fe1058afa2d145`。独立分支 `codex/native-engine-hotspots` 已完成原生引擎转正与热点实现，运行代码冻结于 `040f393`，验收脚本收口于 `af1c803`；完整规则、八种子轨迹及原生/网页 CI 已通过。按用户要求停止追加计时并提交交付；实测、复现和未验证项统一见[任务记录](performance/engine/README.md)。规则仍为 `3.0-feedback5-live-deployment-2026-09-23`，尚未合并 main 或远程部署。
+核对日期：2026-10-04。远端 `main` 已合并原生引擎转正成果，当前为 `a1679bb`。本轮独立分支 `codex/pytorch-execution` 在此基础上优化 Python/PyTorch 执行，不重写 Rust；默认模型 CUDA 固定请求、实际闭环、连续更新和另进程恢复结果见[执行链路报告](performance/execution/README.md)。采样推荐 CUDA FP32，连续更新可选 BF16；保持原模型、损失、数据权重和规则，不宣称学习有效性或棋力已解决。新分支不自动合并、发布或部署。
 
 ## 当前入口
 
@@ -12,7 +12,7 @@
 | TS 教师与搜索      | [训练导航](TRAINING.md)、[Python 与旧工具说明](../../training/README.md)；手工教师、restricted PUCT 仍需 Node，未迁移到原生入口。                                                |
 | 本轮性能与功能证据 | [正式引擎任务记录](performance/engine/README.md)；此前内核重写见[历史实测](performance/kernel/RESULTS.md)，训练宿主接线见[原生训练报告](performance/native-training/README.md)。 |
 
-## 正式引擎与当前边界
+## 已完成的原生转正（2026-10-03）与保留边界
 
 正式目录、crate 和默认程序为 `native/engine/`、`haojie-engine`。Windows/Linux x64 原生 CI 包含锁定构建、fmt/test/Clippy、release 身份及 TS 规则/动作树/公开信息/编码/规范哈希差分。源码交付包自带规则和晚盘前缀，在无宿主运行时挂载的隔离容器独立安装；根目录扫描和实际 execve 检查覆盖安装/运行，不只移除 PATH。非空监督、0→2→4 更新、45 张量变化、有限优化器、另进程恢复与连续四步逐张量相等及新权重采样/审核通过。支持完整学习阶段恢复，不支持半局递归栈精确恢复。
 
