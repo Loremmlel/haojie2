@@ -1,0 +1,2 @@
+# 教师静态包按原始字节校验指纹，Windows 检出也必须保持构建产物的 LF。
+/training/haojie_training/console/assets/teacher.js text eol=lf
