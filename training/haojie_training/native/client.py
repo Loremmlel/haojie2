@@ -51,8 +51,10 @@ class Client:
     def _read(self):
         try:
             while line := self.process.stdout.readline(16 * 1024 * 1024 + 1):
-                if len(line) > 16 * 1024 * 1024 or not line.endswith(b"\n"):
-                    raise ValueError("控制消息过长或不完整")
+                if len(line) > 16 * 1024 * 1024:
+                    raise ValueError("控制消息过长")
+                if not line.endswith(b"\n"):
+                    raise RuntimeError("原生进程已退出")
                 meta = json.loads(line)
                 if "bytes" in meta:
                     size = meta["bytes"]
@@ -65,7 +67,7 @@ class Client:
                     while offset < size:
                         count = self.process.stdout.readinto(view[offset:])
                         if not count:
-                            raise ValueError("张量消息不完整")
+                            raise RuntimeError("原生进程已退出")
                         offset += count
                     self.read_seconds += time.perf_counter() - started
                     self.tensor_bytes += size

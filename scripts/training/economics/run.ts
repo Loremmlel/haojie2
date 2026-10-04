@@ -20,7 +20,7 @@ import type { Observation } from '../../../src/ai/types';
 import { withRecordOutput, hashRecordFile } from '../records/io';
 import { readTrainingRecords, recordHeader } from '../records/replay';
 import { TinyPolicy, randomStream } from './policy';
-import { sampleCommand, sampleChoices, emptyMetrics } from './sample';
+import { sampleCommand, sampleChoices, emptyMetrics, SamplingBudgetError } from './sample';
 
 export interface Options {
   seconds: number;
@@ -204,10 +204,16 @@ export async function sampleWorker(
           });
           metrics.recordMs += performance.now() - start;
         } catch (reason) {
-          error = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
-          interrupted = 'implementation-error';
+          error =
+            reason instanceof SamplingBudgetError
+              ? null
+              : reason instanceof Error
+                ? (reason.stack ?? reason.message)
+                : String(reason);
+          interrupted =
+            reason instanceof SamplingBudgetError ? 'decode-budget' : 'implementation-error';
           await emit({
-            type: 'error',
+            type: error ? 'error' : 'pause',
             game,
             index: env.status().commands,
             actor,

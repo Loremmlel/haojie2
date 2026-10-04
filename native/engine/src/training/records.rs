@@ -410,7 +410,15 @@ pub fn audit(
                 {
                     return Err("false truncation boundary".into());
                 }
-                if !["terminal", "commands", "plies", "cancelled", "error"].contains(&reason)
+                if ![
+                    "terminal",
+                    "commands",
+                    "plies",
+                    "decode-budget",
+                    "cancelled",
+                    "error",
+                ]
+                .contains(&reason)
                     || *body != outcome(s, count, reason)
                 {
                     return Err("outcome mismatch".into());

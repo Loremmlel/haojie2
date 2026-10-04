@@ -258,10 +258,14 @@ fn sample<R: BufRead, W: Write>(
         if let Err(e) = result {
             reason = if e == "cancelled" {
                 "cancelled"
+            } else if e == sampler::DECODE_BUDGET {
+                "decode-budget"
             } else {
                 "error"
             };
-            error = Some(e);
+            if reason != "decode-budget" {
+                error = Some(e);
+            }
             break;
         }
     }

@@ -23,6 +23,7 @@ export const emptyMetrics = () => ({
   offTurnPasses: 0,
 });
 export type Metrics = ReturnType<typeof emptyMetrics>;
+export class SamplingBudgetError extends Error {}
 
 /**
  * 只在一个公开局面内采样动作参数；空参数分支回溯，不推演未来局面、不做棋力搜索。
@@ -55,7 +56,7 @@ export function* sampleChoices(
     Command | 'pass' | undefined,
     boolean
   > {
-    if (++nodes > 4096 || cursor.length > 256) throw new Error('参数解码预算耗尽');
+    if (++nodes > 4096 || cursor.length > 256) throw new SamplingBudgetError('参数解码预算耗尽');
     metrics.nodes++;
     start = performance.now();
     const node = tree.node(cursor);

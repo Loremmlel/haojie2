@@ -97,7 +97,9 @@ class Ledger:
                     status = (
                         "terminal"
                         if report["outcome"]["terminated"]
-                        else (reason if reason in {"commands", "plies"} else "pending")
+                        else (
+                            reason if reason in {"commands", "plies", "decode-budget"} else "pending"
+                        )
                     )
                     if report["outcome"]["reason"] == "error":
                         raise ValueError("恢复发现规则/协议错误，须先修复原因")

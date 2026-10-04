@@ -223,6 +223,8 @@ def main():
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--source", type=Path)
     parser.add_argument("--environments", type=int, default=16)
+    parser.add_argument("--seconds", type=float, default=3600)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     torch.set_num_threads(1)
     torch.set_num_interop_threads(1)
@@ -230,30 +232,37 @@ def main():
         screen(args)
     else:
         args.output.parent.mkdir(parents=True, exist_ok=True)
+        prefix = args.output.with_name(args.output.name + "-resume") if args.resume else args.output
         begin = PROCESS_STARTED
-        with Monitor(args.output.with_suffix(".hardware.jsonl")):
+        with Monitor(prefix.with_suffix(".hardware.jsonl")):
             if args.op == "formal":
                 launch_offset = time.perf_counter() - PROCESS_STARTED
+                prefix.with_suffix(".launch.json").write_text(
+                    json.dumps({"launch_offset_seconds": launch_offset, "budget_seconds": args.seconds}),
+                    encoding="utf-8",
+                )
                 result = resident(
                     args.engine,
                     args.checkpoint,
                     args.output,
                     environments=args.environments,
-                    seconds=3600 - launch_offset,
+                    seconds=args.seconds - launch_offset,
                     drain_seconds=120,
                     target=64,
                     seed=2026100407,
                     commands=20000,
                     plies=1000,
                     device="cuda",
+                    resume=args.resume,
                 )
                 result["launch_offset_seconds"] = launch_offset
+                result["requested_wrapper_seconds"] = args.seconds
             else:
                 from haojie_training.native.stream import prepare_pool
 
                 result = prepare_pool(args.engine, args.source, args.output, 32)
         result["wrapper_seconds"] = time.perf_counter() - begin
-        args.output.with_suffix(".total.json").write_text(
+        prefix.with_suffix(".total.json").write_text(
             json.dumps(result, indent=2), encoding="utf-8"
         )
         print(json.dumps(result), flush=True)

@@ -10,6 +10,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::time::Instant;
 
+pub const DECODE_BUDGET: &str = "参数解码预算耗尽";
+
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Metrics {
@@ -72,7 +74,7 @@ impl Sampling<'_> {
     fn visit(&mut self, tree: &mut Tree<'_>, cursor: &[usize]) -> Result<Selected, String> {
         self.nodes += 1;
         if self.nodes > 4096 || cursor.len() > 256 {
-            return Err("参数解码预算耗尽".into());
+            return Err(DECODE_BUDGET.into());
         }
         self.metrics.nodes += 1;
         let t = Instant::now();
@@ -362,8 +364,14 @@ pub fn game(request: &Value, catalog: &Catalog) -> Result<Value, String> {
         metrics.record_ms += ms(t);
     }
     let terminated = state.extra.contains_key("winner");
+    let decode_budget = error.as_deref() == Some(DECODE_BUDGET);
+    if decode_budget {
+        error = None;
+    }
     let truncation = if terminated {
         None
+    } else if decode_budget {
+        Some("decode-budget")
     } else if commands.len() >= max_commands {
         Some("commands")
     } else if state.ply - initial_ply >= max_plies {

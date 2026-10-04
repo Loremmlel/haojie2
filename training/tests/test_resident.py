@@ -1,11 +1,13 @@
 """以确定性零 logits 验证工作池，不把替身吞吐当模型产能。"""
 
 import gc
+import io
 import os
 import tempfile
 import unittest
 import weakref
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
@@ -39,6 +41,21 @@ class ResidentTests(unittest.TestCase):
             "cpu",
             inference=(PolicyInference(ZeroPolicy(), "cpu"), "a" * 64),
         )
+
+    def test_eof_during_frame_is_restartable_but_corruption_is_not(self):
+        for payload, kind in (
+            (b'{"type":"infer"', RuntimeError),
+            (b'{"bytes":10,"entities":1,"candidates":1}\nabc', RuntimeError),
+            (b'{bad json}\n', ValueError),
+        ):
+            client = Client.__new__(Client)
+            client.process = SimpleNamespace(stdout=io.BytesIO(payload))
+            results = []
+            client._publish = results.append
+            client._read()
+            self.assertIsInstance(results[-1], kind)
+            if kind is RuntimeError:
+                self.assertEqual(str(results[-1]), "原生进程已退出")
 
     def test_refill_identity_and_frame_lifetime(self):
         starts = [task_identity(97, i)["start"] for i in range(9)]
