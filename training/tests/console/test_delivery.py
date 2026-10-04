@@ -4,8 +4,10 @@ import threading
 import time
 import unittest
 from collections import Counter
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 
@@ -16,10 +18,42 @@ from haojie_training.console.opponents import Teacher, schedule
 from haojie_training.console.sampling import task_plan
 from haojie_training.console.storage import QuotaError, Store
 from haojie_training.data import synthetic_batch
-from haojie_training.model import ModelConfig
+from haojie_training.model import ModelConfig, PolicyValueNet
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_resource_cancelled_evaluation_is_an_error_not_a_timeout_or_loss(self):
+        model = PolicyValueNet(ModelConfig.tiny())
+        job = Evaluation.__new__(Evaluation)
+        job.c = SimpleNamespace(
+            config=defaults(),
+            trainer=SimpleNamespace(model=model),
+            device=torch.device("cpu"),
+            engine="unused",
+            counts={"games": 0},
+            cancel=threading.Event(),
+            eval_cancel=threading.Event(),
+            _close_pool=lambda: None,
+            _progress=lambda _: None,
+            log=lambda _: None,
+        )
+        job.weights = job.baseline = {
+            "version": "a" * 64,
+            "updates": 0,
+            "config": asdict(model.config),
+            "model": model.state_dict(),
+        }
+        job.config, job.created = defaults(), time.time()
+        job.plan = [{**schedule(1, 1)[0], "difficulty": "baseline", "result": "pending"}]
+        job.index, job.confirmation, job.series, job.conditions = 0, False, "resource-test", {}
+        with patch("haojie_training.console.evaluation.Pool") as pool:
+            pool.return_value.run.side_effect = lambda jobs, **_: jobs.resource_error("帧内存不足")
+            report = job.slice()
+        result = report["results"]["baseline"]
+        self.assertEqual(result["errors"], 1)
+        self.assertEqual((result["timeouts"], result["losses"], result["n"]), (0, 0, 0))
+        self.assertEqual(report["games"][0]["reason"], "resource-budget")
+
     def test_due_evaluation_survives_pause_but_explicit_pending_cancel_is_respected(self):
         c = Controller.__new__(Controller)
         c.config = {**defaults(), "eval_games": 4}

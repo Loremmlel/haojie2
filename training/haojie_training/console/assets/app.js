@@ -30,6 +30,7 @@ const reasons = {
   'decode-budget': '解码超限',
   error: '错误',
   'time-budget': '单局时间预算耗尽',
+  'resource-budget': '推理帧内存预算不足',
 };
 const number = (n) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(n ?? 0);
 const bytes = (n) => `${number((n ?? 0) / 2 ** 20)} MiB`;
@@ -145,6 +146,12 @@ function controls() {
 
 function render(s) {
   current = s;
+  const matchups = Object.entries(s.counts.matchups ?? {});
+  const historical = matchups.reduce(
+    (n, [key, count]) => n + (key.includes('/historical/') ? count : 0),
+    0,
+  );
+  const assigned = matchups.reduce((n, [, count]) => n + count, 0);
   const experiments = s.experiments ?? [];
   const choice = $('experiment-choice');
   const signature = JSON.stringify([s.experiment, experiments]);
@@ -171,7 +178,7 @@ function render(s) {
   );
   text(
     'quick-runtime',
-    `${states[s.state]} · ${s.runtime.active?.length ?? 0} 局进行中 · 进程树 RAM ${bytes(s.resources.rss)}`,
+    `${states[s.state]} · ${s.runtime.active?.length ?? 0} 局进行中 · 实际分配：当前自对弈${assigned - historical} / 历史${historical}（${percent(assigned ? historical / assigned : null)}） · RAM ${bytes(s.resources.rss)}`,
   );
   text(
     'quick-resource',
@@ -203,11 +210,12 @@ function render(s) {
     'learning-status',
     s.learning_status + (s.research_fixture ? '（验收夹具模式，不作为棋力）' : ''),
   );
+  const loss = s.losses.at(-1);
   text(
     'loss-description',
-    s.config.method.startsWith('decomposed-mc-q-')
-      ? '候选收益均方误差 / 状态价值均方误差'
-      : '动作交叉熵 / 状态价值均方误差',
+    loss
+      ? `${s.config.method.startsWith('decomposed-mc-q-') ? 'Q均方误差' : '动作交叉熵'} ${loss.policy.toFixed(4)} / 价值均方误差 ${loss.value.toFixed(4)} · 更新${loss.step}`
+      : '等待真实终局与更新，尚无损失记录',
   );
   text('games', number(s.counts.games));
   text(
@@ -222,7 +230,7 @@ function render(s) {
   text('samples', number(s.pool.samples));
   text(
     'retention',
-    `累计保留 ${number(s.counts.retained_samples)} / ${number(s.counts.seen_samples)} · 超大拒收 ${number(s.counts.oversize_samples)}`,
+    `累计保留 ${number(s.counts.retained_samples)} / ${number(s.counts.seen_samples)} · 实际消费 ${number(s.pool.consumed)}`,
   );
   text('saved', number(s.saved_step));
   text('save-time', `上次保存 ${date(s.saved_at)}`);
