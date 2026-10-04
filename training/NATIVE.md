@@ -8,6 +8,12 @@ TS 手工教师、restricted PUCT、旧记录转换和历史改善/连续实验�
 
 ## 当前运行内核
 
+2026-10-04 已接通 Python 执行优化：推理专用输入/策略头、拥有型帧视图、连续页锁定组批、直接就绪队列、分片长度索引、单批预取和 CUDA fused AdamW。模型、损失及原生协议不变。默认 11,695,874 参数模型的 CUDA 实测、数值误差、失败路线和复现入口见[执行链路报告](../docs/ai/performance/execution/README.md)。
+
+采样推荐 `--device cuda --precision fp32`、1 个 PyTorch 宿主线程和最多 8 环境，`--batch-wait-ms` 默认 0；CLI 的 `--device auto` 保留无加速器时 CPU 回退。训练推荐 `--device cuda --precision bf16 --threads 1`，`--optimizer auto` 在 CUDA FP32/BF16 使用融合 AdamW，FP16/CPU/XPU 使用 foreach。`--prefetch` 默认开启，`--no-prefetch` 可做参考对照；不改变样本权重或按累计步骤确定的随机源。
+
+要求同设备逐位恢复时，新阶段使用 `--deterministic`；续训省略此开关会继承检查点的确定性和矩阵精度设置。非确定性 CUDA 的连续/恢复结果允许存在舍入差异。融合优化器检查点须在 CUDA 原执行模式恢复；`--optimizer auto` 恢复实际保存的优化器执行方式，显式不匹配会失败。训练报告另列加载、前后全量指标评估及保存耗时，不用两步烟雾测试代表更新吞吐。
+
 环境内部使用类型化实体、命令、反应与时钟快照；公开只读视图直接进入动作树与编码，连续模拟不再经过 `Observation Value → State`。外部存档、观察、记录及控制消息仍遵守原协议。原生发送缓冲在同步写入完成后复用，Python 接收的张量仍独立拥有。现有二进制协议与就绪调度没有换版。
 
 2026-10-03 的正式原生 CI 从源码交付包在独立 Linux 容器构建并安装，运行根不挂载宿主仓库、关闭网络、扫描整个文件系统并核对安装与运行的实际 execve；不是仅从 PATH 删除 Node。非空标签、0→2→4 更新、45 个参数张量变化、另进程恢复与连续四步逐张量相等及新权重采样/审核均通过。Windows/Linux 的规则、候选、编码、RNG、私有信息和规范哈希继续由 TS 独立参照验证。
@@ -50,7 +56,7 @@ PYTHON -m haojie_training.native --engine ENGINE sample --checkpoint restored.pt
 | 模型 / 检查点  | `entity-transformer-v2` / `haojie-checkpoint-v1` |
 
 - 单一权威仍是 TS 的 catalog/combat/recipes/pools/schema。开发时显式运行 `node --import tsx scripts/training/native/rules-package.ts` 生成提交包，`npm run train:rules:check` 检查过期。安装、缺缓存启动和新数据预处理不调用生成器。`data/rules.json` 固定字节 SHA256、规则/编码版本随 manifest 提交并嵌入二进制；Git 不转换规则包换行。
-- `haojie-training-binary-v1` 使用 JSON 行控制，随后发送 LE f32 特征、LE i64 索引、u8 掩码。顺序是 entities/globals/candidates/kinds/sources/targets/entity_mask/candidate_mask，维度与旧模型一致。Python 复制为独立拥有张量，异步批处理不借用可被覆盖的内存。Rust 保存局面与递归上下文。
+- `haojie-training-binary-v1` 使用 JSON 行控制，随后发送 LE f32 特征、LE i64 索引、u8 掩码。顺序是 entities/globals/candidates/kinds/sources/targets/entity_mask/candidate_mask，维度与旧模型一致。Python 每帧拥有独立接收字节区，NumPy/Tensor 视图共同持有该帧，后续请求不覆盖；主机组批容量只在结果回传完成后复用。Rust 保存局面与递归上下文。
 - 模型请求带递增 id 和检查点文件 SHA256；核对规则/完整编码/规则包、有限权重及 logits。错误/过期响应明确失败，不回退教师或随机策略。换权重创建新模型及环境，不复用 TinyPolicy 投影。
 - `haojie-native-record-v1` 使用逐行 SHA256 链和执行前后状态哈希。规范编码：类型标签 null=0/bool=1/number=2/string=3/array=4/object=5；长度 u64 LE，字符串 UTF-8，对象按 UTF-8 键排序，数值有限 f64 LE、负零归零，布尔0/1，缺失不等于 null。哈希链计算 `{previous,body}` 的规范编码；旧记录和旧指纹不改写。
 - 训练入口验证命令字段、范围、身份与权限。状态只来自原生新局及合法命令，权威 RNG/暗选不进入模型输入。原开发差分协议不作为不可信训练入口。
