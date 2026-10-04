@@ -26,6 +26,7 @@
       <section class="command-bar" aria-label="训练控制">
         <span id="state" class="state">空闲</span>
         <div class="actions">
+          <button type="button" id="new-training" disabled>新建训练</button>
           <button type="button" disabled data-action="start" class="primary">开始 / 继续</button
           ><button type="button" disabled data-action="pause">暂停</button
           ><button type="button" disabled data-action="save">保存恢复点</button
@@ -41,7 +42,7 @@
         <section data-page="overview" class="page overview">
           <div class="method">
             <h2 id="method">分解动作 MC 收益回归 · 实验</h2>
-            <p id="learning-status">自对弈数据与训练接口已接通，策略改进实验尚未完成</p>
+            <p id="learning-status">正在检查训练就绪状态</p>
           </div>
           <section class="numbers" aria-label="训练概览">
             <article>
@@ -82,6 +83,7 @@
               <div>
                 <h3>当前计算</h3>
                 <p id="quick-runtime">等待开始</p>
+                <p id="active-games"></p>
               </div>
               <div>
                 <h3>资源余量</h3>
@@ -106,6 +108,9 @@
           <div class="page-heading">
             <h2>外部棋力评测</h2>
             <p id="eval-ready">检测评测组件</p>
+            <p id="evaluation-job"></p>
+            <p id="candidate-status"></p>
+            <button type="button" disabled data-action="confirm-candidate">确认冻结候选</button>
           </div>
           <div class="columns evaluation-layout">
             <section class="panel">
@@ -159,6 +164,8 @@
               <div>
                 <h3>内存与计算</h3>
                 <p id="memory"></p>
+                <p id="consumption"></p>
+                <p id="coverage"></p>
                 <p id="compute"></p>
                 <p id="inflight"></p>
               </div>
@@ -166,6 +173,7 @@
                 <h3>版本与恢复</h3>
                 <p id="version"></p>
                 <p id="opponents"></p>
+                <p id="matchups"></p>
                 <p id="checkpoints"></p>
                 <p id="best"></p>
               </div>
@@ -174,6 +182,16 @@
           <section class="panel">
             <h2>存储边界</h2>
             <p id="managed-root" class="path"></p>
+            <label>已有实验<select id="experiment-choice" disabled></select></label>
+            <button type="button" data-action="switch-experiment" disabled>打开所选实验</button>
+            <button type="button" data-action="delete-experiment" disabled>
+              删除所选非当前实验
+            </button>
+            <p>打开时恢复原优化器和曲线；删除会移除所选实验的恢复点、权重和指标，不能撤销。</p>
+            <button type="button" data-action="restore" disabled>从恢复点重新加载</button>
+            <button type="button" data-action="export" disabled>导出模型到受管目录</button>
+            <button type="button" data-action="cleanup" disabled>回收可替换权重</button>
+            <p id="exports"></p>
             <div id="external"></div>
             <p>
               显式纳管旧目录可在启动时使用
@@ -187,150 +205,193 @@
             <p>先暂停再修改；下一次恢复点保存设置。评测配置变化建立新系列。</p>
           </div>
           <form id="settings" class="panel" novalidate>
-            <div class="form-grid">
-              <label
-                >并行环境数<input
-                  name="environments"
-                  type="number"
-                  min="1"
-                  max="16"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >每轮采样局数<input
-                  name="games_per_round"
-                  type="number"
-                  min="1"
-                  max="128"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >每轮更新步数<input
-                  name="updates_per_round"
-                  type="number"
-                  min="1"
-                  max="1000"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >更新批量<input
-                  name="batch_size"
-                  type="number"
-                  min="1"
-                  max="32"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >RAM样本池（MiB）<input
-                  name="pool_mib"
-                  type="number"
-                  min="16"
-                  max="4096"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >自动保存间隔（秒）<input
-                  name="save_seconds"
-                  type="number"
-                  min="10"
-                  max="86400"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >新增终局保存间隔（0关闭）<input
-                  name="save_games"
-                  type="number"
-                  min="0"
-                  max="100000"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >评测间隔（新增终局）<input
-                  name="eval_games"
-                  type="number"
-                  min="1"
-                  max="100000"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >每档每规则的交换对数<input
-                  name="eval_pairs"
-                  type="number"
-                  min="1"
-                  max="20"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >单轮评测预算（秒）<input
-                  name="eval_seconds"
-                  type="number"
-                  min="2"
-                  max="7200"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >历史池容量<input
-                  name="history_size"
-                  type="number"
-                  min="4"
-                  max="8"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >历史纳入间隔（更新步）<input
-                  name="history_every"
-                  type="number"
-                  min="1"
-                  max="100000"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >每局命令上限<input
-                  name="max_commands"
-                  type="number"
-                  min="1"
-                  max="20000"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >每局回合上限<input
-                  name="max_plies"
-                  type="number"
-                  min="1"
-                  max="1000"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >探索温度<input
-                  name="temperature"
-                  type="number"
-                  min="0.05"
-                  max="2"
-                  step="0.05"
-                  aria-describedby="form-error"
-                  required
-              /></label>
-              <label
-                >训练方法<select name="method">
-                  <option value="decomposed-mc-q-v1">MC 收益回归（实验）</option>
-                  <option value="sampled-action-imitation">动作模仿（接线基线）</option>
-                </select></label
-              >
-            </div>
+            <details>
+              <summary>高级设置（默认可直接开始）</summary>
+              <div class="form-grid">
+                <label
+                  >经典规则占比（%）<input
+                    name="classic_percent"
+                    type="number"
+                    min="0"
+                    max="100"
+                    required
+                /></label>
+                <label
+                  >历史匹配占比（%）<input
+                    name="history_percent"
+                    type="number"
+                    min="0"
+                    max="100"
+                    required
+                /></label>
+                <label
+                  >当前方先手占比（%）<input
+                    name="current_first_percent"
+                    type="number"
+                    min="0"
+                    max="100"
+                    required
+                /></label>
+                <label
+                  >自动更新步数上限<input
+                    name="update_limit"
+                    type="number"
+                    min="1"
+                    max="1000"
+                    required
+                /></label>
+                <label
+                  >确认评测每规则交换对数<input
+                    name="confirmation_pairs"
+                    type="number"
+                    min="5"
+                    max="20"
+                    required
+                /></label>
+                <label
+                  >并行环境数<input
+                    name="environments"
+                    type="number"
+                    min="1"
+                    max="16"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >每轮采样局数<input
+                    name="games_per_round"
+                    type="number"
+                    min="1"
+                    max="128"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >手动更新步数（0为按可消费样本自动）<input
+                    name="updates_per_round"
+                    type="number"
+                    min="0"
+                    max="1000"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >更新批量<input
+                    name="batch_size"
+                    type="number"
+                    min="1"
+                    max="32"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >RAM样本池（MiB）<input
+                    name="pool_mib"
+                    type="number"
+                    min="16"
+                    max="4096"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >自动保存间隔（秒）<input
+                    name="save_seconds"
+                    type="number"
+                    min="10"
+                    max="86400"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >新增终局保存间隔（0关闭）<input
+                    name="save_games"
+                    type="number"
+                    min="0"
+                    max="100000"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >评测间隔（新增终局）<input
+                    name="eval_games"
+                    type="number"
+                    min="1"
+                    max="100000"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >每档每规则的交换对数<input
+                    name="eval_pairs"
+                    type="number"
+                    min="1"
+                    max="20"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >每个评测对局时间片（秒）<input
+                    name="eval_seconds"
+                    type="number"
+                    min="2"
+                    max="7200"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >历史池容量<input
+                    name="history_size"
+                    type="number"
+                    min="4"
+                    max="8"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >历史纳入间隔（更新步）<input
+                    name="history_every"
+                    type="number"
+                    min="1"
+                    max="100000"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >每局命令上限<input
+                    name="max_commands"
+                    type="number"
+                    min="1"
+                    max="20000"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >每局回合上限<input
+                    name="max_plies"
+                    type="number"
+                    min="1"
+                    max="1000"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >探索温度<input
+                    name="temperature"
+                    type="number"
+                    min="0.05"
+                    max="2"
+                    step="0.05"
+                    aria-describedby="form-error"
+                    required
+                /></label>
+                <label
+                  >训练方法<select name="method">
+                    <option value="decomposed-mc-q-v2">MC 收益回归 v2</option>
+                    <option value="sampled-action-imitation">动作模仿（接线基线）</option>
+                  </select></label
+                >
+              </div>
+            </details>
             <p id="form-error" role="alert"></p>
             <button type="submit">应用设置</button>
             <p class="setting-note">
@@ -343,7 +404,9 @@
             <h2>运行日志</h2>
             <p>最近100条；指标低频合并保存，页面刷新不写盘。</p>
           </div>
-          <section class="panel"><ol id="logs" aria-label="最近100条日志"></ol></section>
+          <section class="panel">
+            <ol id="logs" aria-label="最近100条日志"></ol>
+          </section>
         </section>
       </div>
       <footer>
@@ -351,6 +414,39 @@
         <span>关闭页面不停止训练 · 暂停取消在途局 · 完整记录研究模式另行保留</span>
       </footer>
     </main>
+    <dialog id="new-dialog" aria-labelledby="new-title">
+      <form id="new-form" novalidate>
+        <h2 id="new-title">新建训练实验</h2>
+        <p>独立曲线、恢复点和历史池，共享20GB配额。切换前保存当前未保存更新；原实验保留。</p>
+        <label
+          >初始化来源<select name="source">
+            <option value="fresh">默认模型 · 随机初始化</option>
+            <option value="current">继承内存最新权重 · 新优化器</option>
+            <option value="recovery">继承最新恢复点权重 · 新优化器</option>
+          </select></label
+        >
+        <label
+          >规则组合<select name="rules">
+            <option value="50">经典 / 神龛各半</option>
+            <option value="100">经典</option>
+            <option value="0">神龛</option>
+          </select></label
+        >
+        <label
+          >设备<select name="device">
+            <option value="auto">自动选择</option>
+            <option value="cuda">CUDA</option>
+            <option value="cpu">CPU</option>
+          </select></label
+        >
+        <p>
+          MC-Q v2 · CUDA采样FP32、更新BF16（支持时）· 自动更新预算。正常继续已有实验请使用顶部“开始
+          / 继续”。
+        </p>
+        <button type="submit" id="new-cancel" formmethod="dialog">取消</button
+        ><button type="submit" class="primary">建立实验</button>
+      </form>
+    </dialog>
     <script src="/app.js"></script>
   </body>
 </html>

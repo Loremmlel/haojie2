@@ -61,7 +61,7 @@ class ResourceTests(unittest.TestCase):
         )
         jobs = MemoryJobs(c, "current", (model, "historical"))
         task = jobs.claim()
-        self.assertEqual(task["models"], ["historical", "current"])
+        self.assertEqual(task["models"], ["current", "historical"])
         batch = synthetic_batch(model.config, size=1, entities=4, actions=2)
         frame = {
             "input": {k: batch[k][0] for k in INPUT_KEYS},
@@ -70,10 +70,12 @@ class ResourceTests(unittest.TestCase):
             "selected": 0,
             "step": 0,
             "index": 0,
+            "decision": 1,
+            "semantics": "mc-context-v2",
         }
-        jobs.example(task, {**frame, "actor": 1, "model": "historical"})
+        jobs.example(task, {**frame, "actor": 2, "model": "historical"})
         self.assertEqual(task["trajectory"].seen, 0)
-        jobs.example(task, {**frame, "actor": 2, "model": "current"})
+        jobs.example(task, {**frame, "actor": 1, "model": "current", "decision": 2})
         self.assertEqual(task["trajectory"].seen, 1)
         calls = []
 
@@ -312,10 +314,24 @@ class IntegrationTests(unittest.TestCase):
                 saved = c.saved_step
                 saved_file = store.names("recovery")[-1]
                 payload = torch.load(store.root / saved_file, weights_only=True)
-                self.assertEqual(payload["format"], "haojie-stream-recovery-v1")
+                self.assertEqual(payload["format"], "haojie-stream-recovery-v2")
                 self.assertNotIn("dataset_sha256", payload["trainer"]["metadata"])
             finally:
                 c.close()
+            # 同一冻结版本的评测只写小摘要，之后重启也应可见，无需再写完整模型。
+            report = {
+                "model": first,
+                "series": "same-frozen-model",
+                "results": {key: {"n": 0} for key in ("easy", "medium", "hard")},
+            }
+            store.metrics(
+                {
+                    "version": first,
+                    "updates": saved,
+                    "losses": payload["losses"],
+                    "evaluations": [report],
+                }
+            )
             restored = Controller(self.engine, Store(folder), device="cpu", tiny=True)
             try:
                 restored.command("save")
@@ -332,6 +348,7 @@ class IntegrationTests(unittest.TestCase):
                 self.assertEqual(len(restored.samples.rows), 0)
                 self.assertTrue(restored.restored)
                 self.assertEqual(identity(restored.trainer.model), first)
+                self.assertEqual(restored.evaluations, [report])
                 # 假时钟检验10分钟仅在新更新后触发，暂停不自动补保存。
                 with patch(
                     "haojie_training.console.controller.time.time",

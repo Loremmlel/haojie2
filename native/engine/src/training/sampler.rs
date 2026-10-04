@@ -69,6 +69,210 @@ struct Sampling<'a> {
 pub type Acceptance<'a> = dyn FnMut(&Command, &[usize], &str, u32) -> Result<bool, String> + 'a;
 pub trait Inference {
     fn logits(&mut self, input: &encoding::Input) -> Result<Vec<f64>, String>;
+    fn decision(
+        &mut self,
+        _input: &encoding::Input,
+        _selected: usize,
+        _depth: usize,
+        _stage: &str,
+        _pass: bool,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// 在线 MC-Q v2：每次重试重新按剩余候选采样，公开尝试日志成为输入的一部分。
+/// 所有真实选择（含随后回溯的尝试）都使用同局终局收益，不给非法尝试人造负分。
+pub fn external_mc(
+    observation: &runtime::PublicPosition,
+    actor: usize,
+    inference: &mut dyn Inference,
+    random: &mut Random,
+    catalog: &Catalog,
+    optional: bool,
+    accept: &mut Acceptance<'_>,
+) -> Result<(Selected, Vec<usize>, Metrics), String> {
+    if observation.viewer != actor {
+        return Err("public view actor mismatch".into());
+    }
+    let mut tree = Tree::from_view(observation, catalog)?;
+    mc_search(
+        &mut |cursor| {
+            let node = tree.node(cursor)?;
+            let input = if node.choices.is_empty() {
+                encoding::Input::default()
+            } else {
+                (*encoding::encode_sampling(&tree, &node)?).clone()
+            };
+            Ok(McNode {
+                stage: node.stage,
+                input,
+                choices: node
+                    .choices
+                    .iter()
+                    .map(|c| McChoice {
+                        command: c.command.clone(),
+                        next: c.next.is_some(),
+                        status: c.status,
+                    })
+                    .collect(),
+            })
+        },
+        inference,
+        random,
+        optional,
+        accept,
+    )
+}
+
+pub struct McChoice {
+    pub command: Command,
+    pub next: bool,
+    pub status: &'static str,
+}
+pub struct McNode {
+    pub stage: &'static str,
+    pub input: encoding::Input,
+    pub choices: Vec<McChoice>,
+}
+pub fn mc_search(
+    node: &mut dyn FnMut(&[usize]) -> Result<McNode, String>,
+    inference: &mut dyn Inference,
+    random: &mut Random,
+    optional: bool,
+    accept: &mut Acceptance<'_>,
+) -> Result<(Selected, Vec<usize>, Metrics), String> {
+    let mut state = McSampling {
+        inference,
+        random,
+        accept,
+        journal: vec![],
+        nodes: 0,
+        metrics: Metrics::default(),
+        optional,
+    };
+    let (selected, path) = state.visit(node, &[])?;
+    Ok((selected, path, state.metrics))
+}
+
+struct McSampling<'a> {
+    inference: &'a mut dyn Inference,
+    random: &'a mut Random,
+    accept: &'a mut Acceptance<'a>,
+    journal: Vec<[f64; 64]>,
+    nodes: usize,
+    metrics: Metrics,
+    optional: bool,
+}
+impl McSampling<'_> {
+    fn event(&mut self, depth: usize, index: usize, result: f64) {
+        let mut row = [0.0; 64];
+        // 独立上下文词类250；顺序、深度、原候选索引及选择/空分支/拒绝事件无损编码。
+        row[0] = self.journal.len() as f64 / 4096.0;
+        row[1] = depth as f64 / 256.0;
+        row[2] = index as f64;
+        row[3] = result;
+        self.journal.push(row);
+    }
+    fn visit(
+        &mut self,
+        tree: &mut dyn FnMut(&[usize]) -> Result<McNode, String>,
+        cursor: &[usize],
+    ) -> Result<(Selected, Vec<usize>), String> {
+        if cursor.len() > 256 {
+            return Err(DECODE_BUDGET.into());
+        }
+        let node = tree(cursor)?;
+        let pass = self.optional && cursor.is_empty();
+        if node.choices.is_empty() {
+            return Ok((
+                if pass {
+                    Selected::Pass
+                } else {
+                    Selected::Empty
+                },
+                vec![],
+            ));
+        }
+        let count = node.choices.len() + usize::from(pass);
+        let mut remaining = vec![true; count];
+        while remaining.iter().any(|v| *v) {
+            self.nodes += 1;
+            self.metrics.nodes += 1;
+            if self.nodes > 4096 {
+                return Err(DECODE_BUDGET.into());
+            }
+            let i;
+            {
+                let mut input = node.input.clone();
+                if pass {
+                    crate::records::add_pass(&mut input);
+                }
+                input.candidate_mask.clone_from(&remaining);
+                for event in &self.journal {
+                    input.entities.tail.push(*event);
+                    input.kinds.push(250);
+                    input.entity_mask.push(true);
+                }
+                self.metrics.max_entities = self.metrics.max_entities.max(input.entities.len());
+                self.metrics.max_candidates = self.metrics.max_candidates.max(count);
+                let available = remaining.iter().filter(|v| **v).count();
+                i = if available == 1 {
+                    self.metrics.forced += 1;
+                    remaining.iter().position(|v| *v).unwrap()
+                } else {
+                    self.metrics.evaluations += 1;
+                    let logits = self.inference.logits(&input)?;
+                    if logits.len() != count || logits.iter().any(|v| !v.is_finite()) {
+                        return Err("invalid policy logits".into());
+                    }
+                    let mut best = None;
+                    for (index, value) in logits.iter().enumerate() {
+                        if remaining[index] {
+                            let score = value - (-self.random.next().ln()).ln();
+                            if best.is_none_or(|(_, previous)| score > previous) {
+                                best = Some((index, score));
+                            }
+                        }
+                    }
+                    best.unwrap().0
+                };
+                self.inference.decision(
+                    &input,
+                    i,
+                    cursor.len(),
+                    node.stage,
+                    pass && i == node.choices.len(),
+                )?;
+            }
+            self.event(cursor.len(), i, 1.0);
+            let mut path = cursor.to_vec();
+            path.push(i);
+            if pass && i == node.choices.len() {
+                return Ok((Selected::Pass, path));
+            }
+            let choice = &node.choices[i];
+            if !choice.next {
+                if (self.accept)(&choice.command, &path, choice.status, self.random.0)? {
+                    return Ok((Selected::Command(Box::new(choice.command.clone())), path));
+                }
+                self.metrics.rejected += 1;
+                if self.metrics.rejected >= 64 {
+                    return Err(DECODE_BUDGET.into());
+                }
+                self.event(cursor.len(), i, -2.0);
+            } else {
+                let result = self.visit(tree, &path)?;
+                if !matches!(result.0, Selected::Empty) {
+                    return Ok(result);
+                }
+                self.event(cursor.len(), i, -1.0);
+            }
+            self.metrics.backtracks += 1;
+            remaining[i] = false;
+        }
+        Ok((Selected::Empty, vec![]))
+    }
 }
 impl Sampling<'_> {
     fn visit(&mut self, tree: &mut Tree<'_>, cursor: &[usize]) -> Result<Selected, String> {

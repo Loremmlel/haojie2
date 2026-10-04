@@ -123,7 +123,7 @@ fn js_key_order(mut keys: Vec<String>) -> Vec<String> {
     });
     keys
 }
-#[derive(Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct Input {
     pub entities: EntityRows,
     pub kinds: Vec<usize>,
@@ -138,7 +138,7 @@ pub struct Input {
     fixed_wire: Option<(usize, Rc<OnceCell<FixedWire>>)>,
 }
 /// 固定区一次连续生成；节点追加区复用容量。两区都直接写最终数值行，不逐行装箱。
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct EntityRows {
     pub fixed: Option<Rc<Vec<[f64; 64]>>>,
     pub tail: Vec<[f64; 64]>,

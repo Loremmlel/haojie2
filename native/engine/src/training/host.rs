@@ -24,6 +24,8 @@ pub struct Wire<R, W> {
     id: u64,
     command_index: usize,
     ply: f64,
+    decision_id: u64,
+    emit_decisions: bool,
     tensor_bytes: Vec<u8>,
     control_bytes: Vec<u8>,
 }
@@ -69,6 +71,25 @@ impl<R: BufRead, W: Write> Wire<R, W> {
     }
 }
 impl<R: BufRead, W: Write> Inference for Wire<R, W> {
+    fn decision(
+        &mut self,
+        input: &encoding::Input,
+        selected: usize,
+        depth: usize,
+        stage: &str,
+        pass: bool,
+    ) -> Result<(), String> {
+        if !self.emit_decisions {
+            return Ok(());
+        }
+        self.decision_id += 1;
+        self.tensor(
+            json!({"type":"example","index":self.command_index,"decision":self.decision_id,
+            "step":depth,"stage":stage,"actor":self.actor,"model":self.model,"selected":selected,
+            "pass":pass,"semantics":"mc-context-v2"}),
+            input,
+        )
+    }
     fn logits(&mut self, input: &encoding::Input) -> Result<Vec<f64>, String> {
         #[cfg(feature = "kernel-profile")]
         let _profile = crate::profile::scope(crate::profile::Phase::Protocol);
@@ -106,6 +127,8 @@ struct Request {
     models: Option<[String; 2]>,
     #[serde(default)]
     teacher: Option<usize>,
+    #[serde(default)]
+    mc_context: bool,
     start: Start,
     model: String,
     sampler_seed: u32,
@@ -135,6 +158,7 @@ fn sample<R: BufRead, W: Write>(
         || (request.memory && !request.record.is_empty())
         || (!request.memory && request.record.is_empty())
         || (!request.memory && (request.models.is_some() || request.teacher.is_some()))
+        || (!request.memory && request.mc_context)
         || request
             .models
             .as_ref()
@@ -163,6 +187,8 @@ fn sample<R: BufRead, W: Write>(
         writer.push(json!({"type":"game","format":records::FORMAT,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],"model":request.model,"start":request.start,"initialHash":current_hash,"samplerSeed":request.sampler_seed,"policyKind":"model-gumbel-backtracking-v2","maxCommands":request.max_commands,"maxPlies":request.max_plies}))?;
     }
     wire.model = request.model.clone();
+    wire.emit_decisions = request.mc_context && request.memory && request.teacher.is_none();
+    wire.decision_id = 0;
     let models = request
         .models
         .unwrap_or([request.model.clone(), request.model.clone()]);
@@ -193,11 +219,16 @@ fn sample<R: BufRead, W: Write>(
             let other = 3 - actor;
             wire.actor = actor;
             wire.model = models[actor - 1].clone();
-            // 教师仅收到所属方公开观察；权威状态始终留在原生引擎。
-            if request.teacher == Some(actor) {
+            let public = observation.position();
+            let optional = offer
+                && public.pending.is_empty()
+                && public.phase != "shrine-draft"
+                && public.pieces().any(|u| u.owner == other && u.has("u7"));
+            // 教师与模型具有相同回合外窗口；null 仅在可选窗口表示真实 Pass。
+            if optional && request.teacher == Some(other) {
                 wire.id += 1;
                 wire.send(
-                    &json!({"type":"teacher","id":wire.id,"actor":actor,"observation":runtime::observe(&state, actor)?}),
+                    &json!({"type":"teacher","id":wire.id,"actor":other,"optional":true,"commandIndex":count,"ply":state.ply,"observation":runtime::observe(&state, other)?}),
                 )?;
                 let response = wire.read()?;
                 encoding::known(&response, &["id", "command", "cancel"])?;
@@ -207,17 +238,15 @@ fn sample<R: BufRead, W: Write>(
                 if response["cancel"] == true {
                     return Err("cancelled".into());
                 }
-                state = boundary::step(&state, actor, &response["command"], catalog)?;
-                count += 1;
-                offer = true;
-                return Ok(());
+                if !response["command"].is_null() {
+                    state = boundary::step(&state, other, &response["command"], catalog)?;
+                    count += 1;
+                    offer = false;
+                    metrics.off_turn_commands += 1;
+                    return Ok(());
+                }
+                metrics.off_turn_passes += 1;
             }
-            let public = observation.position();
-            let optional = offer
-                && request.teacher != Some(other)
-                && public.pending.is_empty()
-                && public.phase != "shrine-draft"
-                && public.pieces().any(|u| u.owner == other && u.has("u7"));
             let mut selected = Selected::Empty;
             let mut path = vec![];
             let mut off_turn = false;
@@ -250,13 +279,17 @@ fn sample<R: BufRead, W: Write>(
                 }
             };
             metrics.observation_ms += observed.elapsed().as_secs_f64() * 1000.0;
-            if optional {
+            if optional && request.teacher != Some(other) {
                 wire.actor = other;
                 wire.model = models[other - 1].clone();
                 let observed = Instant::now();
                 let other_observation = runtime::public_view(&state, other)?;
                 metrics.observation_ms += observed.elapsed().as_secs_f64() * 1000.0;
-                let (choice, trace, costs) = sampler::external(
+                let (choice, trace, costs) = (if request.mc_context {
+                    sampler::external_mc
+                } else {
+                    sampler::external
+                })(
                     &other_observation,
                     other,
                     wire,
@@ -280,7 +313,27 @@ fn sample<R: BufRead, W: Write>(
             if !matches!(selected, Selected::Command(_)) {
                 wire.actor = actor;
                 wire.model = models[actor - 1].clone();
-                let (choice, trace, costs) = sampler::external(
+                if request.teacher == Some(actor) {
+                    wire.id += 1;
+                    wire.send(&json!({"type":"teacher","id":wire.id,"actor":actor,"optional":false,"commandIndex":count,"ply":state.ply,"observation":runtime::observe(&state, actor)?}))?;
+                    let response = wire.read()?;
+                    encoding::known(&response, &["id", "command", "cancel"])?;
+                    if response["id"] != wire.id {
+                        return Err("stale teacher response".into());
+                    }
+                    if response["cancel"] == true {
+                        return Err("cancelled".into());
+                    }
+                    state = boundary::step(&state, actor, &response["command"], catalog)?;
+                    count += 1;
+                    offer = true;
+                    return Ok(());
+                }
+                let (choice, trace, costs) = (if request.mc_context {
+                    sampler::external_mc
+                } else {
+                    sampler::external
+                })(
                     &observation,
                     actor,
                     wire,
@@ -308,7 +361,7 @@ fn sample<R: BufRead, W: Write>(
             };
             if let Some(writer) = writer.as_mut() {
                 writer.push(json!({"type":"sample","index":count,"actor":actor,"command":command,"path":path,"optional":off_turn,"before":current_hash,"after":after_hash,"model":wire.model,"samplerState":random.0}))?;
-            } else if request.teacher.is_none() {
+            } else if request.teacher.is_none() && !request.mc_context {
                 // 只有权威接受的路径可以编码。与完整记录审核共享编码/路径验证，
                 // 不传拒绝试探或每步权威快照；终局收益由 done 统一确认。
                 let command = serde_json::to_value(&command).map_err(|e| e.to_string())?;
@@ -387,15 +440,25 @@ pub fn serve() -> Result<(), String> {
         id: 0,
         command_index: 0,
         ply: 0.0,
+        decision_id: 0,
+        emit_decisions: false,
         tensor_bytes: Vec::new(),
         control_bytes: Vec::new(),
     };
-    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe(),"capabilities":["memory-examples-v1","actor-model-routing-v1","teacher-v1"]}))?;
+    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe(),"capabilities":["memory-examples-v1","mc-context-v2","actor-model-routing-v1","teacher-v2"]}))?;
     loop {
         let request = wire.read()?;
         let result = match request["op"].as_str() {
             Some("close") => return Ok(()),
             Some("sample") => sample(request, &catalog, &mut wire),
+            Some("mc-exercise") => {
+                wire.model = "0".repeat(64);
+                wire.actor = 1;
+                wire.command_index = 0;
+                wire.emit_decisions = true;
+                wire.decision_id = 0;
+                crate::exercise::run(&request, &mut wire)
+            }
             Some("audit") => {
                 #[cfg(feature = "kernel-profile")]
                 let kernel = {

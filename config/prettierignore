@@ -17,6 +17,8 @@ rules.json
 **/data/hash-vectors.json
 # 保留已提交实测证据原始字节。
 **/performance/resident/results.json
+# 历史失败报告保留原文，不为格式检查改写证据。
+**/performance/resident/INITIAL-FAILURE.md
 
 # 保留作者提供的实战观察原文作为证据。
 docs/ai/AI-HARD-PLAYTEST-2026-09-07.md

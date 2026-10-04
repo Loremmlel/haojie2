@@ -46,7 +46,8 @@ class ResidentTests(unittest.TestCase):
     def test_eof_during_frame_is_restartable_but_corruption_is_not(self):
         for payload, kind in (
             (b'{"type":"infer"', RuntimeError),
-            (b'{"bytes":10,"entities":1,"candidates":1}\nabc', RuntimeError),
+            (b'{"bytes":666,"entities":1,"candidates":1}\nabc', RuntimeError),
+            (b'{"bytes":10,"entities":1,"candidates":1}\nabc', ValueError),
             (b"{bad json}\n", ValueError),
         ):
             client = Client.__new__(Client)
@@ -58,6 +59,33 @@ class ResidentTests(unittest.TestCase):
             self.assertIsInstance(results[-1], kind)
             if kind is RuntimeError:
                 self.assertEqual(str(results[-1]), "原生进程已退出")
+
+    def test_large_valid_frame_is_distinct_from_resource_and_protocol_errors(self):
+        entities = 8200
+        body = (
+            torch.zeros(entities * 64 + 32 + 64).numpy().tobytes()
+            + torch.zeros(entities, dtype=torch.int64).numpy().tobytes()
+            + torch.full((2,), -1, dtype=torch.int64).numpy().tobytes()
+            + bytes([1]) * (entities + 1)
+        )
+        self.assertGreater(len(body), 2 * 1024 * 1024)
+        header = (
+            json.dumps(
+                {"type": "infer", "bytes": len(body), "entities": entities, "candidates": 1}
+            ).encode()
+            + b"\n"
+        )
+        for limit, kind in ((4 * 1024 * 1024, dict), (1024 * 1024, MemoryError)):
+            client = Client.__new__(Client)
+            client.frame_limit = limit
+            client.read_seconds = client.decode_seconds = client.tensor_bytes = 0
+            client.process = SimpleNamespace(stdout=io.BytesIO(header + body))
+            result = []
+            client._publish = result.append
+            client._read()
+            self.assertIsInstance(result[0], kind)
+            if kind is dict:
+                self.assertEqual(result[0]["input"]["entities"].shape[0], entities)
 
     def test_refill_identity_and_frame_lifetime(self):
         starts = [task_identity(97, i)["start"] for i in range(9)]

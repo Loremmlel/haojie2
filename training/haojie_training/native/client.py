@@ -61,8 +61,16 @@ class Client:
                 meta = json.loads(line)
                 if "bytes" in meta:
                     size = meta["bytes"]
-                    if type(size) is not int or not 0 < size <= self.frame_limit:
+                    entities, candidates = meta.get("entities"), meta.get("candidates")
+                    if (
+                        any(type(n) is not int or n < 1 for n in (size, entities, candidates))
+                        or size != entities * 265 + candidates * 273 + 128
+                    ):
                         raise ValueError("张量消息长度无效")
+                    if size > self.frame_limit:
+                        raise MemoryError(
+                            f"合法张量需要{size}字节，超过本槽位{self.frame_limit}字节内存预算"
+                        )
                     data = bytearray(size)
                     started = time.perf_counter()
                     view = memoryview(data)
@@ -121,6 +129,8 @@ class Client:
         return self.checked(value)
 
     def checked(self, value):
+        if isinstance(value, MemoryError):
+            raise value
         if isinstance(value, Exception):
             raise RuntimeError(f"{value}: {self.errors.decode(errors='replace')}")
         if value.get("type") == "error":

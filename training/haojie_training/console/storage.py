@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -91,7 +92,8 @@ class Store:
         with self.lock:
             categories = {}
             for name, size in self.files.items():
-                category = name.split("/")[0]
+                parts = name.split("/")
+                category = parts[2] if len(parts) > 2 and parts[0] == "experiments" else parts[0]
                 categories[category] = categories.get(category, 0) + size
             recent = sum(size for at, size in self.writes if time.monotonic() - at < 60)
             return {
@@ -121,11 +123,16 @@ class Store:
             for name in self.names(category)[:-keep]:
                 self.remove(name)
         for name in list(self.files):
-            if name.endswith(".partial") and name.split("/")[0] in {
+            if name in {"active.json.partial", "adopted.json.partial"}:
+                self.remove(name)
+                continue
+            if name.endswith(".partial") and name.split("/")[-2] in {
                 "recovery",
                 "history",
                 "best",
                 "metrics",
+                "baseline",
+                "export",
             }:
                 self.remove(name)
         if sum(self.files.values()) + self.reserved + needed > self.limit:
@@ -170,8 +177,16 @@ class Store:
         self.write(
             name, buffer.getvalue(), lambda p: torch.load(p, weights_only=True, map_location="cpu")
         )
-        for old in self.names(category)[:-keep]:
-            self.remove(old)
+        names = self.names(category)
+        if category.split("/")[-1] == "history":
+            # 保留首尾，优先移除时间距离最密集的中间权重，避免只剩最近一小段。
+            while len(names) > keep:
+                steps = [int(Path(n).stem) for n in names]
+                index = min(range(1, len(names) - 1), key=lambda i: steps[i + 1] - steps[i - 1])
+                self.remove(names.pop(index))
+        else:
+            for old in names[:-keep]:
+                self.remove(old)
         return name
 
     def metrics(self, payload):
@@ -179,6 +194,75 @@ class Store:
         if len(data) > 2_000_000:
             raise QuotaError("指标超过2MB额度")
         self.write("metrics/recent.json", data)
+
+    def read_metrics(self, prefix=""):
+        path = self.root / prefix / "metrics/recent.json"
+        if not path.exists():
+            return {}
+        if path.stat().st_size > 2_000_000:
+            raise ValueError("指标摘要超过2MB")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("指标摘要必须是对象")
+        return payload
+
+    def scope(self, experiment):
+        if not re.fullmatch(r"[0-9a-f]{12}", experiment):
+            raise ValueError("实验身份无效")
+        return ExperimentStore(self, experiment)
+
+    def experiments(self):
+        result = {}
+        with self.lock:
+            for name, size in self.files.items():
+                parts = name.split("/")
+                if len(parts) >= 4 and parts[0] == "experiments":
+                    identity, category = parts[1:3]
+                    if not re.fullmatch(r"[0-9a-f]{12}", identity):
+                        continue
+                elif len(parts) == 2 and parts[0] in {
+                    "recovery",
+                    "history",
+                    "baseline",
+                    "best",
+                    "export",
+                }:
+                    identity, category = "legacy", parts[0]
+                else:
+                    continue
+                entry = result.setdefault(identity, {"id": identity, "bytes": 0, "recoveries": 0})
+                entry["bytes"] += size
+                entry["recoveries"] += int(category == "recovery" and name.endswith(".pt"))
+        return sorted(result.values(), key=lambda entry: entry["id"])
+
+
+class ExperimentStore:
+    """实验只有路径命名空间；计账、预留和写入锁始终属于同一个全局 Store。"""
+
+    def __init__(self, store, experiment):
+        self.store, self.root = store, store.root
+        self.prefix = f"experiments/{experiment}"
+
+    def names(self, category):
+        return self.store.names(f"{self.prefix}/{category}")
+
+    def save_tensor(self, category, step, payload, keep):
+        return self.store.save_tensor(f"{self.prefix}/{category}", step, payload, keep)
+
+    def metrics(self, payload):
+        data = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode()
+        if len(data) > 2_000_000:
+            raise QuotaError("指标超过2MB额度")
+        self.store.write(f"{self.prefix}/metrics/recent.json", data)
+
+    def snapshot(self):
+        return self.store.snapshot()
+
+    def read_metrics(self):
+        return self.store.read_metrics(self.prefix)
+
+    def reconcile(self):
+        self.store.reconcile()
 
 
 class Lease:

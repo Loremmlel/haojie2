@@ -175,6 +175,7 @@ class Pool:
             }
             if getattr(jobs, "memory", False):
                 request.update(memory=True, models=task["models"])
+                request["mcContext"] = getattr(jobs, "mc_context", False)
                 if task.get("teacher"):
                     request["teacher"] = task["teacher"]
             else:
@@ -288,6 +289,14 @@ class Pool:
                         continue  # 已关闭管道的 EOF；不能发送到新进程。
                     if i not in self.slots:
                         raise ValueError("空闲槽位收到旧局响应")
+                    if isinstance(raw, MemoryError) and getattr(jobs, "memory", False):
+                        jobs.unfinished(self.slots.pop(i))
+                        jobs.resource_error(str(raw))
+                        self.clients[i].close()
+                        self.generations[i] += 1
+                        self.last_ids[i] = 0
+                        self.clients[i] = self.new_client(i)
+                        continue
                     if isinstance(raw, RuntimeError) and str(raw) == "原生进程已退出":
                         restart(i, raw)
                         continue
@@ -305,6 +314,8 @@ class Pool:
                     elif message["type"] == "example" and getattr(jobs, "memory", False):
                         jobs.example(task, message)
                     elif message["type"] == "teacher" and getattr(jobs, "memory", False):
+                        task["commands"] = message.get("commandIndex", task.get("commands"))
+                        task["ply"] = message.get("ply", task.get("ply"))
                         command = jobs.teacher_next(message)
                         self.clients[i].send({"id": message["id"], "command": command})
                     elif message["type"] == "infer" and message.get("model") in task.get(

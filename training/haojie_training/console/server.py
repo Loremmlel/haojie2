@@ -124,7 +124,7 @@ def http_server(controller, port=8765):
                     raise ValueError("控制请求必须包含操作名称")
                 controller.command(body["action"], body.get("values"))
                 self.reply(202, {"accepted": True})
-            except (ValueError, KeyError, TimeoutError) as error:
+            except (ValueError, KeyError, RuntimeError, OSError) as error:
                 self.reply(400, {"error": str(error)})
 
     return ThreadingHTTPServer(("127.0.0.1", port), Handler)

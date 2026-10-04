@@ -81,6 +81,10 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           node --import tsx --test tests/runtime/native-record.test.ts
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:HAOJIE_NATIVE = (Resolve-Path $engine).Path
+          $env:HAOJIE_PYTHON = (Get-Command python).Source
+          node --import tsx --test tests/runtime/mc-context.differential.ts
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           node --import tsx scripts/training/performance/engine/hashes.ts --executable $engine --output artifacts/native-hashes.json
           exit $LASTEXITCODE
       - uses: actions/upload-artifact@v4

@@ -1,9 +1,9 @@
 {
   "format": "haojie-teacher-bundle-v1",
-  "commit": "6a95e3656e167007a7a5f0aebea17f9eaf3136e8",
-  "sha256": "e35829b2f3f3418e52b3d9fd5d3ebca6daf924da573fc34866599e3f18778b4f",
+  "commit": "14e45a8f4b5aa74af40a69b2229162c90bc5ca23",
+  "sha256": "9a76c8c3845922a5eb5af5d606ff522b025ee34df89d933bf78ae7d94f0b01ef",
   "sources": {
-    "scripts/training/native/teacher/index.ts": "0bb827577e06ad1bc3f6c0d8972c46a039746caa3843170491a663ed178049dc",
+    "scripts/training/native/teacher/index.ts": "3d7827bb7a6101782823f9f35c2c713aa424f29e73d3188817cdf4c403d1a3c9",
     "src/ai/budget.ts": "5ba5d44720b00954e4d032b57b70769fba607e7d921ba17b9e692ac40190ade5",
     "src/ai/difficulty.ts": "8ae91f34534a23a2423d903223f534234b099b58e47d59f4c1f104c934834fdd",
     "src/ai/evaluation/evaluate.ts": "82a826e9a80c1e2e28c714a5a3ad8e42aae4bf9060a28d131baa83df560ef9ef",
