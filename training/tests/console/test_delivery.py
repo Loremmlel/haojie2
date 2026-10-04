@@ -1,9 +1,12 @@
+import io
 import random
+import sys
 import tempfile
 import threading
 import time
 import unittest
 from collections import Counter
+from contextlib import redirect_stderr
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,12 +19,50 @@ from haojie_training.console.evaluation import Evaluation, evaluate_slice, froze
 from haojie_training.console.memory import SamplePool, Trajectory
 from haojie_training.console.opponents import Teacher, schedule
 from haojie_training.console.sampling import task_plan
+from haojie_training.console.server import main
 from haojie_training.console.storage import QuotaError, Store
 from haojie_training.data import synthetic_batch
 from haojie_training.model import ModelConfig, PolicyValueNet
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_cli_import_does_not_overwrite_a_scoped_experiment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            engine = root / "unused-engine"
+            engine.touch()
+            store = Store(root / "managed")
+            store.write("service.lock", b"0")
+            name = "experiments/ab12cd34ef56/recovery/0000000000000007.pt"
+            store.write(name, b"preserve existing recovery")
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "haojie-console",
+                        "--root",
+                        str(store.root),
+                        "--engine",
+                        str(engine),
+                        "--import-weights",
+                        str(root / "new-weights.pt"),
+                    ],
+                ),
+                patch("haojie_training.console.server.torch.set_num_threads"),
+                patch("haojie_training.console.server.torch.set_num_interop_threads"),
+                patch(
+                    "haojie_training.console.server.Controller",
+                    side_effect=AssertionError("不得初始化"),
+                ),
+                redirect_stderr(io.StringIO()) as errors,
+            ):
+                with self.assertRaises(SystemExit) as stopped:
+                    main()
+            self.assertEqual(stopped.exception.code, 2)
+            self.assertIn("已有恢复点", errors.getvalue())
+            self.assertEqual((store.root / name).read_bytes(), b"preserve existing recovery")
+
     def test_resource_cancelled_evaluation_is_an_error_not_a_timeout_or_loss(self):
         model = PolicyValueNet(ModelConfig.tiny())
         job = Evaluation.__new__(Evaluation)

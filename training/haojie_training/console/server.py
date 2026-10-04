@@ -184,7 +184,7 @@ def main():
     lease = Lease(store)
     if args.adopt:
         store.adopt(args.adopt)
-    if args.import_weights and store.names("recovery"):
+    if args.import_weights and any(entry["recoveries"] for entry in store.experiments()):
         lease.close()
         parser.error("已有恢复点；导入原件不会覆盖持续学习状态")
     controller = Controller(
