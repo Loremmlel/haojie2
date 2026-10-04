@@ -121,6 +121,7 @@ try {
   assert.equal(restored.pool.samples, 0);
   checks.push('独立进程恢复最近完整点，RAM池为空，未保存进度确实回退');
   await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.locator('summary').click();
   await page.locator('input[name=max_commands]').fill('1');
   await page.locator('input[name=eval_seconds]').fill('30');
   await page.getByRole('button', { name: '应用设置', exact: true }).click();
@@ -131,10 +132,10 @@ try {
     (s) => s.evaluations.length > 0 && s.state === 'paused',
   );
   assert.equal(evaluated.counts.retained_samples, restored.counts.retained_samples);
-  assert.equal(evaluated.evaluations[0].games.length, 12);
+  assert.equal(evaluated.evaluations[0].games.length, 16);
   assert.equal(evaluated.evaluations[0].results.easy.n, 0);
   assert.equal(evaluated.evaluations[0].results.hard.errors, 0);
-  checks.push('三档真实AI、两规则交换座位12局适配；限额局显示未完成，评测不入池');
+  checks.push('三档真实AI及独立基准、两规则交换座位16局适配；限额局显示未完成，评测不入池');
   await page.getByRole('link', { name: '评测', exact: true }).click();
   await page.screenshot({ path: resolve(output, 'evaluation.png') });
   await page.getByRole('link', { name: '资源', exact: true }).click();
@@ -153,6 +154,43 @@ try {
   assert.equal(cancelled.counts.retained_samples, restored.counts.retained_samples);
   assert.ok(Object.values(cancelled.evaluations[1].results).some((r) => r.unfinished > 0));
   checks.push('立即评测后的取消按钮确实停止本轮计算，不污染训练');
+  await page.getByRole('link', { name: '资源', exact: true }).click();
+  await page.getByRole('button', { name: '导出模型到受管目录', exact: true }).click();
+  await wait(restarted.url, (s) => s.exports.length === 1 && s.state === 'paused');
+  await page.getByRole('button', { name: '新建训练', exact: true }).click();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#new-dialog').evaluate((dialog) => dialog.open), false);
+  await page.getByRole('button', { name: '新建训练', exact: true }).click();
+  await page.locator('#new-form select[name=source]').selectOption('current');
+  await page.locator('#new-form select[name=device]').selectOption('cpu');
+  await page.getByRole('button', { name: '建立实验', exact: true }).click();
+  const inherited = await wait(
+    restarted.url,
+    (s) => s.experiment !== 'legacy' && s.state === 'paused',
+  );
+  assert.equal(inherited.version, cancelled.version);
+  assert.equal(inherited.updates, 0);
+  assert.equal(inherited.parent.optimizer, false);
+  assert.equal(inherited.evaluations.length, 0);
+  assert.equal(inherited.disk.root, cancelled.disk.root);
+  await page.locator('#experiment-choice').selectOption('legacy');
+  await page.getByRole('button', { name: '打开所选实验', exact: true }).click();
+  const reopened = await wait(
+    restarted.url,
+    (s) => s.experiment === 'legacy' && s.state === 'paused',
+  );
+  assert.equal(reopened.updates, restored.updates);
+  assert.equal(reopened.version, restored.version);
+  await page.locator('#experiment-choice').selectOption(inherited.experiment);
+  await page.getByRole('button', { name: '删除所选非当前实验', exact: true }).click();
+  await wait(restarted.url, (s) =>
+    s.experiments.every((entry) => entry.id !== inherited.experiment),
+  );
+  await page.getByRole('button', { name: '从恢复点重新加载', exact: true }).click();
+  await wait(restarted.url, (s) => s.restored && s.state === 'paused');
+  checks.push(
+    '页面导出、新实验继承权重但重建优化器/曲线、共享配额、打开原实验恢复、明确删除非当前实验',
+  );
   await page.getByRole('link', { name: '概览', exact: true }).click();
   await page.screenshot({ path: resolve(output, 'desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });

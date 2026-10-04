@@ -14,6 +14,8 @@ def resolve_device(name: str) -> torch.device:
     if name == "auto":
         name = "xpu" if torch.xpu.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(name)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA不可用；请在新建训练中选择CPU或安装CUDA版PyTorch")
     if device.type == "xpu" and not torch.xpu.is_available():
         raise RuntimeError("XPU不可用；检查XPU版PyTorch和Intel驱动，不静默改测CPU")
     if device.type not in {"cpu", "xpu", "cuda"}:
@@ -59,7 +61,11 @@ class Trainer:
         if not math.isfinite(value_weight) or value_weight < 0:
             raise ValueError("价值权重必须是有限非负数")
         self.value_weight = value_weight
-        if objective not in {"sampled-action-imitation", "decomposed-mc-q-v1"}:
+        if objective not in {
+            "sampled-action-imitation",
+            "decomposed-mc-q-v1",
+            "decomposed-mc-q-v2",
+        }:
             raise ValueError("未知学习目标")
         self.objective = objective
         self.last_losses = {}
@@ -96,7 +102,7 @@ class Trainer:
             value_loss = ((value - batch["value"]).square() * known).sum() / known.sum().clamp_min(
                 1
             )
-            if self.objective == "decomposed-mc-q-v1":
+            if self.objective.startswith("decomposed-mc-q-"):
                 # 分解节点已执行候选的 MC 收益回归；不是策略梯度，不需要回溯概率。
                 chosen = logits.gather(1, batch["policy"].argmax(-1, keepdim=True)).squeeze(1)
                 policy_loss = (

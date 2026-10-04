@@ -16,6 +16,8 @@ mod damage;
 mod encoding;
 #[path = "core/entities.rs"]
 mod entities;
+#[path = "training/exercise.rs"]
+mod exercise;
 #[path = "core/geometry.rs"]
 mod geometry;
 mod identity;

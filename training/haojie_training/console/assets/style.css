@@ -11,6 +11,30 @@ body {
 [hidden] {
   display: none !important;
 }
+dialog {
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 24px;
+}
+dialog::backdrop {
+  background: #0006;
+}
+dialog label {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0;
+}
+summary {
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+#active-games {
+  font-size: 11px;
+}
 .console-shell {
   height: 100dvh;
   display: grid;

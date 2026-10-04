@@ -124,7 +124,7 @@ def http_server(controller, port=8765):
                     raise ValueError("控制请求必须包含操作名称")
                 controller.command(body["action"], body.get("values"))
                 self.reply(202, {"accepted": True})
-            except (ValueError, KeyError, TimeoutError) as error:
+            except (ValueError, KeyError, RuntimeError, OSError) as error:
                 self.reply(400, {"error": str(error)})
 
     return ThreadingHTTPServer(("127.0.0.1", port), Handler)
@@ -184,7 +184,7 @@ def main():
     lease = Lease(store)
     if args.adopt:
         store.adopt(args.adopt)
-    if args.import_weights and store.names("recovery"):
+    if args.import_weights and any(entry["recoveries"] for entry in store.experiments()):
         lease.close()
         parser.error("已有恢复点；导入原件不会覆盖持续学习状态")
     controller = Controller(

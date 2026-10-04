@@ -8,4 +8,5 @@ artifacts/
 .venv/
 __pycache__/
 *.egg-info/
+/training/build/
 .ruff_cache/
