@@ -49,6 +49,7 @@ class MemoryJobs:
         self.target = 1 if evaluation else controller.config["games_per_round"]
         self.assigned = self.finished = 0
         self.result = None
+        self.resource_failure = None
         self.cancel = None
         self.inferences = {
             current: PolicyInference(controller.trainer.model.eval(), controller.device)
@@ -190,5 +191,6 @@ class MemoryJobs:
             self.c.counts["discarded"] += 1
 
     def resource_error(self, reason):
+        self.resource_failure = reason
         self.c.counts["resource_cancelled"] = self.c.counts.get("resource_cancelled", 0) + 1
         self.c.log(reason + "；已取消该局，未裁剪实体或补终局标签")

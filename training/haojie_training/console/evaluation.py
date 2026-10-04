@@ -133,6 +133,8 @@ class Evaluation:
                         if outcome["winner"] == game["side"]
                         else "loss"
                     )
+            elif jobs.resource_failure:
+                game.update(result="error", reason="resource-budget", error=jobs.resource_failure)
             else:
                 game["reason"] = (
                     "cancelled" if c.cancel.is_set() or c.eval_cancel.is_set() else "time-budget"
