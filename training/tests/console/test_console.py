@@ -238,6 +238,9 @@ class IntegrationTests(unittest.TestCase):
         for difficulty in ("easy", "medium", "hard"):
             teacher = Teacher(difficulty)
             try:
+                self.assertEqual(
+                    teacher.budget["nodes"], {"easy": 100, "medium": 320, "hard": 800}[difficulty]
+                )
                 with Client(self.engine) as client:
                     client.send(
                         {

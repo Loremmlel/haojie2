@@ -480,6 +480,7 @@ class Controller:
             teacher = None
             try:
                 teacher = Teacher(game["difficulty"])
+                game["budget"] = teacher.budget
                 self.pool = self._new_pool(1)
                 jobs = MemoryJobs(self, self.version, evaluation=game, teacher=teacher)
 

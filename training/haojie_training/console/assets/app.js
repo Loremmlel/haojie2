@@ -10,6 +10,15 @@ const states = {
   error: '错误 / 已停算',
 };
 const names = { easy: '简单', medium: '中等', hard: '困难' };
+const outcomes = { win: '胜', loss: '负', draw: '规则平局', unfinished: '未完成', error: '错误' };
+const reasons = {
+  terminal: '真实终局',
+  commands: '命令超限',
+  plies: '回合超限',
+  cancelled: '已取消',
+  'decode-budget': '解码超限',
+  error: '错误',
+};
 const number = (n) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(n ?? 0);
 const bytes = (n) => `${number((n ?? 0) / 2 ** 20)} MiB`;
 const percent = (n) => (n == null ? '未评测' : `${number(n * 100)}%`);
@@ -283,7 +292,9 @@ function render(s) {
     }
     for (const r of last.games ?? []) {
       const p = document.createElement('p');
-      p.textContent = `${names[r.difficulty]} · ${r.start.rules === 'classic' ? '经典' : '神龛'} · 模型执${r.side === 1 ? '先' : '后'} · ${r.result}${r.reason ? ` / ${r.reason}` : ''}${r.error ? ` / ${r.error}` : ''}`;
+      p.textContent = `${names[r.difficulty]} · ${r.start.rules === 'classic' ? '经典' : '神龛'} · 模型执${r.side === 1 ? '先' : '后'} · ${outcomes[r.result] ?? r.result}${r.reason ? ` / ${reasons[r.reason] ?? r.reason}` : ''}${r.error ? ` / ${r.error}` : ''}`;
+      if (r.budget)
+        p.textContent += ` · 预设工作预算 ${r.budget.nodes} / 回合 ${r.budget.turnNodes} 节点`;
       items.push(p);
     }
     $('evaluation-details').replaceChildren(...items);

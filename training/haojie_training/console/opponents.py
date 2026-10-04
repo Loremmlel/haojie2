@@ -28,10 +28,12 @@ class Teacher:
             # work 模式不依赖时间分配预算；仅满足既有统计计时接口。
             self.context.eval("globalThis.performance = {now: () => 0}")
             self.context.eval(source.decode(), timeout_sec=5)
-            self.context.eval(
-                f"HaojieTeacher.reset({json.dumps(difficulty)}, "
-                f"{json.dumps(budget) if budget else 'undefined'})",
-                timeout_sec=2,
+            self.budget = json.loads(
+                self.context.eval(
+                    f"JSON.stringify(HaojieTeacher.reset({json.dumps(difficulty)}, "
+                    f"{json.dumps(budget) if budget else 'undefined'}))",
+                    timeout_sec=2,
+                )
             )
         except BaseException:
             self.close()
