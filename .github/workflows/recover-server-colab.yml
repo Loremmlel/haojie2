@@ -1,0 +1,108 @@
+name: Recover server and Colab source
+on:
+  push:
+    branches: [feat/server-colab-training]
+    paths: [.github/workflows/recover-server-colab.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: recover-server-colab
+  cancel-in-progress: false
+jobs:
+  restore:
+    if: github.ref == 'refs/heads/feat/server-colab-training'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/server-colab-training
+          fetch-depth: 0
+      - name: Restore checksum-verified source and persist it first
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import base64, gzip, hashlib, json, os, subprocess, urllib.request
+          shas = [
+              '291f43556c58bc9bea400360e55d97ab51a27a50',
+              '3e3545e308c6a1c6256876b43e5d37da62c27b28',
+              '9fbb416672168a3550d9ec12c735a887177fe3a6',
+              'bcfe77574023c3d490d804a90ba66e23fb6e8aba',
+              '8c486548af6cb761f78d66a7d1d371d590f12c8e',
+              '20dad714d4d847710dd5c7a6377a0b38d95163bd',
+              '5ca74c2133b7e3425b6e517483a6b56a634f79a3',
+              '75738e46bed6d46155921d5991e17e358bb05297',
+          ]
+          chunks = []
+          for sha in shas:
+              request = urllib.request.Request(
+                  'https://api.github.com/repos/Loremmlel/haojie2/git/blobs/' + sha,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json'},
+              )
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  payload = json.load(response)
+              chunk = base64.b64decode(payload['content'])
+              assert hashlib.sha1(f'blob {len(chunk)}\0'.encode() + chunk).hexdigest() == sha
+              chunks.append(chunk)
+          compressed = b''.join(chunks)
+          assert hashlib.sha256(compressed).hexdigest() == '4b3f60ee2c4703741737410e99de03c3d028791b7d581f3673feca249d546fe2'
+          patch = gzip.decompress(compressed)
+          assert b'diff --git a/.github/' not in patch
+          if not os.path.exists('training/haojie_training/cloud/session.py'):
+              subprocess.run(['git', 'apply', '--index', '-'], input=patch, check=True)
+          subprocess.run(['git', 'config', 'user.name', 'HinanawiTS'], check=True)
+          subprocess.run(['git', 'config', 'user.email', '110825227+Loremmlel@users.noreply.github.com'], check=True)
+          if subprocess.run(['git', 'diff', '--cached', '--quiet']).returncode:
+              subprocess.run(['git', 'commit', '-m', 'feat: recover server concurrency, inference and Colab training tools'], check=True)
+              subprocess.run(['git', 'push', 'origin', 'HEAD:feat/server-colab-training'], check=True)
+          print('Verified and persisted source patch:', len(patch), 'bytes')
+          PY
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt
+      - run: npm ci --no-audit --no-fund
+      - run: python -m pip install ruff==0.15.6
+      - name: Format restored files and persist formatting
+        run: |
+          python - <<'PY'
+          import subprocess
+          base = '96db80bc8a66bb2b1b9be8f68f6dd7831cf6cea8'
+          paths = subprocess.check_output(['git', 'diff', '--name-only', '--diff-filter=ACMR', base, 'HEAD'], text=True).splitlines()
+          paths = [p for p in paths if not p.startswith('.github/')]
+          python_paths = [p for p in paths if p.endswith('.py')]
+          subprocess.run(['ruff', 'format', '--config', 'training/pyproject.toml', *python_paths], check=True)
+          subprocess.run(['ruff', 'check', '--config', 'training/pyproject.toml', '--fix', *python_paths])
+          subprocess.run(['cargo', 'fmt', '--manifest-path', 'native/engine/Cargo.toml'], check=True)
+          subprocess.run(['npx', 'prettier', '--config', 'config/prettier.json', '--ignore-path', 'config/prettierignore', '--ignore-unknown', '--write', *paths], check=True)
+          subprocess.run(['git', 'add', '-A'], check=True)
+          if subprocess.run(['git', 'diff', '--cached', '--quiet']).returncode:
+              subprocess.run(['git', 'commit', '-m', 'style: format restored server and Colab implementation'], check=True)
+              subprocess.run(['git', 'push', 'origin', 'HEAD:feat/server-colab-training'], check=True)
+          subprocess.run(['ruff', 'check', '--config', 'training/pyproject.toml', *python_paths], check=True)
+          PY
+      - name: Source validation
+        run: |
+          npm run format:check
+          npm run check
+          npm run check:structure
+          python -m compileall -q training/haojie_training scripts/colab/bootstrap.py
+      - name: Package recovered source
+        if: always()
+        run: |
+          mkdir -p artifacts
+          tar --exclude='./.git' --exclude='./node_modules' --exclude='./artifacts' --exclude='./dist' --exclude='*/target' --exclude='*/__pycache__' --exclude='*/.ruff_cache' -czf artifacts/recovered-source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recovered-source
+          path: artifacts/recovered-source.tar.gz
+          retention-days: 7
