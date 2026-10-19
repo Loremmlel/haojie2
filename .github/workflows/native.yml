@@ -8,6 +8,8 @@ on:
         'src/**',
         'scripts/training/**',
         'training/**',
+        'notebooks/**',
+        'scripts/colab/**',
         'tests/**',
         'package*.json',
         '.github/workflows/native.yml',
@@ -19,6 +21,8 @@ on:
         'src/**',
         'scripts/training/**',
         'training/**',
+        'notebooks/**',
+        'scripts/colab/**',
         'tests/**',
         'package*.json',
         '.github/workflows/native.yml',
@@ -69,6 +73,12 @@ jobs:
           $env:HAOJIE_NATIVE = if ($IsWindows) { "$PWD/artifacts/native-target/release/haojie-engine.exe" } else { "$PWD/artifacts/native-target/release/haojie-engine" }
           python -m unittest discover -s training/tests -p 'test_*.py'
           exit $LASTEXITCODE
+      - name: Server 32-process training and backup restore
+        if: runner.os == 'Linux'
+        env:
+          HAOJIE_NATIVE: artifacts/native-target/release/haojie-engine
+          HAOJIE_TEST_ENVIRONMENTS: '32'
+        run: python -m unittest training.tests.console.test_cloud.CloudTests.test_real_training_backup_restart_and_optimizer_continuation -v
       - name: Release identity and representative rule / candidate / encoding differential
         shell: pwsh
         run: |
