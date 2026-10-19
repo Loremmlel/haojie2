@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import torch
+
 from haojie_training.data import synthetic_batch
 from haojie_training.model import ModelConfig
 
@@ -15,6 +16,7 @@ from scripts.training.improvement.model import (  # noqa: E402
     relation_edges,
 )
 from scripts.training.improvement.value.train import features  # noqa: E402
+
 from haojie_training.research.spatial import SpatialPolicyNet  # noqa: E402
 
 

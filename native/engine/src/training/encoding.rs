@@ -1507,15 +1507,7 @@ mod buffer_tests {
 
     #[test]
     fn synchronous_workspace_matches_owned_rows_and_wire_after_reuse_and_errors() {
-        let mut catalog = None;
-        crate::handle(
-            serde_json::from_slice(crate::records::RULES).unwrap(),
-            &mut catalog,
-            &mut vec![],
-            &mut crate::Resident::default(),
-        )
-        .unwrap();
-        let catalog = catalog.unwrap();
+        let catalog = crate::catalog::embedded().unwrap();
         for shrine in [false, true] {
             let state = crate::runtime::create(731280031, shrine, &catalog).unwrap();
             let view = crate::runtime::public_view(&state, 1).unwrap();

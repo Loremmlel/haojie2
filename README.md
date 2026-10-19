@@ -1,36 +1,10 @@
 # 浩劫 3.0 · 神龛 / haojie2
 
-React + TypeScript 回合制战棋，支持同屏双人与三档本地AI。**生产构建只有一个 `dist/index.html`**：React、样式、图标、棋子和特效全部内联，运行时无 CDN、外部字体、图片或 API 请求。游戏引擎不依赖 React、DOM、网络、本地存储或系统时间。
+React + TypeScript 回合制战棋，支持经典 / 神龛模式、同屏双人和三档本地 AI。游戏发行物是一个可离线打开的 HTML，React、样式、棋子、特效和 AI Worker 全部内联。
 
-规则依据本次提供的 [《浩劫.docx》](docs/source/浩劫.docx)，原文件和逐段文本均已归档。项目显示名称为 **浩劫**，仓库与包名保持 `haojie2`，不更改现有仓库地址。
+仓库也包含 **Rust 规则引擎 + Python 训练控制台**：在本机页面管理自对弈、持续训练、暂停恢复、历史对手和真实三档 AI 评测。训练模型尚未接入网页发行版，网页继续使用现有手工搜索 AI。
 
-本地模型训练另见[训练控制台](training/CONSOLE.md)：Python＋正式 Rust 引擎，独立本机页面，支持开始/暂停、内存样本、持续更新、真实三档AI评测和20GB受管配额。策略改进仍是实验，不表示已提高游戏AI棋力。
-
-## 联机嵌入（宿主接管）
-
-新增受控入口 `HaojieOnlineGame`，与原本地 `HaojieGame` 共用棋盘、交互和表现；本地双人、人机、存档和单HTML入口不变。网站可在服务端调用 `applyPlayerCommand` 并分别下发 `getPlayerView`，处理账号、房间、WS和持久化。**这是联机适配能力，不是已上线的联机服务器。** 接口、错误/重连语义及维护约束见[接入文档](docs/ONLINE-ADAPTATION.md)，双棋盘示例见[TwoPlayerDemo](examples/online/TwoPlayerDemo.tsx)。
-
-## 3.0：神龛
-
-“新对局”中独立选择**经典模式 / 神龛模式**，再选同屏或三档本地AI。神龛局从第0回合开始：双方各抽3个候选，能看对方候选，但双方锁定后才共同揭示选择。随后依次部署、装备、启用光环或储存。常驻两次召唤免费使用终极库；回合开始可花3人头额外终极、2人头额外普通。
-
-新增完整16神龛、独立地标层、休眠重建、永久光环和三件武器。举旗采用作者更正的 `(4,7)/(5,7)/(6,7)`（9月20日再次更正）；可与一个友方棋子同格，详情中可切换查看地标和覆盖棋子。新增3名U13合成**牢千K**，每回合将一次召唤改成原池自选；它与开局神龛**老千K**是两个不同能力。
-
-强夺获得可执行技能，各技能独立保存蓄力和次数；时钟、武器返还、重建、秘密选择均支持保存/载入和悔棋。AI共用这些规则和合法命令，只接收公开Observation。**当前不含联机服务器或联机防作弊**。完整数值、实施边界与验证入口见[3.0变更说明](docs/changes/CHANGELOG-3.0.md)。
-
-## 2026-09-20：问题反馈3
-
-超级BW可对友方/敌方逐方向扩展，2×2棋子通过方向按钮逐小格移动；炎魔之心不再把攻击强制变成直线，可逐格绘制弯折穿透路径、撤回并确认。普通攻击/治疗方式保留，所有奶妈可自奶。点击棋子即显示完整能力，持续状态可折叠。
-
-冰冻不改变阵营或关闭常驻被动；伤害法术来源为己方基地，法术与法师AOE不再误伤友方。2×2按覆盖格承受AOE，完整爆弹80。修复BW/SZF跨装备、叠放及地标覆盖物；虹吸改为每实际回合一次的操作技能，灵魂法师40血；沉默炎魔允许普通攻击。一棋一武器与冲锋部署当回合不能装备炎魔之心保持生效。
-
-当前规则和验收入口见[反馈3说明](docs/feedback/FEEDBACK-2026-09-20.md)。旧举旗存档位置保留，新部署仅中间横向三格；新旧CLI录制分版本验证。
-
-## 2026-09-17 反馈更新
-
-普通18/22等待实际下个己方回合，冲锋号令不再提前；名刀保护改为逐来源独立消耗。普通14、15采用新基础属性，14献祭消耗20生命上限。棋子详情新增当前状态与名刀来源；召唤次数用完后可直接选择改判，支持多名U13及前五回合自我重铸。AI使用相同的延迟窗口、来源保护与改判选项。调查结果、存档兼容边界和验证方法见[本轮反馈说明](docs/feedback/FEEDBACK-2026-09-17.md)。
-
-## 试玩与构建
+## 游戏开发与发行
 
 开发需要 Node.js 22：
 
@@ -39,76 +13,59 @@ npm ci
 npm run dev
 ```
 
-开发服务默认 `http://127.0.0.1:4173`，源码修改后自动重建，手动刷新浏览器。生成离线成品：
+打开 `http://127.0.0.1:4173`。源码修改后自动重建，刷新页面查看结果。
 
 ```sh
-npm run build
+npm run build        # 生成独立的 dist/index.html
+npm run deploy       # 同时更新 GitHub Pages 使用的根 index.html
+npm run deploy:check # 检查根发行物与源码构建一致
 ```
 
-将 `dist/index.html` 复制到任意目录并在现代浏览器打开即可；运行游戏不需要 Node.js。也可把该文件作为现有网站的静态页面。受管理的浏览器可能禁止 `file://`，这种情况应通过网站访问，而不是绕过浏览器策略。
+将 `dist/index.html` 复制到任意目录，在现代浏览器打开即可游玩。GitHub Pages 使用 `main / (root)`；影响网页的源码修改须连同重新生成的根 `index.html` 提交。详情见[发布说明](docs/PAGES.md)。
 
-正式对局从空棋盘开始，双方基地300生命，苍穹方先手。**先选择普通或终极召唤，完成所有召唤后点“完成召唤，开始行动”。**“新对局 → 载入演示棋局”可直接体验装备、法师、叠放、伤害和悔棋。同屏双人轮流操作同一设备；人机模式由电脑控制另一方。经典与神龛模式的正式手牌均公开；神龛暗选结果及玉碎奇偶在共同揭示前隐藏。
+正式对局从空棋盘开始。经典模式先完成召唤，再进入行动；神龛模式先暗选与设置神龛。支持悔棋、重做、自动保存、JSON 导入导出和演示棋局。当前规则见[规则手册](docs/RULES.md)，原始材料、版本变更和作者反馈分别保存在 `docs/source/`、`docs/changes/`、`docs/feedback/`。
 
-## 2.5：终极召唤合成
+## 本地自对弈与训练
 
-回合开始有足够材料时，先选择七种配方之一、勾选3个材料、再选己方召唤格；可跳过，不消耗正常召唤次数。支持小BW→正版SZF、至圣先师、无相勾、杀圣、跑得快王城、炎魔之王和万法真君。新结果、即时光环、命中后牵引、反伤与死亡连锁均接入规则、状态栏和三档AI。
+先按[训练安装说明](training/NATIVE.md)安装 Python 3.12 环境、PyTorch 和训练包，并构建正式引擎：
 
-炎魔之心仍以3张未装备手牌合成；其他配方使用场上棋子。材料移除不触发亡语、不送人头；结果不继承装备和强化。炎魔之王改为仅己方回合末13×13最高血目标与敌方四向溅射。详见 [2.5规则与实施边界](docs/changes/CHANGELOG-2.5.md)。这段记录2.5时的范围。3.0已另增神龛模式，经典模式普通池继续保留；善铁仍暂缓。
-
-## 2.1：本地AI与宽屏棋盘
-
-“新对局”中可选择**同屏双人 / 人机对战**、**简单 / 中等 / 困难**，以及自己执先或执后。AI完全在浏览器本地运行，不使用在线模型、账号或服务器。普通和终极棋子共享同一套规则和合法命令接口，不给困难AI额外资源或更好的抽牌。
-
-简单采用单步评分，中等加入回合内束搜索，困难增加预算受限的对手回应检查。小型随机分支按概率枚举，大型分支有限采样；规划器不会接收真实seed或rng。详见[AI算法与限制](docs/ai/AI.md)。
-
-人机模式的悔棋会退回最近一个玩家可决策节点，撤销随后的电脑回应；重做恢复实际结果，不重新掷骰。思考可暂停，新开局/导入/悔棋会取消旧任务。设置随v2存档保存，旧文件缺省为同屏双人。当前页面中的暂停状态不永久写进存档，刷新后可继续AI回合。
-
-当前宽屏遵循棋盘优先契约：完整9×13正方形格与主要控制一屏可用，左右侧栏独立滚动，按可用宽高等比适配，不设会撑出页面的棋盘最低宽度。手机保持自然文档流；布局按功能CSS维护。
-
-## 2.x棋子与规则内容
-
-| 模块       | 实现                                                                                                                                                                        |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 原规则修正 | 第四属性改为攻击次数；每回合选择一种操作模式；主动蓄力；名刀可蓄力移动；大肉比周围震地；金身拦截敌方技能、法术、死吧！和策反；普通20改为新版死亡判定。                      |
-| 终极召唤   | 击杀人头、2人头兑换、揭牌前支付、28编号独立召唤池、SZF变体、改判、金色编号及召唤特效。                                                                                      |
-| 装备       | 寒冰法杖、弑君、靴子、炎魔之心；储存期限、职业限制、替换装备、死亡清除、炎魔之王合成。                                                                                      |
-| 终极能力   | 沉默/眩晕、冰冻禁行、灼烧、十字攻击、巨大化、吸血成长、持续火线、冲撞弹出、虹吸、免疫塔、单体回合推进、反击、复活、击退、小屋死亡召唤、延迟标记、克隆叠放、心灵之火、矿工。 |
-| 交互与图鉴 | 多步选目标、复活记录选择、克隆逐个控制、地面标记、火线、虹吸引导线、护盾/冰冻/装备标识；82个图鉴条目（含16神龛与牢千K），支持普通/终极/神龛/法术/武器/变体筛选与能力搜索。  |
-| 历史和保存 | 最近60步完整悔棋/重做；人头、随机数、装备、连锁反应、叠放批次、阵亡记录和独立时钟全部可恢复；自动保存及JSON导出/导入。                                                      |
-
-**不是把“攻击两次”改成“可自由行动两次”。** 射手选攻击后能攻击两次，但不能攻击一次再移动。矿工、靴子、免费技能及冲锋号令是文档列明的例外。引擎负责这些限制，界面只提交命令。
-
-## 与旧版相比
-
-完整逐条对照在 [变更核对表](docs/changes/CHANGELOG-2.0.md)。旧版的曼哈顿距离、3′人数算法、己方回合储存期限、行控制快照、投石机基地标记及确定性悔棋得到文档确认，继续保留；与新回复冲突的旧实现已经修改。
-
-**旧1.0存档不自动迁移。** 第四属性和操作规则变更会改变旧局面的含义，不能只加字段后假装兼容。2.0使用独立的 `haojie.session.v2` 本地存储键，旧键不删除；导入旧档时明确拒绝并说明原因，原文件不被改写。
-
-## 2.0.1工程更新与作者补充
-
-冲锋号令储存期限已确认**8回合**；当时善铁和相关合成归入暂缓的**3.0神龛模式**，不再作为当前2.x未完成项。这一段记录当时的范围；2.5由作者新增的七种合成以及炎魔之王修改已覆盖对应旧描述。
-
-Game.tsx改为页面组合根；组件、存档、控制流程和样式按功能拆分。保留原生CSS/SVG，不增加组件库或动画库；详细成本收益和目录归属见[工程说明](docs/ENGINEERING.md)。
-
-### GitHub Pages
-
-保持Settings → Pages → Deploy from a branch → **main / (root)**。根index.html是完整游戏发布物，.nojekyll禁用Jekyll，不再以README作首页。更新源码后运行：
-
-```bash
-npm run deploy       # 生成dist/index.html，并准备根目录的发布入口
-npm run deploy:check # 验证根入口与源码构建逐字节一致，CI也会检查
+```sh
+npm run native:build
+python -m haojie_training.console
 ```
 
-随后把源码与index.html一同提交推送；Pages不会自动运行package.json里的脚本。详情见[发布与存档](docs/PAGES.md)。
+使用已安装训练包的 Python。浏览器打开 `http://127.0.0.1:8765`，在页面中新建训练，然后开始 / 继续；默认受管根为 `~/.haojie-training`。可用 `--engine` 指定引擎，`--root` 指定整个训练根。
 
-**重新部署不会主动丢存档。** 同一浏览器、同一origin及兼容的schema继续读`haojie.session.v2`。不是云存档；换设备/域名、清除站点数据等仍需导入导出。旧2.0号令卡按抽取回合补成8回合期限，撤销历史一并兼容修正，不更换存储键。
+| 用途                                 | 入口                                       |
+| ------------------------------------ | ------------------------------------------ |
+| 日常训练、暂停恢复、评测与 20GB 配额 | [训练控制台](training/CONSOLE.md)          |
+| 独立原生采样、记录审核、检查点恢复   | [Rust + Python CLI](training/NATIVE.md)    |
+| 数据准备、模型训练、推理与导出       | [Python 训练包](training/README.md)        |
+| 教师数据、已有搜索记录、模型对战     | [TypeScript 训练工具](docs/ai/TRAINING.md) |
+| 模型输入和样本语义                   | [编码协议](training/ENCODING.md)           |
+| 当前实现和维护导航                   | [AI / 训练状态](docs/ai/STATUS.md)         |
+
+训练控制台使用终局收益更新 MC-Q 模型，原记录 CLI 继续保留其监督训练语义。自然棋力由冻结模型的独立评测检验；历史实验和测量见[历史索引](docs/ai/HISTORY.md)。
+
+## 仓库结构
+
+| 目录                        | 职责                                       |
+| --------------------------- | ------------------------------------------ |
+| `src/engine/`               | TypeScript 权威规则、公开视图、存档与回放  |
+| `src/ai/`、`src/match/`     | 本地 AI 搜索、公开训练编码、对局环境       |
+| `src/ui/`                   | React 游戏界面，组件与样式按功能就近维护   |
+| `native/engine/`            | Rust 规则实现、动作树、编码与原生采样协议  |
+| `training/haojie_training/` | Python 模型、训练器、原生宿主和 Web 控制台 |
+| `scripts/`                  | 构建、CLI、数据工具和原生差分验证          |
+| `tests/`、`training/tests/` | 游戏行为、浏览器、TS / Rust 对应及训练验证 |
+| `docs/`                     | 当前接口、规则与维护说明                   |
+
+职责与接入边界见[架构说明](docs/ARCHITECTURE.md)；TS / Rust 的状态所有权和采样对应见[运行内核](docs/ai/RUNTIME.md)。
 
 ## 嵌入现有网站
 
-整个组件：
-
 ```tsx
-'use client'; // Next.js App Router适用
+'use client';
 import { HaojieGame } from './haojie/src';
 
 export default function GamePage() {
@@ -121,15 +78,7 @@ export default function GamePage() {
 }
 ```
 
-只复用规则引擎：
-
-```ts
-import { createGame, applyCommand } from './haojie/src/engine';
-let state = createGame(20260907);
-state = applyCommand(state, { type: 'summon', ultimate: false });
-```
-
-React入口支持 `initialState`、`initialMatch`、`storageKey={null}`、`onStateChange`。样式以 `.hj-game` 限定，独立页面对 `body` 的重置不进入组件。详见 [架构与接入](docs/ARCHITECTURE.md)。当前有本地AI，但没有联网房间或服务端；将来联网仍需另行建立权威服务端。宿主自己打包而未注入Worker代码时，AI自动使用分片计算。
+本地组件还支持 `initialState`、`storageKey={null}` 和 `onStateChange`。联机宿主使用 `HaojieOnlineGame`，在服务端调用 `applyPlayerCommand`，并向各玩家下发 `getPlayerView`；账号、房间、WebSocket 和持久化由宿主负责。见[联机接入协议](docs/ONLINE-ADAPTATION.md)和[双玩家示例](examples/online/TwoPlayerDemo.tsx)。
 
 ## 验证与维护
 
@@ -137,39 +86,17 @@ React入口支持 `initialState`、`initialMatch`、`storageKey={null}`、`onSta
 npm run format:check
 npm run check
 npm test
-npm run build
+npm run check:structure
+npm run train:rules:check
+npm run train:teacher:check
+npm run deploy:check
 npx playwright install chromium
 npm run test:browser
 npm run test:pages
-npm run test:browser:ai
 ```
 
-测试按 `core`、`ultimate`、`session`、`ai` 分类，每种棋子有稳定的行为断言，不依赖React内部实现和像素快照。浏览器测试从生产HTML开始，执行真实按钮操作，包括装备、法术、复活、虹吸、冲撞、改判、克隆控制、胜负、悔棋和手机布局。
+原生代码另运行 `npm run native:test`、`npm run native:check`，并使用已安装训练依赖的 Python 运行 `python -m unittest discover -s training/tests -p 'test_*.py'`；原生测试通过 `HAOJIE_NATIVE` 指定已构建引擎。CI 还验证两端规则、动作候选、编码、规范哈希、MC-Q 选择和独立安装恢复。
 
-默认浏览器验收使用 **网络离线的 `file://` 页面**。特定沙箱禁用页面导航时，可使用 `HAOJIE_RENDER_ONLY=1 npm run test:browser` 在内存里渲染同一成品，报告明确标记 `in-memory-render-only`，不把它冒充本地文件和自动存档验收。GitHub CI仍运行默认完整模式。
+浏览器验收默认在网络离线的 `file://` 页面执行真实操作；特效开发预览使用 `npm run preview:vfx`。CLI 对局和回放使用 `npm run play:cli`，参数见[CLI 手册](docs/CLI.md)。
 
-开发特效预览：`npm run preview:vfx`生成`artifacts/vfx-preview.html`，提供22个真实引擎场景。它不是发行分包，不进入正式游戏入口。视觉、事件和取消契约见[特效说明](docs/VFX.md)。
-
-CI产物：`haojie2-single-html`、`source-snapshot`、`acceptance-evidence`。部署动画、弹道和音效不会驱动规则计时；音效默认关闭，界面遵守系统“减少动态效果”设置。
-
-运行时依赖仍只有React与ReactDOM；构建用esbuild，规则测试用Node测试运行器+tsx，浏览器验收用Playwright。所有依赖已固定在lockfile，第三方运行时许可包含在发行HTML里。
-
-HTTP同源续局与多实例嵌入验收：`npm run test:pages`。组件与样式定位见`docs/ENGINEERING.md`；原始规则文档保留在`docs/source/`。
-
-AI固定种子对局采样：`npm run bench:ai -- hard,medium`。样本不代表经过统计验证的难度胜率；完整2.1变化见`docs/changes/CHANGELOG-2.1.md`。
-
-### 宽屏棋局
-
-容器宽度达到1100px时，采用全宽、一屏棋局：比分与控制在左，AI状态与手牌在右，中央9×13棋盘按可用高度等比适配。页面和棋盘不滚动，侧栏内容过长时独立滚动。手机/窄屏保持自然文档流。布局修正不更改AI算法、游戏规则或现有存档。
-
-## 命令行对局与AI复盘
-
-无需浏览器即可运行真实引擎和困难AI：
-
-```bash
-npm run play:cli -- --new --seed 20260907 --difficulty hard --human 1
-```
-
-支持完整JSON命令、分步AI、网页存档导入、概率/评分trace和确定性命令回放。详见[CLI手册](docs/CLI.md)与[实战改进](docs/ai/AI-IMPROVEMENTS-2026-09-08.md)。三档共享本次危险估计、阵型、终极召唤与战术改进；不以小样本自对弈声称已达到作者级胜率。
-
-训练工具另提供常驻JSONL多环境接口、公开随机模拟、未裁剪动作描述、教师对弈样本和Node吞吐基准。运行`npm run --silent train:serve`、`npm run train:selfplay`或`npm run bench:training`。先看[AI/训练当前状态](docs/ai/STATUS.md)，再按用途读[训练接口与路线](docs/ai/TRAINING.md)、[Python训练子项目](training/README.md)或[Rust 引擎入口](native/engine/README.md)。公开游戏编码、完整规则 Rust 采样和实验性网络 CLI 已实现；神经网络与搜索尚未接入单 HTML 发行版。
+提交规则与数据兼容边界见 [AGENTS.md](AGENTS.md)及[维护约束](docs/maintenance/ENGINEERING-CONSTRAINTS.md)。

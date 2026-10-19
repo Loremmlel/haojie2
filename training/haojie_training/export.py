@@ -15,7 +15,7 @@ from torch import nn
 
 from .data import load_dataset, select_batch, synthetic_batch, token_counts
 from .model import NETWORK_VERSION, PolicyValueNet
-from .runtime import checkpoint_config
+from .runtime import read_checkpoint
 
 INPUTS = (
     "entities",
@@ -95,8 +95,7 @@ def main():
     if args.output.exists():
         parser.error("输出目录已存在；请使用新目录，保留旧实验")
     torch.set_num_threads(4)
-    config = checkpoint_config(args.checkpoint)
-    payload = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+    config, payload = read_checkpoint(args.checkpoint)
     model = PolicyValueNet(config).eval()
     model.load_state_dict(payload["model"])
     dataset, metadata = load_dataset(args.data, config)

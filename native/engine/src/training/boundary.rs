@@ -84,7 +84,7 @@ pub fn step_typed(
     if !crate::actions::permitted_command(state, actor, command) {
         return Err("unauthorized actor".into());
     }
-    let mut next = crate::apply_runtime(state, command, catalog)
+    let mut next = crate::command::apply_runtime(state, command, catalog)
         .map_err(|e| format!("rule rejected command: {e:?}"))?;
     next.events.clear();
     next.extra.insert("log".into(), serde_json::json!([]));
@@ -102,7 +102,7 @@ pub fn attempt(
     if !crate::actions::permitted_command(state, actor, command) {
         return Err("unauthorized actor".into());
     }
-    match crate::apply_runtime(state, command, catalog) {
+    match crate::command::apply_runtime(state, command, catalog) {
         Ok(mut next) => {
             next.events.clear();
             next.extra.insert("log".into(), serde_json::json!([]));

@@ -6,7 +6,7 @@ import { createDecisionEncoder } from '../../../../src/ai/training/encoding/deci
 import { observe } from '../../../../src/ai/observation';
 import { createTrainingInspector } from '../../../../src/ai/training/queries';
 import { createGame } from '../../../../src/engine/commands/game';
-import { TinyPolicy } from '../../economics/policy';
+import { TinyPolicy } from '../../sampling/policy';
 import { nativeClient } from '../client';
 import { fixtures } from '../fixtures';
 import { combatFixtures } from '../combat-fixtures';

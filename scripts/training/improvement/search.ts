@@ -11,7 +11,7 @@ import type {
   DecodeResult,
   PolicyEvaluator,
 } from '../../../src/ai/training/decoder';
-import { checkPosition, terminalValue, windowBoundary } from '../search/puct';
+import { checkPosition, terminalValue, windowBoundary } from '../search/domain';
 import { beamDecode, type CompleteCandidate } from './beam';
 
 interface Edge {

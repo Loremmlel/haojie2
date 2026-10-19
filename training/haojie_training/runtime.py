@@ -211,8 +211,13 @@ class Trainer:
             getattr(torch, self.device.type).set_rng_state(payload["rng_device"], self.device)
 
 
-def checkpoint_config(path: Path) -> ModelConfig:
+def read_checkpoint(path: Path) -> tuple[ModelConfig, dict]:
+    """一次读取并校验正式检查点；配置和权重始终来自同一个磁盘快照。"""
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if payload.get("format") != "haojie-checkpoint-v1" or payload.get("network") != NETWORK_VERSION:
         raise ValueError("检查点网络版本不兼容；旧骨架检查点需用原版本代码读取")
-    return ModelConfig(**payload["config"])
+    return ModelConfig(**payload["config"]), payload
+
+
+def checkpoint_config(path: Path) -> ModelConfig:
+    return read_checkpoint(path)[0]

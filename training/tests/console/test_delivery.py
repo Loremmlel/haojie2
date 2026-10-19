@@ -20,9 +20,10 @@ from haojie_training.console.memory import SamplePool, Trajectory
 from haojie_training.console.opponents import Teacher, schedule
 from haojie_training.console.sampling import task_plan
 from haojie_training.console.server import main
-from haojie_training.console.storage import QuotaError, Store
+from haojie_training.console.storage import FORMAT, QuotaError, Store, restore_recovery
 from haojie_training.data import synthetic_batch
 from haojie_training.model import ModelConfig, PolicyValueNet
+from haojie_training.runtime import Trainer
 
 
 class DeliveryTests(unittest.TestCase):
@@ -155,6 +156,39 @@ class DeliveryTests(unittest.TestCase):
         with self.assertRaises(QuotaError):
             c._new_experiment()
         self.assertEqual((c.experiment, c.version), ("original", "weights"))
+
+    def test_corrupt_latest_recovery_falls_back_and_preserves_learning_state(self):
+        torch.set_num_threads(1)
+        config = defaults()
+        metadata = {"policy_source": config["method"], "ruleset": "recovery-test"}
+        trainer = Trainer(
+            PolicyValueNet(ModelConfig.tiny()),
+            torch.device("cpu"),
+            objective=config["method"],
+        )
+        batch = synthetic_batch(trainer.model.config, size=2, entities=4, actions=2)
+        trainer.step(batch)
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(folder).scope("ab12cd34ef56")
+            saved = trainer.checkpoint(metadata)
+            store.save_tensor(
+                "recovery", 1, {"format": FORMAT, "config": config, "trainer": saved}, 2
+            )
+            broken = f"{store.prefix}/recovery/0000000000000002.pt"
+            store.store.write(broken, b"interrupted checkpoint")
+            messages = []
+            restored, payload = restore_recovery(
+                store, metadata, torch.device("cpu"), messages.append
+            )
+            self.assertEqual(payload["trainer"]["updates"], 1)
+            self.assertEqual(restored.objective, config["method"])
+            self.assertTrue(torch.equal(torch.get_rng_state(), saved["rng_cpu"]))
+            self.assertEqual(len(messages), 1)
+            self.assertIn(broken, messages[0])
+            self.assertEqual((store.root / broken).read_bytes(), b"interrupted checkpoint")
+            torch.testing.assert_close(trainer.step(batch), restored.step(batch), atol=0, rtol=0)
+            for before, after in zip(trainer.model.parameters(), restored.model.parameters()):
+                torch.testing.assert_close(before, after, atol=0, rtol=0)
 
     def test_teacher_can_cancel_inside_a_long_javascript_call(self):
         teacher = Teacher("hard")

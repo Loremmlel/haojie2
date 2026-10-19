@@ -6,21 +6,17 @@
 
 最小主线是模型采样 → 已执行动作监督及真实终局价值 → 训练/验证分片 → 更新 → 恢复 → 新权重采样。`sampled-action-imitation` 表示对已执行动作的监督，不是策略梯度、搜索访问分布或行为概率；回溯后不输出未经推导的路径概率。不宣称此闭环已获得有效强化学习或棋力提升。
 
-TS 手工教师、restricted PUCT、旧记录转换和历史改善/连续实验仍是独立的 TS 工具，未迁移且不由本入口调用。搜索轨迹不能静默变成 one-hot。缺少新规则包哈希的旧权重继续由旧入口使用，新采样入口明确拒绝。
+TS 手工教师与旧记录转换由独立的 TS 工具维护，旧阶段实验见[历史索引](../docs/ai/HISTORY.md)。搜索轨迹不能静默变成 one-hot。缺少新规则包哈希的旧权重继续由旧入口使用，新采样入口明确拒绝。
 
-## 当前运行内核
+## 运行结构
 
-2026-10-04 已接通 Python 执行优化：推理专用输入/策略头、拥有型帧视图、连续页锁定组批、直接就绪队列、分片长度索引、单批预取和 CUDA fused AdamW。模型、损失及原生协议不变。默认 11,695,874 参数模型的 CUDA 实测、数值误差、失败路线和复现入口见[执行链路报告](../docs/ai/performance/execution/README.md)。
+Python 使用推理专用输入和策略头、独立拥有的接收帧、就绪队列组批、分片长度索引、单批预取及受支持的 CUDA fused AdamW。Rust 负责规则与采样，模型、损失和传输协议由双方共同维护。模块对应见[运行结构](../docs/ai/RUNTIME.md)，历史设备测量见[历史索引](../docs/ai/HISTORY.md)。
 
-采样使用 `--device cuda --precision fp32`、1 个 PyTorch 宿主线程，`--batch-wait-ms` 默认 0；旧 `sample` 保留最多 8 起点短测，新 `resident` 的环境数独立配置。32 环境的固定默认模型自然局实测见[常驻采样报告](../docs/ai/performance/resident/README.md)。CLI 的 `--device auto` 保留无加速器时 CPU 回退。训练推荐 `--device cuda --precision bf16 --threads 1`，`--optimizer auto` 在 CUDA FP32/BF16 使用融合 AdamW，FP16/CPU/XPU 使用 foreach。`--prefetch` 默认开启，`--no-prefetch` 可做参考对照；不改变样本权重或按累计步骤确定的随机源。
+采样默认 `--precision fp32`、1 个 PyTorch 宿主线程，`--batch-wait-ms` 默认 0。`sample` 接受最多 8 个指定起点，`resident` 独立配置环境数。显式设备不可用时失败，`--device auto` 允许 CPU 回退。CUDA 训练可用 `--precision bf16 --threads 1`；`--optimizer auto` 为支持的模式选用融合 AdamW，其他模式使用 foreach。`--prefetch` 默认开启。
 
-要求同设备逐位恢复时，新阶段使用 `--deterministic`；续训省略此开关会继承检查点的确定性和矩阵精度设置。非确定性 CUDA 的连续/恢复结果允许存在舍入差异。融合优化器检查点须在 CUDA 原执行模式恢复；`--optimizer auto` 恢复实际保存的优化器执行方式，显式不匹配会失败。训练报告另列加载、前后全量指标评估及保存耗时，不用两步烟雾测试代表更新吞吐。
+需要同设备逐位恢复时使用 `--deterministic`；续训继承检查点的确定性、矩阵精度及优化器执行方式。融合优化器状态在兼容 CUDA 模式恢复。报告分别列加载、评估和保存耗时。
 
-环境内部使用类型化实体、命令、反应与时钟快照；公开只读视图直接进入动作树与编码，连续模拟不再经过 `Observation Value → State`。外部存档、观察、记录及控制消息仍遵守原协议。原生发送缓冲在同步写入完成后复用，Python 接收的张量仍独立拥有。现有二进制协议与就绪调度没有换版。
-
-2026-10-03 的正式原生 CI 从源码交付包在独立 Linux 容器构建并安装，运行根不挂载宿主仓库、关闭网络、扫描整个文件系统并核对安装与运行的实际 execve；不是仅从 PATH 删除 Node。非空标签、0→2→4 更新、45 个参数张量变化、另进程恢复与连续四步逐张量相等及新权重采样/审核均通过。Windows/Linux 的规则、候选、编码、RNG、私有信息和规范哈希继续由 TS 独立参照验证。
-
-基础表示对应见[运行内核](../docs/ai/performance/kernel/ARCHITECTURE.md)；当前优化、性能边界、原始证据与复现入口统一见[正式引擎任务记录](../docs/ai/performance/engine/README.md)。固定实体编码区、节点追加区及最终发送帧在同步消费完成后复用；类型化状态直接进入既有规范哈希，成功提交后的哈希才可用于下一条记录。模型、优化器、监督语义和训练安装依赖保持不变。
+引擎内部使用类型化实体、命令、反应和时钟快照；公开观察直接进入动作树与编码。规则加载由 `setup/catalog.rs` 统一处理，正式训练宿主与开发协议分别使用这一入口。外部存档、观察、记录及控制消息保持各自协议；发送缓冲仅在同步消费完成后复用。
 
 ## 独立安装与运行
 
@@ -98,12 +94,8 @@ python scripts/training/native/pipeline/package.py --starts <已验证前缀.jso
 python scripts/training/native/pipeline/accept.py --engine ENGINE --starts fixtures/late-starts.json --output <新验收目录>
 ```
 
-当前阶段状态和证据见[正式引擎任务记录](../docs/ai/performance/engine/README.md)。此前训练宿主接线的历史结果保留于[原生训练报告](../docs/ai/performance/native-training/README.md)。
+现行状态见[状态入口](../docs/ai/STATUS.md)，此前安装与恢复验收见[历史索引](../docs/ai/HISTORY.md)。
 
-## 并发与测量边界
+## 并发与退出
 
 每个环境持有一个Rust进程和最多一个在途模型请求。Python收到首个完成请求后合并已经就绪的节点，不等待其他环境的规则查询；相同环境的响应与后续请求仍串行。前向异常、版本错误或取消会关闭本批自己启动的进程，成功命令前缀保留。这里没有共享可变张量、跨权重缓存或新的Rust专用查询算法。
-
-`scripts/training/native/pipeline/measure.py` 在独立 Linux PID 命名空间测量冻结检查点，`--parallel` 批量运行全部起点，省略时逐局单环境运行；`--prepare` 加入独立审核、再次审核并编码分片、加载、两步 AdamW 和全验证集损失评估。这一严格流程的两次审核都计费；推荐单遍流程另记账，不能把减少阶段算作等价内核加速。输出包含工作量、文件哈希、阶段墙钟、累计 CPU 和 100ms 采样 RSS；RSS 不是连续精确峰值，Rust 推理等待包含 Python 前向及传输，不能与前向耗时相加。本轮交错成对测量使用 `scripts/training/performance/kernel/application.py`，CPU/RSS 的具体边界见任务记录。
-
-性能报告只适用于注明的检查点、尺寸、设备与环境并发数。小模型两步更新的占比不代表长期训练；并发切片也不代表自然开局或整机最大吞吐。

@@ -6,6 +6,8 @@ from torch.nn import functional as F
 
 from haojie_training.research.spatial import SpatialPolicyNet
 
+FORMAT = "haojie-improvement-policy-v1"
+
 FEATURES = ("absolute", "relative", "relations", "fields", "candidate")
 ARMS = ("spatial", *FEATURES, "combined", "capacity")
 

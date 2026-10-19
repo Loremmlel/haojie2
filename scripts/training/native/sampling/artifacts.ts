@@ -5,6 +5,20 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from 'esbuild';
 
+/** 与 build.rs 一样收集实际源码和规则包，模块增删时无需同步手写清单。 */
+export function nativeSourcePaths(native = 'native/engine') {
+  return [
+    ...['Cargo.toml', 'Cargo.lock', 'build.rs'].map((name) => join(native, name)),
+    ...['src', 'data'].flatMap((directory) =>
+      readdirSync(join(native, directory), { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => join(entry.parentPath, entry.name)),
+    ),
+  ]
+    .map((path) => path.replaceAll('\\', '/'))
+    .sort();
+}
+
 /** 新目录冻结源文件指纹、驱动和可执行文件；基准只运行复制后的二进制。 */
 export async function freeze(
   entry: string,
@@ -24,16 +38,7 @@ export async function freeze(
     metafile: true,
   });
   writeFileSync(join(output, 'runner.mjs'), built.outputFiles[0].contents, { flag: 'wx' });
-  const paths = [
-    ...Object.keys(built.metafile.inputs),
-    ...readdirSync(join(native, 'src'), { recursive: true })
-      .filter((p) => String(p).endsWith('.rs'))
-      .map((p) => join(native, 'src', String(p))),
-    join(native, 'Cargo.toml'),
-    join(native, 'Cargo.lock'),
-    join(native, 'build.rs'),
-    ...readdirSync(join(native, 'data')).map((p) => join(native, 'data', p)),
-  ];
+  const paths = [...Object.keys(built.metafile.inputs), ...nativeSourcePaths(native)];
   const hash = (v: Buffer) => createHash('sha256').update(v).digest('hex');
   const target = join(output, 'engine.exe');
   copyFileSync(executable, target);

@@ -3,6 +3,7 @@
 原生进程对同一次读取重放、校验、编码并计算原始字节哈希。复用时核对当前内容、
 完整规则/编码及实际审核器身份，随后只消费已经拥有的张量，不再打开记录生成特征。
 """
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,8 +15,13 @@ def binding(ready):
     engine = ready.get("engine", {})
     if engine.get("auditor") != "haojie-native-audit-v1":
         raise ValueError("需要提供内容绑定的正式原生审核器")
-    return {"version": engine["auditor"], "build": engine["build"]["sourceSha256"],
-            "rulesHash": ready["rulesHash"], "ruleset": ready["ruleset"], "schema": ready["schema"]}
+    return {
+        "version": engine["auditor"],
+        "build": engine["build"]["sourceSha256"],
+        "rulesHash": ready["rulesHash"],
+        "ruleset": ready["ruleset"],
+        "schema": ready["schema"],
+    }
 
 
 @dataclass(frozen=True)
@@ -52,7 +58,9 @@ def audit(executable, path):
                 raw_hash = report.get("inputSha256")
                 if not isinstance(raw_hash, str) or len(raw_hash) != 64:
                     raise ValueError("审核缺少原始内容身份")
-                return AuditedRecord(client.ready, engine_hash, header, report, tuple(inputs), tuple(records))
+                return AuditedRecord(
+                    client.ready, engine_hash, header, report, tuple(inputs), tuple(records)
+                )
             else:
                 raise ValueError("未知编码消息")
 

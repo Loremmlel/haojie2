@@ -2,7 +2,7 @@ import { ensure } from '../../../src/engine/core/state';
 import { decisionOwner } from '../../../src/ai/observation';
 import { trainingDistribution } from '../../../src/ai/training/simulation';
 import type { Observation } from '../../../src/ai/types';
-import { commands, terminalValue, windowBoundary } from './puct';
+import { commands, terminalValue, windowBoundary } from './domain';
 
 /**
  * 有限命令深度的全宽期望极大极小参照；概率树必须完整枚举，否则明确失败。

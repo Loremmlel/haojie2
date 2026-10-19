@@ -106,6 +106,6 @@ impl Queries {
             _ => {}
         }
         // 攻击、技能、反应、冲撞和随机边界仍由相同完整规则结算，不能拿公共资格代替后果。
-        crate::execute(s, c, catalog, true).map(|_| ())
+        crate::command::execute(s, c, catalog, true).map(|_| ())
     }
 }

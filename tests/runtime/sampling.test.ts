@@ -14,7 +14,7 @@ import {
   createDecisionEncoder,
   createSamplingEncoder,
 } from '../../src/ai/training/encoding/decision';
-import { TinyPolicy } from '../../scripts/training/economics/policy';
+import { TinyPolicy } from '../../scripts/training/sampling/policy';
 import { RuleError, ensure } from '../../src/engine/core/state';
 
 test('批次拒绝与随机边界不泄漏预检模式，新观察重建准备，正式错误保留调用栈', () => {

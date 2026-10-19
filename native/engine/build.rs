@@ -14,6 +14,9 @@ fn collect(path: &Path, files: &mut Vec<std::path::PathBuf>) {
 }
 
 fn main() {
+    // 目录成员变化也要刷新身份，避免新增或删除源码后沿用旧哈希。
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=data");
     let mut files = vec!["Cargo.toml".into(), "Cargo.lock".into(), "build.rs".into()];
     collect(Path::new("src"), &mut files);
     collect(Path::new("data"), &mut files);

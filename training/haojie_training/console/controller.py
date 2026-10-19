@@ -19,77 +19,13 @@ from ..native.client import Client
 from ..native.pipeline import metadata, model_from
 from ..native.pool import Pool
 from ..runtime import Trainer, resolve_device
+from .config import METHOD as METHOD
+from .config import defaults, validate
 from .evaluation import evaluate_slice
 from .memory import SamplePool
 from .opponents import ready
 from .sampling import MemoryJobs
-
-METHOD = "decomposed-mc-q-v2"
-FORMAT = "haojie-stream-recovery-v2"
-
-
-def defaults():
-    return {
-        "environments": 4,
-        "games_per_round": 4,
-        "updates_per_round": 0,
-        "update_limit": 256,
-        "batch_size": 8,
-        "classic_percent": 50,
-        "history_percent": 50,
-        "current_first_percent": 50,
-        "pool_mib": min(4096, max(64, int(psutil.virtual_memory().available / 4 / 2**20))),
-        "save_seconds": 600,
-        "save_games": 0,
-        "eval_games": 16,
-        "eval_pairs": 1,
-        "eval_seconds": 180,
-        "confirmation_pairs": 5,
-        "max_commands": 20000,
-        "max_plies": 1000,
-        "history_every": 200,
-        "history_size": 4,
-        "seed": 20261004,
-        "method": METHOD,
-        "temperature": 0.25,
-    }
-
-
-def validate(config):
-    limits = {
-        "environments": (1, 16),
-        "games_per_round": (1, 128),
-        "updates_per_round": (0, 1000),
-        "update_limit": (1, 1000),
-        "classic_percent": (0, 100),
-        "history_percent": (0, 100),
-        "current_first_percent": (0, 100),
-        "confirmation_pairs": (5, 20),
-        "batch_size": (1, 32),
-        "pool_mib": (16, 4096),
-        "save_seconds": (10, 86400),
-        "save_games": (0, 100000),
-        "eval_games": (1, 100000),
-        "eval_pairs": (1, 20),
-        "eval_seconds": (2, 7200),
-        "max_commands": (1, 20000),
-        "max_plies": (1, 1000),
-        "history_every": (1, 100000),
-        "history_size": (4, 8),
-        "seed": (1, 999999999),
-    }
-    if set(config) != set(defaults()):
-        raise ValueError("设置字段不匹配")
-    for key, (low, high) in limits.items():
-        if type(config[key]) is not int or not low <= config[key] <= high:
-            raise ValueError(f"{key} 必须为 {low} 至 {high} 的整数")
-    if config["method"] not in (METHOD, "sampled-action-imitation"):
-        raise ValueError("未知训练方法")
-    if (
-        not isinstance(config["temperature"], (int, float))
-        or not 0.05 <= config["temperature"] <= 2
-    ):
-        raise ValueError("温度必须为0.05至2")
+from .storage import FORMAT, restore_recovery
 
 
 def identity(model):
@@ -101,6 +37,12 @@ def identity(model):
 
 
 class Controller:
+    """HTTP 提交运行意图，后台线程串行拥有模型、采样器和检查点提交。
+
+    暂停通过事件在阶段边界取消，样本池仅保留在内存；恢复和新实验成功后
+    才切换持久化身份。设置校验和恢复文件校验分别由 config、storage 负责。
+    """
+
     def __init__(self, engine, store, *, device="auto", tiny=False, imported=None, starts=None):
         self.engine, self.store = engine, store
         self.root_store = store
@@ -114,9 +56,8 @@ class Controller:
                 self.experiment = selected
         except (ValueError, KeyError, TypeError) as error:
             startup_notice = f"活动清单无效：{error}；请在资源页选择已有实验，原文件保留"
-        self.new_request = None
+        self.new_request = self.switch_request = None
         self.parent = None
-        self.generation = 0
         self.evaluation = None
         self.candidate = None
         self.update_budget = 0
@@ -130,40 +71,48 @@ class Controller:
         self.wake = threading.Event()
         self.state, self.error = "idle", None
         self.want_run = self.want_save = self.want_eval = False
+        self.want_restore = self.want_export = False
         self.trainer = self.pool = None
         self.version = None
         self.meta = None
         self.rng = random.Random(self.config["seed"])
+        self._reset_progress()
+        self.samples = SamplePool(self.config["pool_mib"] * 2**20)
+        self.logs = deque(maxlen=100)
+        if startup_notice:
+            self.log(startup_notice)
+        self.last_activity = None
+        self.runtime = {"active": [], "inflight_bytes": 0}
+        self.update_progress = 0
+        self.telemetry = {}
+        self.external = []
+        self.last_metrics = time.monotonic()
+        self.last_completed = time.time()
+        self.thread = threading.Thread(target=self._loop, name="haojie-controller", daemon=True)
+        self.thread.start()
+
+    def _reset_progress(self):
+        """首次启动和新实验使用相同计数起点；磁盘恢复随后覆盖这些默认值。"""
         self.counts = dict.fromkeys(
             (
                 "games",
                 "truncated",
                 "discarded",
                 "tasks",
+                "eval_tasks",
                 "seen_samples",
                 "retained_samples",
                 "oversize_samples",
             ),
             0,
         )
-        self.samples = SamplePool(self.config["pool_mib"] * 2**20)
-        self.logs, self.losses, self.evaluations = deque(maxlen=100), [], []
-        if startup_notice:
-            self.log(startup_notice)
+        self.losses, self.evaluations = [], []
         self.saved_step = self.saved_games = self.eval_games = self.eval_step = (
             self.history_step
         ) = 0
-        self.saved_at = self.last_activity = None
-        self.round_number = 0
-        self.runtime = {"active": [], "inflight_bytes": 0}
-        self.update_progress = 0
-        self.telemetry = {}
-        self.external = []
-        self.last_metrics = time.monotonic()
+        self.saved_at = None
+        self.generation = self.round_number = 0
         self.restored = False
-        self.last_completed = time.time()
-        self.thread = threading.Thread(target=self._loop, name="haojie-controller", daemon=True)
-        self.thread.start()
 
     def log(self, message):
         with self.lock:
@@ -392,50 +341,16 @@ class Controller:
         recoveries = self.store.names("recovery")
         payload = None
         if recoveries and not self.imported:
-            for name in reversed(recoveries):
-                try:
-                    payload = torch.load(
-                        self.store.root / name, weights_only=True, map_location="cpu"
-                    )
-                    if payload["format"] != FORMAT or payload["trainer"]["metadata"] != {
-                        **self.meta,
-                        "policy_source": payload["config"]["method"],
-                    }:
-                        raise ValueError("恢复点规则/编码不匹配")
-                    validate(payload["config"])
-                    restored_trainer = Trainer(
-                        PolicyValueNet(ModelConfig(**payload["trainer"]["config"])),
-                        self.device,
-                        precision=payload["trainer"]["precision"],
-                        optimizer="auto",
-                        objective=payload["config"]["method"],
-                    )
-                    restored_trainer.restore_payload(
-                        payload["trainer"], payload["trainer"]["metadata"]
-                    )
-                    if not all(
-                        restored_trainer.health()[key]
-                        for key in ("finite_parameters", "finite_optimizer")
-                    ):
-                        raise ValueError("恢复点含非有限学习状态")
-                    break
-                except Exception as error:
-                    self.log(f"恢复点 {name} 无效：{error}")
-                    payload = None
-            if payload is None:
-                raise ValueError("无有效恢复点；未覆盖已有文件")
+            trainer, payload = restore_recovery(self.store, self.meta, self.device, self.log)
             self.config = payload["config"]
             self.meta["policy_source"] = self.config["method"]
-            model = restored_trainer.model
         elif self.imported:
             model, _ = model_from(self.imported, self.ready)
         else:
             torch.manual_seed(self.config["seed"])
             model = PolicyValueNet(ModelConfig.tiny() if self.tiny else ModelConfig())
-        trainer = (
-            restored_trainer
-            if payload
-            else Trainer(
+        if payload is None:
+            trainer = Trainer(
                 model,
                 self.device,
                 precision="bf16"
@@ -444,7 +359,6 @@ class Controller:
                 optimizer="auto",
                 objective=self.config["method"],
             )
-        )
         if payload:
             accelerator = payload.get("accelerator_rng")
             if accelerator and accelerator["device"] == self.device.type:
@@ -652,7 +566,8 @@ class Controller:
                 {"step": self.trainer.updates, "time": time.time(), **self.trainer.last_losses}
             )
             self.losses = self._compact(self.losses)
-            if not all(self.trainer.health()[k] for k in ("finite_parameters", "finite_optimizer")):
+            health = self.trainer.health()
+            if not health["finite_parameters"] or not health["finite_optimizer"]:
                 raise FloatingPointError("模型/优化器包含非有限参数")
             if (
                 not self.cancel.is_set()
@@ -717,11 +632,11 @@ class Controller:
                         self.want_eval = False
                     self.candidate = None
                     self.log("趋势候选超过24小时，已释放冻结权重；可重新评测")
-                if getattr(self, "switch_request", None):
+                if self.switch_request:
                     self._switch_experiment()
                 if self.new_request:
                     self._new_experiment()
-                if getattr(self, "want_restore", False):
+                if self.want_restore:
                     self.want_restore = False
                     self._close_pool()
                     self.trainer = self.version = self.imported = None
@@ -733,7 +648,7 @@ class Controller:
                     or self.want_save
                     or self.want_eval
                     or self.evaluation
-                    or getattr(self, "want_export", False)
+                    or self.want_export
                 ):
                     if self.state == "pausing":
                         self._pause()
@@ -741,7 +656,7 @@ class Controller:
                     self.wake.clear()
                     continue
                 self._initialize()
-                if getattr(self, "want_export", False):
+                if self.want_export:
                     self.want_export = False
                     name = self.store.save_tensor(
                         "export", self.trainer.updates, self._weights(), 1
@@ -855,26 +770,8 @@ class Controller:
         self.trainer = self.meta = self.version = None
         self.imported = None
         self.device, self.config, self.parent = device, config, parent
-        self.counts = {
-            key: 0
-            for key in (
-                "games",
-                "truncated",
-                "discarded",
-                "tasks",
-                "eval_tasks",
-                "seen_samples",
-                "retained_samples",
-                "oversize_samples",
-            )
-        }
-        self.saved_step = self.saved_games = self.eval_games = self.eval_step = (
-            self.history_step
-        ) = self.generation = self.round_number = 0
-        self.saved_at = None
-        self.losses, self.evaluations = [], []
+        self._reset_progress()
         self.evaluation = self.candidate = None
-        self.restored = False
         self.rng = random.Random(config["seed"])
         self.cancel.clear()
         self._initialize()
