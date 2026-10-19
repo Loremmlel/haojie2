@@ -18,7 +18,6 @@ from .opponents import ASSETS
 from .storage import Lease, Store
 
 
-
 def http_server(controller, port=8765):
     token = secrets.token_urlsafe(32)
 

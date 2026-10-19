@@ -17,7 +17,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
-
 from haojie_training.cloud.backup import Backups, freeze, import_root
 from haojie_training.cloud.session import Session, wait_for
 from haojie_training.console.config import defaults
@@ -36,13 +35,21 @@ def stored(folder):
     trainer = Trainer(PolicyValueNet(ModelConfig.tiny()), torch.device("cpu"))
     trainer.step(synthetic_batch(trainer.model.config, size=2, entities=4, actions=2))
     payload = {
-        "format": FORMAT, "trainer": trainer.checkpoint({}), "config": defaults(),
-        "counts": {"games": 2}, "random": random.Random(9).getstate(), "saved_at": time.time(),
+        "format": FORMAT,
+        "trainer": trainer.checkpoint({}),
+        "config": defaults(),
+        "counts": {"games": 2},
+        "random": random.Random(9).getstate(),
+        "saved_at": time.time(),
     }
     store.save_tensor("recovery", trainer.updates, payload, 2)
     return SimpleNamespace(
-        root_store=store, store=store, experiment="legacy", saved_step=trainer.updates,
-        saved_at=payload["saved_at"], device=torch.device("cpu"),
+        root_store=store,
+        store=store,
+        experiment="legacy",
+        saved_step=trainer.updates,
+        saved_at=payload["saved_at"],
+        device=torch.device("cpu"),
     )
 
 
@@ -167,12 +174,29 @@ class CloudTests(unittest.TestCase):
             root = Path(folder)
             connection = root / "connection.json"
             with (root / "service.log").open("w+") as log:
-                process = subprocess.Popen([
-                    sys.executable, "-m", "haojie_training.cloud", "--engine",
-                    os.environ["HAOJIE_NATIVE"], "--root", str(root / "local"),
-                    "--backup-dir", str(root / "drive"), "--connection-file", str(connection),
-                    "--device", "cpu", "--torch-threads", "2", "--tiny", "--paused",
-                ], stdout=log, stderr=subprocess.STDOUT)
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-m",
+                        "haojie_training.cloud",
+                        "--engine",
+                        os.environ["HAOJIE_NATIVE"],
+                        "--root",
+                        str(root / "local"),
+                        "--backup-dir",
+                        str(root / "drive"),
+                        "--connection-file",
+                        str(connection),
+                        "--device",
+                        "cpu",
+                        "--torch-threads",
+                        "2",
+                        "--tiny",
+                        "--paused",
+                    ],
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                )
                 try:
                     deadline = time.monotonic() + 60
                     while not connection.exists() and time.monotonic() < deadline:
@@ -184,9 +208,13 @@ class CloudTests(unittest.TestCase):
 
                     def api(path, body=None):
                         request = urllib.request.Request(
-                            address + path, data=json.dumps(body).encode() if body else None,
-                            headers={"Content-Type": "application/json", "Origin": address,
-                                     "X-Session-Token": token if body else ""},
+                            address + path,
+                            data=json.dumps(body).encode() if body else None,
+                            headers={
+                                "Content-Type": "application/json",
+                                "Origin": address,
+                                "X-Session-Token": token if body else "",
+                            },
                         )
                         with urllib.request.urlopen(request, timeout=10) as response:
                             return json.load(response)
@@ -215,21 +243,32 @@ class CloudTests(unittest.TestCase):
         torch.set_num_threads(1)
         engine = os.environ["HAOJIE_NATIVE"]
         repo = Path(__file__).resolve().parents[3]
-        starts = json.loads(gzip.decompress(
-            (repo / "tests/fixtures/native/late-starts.json.gz").read_bytes()
-        ))[:2]
+        starts = json.loads(
+            gzip.decompress((repo / "tests/fixtures/native/late-starts.json.gz").read_bytes())
+        )[:2]
         environments = int(os.environ.get("HAOJIE_TEST_ENVIRONMENTS", "4"))
         settings = {
-            "environments": environments, "games_per_round": environments,
+            "environments": environments,
+            "games_per_round": environments,
             "inference_batch_size": min(8, environments),
-            "updates_per_round": 2, "batch_size": 2, "pool_mib": 16,
-            "max_commands": 500, "max_plies": 60, "history_every": 2, "eval_games": 100000,
+            "updates_per_round": 2,
+            "batch_size": 2,
+            "pool_mib": 16,
+            "max_commands": 500,
+            "max_plies": 60,
+            "history_every": 2,
+            "eval_games": 100000,
         }
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             session = Session(
-                engine, root / "local", device="cpu", settings=settings,
-                backup_dir=root / "drive", tiny=True, starts=starts,
+                engine,
+                root / "local",
+                device="cpu",
+                settings=settings,
+                backup_dir=root / "drive",
+                tiny=True,
+                starts=starts,
             )
             restored = None
             try:
@@ -262,8 +301,12 @@ class CloudTests(unittest.TestCase):
                 self.assertGreater(saved_counts["retained_samples"], 0)
                 self.assertIsNone(c.pool)
                 restored = Session(
-                    engine, root / "restored", device="cpu", backup_dir=root / "drive",
-                    tiny=True, starts=starts,
+                    engine,
+                    root / "restored",
+                    device="cpu",
+                    backup_dir=root / "drive",
+                    tiny=True,
+                    starts=starts,
                 )
                 other = restored.controller
                 self.assertEqual(other.trainer.updates, updates)
@@ -275,16 +318,28 @@ class CloudTests(unittest.TestCase):
                 for key, state in optimizer["state"].items():
                     for field, value in state.items():
                         if isinstance(value, torch.Tensor):
-                            torch.testing.assert_close(actual["state"][key][field], value, rtol=0, atol=0)
+                            torch.testing.assert_close(
+                                actual["state"][key][field], value, rtol=0, atol=0
+                            )
                         else:
                             self.assertEqual(actual["state"][key][field], value)
                 self.assertFalse(other.samples.rows)
                 self.assertTrue(other.store.names("baseline"))
                 self.assertEqual(other.store.names("history"), c.store.names("history"))
                 restored.command("start")
-                wait_for(other, lambda: other.trainer.updates > updates, max(120, environments * 15))
-                print(json.dumps({"environments": environments, "peak_active": peak,
-                                  "updates": updates, "sampling": perf["sampling"]}))
+                wait_for(
+                    other, lambda: other.trainer.updates > updates, max(120, environments * 15)
+                )
+                print(
+                    json.dumps(
+                        {
+                            "environments": environments,
+                            "peak_active": peak,
+                            "updates": updates,
+                            "sampling": perf["sampling"],
+                        }
+                    )
+                )
             finally:
                 if restored is not None:
                     self.assertEqual(restored.close(), [])

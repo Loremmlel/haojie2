@@ -76,8 +76,15 @@ class Controller:
         )
         self.last_round = {}
         self.sampling_totals = dict.fromkeys(
-            ("requests", "inference_requests", "forwards", "inference_seconds",
-             "collation_seconds", "tensor_bytes"), 0
+            (
+                "requests",
+                "inference_requests",
+                "forwards",
+                "inference_seconds",
+                "collation_seconds",
+                "tensor_bytes",
+            ),
+            0,
         )
         self.cancel, self.eval_cancel, self.shutdown = (threading.Event() for _ in range(3))
         self.wake = threading.Event()
@@ -603,9 +610,7 @@ class Controller:
                 PolicyInference(self.trainer.model, self.device, self.config["sampling_precision"]),
                 self.version,
             ),
-            frame_limit=min(
-                32 * 2**20, max(4 * 2**20, available_memory() // (16 * count))
-            ),
+            frame_limit=min(32 * 2**20, max(4 * 2**20, available_memory() // (16 * count))),
         )
 
     def _sample(self):

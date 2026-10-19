@@ -27,7 +27,9 @@ def main():
     sources = parser.add_mutually_exclusive_group()
     sources.add_argument("--restore", type=Path, help="备份目录/完成清单/停止写入的训练根/恢复点")
     sources.add_argument("--import-weights", type=Path, help="仅继承兼容权重，建立新优化器")
-    parser.add_argument("--paused", action="store_true", help="加载后暂停，先通过 Notebook 查看设置")
+    parser.add_argument(
+        "--paused", action="store_true", help="加载后暂停，先通过 Notebook 查看设置"
+    )
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--torch-threads", type=int, default=1, help="Torch CPU 算子线程数")
     parser.add_argument("--connection-file", type=Path, help="将本机 API 地址写入指定本地文件")
@@ -43,9 +45,16 @@ def main():
     try:
         settings = json.loads(args.settings.read_text(encoding="utf-8")) if args.settings else None
         session = Session(
-            engine, args.root, device=args.device, settings=settings, backup_dir=args.backup_dir,
-            backup_seconds=args.backup_seconds, backup_keep=args.backup_keep,
-            restore=args.restore, import_weights=args.import_weights, scratch=args.scratch,
+            engine,
+            args.root,
+            device=args.device,
+            settings=settings,
+            backup_dir=args.backup_dir,
+            backup_seconds=args.backup_seconds,
+            backup_keep=args.backup_keep,
+            restore=args.restore,
+            import_weights=args.import_weights,
+            scratch=args.scratch,
             tiny=args.tiny,
         )
     except (OSError, ValueError, RuntimeError, TimeoutError) as error:

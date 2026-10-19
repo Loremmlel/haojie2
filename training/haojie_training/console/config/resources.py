@@ -162,10 +162,14 @@ def monitor(controller):
             workers = []
             for key, member in current.items():
                 delta = member["cpu"] - previous.get(key, {"cpu": 0})["cpu"]
-                workers.append({
-                    "pid": member["pid"], "name": member["name"],
-                    "cpu_cores": max(0, delta) / (now - began), "rss": member["rss"],
-                })
+                workers.append(
+                    {
+                        "pid": member["pid"],
+                        "name": member["name"],
+                        "cpu_cores": max(0, delta) / (now - began),
+                        "rss": member["rss"],
+                    }
+                )
             # Linux 父进程累积已回收子进程时间；合计求差，避免短局退出丢账或重复记账。
             total = sum(row["cpu"] + row["reaped_cpu"] for row in current.values())
             prior = sum(row["cpu"] + row["reaped_cpu"] for row in previous.values())
@@ -192,7 +196,8 @@ def monitor(controller):
                     properties = torch.cuda.get_device_properties(device)
                     identity = getattr(properties, "uuid", None)
                     handle = (
-                        nvml.nvmlDeviceGetHandleByUUID(str(identity)) if identity
+                        nvml.nvmlDeviceGetHandleByUUID(str(identity))
+                        if identity
                         else nvml.nvmlDeviceGetHandleByIndex(device.index or 0)
                     )
                     telemetry["gpu_utilization"] = nvml.nvmlDeviceGetUtilizationRates(handle).gpu

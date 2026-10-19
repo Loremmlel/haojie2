@@ -48,8 +48,15 @@ if "--real" in sys.argv:
 result = []
 with Client(sys.argv[1]) as client:
     for seed, scores in ((17, [100, 0, 0, -100]), (29, [0, 0, 100, -100]), (43, [0, 0, 0, 100])):
-        client.send({"op": "mc-exercise", "case": 1, "samplerSeed": seed,
-                     "outcomeSeed": 77, "inputRefs": "--refs" in sys.argv})
+        client.send(
+            {
+                "op": "mc-exercise",
+                "case": 1,
+                "samplerSeed": seed,
+                "outcomeSeed": 77,
+                "inputRefs": "--refs" in sys.argv,
+            }
+        )
         rows, last = [], None
         while True:
             message = client.receive()

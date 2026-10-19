@@ -491,7 +491,9 @@ $('settings').addEventListener('submit', (event) => {
     if (field.name && !field.disabled) {
       field.setAttribute('aria-invalid', String(!field.validity.valid));
       if (!field.validity.valid) invalid ??= field;
-      values[field.name] = ['method', 'sampling_precision'].includes(field.name) ? field.value : Number(field.value);
+      values[field.name] = ['method', 'sampling_precision'].includes(field.name)
+        ? field.value
+        : Number(field.value);
     }
   text('form-error', invalid ? '请在标注的范围内填写数值。' : '');
   if (invalid) {

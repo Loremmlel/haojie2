@@ -104,7 +104,8 @@ def _check_root(root):
     active = root / "active.json"
     experiment = (
         json.loads(active.read_text(encoding="utf-8"))["experiment"]
-        if active.exists() else "legacy"
+        if active.exists()
+        else "legacy"
     )
     store = Store(root)
     scoped = store if experiment == "legacy" else store.scope(experiment)
@@ -193,7 +194,9 @@ def import_root(source, destination):
             shutil.copyfile(source, target)
             after = source.stat()
             if (before.st_size, before.st_mtime_ns, before.st_ino) != (
-                after.st_size, after.st_mtime_ns, after.st_ino
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ino,
             ) or digest(source) != digest(target):
                 raise ValueError("恢复点在复制过程中变化；请先停止写入")
         else:
@@ -215,8 +218,12 @@ def import_root(source, destination):
                     raise ValueError("训练根在复制过程中变化；请先停止服务并完成文件传输")
         _check_root(staging)
         _publish_root(staging, destination)
-    return {"source": str(source), "root": str(destination), "kind": "recovery",
-            "source_lock": source_lock}
+    return {
+        "source": str(source),
+        "root": str(destination),
+        "kind": "recovery",
+        "source_lock": source_lock,
+    }
 
 
 class Backups:
@@ -238,7 +245,8 @@ class Backups:
                 pass
         payload = json.loads(marker.read_text(encoding="utf-8"))
         if (
-            not isinstance(payload, dict) or payload.get("format") != FORMAT
+            not isinstance(payload, dict)
+            or payload.get("format") != FORMAT
             or not isinstance(payload.get("owner"), str)
             or not re.fullmatch("[0-9a-f]{32}", payload["owner"])
         ):
@@ -256,11 +264,14 @@ class Backups:
                     continue
                 name, created = record.get("archive"), record.get("created_at")
                 if (
-                    record.get("format") == FORMAT and record.get("owner") == self.owner
-                    and isinstance(name, str) and name.startswith(f"haojie-{self.owner[:8]}-")
+                    record.get("format") == FORMAT
+                    and record.get("owner") == self.owner
+                    and isinstance(name, str)
+                    and name.startswith(f"haojie-{self.owner[:8]}-")
                     and _ARCHIVE.fullmatch(name)
                     and path.name == name.removesuffix(".tar.gz") + ".json"
-                    and type(created) in (int, float) and math.isfinite(created)
+                    and type(created) in (int, float)
+                    and math.isfinite(created)
                 ):
                     result.append((path, record))
             except (OSError, ValueError, TypeError):
@@ -284,9 +295,14 @@ class Backups:
                     files[relative] = {"bytes": path.stat().st_size, "sha256": digest(path)}
                     packed.add(path, arcname=relative, recursive=False)
         record = {
-            "format": FORMAT, "owner": self.owner, "created_at": time.time(),
-            "archive": archive.name, "bytes": archive.stat().st_size,
-            "sha256": digest(archive), "files": files, "checkpoint": info,
+            "format": FORMAT,
+            "owner": self.owner,
+            "created_at": time.time(),
+            "archive": archive.name,
+            "bytes": archive.stat().st_size,
+            "sha256": digest(archive),
+            "files": files,
+            "checkpoint": info,
         }
         remote = self.root / archive.name
         temporary = remote.with_name(remote.name + ".partial")
@@ -311,7 +327,7 @@ class Backups:
             manifest_temporary.unlink(missing_ok=True)
         # 新版归档与完成标记均发布后，才轮换本工具自己的旧版。
         warnings = []
-        for old_manifest, old in self.records()[:-self.keep]:
+        for old_manifest, old in self.records()[: -self.keep]:
             try:
                 old_manifest.unlink()
                 (self.root / old["archive"]).unlink(missing_ok=True)
@@ -343,11 +359,15 @@ class Backups:
         if not isinstance(checkpoint, dict):
             raise ValueError("备份恢复元数据无效")
         if (
-            not isinstance(files, dict) or not files or len(files) > 8192
+            not isinstance(files, dict)
+            or not files
+            or len(files) > 8192
             or any(not owned(name) for name in files)
             or any(
-                not isinstance(row, dict) or type(row.get("bytes")) is not int
-                or row["bytes"] < 0 or not isinstance(row.get("sha256"), str)
+                not isinstance(row, dict)
+                or type(row.get("bytes")) is not int
+                or row["bytes"] < 0
+                or not isinstance(row.get("sha256"), str)
                 or not re.fullmatch("[0-9a-f]{64}", row["sha256"])
                 for row in files.values()
             )
@@ -360,7 +380,9 @@ class Backups:
         source = self.root / record["archive"]
         if source.is_symlink() or source.stat().st_size != record["bytes"]:
             raise ValueError("归档大小与完成清单不匹配")
-        with tempfile.TemporaryDirectory(prefix="haojie-restore-", dir=destination.parent) as folder:
+        with tempfile.TemporaryDirectory(
+            prefix="haojie-restore-", dir=destination.parent
+        ) as folder:
             work = Path(folder)
             archive = work / "backup.tar.gz"
             shutil.copyfile(source, archive)
@@ -372,8 +394,10 @@ class Backups:
             with tarfile.open(archive, "r:gz") as packed:
                 for member in packed:
                     if (
-                        not member.isfile() or member.name not in files
-                        or member.name in seen or member.size != files[member.name]["bytes"]
+                        not member.isfile()
+                        or member.name not in files
+                        or member.name in seen
+                        or member.size != files[member.name]["bytes"]
                     ):
                         raise ValueError("归档包含非法路径、链接或不匹配的文件")
                     target = staging / member.name
@@ -404,7 +428,12 @@ class BackupWorker:
             raise ValueError("归档临时目录必须位于活跃训练根之外")
         self.lock, self.wake, self.stop = threading.Lock(), threading.Event(), threading.Event()
         self.pending = None
-        self.info = {"state": "等待备份", "error": None, "last": None, "directory": str(backups.root)}
+        self.info = {
+            "state": "等待备份",
+            "error": None,
+            "last": None,
+            "directory": str(backups.root),
+        }
         self.thread = threading.Thread(target=self._loop, name="haojie-backup", daemon=True)
         self.thread.start()
 
@@ -438,7 +467,9 @@ class BackupWorker:
             if not future.set_running_or_notify_cancel():
                 continue
             try:
-                with tempfile.TemporaryDirectory(prefix="haojie-backup-", dir=self.scratch) as folder:
+                with tempfile.TemporaryDirectory(
+                    prefix="haojie-backup-", dir=self.scratch
+                ) as folder:
                     work = Path(folder)
                     staging = work / "root"
                     staging.mkdir()

@@ -63,11 +63,16 @@ class Client:
                 meta = json.loads(line)
                 if "inputRef" in meta:
                     identity = (
-                        meta["inputRef"], meta.get("model"), meta.get("actor"), meta.get("index")
+                        meta["inputRef"],
+                        meta.get("model"),
+                        meta.get("actor"),
+                        meta.get("index"),
                     )
                     if (
-                        not self._input_refs or meta.get("type") != "example"
-                        or type(meta["inputRef"]) is not int or meta["inputRef"] < 1
+                        not self._input_refs
+                        or meta.get("type") != "example"
+                        or type(meta["inputRef"]) is not int
+                        or meta["inputRef"] < 1
                         or any(value is None for value in identity)
                         or any(key in meta for key in ("bytes", "entities", "candidates", "input"))
                         or last_input is None
@@ -107,9 +112,16 @@ class Client:
                     del data, view
                     if meta.get("type") == "infer" and self._input_refs:
                         last_input = (
-                            (meta.get("id"), meta.get("model"), meta.get("actor"),
-                             meta.get("commandIndex")),
-                            {key: meta[key] for key in ("bytes", "entities", "candidates", "input")},
+                            (
+                                meta.get("id"),
+                                meta.get("model"),
+                                meta.get("actor"),
+                                meta.get("commandIndex"),
+                            ),
+                            {
+                                key: meta[key]
+                                for key in ("bytes", "entities", "candidates", "input")
+                            },
                         )
                 if meta.get("type") in ("example", "done", "error", "teacher"):
                     last_input = None

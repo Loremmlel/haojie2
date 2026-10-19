@@ -7,9 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import torch
-
-from haojie_training.console.config import defaults, upgrade, validate
-from haojie_training.console.config import resources
+from haojie_training.console.config import defaults, resources, upgrade, validate
 from haojie_training.console.controller import Controller
 from haojie_training.console.storage import Store
 
@@ -42,10 +40,14 @@ class ServerTests(unittest.TestCase):
             with (
                 patch.object(resources, "_cgroups", return_value=(child, parent)),
                 patch.object(resources.os, "cpu_count", return_value=64),
-                patch.object(resources.os, "sched_getaffinity", return_value=set(range(8)), create=True),
-                patch.object(resources.psutil, "virtual_memory", return_value=SimpleNamespace(
-                    total=64 * 2**30, available=48 * 2**30
-                )),
+                patch.object(
+                    resources.os, "sched_getaffinity", return_value=set(range(8)), create=True
+                ),
+                patch.object(
+                    resources.psutil,
+                    "virtual_memory",
+                    return_value=SimpleNamespace(total=64 * 2**30, available=48 * 2**30),
+                ),
             ):
                 self.assertEqual(resources.cpu_capacity(), 2)
                 self.assertEqual(resources.available_memory(), 2**30)
@@ -59,7 +61,9 @@ class ServerTests(unittest.TestCase):
         for v2 in (True, False):
             with self.subTest(v2=v2), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
-                (root / ("memory.max" if v2 else "memory.limit_in_bytes")).write_text(str(8 * 2**30))
+                (root / ("memory.max" if v2 else "memory.limit_in_bytes")).write_text(
+                    str(8 * 2**30)
+                )
                 (root / ("memory.current" if v2 else "memory.usage_in_bytes")).write_text(
                     str(8 * 2**30 - 256 * 2**20)
                 )
@@ -77,12 +81,22 @@ class ServerTests(unittest.TestCase):
 
     def test_old_recovery_options_and_server_ranges(self):
         original = defaults()
-        legacy = {k: v for k, v in original.items() if k not in {
-            "inference_batch_size", "batch_wait_ms", "sampling_precision"
-        }}
+        legacy = {
+            k: v
+            for k, v in original.items()
+            if k not in {"inference_batch_size", "batch_wait_ms", "sampling_precision"}
+        }
         self.assertEqual(upgrade(legacy), original)
-        validate({**original, "environments": 128, "games_per_round": 256,
-                  "batch_size": 128, "pool_mib": 32768, "batch_wait_ms": 0.5})
+        validate(
+            {
+                **original,
+                "environments": 128,
+                "games_per_round": 256,
+                "batch_size": 128,
+                "pool_mib": 32768,
+                "batch_wait_ms": 0.5,
+            }
+        )
         with self.assertRaises(ValueError):
             validate({**original, "batch_wait_ms": float("nan")})
         with self.assertRaises(ValueError):
@@ -90,7 +104,9 @@ class ServerTests(unittest.TestCase):
 
     def test_snapshot_reports_initialization_failure_and_closed_service(self):
         with tempfile.TemporaryDirectory() as folder:
-            controller = Controller(Path(folder) / "missing-engine", Store(folder), device="cpu", tiny=True)
+            controller = Controller(
+                Path(folder) / "missing-engine", Store(folder), device="cpu", tiny=True
+            )
             try:
                 future = controller.snapshot(lambda _: self.fail("初始化失败时不应冻结快照"))
                 with self.assertRaises(FileNotFoundError):

@@ -28,9 +28,20 @@ class Session:
     """
 
     def __init__(
-        self, engine, root, *, device="auto", settings=None, backup_dir=None,
-        backup_seconds=600, backup_keep=3, restore=None, import_weights=None,
-        scratch=None, tiny=False, starts=None,
+        self,
+        engine,
+        root,
+        *,
+        device="auto",
+        settings=None,
+        backup_dir=None,
+        backup_seconds=600,
+        backup_keep=3,
+        restore=None,
+        import_weights=None,
+        scratch=None,
+        tiny=False,
+        starts=None,
     ):
         root = Path(root).absolute()
         if settings is not None and not isinstance(settings, dict):
@@ -46,7 +57,8 @@ class Session:
         if backup_dir:
             destination = Path(backup_dir).resolve()
             if (
-                destination == root.resolve() or destination in root.resolve().parents
+                destination == root.resolve()
+                or destination in root.resolve().parents
                 or root.resolve() in destination.parents
             ):
                 raise ValueError("活跃训练根和备份目录必须互不包含；训练根应位于本地磁盘")
@@ -79,19 +91,26 @@ class Session:
             if import_weights and any(row["recoveries"] for row in store.experiments()):
                 raise ValueError("已有恢复点不能被导入权重覆盖；请指定新的本地训练根")
             self.controller = Controller(
-                str(Path(engine).resolve()), store, device=device, tiny=tiny,
-                imported=Path(import_weights).resolve() if import_weights else None, starts=starts,
+                str(Path(engine).resolve()),
+                store,
+                device=device,
+                tiny=tiny,
+                imported=Path(import_weights).resolve() if import_weights else None,
+                starts=starts,
             )
             controller = self.controller
             if controller.store.names("recovery"):
                 controller.command("restore")
                 wait_for(controller, lambda: controller.state == "paused")
             else:
-                controller.command("settings", {**server_defaults(str(controller.device)), **(settings or {})})
+                controller.command(
+                    "settings", {**server_defaults(str(controller.device)), **(settings or {})}
+                )
                 # 保存同时初始化模型；权重导入仍走控制器的兼容检查。
                 controller.command("save")
                 wait_for(
-                    controller, lambda: controller.saved_at is not None and controller.state == "paused"
+                    controller,
+                    lambda: controller.saved_at is not None and controller.state == "paused",
                 )
             if settings:
                 controller.command("settings", settings)
@@ -114,7 +133,8 @@ class Session:
 
     def status(self):
         return {
-            **self.controller.status(), "hardware": self.hardware,
+            **self.controller.status(),
+            "hardware": self.hardware,
             "backup": self.backup.status() if self.backup else None,
             "restoration": self.restoration,
         }

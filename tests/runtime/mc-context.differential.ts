@@ -154,12 +154,16 @@ test('自然历史前缀的回合外Pass：实际观察及完整输入相同，�
     input: JSON.stringify({ ...start, prelude: start.prelude.slice(0, index) }),
   });
   assert.equal(result.status, 0, result.stderr);
-  const compact = spawnSync(python, ['training/tests/console/mc_trace.py', engine, '--real', '--refs'], {
-    encoding: 'utf8',
-    windowsHide: true,
-    maxBuffer: 32 * 1024 * 1024,
-    input: JSON.stringify({ ...start, prelude: start.prelude.slice(0, index) }),
-  });
+  const compact = spawnSync(
+    python,
+    ['training/tests/console/mc_trace.py', engine, '--real', '--refs'],
+    {
+      encoding: 'utf8',
+      windowsHide: true,
+      maxBuffer: 32 * 1024 * 1024,
+      input: JSON.stringify({ ...start, prelude: start.prelude.slice(0, index) }),
+    },
+  );
   assert.equal(compact.status, 0, compact.stderr);
   assert.deepEqual(JSON.parse(compact.stdout).rows, JSON.parse(result.stdout).rows);
   const actual = JSON.parse(result.stdout);

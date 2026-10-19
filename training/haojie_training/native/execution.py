@@ -23,9 +23,14 @@ class InferenceStats:
     entity_slots: int = 0
     candidate_slots: int = 0
     batch_sizes: Counter = field(default_factory=Counter)
-    cuda_timing: dict = field(default_factory=lambda: {
-        "batches": 0, "upload_ms": 0.0, "model_ms": 0.0, "download_ms": 0.0
-    })
+    cuda_timing: dict = field(
+        default_factory=lambda: {
+            "batches": 0,
+            "upload_ms": 0.0,
+            "model_ms": 0.0,
+            "download_ms": 0.0,
+        }
+    )
 
     def snapshot(self):
         return {

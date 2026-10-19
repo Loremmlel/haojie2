@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
-
 from haojie_training.console.controller import Controller, defaults, identity, validate
 from haojie_training.console.memory import SamplePool, Trajectory
 from haojie_training.console.opponents import Teacher, summarize

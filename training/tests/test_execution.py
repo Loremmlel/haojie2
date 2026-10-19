@@ -3,13 +3,12 @@
 import copy
 import io
 import json
-from types import SimpleNamespace
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
-
 from haojie_training.batching import training_batches
 from haojie_training.data import INPUT_KEYS, collate_inputs, synthetic_batch, validate_inputs
 from haojie_training.model import ModelConfig, PolicyValueNet, policy_value_loss
@@ -58,7 +57,6 @@ class ExecutionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 decode(raw, 4, 5)
 
-
     def test_cpu_buffer_reuse_and_shared_statistics(self):
         model = PolicyValueNet(ModelConfig.tiny()).eval()
         stats = InferenceStats()
@@ -66,8 +64,12 @@ class ExecutionTests(unittest.TestCase):
         saved = []
         for index, sizes in enumerate(((4, 4), (4, 7, 4), (3,))):
             rows = [
-                {k: v[0] for k, v in synthetic_batch(model.config, 1, n, 5).items()
-                 if k in INPUT_KEYS} for n in sizes
+                {
+                    k: v[0]
+                    for k, v in synthetic_batch(model.config, 1, n, 5).items()
+                    if k in INPUT_KEYS
+                }
+                for n in sizes
             ]
             original = [{k: v.clone() for k, v in row.items()} for row in rows]
             expected = collate_inputs(rows, model.config)
@@ -89,23 +91,42 @@ class ExecutionTests(unittest.TestCase):
 
     def test_input_reference_ownership_and_stale_rejection(self):
         batch = synthetic_batch(ModelConfig.tiny(), 1, 4, 5)
-        keys = ("entities", "globals", "candidates", "kinds", "sources", "targets",
-                "entity_mask", "candidate_mask")
+        keys = (
+            "entities",
+            "globals",
+            "candidates",
+            "kinds",
+            "sources",
+            "targets",
+            "entity_mask",
+            "candidate_mask",
+        )
         data = b"".join(batch[k][0].numpy().tobytes() for k in keys)
-        infer = {"type": "infer", "id": 1, "model": "a" * 64, "actor": 1,
-                 "commandIndex": 0, "entities": 4, "candidates": 5, "bytes": len(data)}
-        example = {"type": "example", "inputRef": 1, "model": "a" * 64,
-                   "actor": 1, "index": 0}
+        infer = {
+            "type": "infer",
+            "id": 1,
+            "model": "a" * 64,
+            "actor": 1,
+            "commandIndex": 0,
+            "entities": 4,
+            "candidates": 5,
+            "bytes": len(data),
+        }
+        example = {"type": "example", "inputRef": 1, "model": "a" * 64, "actor": 1, "index": 0}
 
         def read(messages, enabled=True):
             client = Client.__new__(Client)
             client._input_refs = enabled
             client.read_seconds = client.decode_seconds = client.tensor_bytes = 0
             client.frame_limit = len(data)
-            client.process = SimpleNamespace(stdout=io.BytesIO(
-                json.dumps(infer).encode() + b"\n" + data + b"".join(
-                    json.dumps(message).encode() + b"\n" for message in messages
-                )))
+            client.process = SimpleNamespace(
+                stdout=io.BytesIO(
+                    json.dumps(infer).encode()
+                    + b"\n"
+                    + data
+                    + b"".join(json.dumps(message).encode() + b"\n" for message in messages)
+                )
+            )
             values = []
             client._publish = values.append
             client._read()
@@ -115,10 +136,16 @@ class ExecutionTests(unittest.TestCase):
         result = read([example])
         self.assertEqual(len(result), 3)
         for key in INPUT_KEYS:
-            self.assertEqual(result[0]["input"][key].data_ptr(),
-                             result[1]["input"][key].data_ptr())
-        for change in ({"inputRef": 2}, {"inputRef": True}, {"inputRef": -1},
-                       {"index": 1}, {"actor": 2}, {"model": "b" * 64}, {"bytes": 0}):
+            self.assertEqual(result[0]["input"][key].data_ptr(), result[1]["input"][key].data_ptr())
+        for change in (
+            {"inputRef": 2},
+            {"inputRef": True},
+            {"inputRef": -1},
+            {"index": 1},
+            {"actor": 2},
+            {"model": "b" * 64},
+            {"bytes": 0},
+        ):
             with self.subTest(change=change):
                 self.assertIsInstance(read([{**example, **change}])[-1], ValueError)
         self.assertIsInstance(read([example], enabled=False)[-1], ValueError)
@@ -136,8 +163,11 @@ class ExecutionTests(unittest.TestCase):
         exported["format"] = "haojie-stream-weights-v1"
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "model.pt"
-            for value in (payload, {"format": "haojie-stream-recovery-v2", "trainer": payload},
-                          exported):
+            for value in (
+                payload,
+                {"format": "haojie-stream-recovery-v2", "trainer": payload},
+                exported,
+            ):
                 torch.save(value, path)
                 config, actual = read_checkpoint(path)
                 self.assertEqual(config, trainer.model.config)

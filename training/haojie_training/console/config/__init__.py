@@ -58,7 +58,10 @@ def upgrade(config):
 
 def validate(config):
     if set(config) != _INTEGERS.keys() | {
-        "method", "temperature", "batch_wait_ms", "sampling_precision",
+        "method",
+        "temperature",
+        "batch_wait_ms",
+        "sampling_precision",
     }:
         raise ValueError("设置字段不匹配")
     for key, (_, low, high) in _INTEGERS.items():

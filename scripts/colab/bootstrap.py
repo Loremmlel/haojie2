@@ -19,7 +19,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--venv", type=Path, default=Path("/content/haojie-venv"))
     parser.add_argument("--target", type=Path, default=Path("/content/haojie-native"))
-    parser.add_argument("--backend", default="auto", choices=("auto", "cpu", "cu126", "cu128", "cu130"))
+    parser.add_argument(
+        "--backend", default="auto", choices=("auto", "cpu", "cu126", "cu128", "cu130")
+    )
     parser.add_argument("--device", default="cuda", choices=("cuda", "cpu"))
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
@@ -41,10 +43,24 @@ def main():
         run([python, "-c", "import sys; assert sys.version_info[:2] == (3, 12)"])
         backend = "cpu" if args.device == "cpu" and args.backend == "auto" else args.backend
         # uv 官方的自动后端选择依据驱动；版本仍受仓库精确 pin 约束。
-        run([*uv, "pip", "install", "--python", python, "--torch-backend", backend,
-             "--reinstall-package", "torch", "-e", repo / "training"], env=env)
+        run(
+            [
+                *uv,
+                "pip",
+                "install",
+                "--python",
+                python,
+                "--torch-backend",
+                backend,
+                "--reinstall-package",
+                "torch",
+                "-e",
+                repo / "training",
+            ],
+            env=env,
+        )
         run([*uv, "pip", "check", "--python", python], env=env)
-    probe = '''import json, torch
+    probe = """import json, torch
 from haojie_training.console.config.resources import hardware, server_defaults
 print(json.dumps({"torch": torch.__version__, "hardware": hardware(),
                   "initial_settings": server_defaults(DEVICE)}, indent=2, ensure_ascii=False))
@@ -55,7 +71,7 @@ if DEVICE == "cuda":
     y = x @ x
     torch.cuda.synchronize()
     assert y[0, 0].item() == 64
-'''
+"""
     run([python, "-c", probe.replace("DEVICE", repr(args.device))])
     cargo_bin = Path.home() / ".cargo/bin"
     if not (cargo_bin / "rustup").exists():
@@ -65,9 +81,26 @@ if DEVICE == "cuda":
             run(["sh", installer, "-y", "--profile", "minimal", "--default-toolchain", "none"])
     env = {**os.environ, "PATH": f"{cargo_bin}{os.pathsep}{os.environ.get('PATH', '')}"}
     run([cargo_bin / "rustup", "toolchain", "install", "1.98.1", "--profile", "minimal"], env=env)
-    run([cargo_bin / "cargo", "+1.98.1", "build", "--locked", "--release", "--manifest-path",
-         repo / "native/engine/Cargo.toml", "--target-dir", args.target.resolve()], env=env)
-    print(json.dumps({"python": str(python), "engine": str(args.target.resolve() / "release/haojie-engine")}, indent=2))
+    run(
+        [
+            cargo_bin / "cargo",
+            "+1.98.1",
+            "build",
+            "--locked",
+            "--release",
+            "--manifest-path",
+            repo / "native/engine/Cargo.toml",
+            "--target-dir",
+            args.target.resolve(),
+        ],
+        env=env,
+    )
+    print(
+        json.dumps(
+            {"python": str(python), "engine": str(args.target.resolve() / "release/haojie-engine")},
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
