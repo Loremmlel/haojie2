@@ -220,8 +220,23 @@ class ResidentTests(unittest.TestCase):
 
             def snapshot(_):
                 if not killed:
+                    deferred = []
+
+                    def slot_zero():
+                        while (event := pool.events.get(timeout=5))[0][0] != 0:
+                            deferred.append(event)
+                        return event
+
+                    # 真实推理帧到达后再终止进程，将它和 EOF 放进同一调度批次。
+                    infer = slot_zero()
+                    self.assertEqual(infer[1]["type"], "infer")
                     killed.append(pool.clients[0].process.pid)
                     pool.clients[0].process.terminate()
+                    eof = slot_zero()
+                    self.assertIsInstance(eof[1], RuntimeError)
+                    self.assertEqual(str(eof[1]), "原生进程已退出")
+                    for event in (infer, eof, *deferred):
+                        pool.events.put_nowait(event)
 
             report = pool.run(ledger, snapshot=snapshot)
             self.assertEqual(report["restarts"], 1)

@@ -38,7 +38,6 @@ def main():
         root / "training/tests/test_resident.py",
         *root.glob("training/tests/console/*.py"),
         Path(__file__).with_name("accept.py"),
-        Path(__file__).with_name("measure.py"),
         *root.glob("scripts/training/native/ci/*.py"),
     ]
     args.output.parent.mkdir(parents=True, exist_ok=True)

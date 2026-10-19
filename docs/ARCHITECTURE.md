@@ -1,52 +1,60 @@
-# 浩劫 · 引擎与页面边界
+# 浩劫 · 架构与接入边界
 
-## 数据流
+## 运行入口
 
-```text
-React 展示/交互 → ActionSpec / 分步Intent → Command
-                                           ↓
-                     applyCommand(previous, command)
-                       验证 → 原子结算 → 新GameState
-                                           ↓
-                   React棋盘、事件动画、战报、存档
-```
+| 入口              | 调用关系与职责                                                                 |
+| ----------------- | ------------------------------------------------------------------------------ |
+| 离线游戏          | React 提交 Command，TS 引擎原子结算；UI 观察新的局面、事件和战报               |
+| 联机组件          | 宿主保存权威 GameState，按玩家下发 PlayerView；组件提交命令和显示回执          |
+| 本地 AI / TS CLI  | 教师搜索仅接收公开 Observation，通过同一引擎执行命令                           |
+| Python 训练控制台 | Python 组织自对弈、模型学习、评测与恢复；Rust 持有环境、公开动作树和采样上下文 |
 
-`src/engine`为纯TypeScript，不引用React、DOM、音频、本地存储、网络或系统时间。`createGame(seed)`与`applyCommand(state, command)`是公开的局面入口；`commandError`同样通过纯引擎验证，不编写另一份仅供界面的规则。
+`src/engine/index.ts` 是纯规则入口，不依赖 React、DOM、存储、音频、网络或系统时钟。公开状态、命令、随机边界和规则数据在 TS / Rust 两端保持对应；语言内部所有权实现见[运行内核](ai/RUNTIME.md)。
 
-## 模块职责
+## 代码归属
 
-| 模块                    | 职责                                                                         |
-| ----------------------- | ---------------------------------------------------------------------------- |
-| `types.ts`              | 版本2可序列化状态、操作、来源与事件协议                                      |
-| `catalog.ts`            | 棋子、法术、武器和神龛定义，两个抽取池和公开规则说明；图鉴与引擎共享唯一数据 |
-| `core/state.ts`         | 状态内PRNG、实时属性、模式操作预算、蓄力快照、个体效果时钟                   |
-| `core/geometry.ts`      | 占位、叠放、路径、攻击阻挡、行控制；不导入页面                               |
-| `commands/combat.ts`    | 伤害、保护、死亡、人头、反击、命中效果；区别普通伤害与消灭                   |
-| `commands/abilities.ts` | 主动蓄力、技能、施法、装备、合成和改判                                       |
-| `commands/movement.ts`  | 普通移动、SZF/小BW连续冲撞、反应队列选点                                     |
-| `commands/lifecycle.ts` | 全局回合开始/结束、持续区域、虹吸、DOT和个体推进                             |
-| `commands/game.ts`      | 唯一命令边界、阶段约束、胜负和明确标注的演示局                               |
-| `session/history.ts`    | 运行时60步撤销/重做、旧v2存档验证，不接触任何存储API                         |
-| `session/recording.ts`  | 初始局面、完整命令路线与当前局面的增量存档；同版重放校验与恢复               |
-| `commands/options.ts`   | 提供可展示的操作描述与选点步骤；不含React类型                                |
+| 位置                                             | 职责                                                             |
+| ------------------------------------------------ | ---------------------------------------------------------------- |
+| `src/engine/types.ts`、`catalog.ts`              | 可序列化状态和命令协议；棋子、法术、武器、神龛及正式数值         |
+| `src/engine/core/`、`runtime/`                   | 状态、时钟、身份、几何查询、实体表示与工作分支                   |
+| `src/engine/commands/`、`setup/`                 | 操作、原子结算、召唤、合成、神龛与反应队列                       |
+| `src/engine/session/`、`online/`                 | 存档和增量回放；玩家视图与操作者权限                             |
+| `src/ai/planning/`、`evaluation/`、`simulation/` | AI 规划、缓存、启发式评分与独立概率模拟                          |
+| `src/ai/training/`、`src/match/`                 | 公开编码、分步动作树、采样与轻量对局环境                         |
+| `src/ui/`                                        | 按 game、board、inspector、hand、library、session 等功能组织页面 |
+| `native/engine/src/`                             | Rust 类型、规则命令、训练宿主、动作树、编码和记录协议            |
+| `training/haojie_training/`                      | PyTorch 模型、训练器、数据、原生进程宿主与本地 Web 控制台        |
+| `scripts/training/`                              | CLI、记录转换和开发验证；运行组件独立于已完成实验                |
 
-复杂技能不在React里直接扣血。UI仅暂存还没选完的参数（目标、落点、行列或阵亡记录），完整指令仍由引擎验证。一个动作不合法时，输入状态、手牌和随机数都不变。金身、免疫塔等不能只在UI禁用按钮，必须在效果结算层生效。
+## 规则与状态
 
-## 时钟、操作和占位
+所有游戏变化通过引擎命令边界。`applyCommand(state, command)` 成功时返回新局面；非法命令保留原状态、手牌、资源及正式随机数。内部连续采样共用同一个规则内核和提交边界。UI 只暂存未选完的目标、落点、路径和材料，完整命令仍由引擎校验。
 
-状态分别保存全局`ply`、各方`turns`以及单位`offset`。冲锋号令只推进目标单位的有效时间。`deployedAt`与`chargedOnDeploy`独立于该有效时间，记录实际部署和冲锋，避免用“提前行动”绕过部署当回合装备限制。
+全局 `ply`、各方 `turns`、单位 `offset` 和实际 `deployedAt` 分开。完整操作、连续攻击、冲撞步数、武器额外攻击各有预算，不能混用。`pending` 保存需要玩家决策的反应，支持在连锁中暂停、保存与恢复。
 
-单位`operations`是已经消耗的完整操作；`mode`锁定当前连续操作，`shots`记录本次攻击次数，`moves`记录冲撞剩余步数。`bonusAttacks`单独表示靴子的额外攻击操作，不能当通用行动点。`charge`存层数，`readyCharge`是回合开始可用层数。
+占位查询统一处理叠放和 2×2 棋子；单体目标、区域作用和覆盖格遵循各自规则。图鉴、属性和规则描述来自同一个 catalog；状态词条来自 `engine/library/keywords.ts`。来源优先级和具体规则见[维护约束](maintenance/ENGINEERING-CONSTRAINTS.md)及[规则手册](RULES.md)。
 
-位置不是简单的一格一ID：`occupants`返回全部叠放者，`targetAt`选择栈顶，2×2单位用整个footprint判定。克隆`group`关联一批8枚，并与尚未部署的同批牌联合决定是否发生最后死亡。冰冻保留阵营，只封锁动作；常驻光环和被动继续生效。
+## AI 与训练
 
-## 可恢复的结算
+网页三档 AI 位于 `src/ai`，评分和搜索位于规则引擎之外。AI 只接收 `observe` 的公开白名单，正式 seed/rng、整个 Session 和未揭示暗选留在权威宿主。独立模拟随机源不改变正式命令的随机序列。预算、收尾与缓存细节见[AI 算法](ai/AI.md)。
 
-所有等待玩家的反应都在`pending`中，不放进React回调或定时器。回合末仍有反应时，显式等待队列完成再切换，存档和悔棋能停在这一步。固定顺序与状态内RNG保证同命令重放结果相同。
+React 的 opponent 控制层负责 Worker 调度、展示节奏和取消。标准构建将 Worker 内联为 Blob；宿主未注入 Worker 时使用相同搜索生成器分片运行。新局、载入、悔棋或卸载会取消旧任务，返回结果在执行前仍须检查当前局面。
 
-`GameEvent`保存坐标/路径及可选的来源、目标身份/尺寸快照，没有对随后可变棋子的引用。`core/event-facts.ts`提供同步事实与因果作用域，不增加事件ID或消耗PRNG。表现层`board/vfx`负责纯映射、命中时序、有上限批次与可取消的棋子运动；持续状态仍由Board读取当前局面。视觉与生命周期契约见[VFX.md](VFX.md)。动画和音效是状态结果的观察者，动画结束不影响规则结果；减少动态效果或关闭声音不会改变对局。
+Rust 训练宿主持有权威环境、公开动作树、编码缓冲和采样递归上下文；Python 持有模型、优化器、样本池、历史对手与恢复点。控制台使用终局收益驱动的 MC-Q v2，原记录 CLI 保持已执行动作监督及终局价值语义。安装与日常操作见[控制台](../training/CONSOLE.md)，独立记录流程见[原生 CLI](../training/NATIVE.md)。
 
-## 接入React / Next.js
+## 页面、样式与表现
+
+`Game.tsx` 是组合根。控制器协调选点与命令，会话层负责持久化和视听生命周期，展示组件通过 props 接收数据。复杂技能结算不放进 React。
+
+组件的 CSS、状态样式和响应式规则就近维护。`styles/index.css` 控制导入顺序，最后处理减少动态效果；跨功能颜色与尺寸使用 tokens。`.hj-game` 限定组件作用域，宿主页面的 body 重置不进入组件。
+
+当游戏容器宽度达到 1100px 时，完整 9×13 正方形棋盘和主要控制一屏可用，长侧栏独立滚动。棋盘按可用宽高等比适配，宿主可用 `--haojie-height` 指定高度；手机保留自然文档流。快捷键仅作用于当前获得焦点的游戏实例。
+
+`GameEvent` 保存事实、路径和来源 / 目标快照。特效、动画和默认关闭的音效观察结算结果；表现不驱动伤害、反应或计时，也不消耗规则随机数。会话替换或卸载时释放表现任务。细节见[特效说明](VFX.md)。
+
+`UnitText` / `UnitLink` 共用图鉴与名称链接，`RuleReference` 以稳定类型区分同名单位和词条。查看实例时从最新公开局面派生，不把旧棋子对象保存为界面状态。
+
+## React / Next.js 接入
 
 ```tsx
 'use client';
@@ -62,55 +70,14 @@ export function Match() {
 }
 ```
 
-入口导入作用域CSS，不重置宿主`body`。设置`storageKey={null}`关闭组件自动持久化；宿主通过回调负责保存。`initialState`只在首次挂载读取，需要替换整个对局用新的React `key`。每个嵌入实例用不同存储键；页面同时有多实例时，快捷键已按聚焦的游戏实例隔离。
+`initialState` 和 `initialMatch` 在初次挂载读取；替换对局使用新的 React `key`。多个实例使用不同 `storageKey`，或设为 `null` 交给宿主持久化。`onStateChange` 接收完整 GameState。
 
-只复用引擎：
+联机入口 `HaojieOnlineGame` 接收宿主修订快照和明确回执，与本地入口共用 GameSurface、交互和表现。服务端使用 `applyPlayerCommand` 校验结构及操作者权限，以 `getPlayerView` 生成各玩家的嵌套公开视图。账号、房间、WebSocket、去重、重连和持久化由宿主负责，见[联机协议](ONLINE-ADAPTATION.md)。
 
-```ts
-import { createGame, applyCommand, commandError } from './haojie/src/engine';
-let state = createGame(20260907);
-const command = { type: 'summon', ultimate: false } as const;
-if (!commandError(state, command)) state = applyCommand(state, command);
-```
+## 保存、发行与验证
 
-将来可以在服务端运行同一引擎，但本版本没有网络房间。身份、权威状态、命令版本号、防作弊、重连和双方同意悔棋仍需另行实现。本地存档验证只是输入校验，不是网络认证边界。
+`Session` 保留 60 步运行时撤销缓存；持久化使用初始局面、全部实际命令路线和当前局面的增量记录。导入同版重放并核对终态后才替换会话。2.x / 3.0 继续使用 GameState v2 与 `haojie.session.v2`，旧存档兼容见[存档说明](session/SAVES.md)。
 
-## 发行与验证
+esbuild 将 React、CSS、游戏和 Worker 内联为一个 HTML。构建拒绝运行时外部导入与额外分包，保留第三方许可。Pages 根发行物与源码一同提交，CI 用 `deploy:check` 检查一致性，见[发布说明](PAGES.md)。
 
-esbuild把React、ReactDOM、CSS与游戏代码打成IIFE并内联进唯一HTML。图标和棋子使用内联矢量/CSS，音效为用户主动开启后的Web Audio合成，无外部字体、图片或音频资源。构建拒绝额外chunk/资产和外部导入，保留第三方许可文本。
-
-`tests/core`维护普通库和基础规则，`tests/ultimate`维护终极库，`tests/session`维护历史、状态图与跨能力交互。测试不按每个修复堆一组重复回归，不绑定CSS排列或React内部状态。
-
-浏览器验收默认离线`file://`，测试真实DOM操作、手机视口和导出导入；产出PNG和JSON证据，不用截图像素作为脆弱断言。仅当环境不允许页面导航时使用明确标识的内存渲染模式做布局/交互辅助验证，最终CI仍走默认文件模式。
-
-## 2.0.1工程组织补充
-
-UI入口仍为`src/index.ts`的HaojieGame及同名Props，Game.tsx仅组合视图。game/useGameController协调意图；session/useGameSession持有会话及声音/事件生命周期；session/storage提供可测试存储适配；SaveTools负责文件导入导出。各展示组件显式传props，不自行修改规则状态。
-
-CSS与各功能就近，styles/index.css保持单一可审阅的顺序，motion.css最后处理减少动态效果。原styles.css、v2.css、refinements.css已移除，不再追加版本补丁样式。公开入口不需要宿主另导入散落样式文件。
-
-已把快捷键限制在当前获得焦点的游戏实例；宿主输入及其他游戏不受影响。多个实例应使用不同storageKey或设为null。版本发布与schema分离，2.0.1保持v2存档；旧号令期限的兼容修正位于engine/migrations.ts，跨所有历史快照统一处理。
-
-结构选型见ENGINEERING.md，Pages生成入口与本机续局语义见PAGES.md。
-
-## 2.1：AI和人机历史的边界
-
-`src/ai`在引擎外生成/评分/搜索命令，`src/match`保存模式设置及人类决策撤销；React opponent/useComputer只做Worker调度、取消与命令提交。引擎可选模拟RandomSource在WeakMap里短暂生效，不改变正式命令的随机行为，不被序列化。
-
-AI接收显式白名单Observation，不接收真seed/rng或Session；小随机分支按概率展开，复杂随机采样。正式执行与假想局面不一致则重新规划；不会按真实存档预测将来的抽卡。
-
-`Session.match`可选，缺省同屏双人；`humanAnchor`保存超长AI回合之前的人类决策。旧schema和storageKey不变。对外Props新增initialMatch只影响初次挂载/新实例，与initialState一致；不改变原onStateChange只传GameState的契约。
-
-标准单文件构建先打包独立Worker，把它内联进主包并以Blob启动。宿主未注入内联常量或Worker不支持时，以相同搜索Generator分片运行；没有偷偷请求worker.js。每次任务都检查取消编号和状态引用。完整搜索与预算边界见AI.md。
-
-## 3.0：可受控会话与玩家视图
-
-本地入口继续由useGameController/useGameSession持有Session、历史、存储和AI；HaojieOnlineGame由useOnlineController接收宿主修订快照及明确回执。两者共用GameSurface、useGameInteraction和useGamePresentation，不复制棋盘或技能。GamePosition没有seed/rng，GameState保留完整权威字段；公开预检在需要随机值前停止，不制造假随机状态。服务端applyPlayerCommand负责运行时结构与操作者权限，getPlayerView负责嵌套可见性；房间、账号、WS、持久化与提交去重属于宿主。完整协议见[ONLINE-ADAPTATION.md](ONLINE-ADAPTATION.md)。
-
-## 按职责分组（2026-09-21）
-
-公开入口维持 `src/index.ts`、`src/engine/index.ts` 和 `src/ai/index.ts`。引擎根目录仅保留入口、类型与 catalog；`core/` 提供状态、几何、概率和身份查询，`commands/` 负责规则命令与结算，`setup/` 负责召唤、合成及神龛，`session/` 负责存档历史与兼容，`online/` 负责公开投影及操作者边界。
-
-AI 将规划及缓存放在 `planning/`，策略估值放在 `evaluation/`，概率展开放在 `simulation/`；公开观察、预算、客户端及 Worker 保留在 AI 根目录。UI 的 `game/interaction/` 持有控制器及选点逻辑，展示组件和 CSS 仍就近维护。`library/` 共用图鉴卡片和名称链接，不能向引擎引入展示依赖。
-
-浏览器夹具和测试宿主集中在 `tests/browser/fixtures/`，名称浏览流程在 `tests/browser/library/`。文档按 `docs/ai/`、`docs/changes/`、`docs/feedback/` 归档；作者材料和历史回放内容不改写。工具配置放在 `config/`，格式命令显式引用配置。目录检查排除依赖及生成产物，其余每个目录直属文件不超过10个。
+行为测试维护可观察规则、非法操作原子性和数据恢复。浏览器测试直接操作离线发行物；原生验证比较 TS / Rust 规则、候选、编码、规范哈希与 MC-Q 选择，并检验独立安装后的训练和恢复。入口见根 [README](../README.md)。

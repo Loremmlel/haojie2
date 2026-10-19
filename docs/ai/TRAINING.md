@@ -1,57 +1,10 @@
-# AI训练路线与高速对弈接口
+# TypeScript 训练接口与数据工具
 
-2026-09-22讨论与实现记录，作为接口和训练路线背景保存；现行状态、入口和已暂停方案只见[当前状态](STATUS.md)。目标设备为普通桌面/笔记本，CPU推理也须实用，可使用WebGPU。目标棋力是对熟练作者取得超过80%的胜率；这是后续实战验收目标，不是当前能力或训练规模保证。
+日常自对弈和持续学习使用[本地训练控制台](../../training/CONSOLE.md)。这里维护教师采样、旧记录编码、模型 CLI 对战和独立的 TS 规则参照；原生完整记录入口见[原生训练](../../training/NATIVE.md)。两条训练路径共用公开编码，保留各自的数据语义。
 
-截至2026-09-27的阶段数字与原始结论见[历史进度](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)；其中的“下一步”不再是当前任务。
+网页或 CLI 增量存档可用 `npm run train:import-save -- 输入.json 输出.jsonl.gz` 转为训练轨迹，再交给已有审计和编码器。起点、未结束局标签与公开信息边界见[存档与训练转换](../session/SAVES.md)。
 
-网页/CLI增量存档可通过`npm run train:import-save -- 输入.json 输出.jsonl.gz`转换为增量训练轨迹，并沿用审计与编码器；起点、未结束局标签和隐私边界见[存档与训练转换](../session/SAVES.md)。旧快照训练JSONL不兼容，须重新生成。
-
-## 已讨论的训练方向
-
-采用小型实体Transformer策略/价值网络、显式处理随机事件的MCTS、现有手工AI热启动，再持续自对弈。棋子价值不均不妨碍强化学习；真正困难的是多实体能力关联、组合动作、长期收益、随机性和罕见场景覆盖。
-
-网络读取结构化Observation：棋子/手牌/地标、坐标与尺寸、当前有效能力（含继承能力）、装备、状态来源、实际与个人时钟、独立行动预算、基地、人头、阶段和反应。数值及规则身份继续来自catalog与共享引擎查询，不复制UI文案或让模型靠解析中文规则恢复属性。
-
-实体注意力是候选结构，不保证比简单网络更省样本或更强。精确规则已知，优先直接调用引擎模拟，不先训练一个近似规则转移模型。
-
-搜索必须遵守：
-
-- 抽牌、暴击、免疫等按真实概率枚举或独立采样，随机分支不能选最幸运结果。
-- 不读取正式seed/rng，不从历史推算未来随机序列。实局PRNG和模拟随机源独立。
-- 同一玩家可连续发出多个命令，价值回传按实际决策所有者处理，不能每层自动变号。
-- 反应由所属玩家决策；回合外巨大化须保留相应权限和明确的响应调度。
-- 目前手牌公开；神龛共同揭示前的暗选才有额外隐藏信息。普通公开局面搜索不能补造对手选择；未来需要信息集/混合策略处理。
-- 路径、三材料合成、多目标技能适合分层选择、逐步扩展，不永久限制在手工AI裁剪后的候选内。
-
-训练顺序：
-
-1. 用不同种子、先后手、规则模式和教师难度产生公开观察/动作样本，模仿策略热启动。
-2. 价值主要学习真实终局结果，手工评分最多作辅助目标，不能直接当作实测胜率。
-3. 接入网络与MCTS，将搜索访问次数分布作为策略目标，终局结果作为价值目标，持续迭代。
-4. 保留历史模型、手工AI和不同风格对手，检查策略互相克制和遗忘。
-5. 用合法的局面、罕见组合及作者实战补齐薄弱点，训练集和最终实战测试集分离。
-
-几万至几十万局是实验规模，是否足够由验证曲线决定。10万局×每局300个决策×每次200次搜索模拟为60亿次模拟；一条模拟可能需要多次规则转移，缓存、批处理和网络成本也必须计入。不能用裸引擎命令吞吐直接估算完整训练耗时。
-
-## 模型大小与浏览器部署
-
-| 候选规模 | FP16原始权重 | 定位                                           |
-| -------- | ------------ | ---------------------------------------------- |
-| 10–15M   | 20–30MB      | 正式首版优先，兼顾普通笔记本CPU与搜索吞吐      |
-| 20–30M   | 40–60MB      | WebGPU及棋力对照实验                           |
-| 50M      | 100MB        | 后续大模型/教师候选；默认CPU＋MCTS偏重，需实测 |
-
-首个正式候选为6层Encoder、隐藏维度384、6个注意力头、FFN维度1536，共享策略/价值主干。当时已实现11,547,266参数的[PyTorch骨架与训练子项目](../../training/README.md)，采用候选评分头和价值头，并比较CPU/XPU与训练精度。此段写作时完整游戏特征编码、候选生成及浏览器部署尚待接入；前两项后来已实现，浏览器模型仍未进入离线发行版，见[当前状态](STATUS.md)。合成数据训练仅验证计算闭环，不代表已有棋力。早期更小配置只用于快速验证。
-
-参数量不是延迟：实体数量、输出动作表示、算子支持、批大小、CPU/GPU传输和搜索次数都会影响速度。分档填充实体，不因固定token长度截断克隆、叠放或必要状态。一次决策若串行评估200个新叶子，单次10ms就仅网络耗时2秒；本游戏一回合有多个决策，须评估完整回合等待时间。
-
-WebGPU可评估FP16，但要检测shader-f16与实际算子支持。CPU/WASM不统一要求FP16，应比较FP32和受支持的8位量化版本，重新验收量化后的策略/价值与棋力。稳定形状、兼容算子和批量叶子推理值得测量；批次过大也可能削弱树搜索的及时反馈。
-
-长期训练前还应在目标浏览器测约12M/25M模型的加载、编译预热、batch=1及小批量推理、峰值内存。此段写作时尚无浏览器基准；之后仅完成约11.7M模型的本地 HTTP 前向测试，不代表离线发行版、完整命令解码或峰值内存验收，见[历史记录](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md#浏览器实测117m模型)。Node规则基准和PyTorch训练基准不能代替浏览器推理测试。
-
-保持单个离线HTML。50M FP16权重约100MB，Base64内联约133MB，另有运行时、解码和激活内存。实际file://环境必须验证WASM多线程能力；不能套用开启跨源隔离的网页多线程数据。模型训练在独立工具中进行，不给发行HTML加入训练服务或隐式下载。
-
-## 本轮已实现的接口
+## 模块职责
 
 | 文件                            | 责任                                                      |
 | ------------------------------- | --------------------------------------------------------- |
@@ -63,7 +16,7 @@ WebGPU可评估FP16，但要检测shader-f16与实际算子支持。CPU/WASM不�
 | `scripts/training/self-play.ts` | 热启动教师对弈及可选流式公开样本记录                      |
 | `scripts/training/benchmark.ts` | 规则、复制、编码、预检、动作描述、对弈和多进程基准        |
 
-环境每步仍调用applyCommand，结算期间完整生成事件，成功后才清理events/log。不保存Session的60步历史，不逐步解析/保存整份存档，不计算trace；正式随机数、serial、规则状态与原版一致。没有修改引擎、旧CLI、存档格式或浏览器行为。
+环境用 `applyRuntimeCommand` 接续拥有型工作局面，与公开 `applyCommand` 共用原子规则内核；成功后清理 events/log，正式随机数、serial 和规则状态保持一致。它不保留 Session 的撤销历史。`observation` 导出独立快照，内部 `view` 提供同一决策中的公开只读视图。
 
 `status()`是轻量状态；`step(actor, command)`只返回status，需要网络输入时显式调用`observation(viewer)`或`frame(viewer)`，避免重复观察复制。fromState仅供宿主导入可信引擎局面，策略和JSONL协议没有权威局面导出接口。
 
@@ -115,9 +68,9 @@ actions提供`factorized-unpruned`表示，包括共享unitActions/cardActions�
 
 geometry复用共享查询：`{type:"attack",unitId,targetId}`返回可选方向路径；`{type:"skill",targetId}`返回巨大化落点；`{type:"synthesize",recipeId,materialIds}`返回指定三材料移除后的落点。方向路径查询不能代替手绘路径的完整空间，手绘path仍由step中的validAttackRoute校验。
 
-当前教师仍使用原有启发式候选，不会探索全部路径/组合，也不会自动新增回合外响应窗口。这是热启动基线的策略限制，不是引擎权限限制。共享公开状态编码与分步动作树已实现，覆盖及参数/完整命令的区别见[编码说明](../../training/ENCODING.md)。未来MCTS需实现渐进扩展及响应调度；当前接口尚未接入MCTS、完整命令的精确合法掩码、浏览器网络推理或信息集求解器。
+当前教师仍使用原有启发式候选，不会探索全部路径/组合，也不会自动新增回合外响应窗口。这是热启动基线的策略限制，不是引擎权限限制。共享公开状态编码与分步动作树已实现，覆盖及参数/完整命令的区别见[编码说明](../../training/ENCODING.md)。模型 CLI 可显式选择有限候选的 beam / MCTS / Gumbel 解码；控制台使用独立的 MC-Q 分解采样。两者的预算、样本和评测结果分别记录。
 
-纯网络CLI对战已由`npm run train:match`提供，复用分步动作树的贪心排序/空分支回溯；Node负责引擎，常驻Python只接收公开编码张量。网络预算耗尽和推理异常明确暂停，单候选免推理，最终命令仍交给引擎原子裁定。用法与统计边界见[网络CLI对战](../../training/README.md#网络cli对战)，当时的运行结果见[历史进度](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)。
+纯网络CLI对战已由`npm run train:match`提供，复用分步动作树的贪心排序/空分支回溯；Node负责引擎，常驻Python只接收公开编码张量。网络预算耗尽和推理异常明确暂停，单候选免推理，最终命令仍交给引擎原子裁定。用法见[Python 训练包](../../training/README.md)，既往运行结果见[历史索引](HISTORY.md)。
 
 ## 生成热启动样本
 
@@ -148,15 +101,4 @@ npm run bench:training -- --games 2 --plies 100 --commands 3000 --nodes 100
 
 区分clone、observe、JSON编码、applyCommand、独立随机转移并输出观察、公开预检、动作空间查询，以及相同79条实录的引擎/训练/Session序列化/协议编码开销。Session测试不含磁盘IO和教师trace，协议编码测试不含OS管道传输，均明确标记。演示局是压力样例，不是自然对局分布。教师测试另测经典/神龛实际对弈，报告完成、截断、命令数与模拟数，不计算对作者胜率。
 
-本机结果与Node是否足够的判断见[Node性能评估](https://github.com/Loremmlel/haojie2/blob/146ad89d274ec404cd16070a0e77b98703c7a8b1/docs/ai/TRAINING-NODE-2026-09-22.md)；11.55M网络的CPU/XPU与精度对比见[PyTorch训练性能](https://github.com/Loremmlel/haojie2/blob/146ad89d274ec404cd16070a0e77b98703c7a8b1/docs/ai/TRAINING-PYTORCH-2026-09-22.md)。不在CI中用机器耗时写脆弱阈值；TypeScript行为测试在tests/training，沿用npm test自动运行，Python测试命令见训练子项目说明。
-
-最终80%目标需冻结规则、模型和推理预算，使用未参与训练的种子、平衡先后手，并让作者熟悉模型打法。近似独立且条件稳定时，100局80胜的95% Wilson区间约71%–87%，不足以可靠断言真实胜率至少80%。不得把短局、自对弈或固定种子回放等同于对作者胜率。
-
-## 研究与实现参考
-
-- [AlphaStar论文](https://storage.googleapis.com/deepmind-media/research/alphastar/AlphaStar_unformatted.pdf)：实体注意力、模仿学习和历史对手联盟的参考；其强化学习算法不是MCTS。
-- [AlphaZero论文](https://arxiv.org/pdf/1712.01815)：策略/价值网络、搜索分布与自对弈迭代。
-- [ReBeL论文](https://arxiv.org/abs/2007.13544)：隐藏信息下不能直接照搬完整信息搜索。
-- [ONNX Runtime Web性能指南](https://onnxruntime.ai/docs/tutorials/web/performance-diagnosis.html)：CPU精度选择、多线程条件、WebGPU图捕获与传输开销。
-- [Chrome WebGPU半精度说明](https://developer.chrome.com/blog/io24-webassembly-webgpu-2)：shader-f16的可用性与性能影响。
-- [Node 22流文档](https://nodejs.org/docs/latest-v22.x/api/stream.html)：常驻管道背压。
+TS 行为测试位于 `tests/training`，随 `npm test` 运行；Python 测试见训练包说明。当前原生差分验证位于 `scripts/training/native/`，核对规则、候选、编码、哈希和 MC-Q 选择。历史性能实验、阶段报告和原始测量见[历史索引](HISTORY.md)。

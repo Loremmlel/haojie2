@@ -298,6 +298,8 @@ class Pool:
                         self.clients[i] = self.new_client(i)
                         continue
                     if isinstance(raw, RuntimeError) and str(raw) == "原生进程已退出":
+                        # 同一批可能先收到推理帧；进程已退出，不能再向重建槽位回传旧请求。
+                        pending = [item for item in pending if item[0] != i]
                         restart(i, raw)
                         continue
                     message = self.clients[i].checked(raw)

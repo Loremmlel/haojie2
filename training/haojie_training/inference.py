@@ -13,7 +13,7 @@ import torch
 
 from .data import FLOAT_KEYS, INDEX_KEYS, INPUT_KEYS, MASK_KEYS, validate_inputs
 from .model import NETWORK_VERSION, PolicyValueNet
-from .runtime import autocast, checkpoint_config, resolve_device, synchronize
+from .runtime import autocast, read_checkpoint, resolve_device, synchronize
 
 
 def decode_input(raw, config):
@@ -66,8 +66,7 @@ def main(load_checkpoint=None):
     torch.set_num_interop_threads(1)
     device = resolve_device(args.device)
     if load_checkpoint is None:
-        config = checkpoint_config(args.checkpoint)
-        payload = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+        config, payload = read_checkpoint(args.checkpoint)
         metadata = payload["metadata"]
         model = PolicyValueNet(config)
         model.load_state_dict(payload["model"])

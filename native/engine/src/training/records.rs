@@ -1,6 +1,8 @@
 //! 新原生记录采用明确的规范哈希，不伪装旧 TS JSON 指纹。完整行错误不能视为截断。
 use crate::{
-    boundary, encoding,
+    boundary,
+    catalog::rules_hash,
+    encoding,
     model::{Catalog, State},
     runtime,
     tree::Tree,
@@ -16,13 +18,6 @@ use std::{
 
 pub const FORMAT: &str = "haojie-native-record-v1";
 pub const AUDITOR: &str = "haojie-native-audit-v1";
-pub const RULES: &[u8] = include_bytes!("../../data/rules.json");
-pub fn bytes_hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-pub fn rules_hash() -> String {
-    bytes_hash(RULES)
-}
 pub fn auditor(catalog: &Catalog) -> Value {
     json!({"version":AUDITOR,"build":env!("HAOJIE_SOURCE_SHA256"),"rulesHash":rules_hash(),
         "ruleset":crate::model::RULESET,"schema":catalog.encoding})
@@ -458,22 +453,17 @@ mod tests {
                 .step_by(2)
                 .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
                 .collect();
-            assert_eq!(hash(&vector["value"]), bytes_hash(&bytes));
+            assert_eq!(
+                hash(&vector["value"]),
+                format!("{:x}", Sha256::digest(&bytes))
+            );
         }
         assert_ne!(hash(&json!({})), hash(&json!({"a": null})));
     }
 
     #[test]
     fn valid_hash_chain_cannot_claim_a_nonterminal_game_is_terminal() {
-        let mut catalog = None;
-        crate::handle(
-            serde_json::from_slice(RULES).unwrap(),
-            &mut catalog,
-            &mut vec![],
-            &mut crate::Resident::default(),
-        )
-        .unwrap();
-        let catalog = catalog.unwrap();
+        let catalog = crate::catalog::embedded().unwrap();
         let start = Start {
             seed: 71,
             rules: "classic".into(),

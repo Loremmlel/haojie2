@@ -8,9 +8,8 @@ import torch
 
 from haojie_training.data import synthetic_batch
 from haojie_training.model import ModelConfig
-from haojie_training.runtime import checkpoint_config
-
 from haojie_training.research.spatial import SpatialPolicyNet
+from haojie_training.runtime import checkpoint_config
 
 
 class RecoveryTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 //! 常驻训练宿主：JSON 控制与拥有型二进制公开张量，递归决策上下文不离开 Rust。
 use crate::{
-    boundary, encoding,
+    boundary, catalog, encoding,
     model::Catalog,
     policy::Random,
     records::{self, Start, Writer},
@@ -184,7 +184,7 @@ fn sample<R: BufRead, W: Write>(
     };
     let mut current_hash = records::state_hash(&state)?;
     if let Some(writer) = writer.as_mut() {
-        writer.push(json!({"type":"game","format":records::FORMAT,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],"model":request.model,"start":request.start,"initialHash":current_hash,"samplerSeed":request.sampler_seed,"policyKind":"model-gumbel-backtracking-v2","maxCommands":request.max_commands,"maxPlies":request.max_plies}))?;
+        writer.push(json!({"type":"game","format":records::FORMAT,"rulesHash":catalog::rules_hash(),"ruleset":crate::model::RULESET,"encoding":catalog.encoding["encoding"],"model":request.model,"start":request.start,"initialHash":current_hash,"samplerSeed":request.sampler_seed,"policyKind":"model-gumbel-backtracking-v2","maxCommands":request.max_commands,"maxPlies":request.max_plies}))?;
     }
     wire.model = request.model.clone();
     wire.emit_decisions = request.mc_context && request.memory && request.teacher.is_none();
@@ -419,19 +419,7 @@ fn sample<R: BufRead, W: Write>(
     Ok(result)
 }
 pub fn serve() -> Result<(), String> {
-    let manifest: Value = serde_json::from_slice(include_bytes!("../../data/manifest.json"))
-        .map_err(|e| e.to_string())?;
-    if manifest["sha256"] != records::rules_hash() {
-        return Err("embedded rules package hash mismatch".into());
-    }
-    let mut catalog = None;
-    crate::handle(
-        serde_json::from_slice(records::RULES).map_err(|e| e.to_string())?,
-        &mut catalog,
-        &mut vec![],
-        &mut crate::Resident::default(),
-    )?;
-    let catalog = catalog.ok_or("missing rules")?;
+    let catalog = catalog::embedded()?;
     let mut wire = Wire {
         input: io::stdin().lock(),
         output: io::BufWriter::new(io::stdout().lock()),
@@ -445,7 +433,7 @@ pub fn serve() -> Result<(), String> {
         tensor_bytes: Vec::new(),
         control_bytes: Vec::new(),
     };
-    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":records::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe(),"capabilities":["memory-examples-v1","mc-context-v2","actor-model-routing-v1","teacher-v2"]}))?;
+    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":catalog::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe(),"capabilities":["memory-examples-v1","mc-context-v2","actor-model-routing-v1","teacher-v2"]}))?;
     loop {
         let request = wire.read()?;
         let result = match request["op"].as_str() {

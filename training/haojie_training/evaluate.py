@@ -220,7 +220,7 @@ def main():
 
     from .data import load_dataset
     from .model import PolicyValueNet
-    from .runtime import checkpoint_config, resolve_device
+    from .runtime import read_checkpoint, resolve_device
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
@@ -235,11 +235,10 @@ def main():
     if args.report.exists() or min(args.batch_size, args.threads) < 1:
         parser.error("报告须为新路径，批量与线程数须为正")
     torch.set_num_threads(args.threads)
-    config = checkpoint_config(args.checkpoint)
+    config, payload = read_checkpoint(args.checkpoint)
     train, train_meta = load_dataset(args.data, config)
     validation, validation_meta = load_dataset(args.validation, config)
     validate_split(train_meta, validation_meta)
-    payload = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     digests = {}
     for key, path in (("dataset_sha256", args.data), ("validation_sha256", args.validation)):
         with path.open("rb") as source:

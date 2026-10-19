@@ -116,15 +116,7 @@ impl EntityIndex {
 mod tests {
     #[test]
     fn changed_layout_and_shared_ids_preserve_first_match_and_snapshot_handles() {
-        let mut catalog = None;
-        crate::handle(
-            serde_json::from_slice(crate::records::RULES).unwrap(),
-            &mut catalog,
-            &mut vec![],
-            &mut crate::Resident::default(),
-        )
-        .unwrap();
-        let catalog = catalog.unwrap();
+        let catalog = crate::catalog::embedded().unwrap();
         let mut source = crate::runtime::create(8137, false, &catalog).unwrap();
         for x in [3.0, 4.0, 5.0] {
             crate::resolution::add_unit(

@@ -9,7 +9,7 @@ import {
   type McDecision,
   type McNode,
 } from '../../src/ai/training/sampling/mc';
-import { randomStream } from '../../scripts/training/economics/policy';
+import { randomStream } from '../../scripts/training/sampling/policy';
 import { createGame, applyCommand, type Player, type Command } from '../../src/engine';
 import { hasTrait } from '../../src/engine/core/traits';
 import { observe, decisionOwner } from '../../src/ai/observation';

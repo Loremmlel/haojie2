@@ -2,6 +2,18 @@
 
 `native/engine/` 是正式维护的 Rust 引擎，crate 与默认二进制均为 `haojie-engine`。现有单 crate、CLI 与运行内核继续维护，内部 Rust 模块不承诺永久稳定。浏览器使用 TS；旧教师/PUCT 不由原生训练入口调用。
 
+## 代码职责
+
+| 位置                                   | 维护职责                                             |
+| -------------------------------------- | ---------------------------------------------------- |
+| `src/main.rs`                          | CLI 模式选择和版本输出                               |
+| `src/development.rs`                   | 可信开发 JSON 协议、驻留会话及差分/基准入口          |
+| `src/setup/catalog.rs`                 | 两个宿主共用的规则包加载、完整校验和规则字节哈希     |
+| `src/core/command.rs`、`src/commands/` | 命令类型、公共阶段检查后的分派及规则执行             |
+| `src/training/`                        | 训练宿主、公开输入边界、动作树、编码、采样和记录审核 |
+
+训练宿主直接加载嵌入规则包；开发会话先接收 `init`。两者共用同一解析器和规则内核，开发协议的驻留状态只在完整校验成功后替换。新增模块由构建身份和交付打包自动收集，不维护第二份源码清单。
+
 ## 构建与支持范围
 
 在仓库根目录执行，Rust/Cargo 1.98.1、链接器；Python 主线要求 3.12。Windows x64 与 Linux x64 纳入 CI，macOS 与其他架构尚未验收。CUDA 由现有 Python 模型负责，Rust 不绑定 GPU；XPU 不在本轮验证范围。
@@ -27,7 +39,7 @@ cargo fmt --manifest-path native/engine/Cargo.toml --check
 
 训练协议 `haojie-training-binary-v1`：JSON 行控制加 LE 张量；握手附完整引擎身份。记录为 `haojie-native-record-v1`，编码为 `haojie-entities-factorized-v1`，规则包为 `haojie-rules-package-v1`。具体安装、命令、张量所有权和恢复约束见 [training/NATIVE.md](../../training/NATIVE.md)。
 
-控制台能力通过训练握手 `capabilities` 显式协商：`memory-examples-v1`、`actor-model-routing-v1`、`teacher-v1`。`sample` 可选 `memory:true`（禁止同时传记录路径）、`models:[先手哈希,后手哈希]`、`teacher:1|2`（仅内存模式）。模型请求附实际 `actor` 与该方固定 `model`；权威接受后才发送同一 `records::examples` 生成的 `example` 张量及 index/step/stage/selected/actor/model。拒绝试探不输出标签。教师消息只有该方公开 `observation`，回复命令仍由权威引擎校验；评测不输出训练样本。省略字段保持完整记录CLI行为，编码/规则/记录版本未改变。流式恢复另用 `haojie-stream-recovery-v1`，见[控制台协议与生命周期](../../training/CONSOLE.md)。
+控制台能力通过训练握手 `capabilities` 显式协商：`memory-examples-v1`、`mc-context-v2`、`actor-model-routing-v1`、`teacher-v2`。`sample` 可选 `memory:true`（禁止同时传记录路径）、`models:[先手哈希,后手哈希]`、`teacher:1|2`（仅内存模式）。模型请求附实际 `actor` 与该方固定 `model`。普通内存样本在权威接受后由 `records::examples` 编码；`mcContext:true` 则发送采样器真实分解选择与 Pass 的输入张量，附 `semantics:mc-context-v2`、decision/step/stage/selected/actor/model。教师消息只有该方公开 `observation`，回复命令仍由权威引擎校验；教师评测不输出训练样本。省略字段保持完整记录CLI行为，编码/规则/记录版本未改变。流式恢复另用 `haojie-stream-recovery-v1`，见[控制台协议与生命周期](../../training/CONSOLE.md)。
 
 审核器 `haojie-native-audit-v1` 的完成回执绑定同一次读取的原始字节 SHA256、规则包、完整编码 schema 和审核器源码身份。Python 的已审核对象只在当前可信进程内复用，不能从外部文件加载为缓存凭据；复用前还核对实际二进制内容与当前记录内容。来源替换之后不重新打开文件生成张量。`audit --prepare` 是推荐的单遍出口；单独 `audit` 保留，独立 TS 规则审核继续在宿主 CI 执行。
 
@@ -48,8 +60,8 @@ node --import tsx scripts/training/native/sampling/validate.ts --output artifact
 ## 维护、升级与排错
 
 - 唯一规则数值源仍是 TS catalog/combat/recipes/pools/schema。变动后运行 `scripts/training/native/rules-package.ts` 并提交规则包；`npm run train:rules:check` 拒绝过期。安装和运行不自动生成规则包。
-- 按 [双端运行内核对应](../../docs/ai/performance/kernel/ARCHITECTURE.md) 同步规则、公开白名单、字段所有权和编码。新增冷字段须说明分离/失效边界；差分覆盖失败、连锁、反应、同长度替换和历史快照。
+- 按 [双端运行内核对应](../../docs/ai/RUNTIME.md) 同步规则、公开白名单、字段所有权和编码。新增冷字段须说明分离/失效边界；差分覆盖失败、连锁、反应、同长度替换和历史快照。
 - 升级先保存原始记录、模型、数据与来源，再核对 `--version` 和检查点契约。旧模型/记录按原版本验收；不改写历史哈希，不因改名升级协议。完整学习阶段可恢复；半局递归栈不可精确恢复。
 - 规则包/协议/编码不匹配时重建匹配的源码版本；不回退 TS。命令超时或模型响应错误保留成功记录前缀，关闭本次子进程，再从报告定位错误。
 - 默认开发验证只用随仓库夹具；`validate.ts --all-workers` 是显式历史研究入口，依赖原始历史轨迹，缺数据不得跳过或补造。
-- 本轮状态与性能证据见 [唯一任务记录](../../docs/ai/performance/engine/README.md)；旧 prototype/kernel 报告及其路径是历史证据，不批量改写。引擎转正与提速不等于模型棋力提高。
+- 当前维护范围见 [AI / 训练状态](../../docs/ai/STATUS.md)；既往性能数据和失败证据保留在[固定历史记录](https://github.com/Loremmlel/haojie2/blob/d920e181dccb425c0a77d57b473fb98f45163b69/docs/ai/performance/engine/README.md)。

@@ -10,7 +10,7 @@ import torch
 from ..data import collate_examples
 from ..model import ModelConfig, PolicyValueNet
 from ..prepare import digest, save_split
-from ..runtime import Trainer, checkpoint_config
+from ..runtime import Trainer, read_checkpoint
 from .audit import audit, validate_audited
 from .client import Client
 from .pool import Pool
@@ -54,8 +54,7 @@ def initialize(executable, path, seed=20261003, tiny=False):
 
 
 def model_from(path, ready, device="cpu"):
-    config = checkpoint_config(path)
-    payload = torch.load(path, weights_only=True, map_location="cpu")
+    config, payload = read_checkpoint(path)
     expected = metadata(ready)
     if any(
         payload["metadata"].get(key) != expected[key]

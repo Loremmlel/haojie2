@@ -107,11 +107,11 @@ export { allocateBudget } from './src/ai/budget';
 AI_BUDGET=production AI_SEEDS=7,42 AI_PLIES=24 AI_REPORT=artifacts/production-pairs npm run bench:ai:compare -- /absolute/path/old-audit.mjs
 ```
 
-production模式忽略`AI_NODES`，每边各用原版/新版自己的分配器。fixed模式用同节点数与很大安全超时，只适合另列的固定工作量实验。当前比较摘要仍保留nodes字段作为fixed参数，阅读时必须结合budgetMode。本次冻结生产结果及逐局面证据见`docs/ai/AI-BUDGET-AUDIT-2026-09-08.md`。
+production模式忽略`AI_NODES`，每边各用原版/新版自己的分配器。fixed模式用同节点数与很大安全超时，只适合另列的固定工作量实验。当前比较摘要仍保留nodes字段作为fixed参数，阅读时必须结合budgetMode。本次冻结生产结果及逐局面证据见[历史记录](https://github.com/Loremmlel/haojie2/blob/d920e181dccb425c0a77d57b473fb98f45163b69/docs/ai/AI-BUDGET-AUDIT-2026-09-08.md)。
 
 ## 2026-09-15：结束前重新判断
 
-CLI与页面统一拒绝直接复用缓存中的`end`。新的收尾检查及实际失误位置见`AI-END-TURN-2026-09-15.md`。trace的`stage=end-turn`只和同表的回合结束分比较，不与`reply`或中途`static`分横比；对应`outcomes`包含一次仅供比较的结束回合投影，`line`是实际计划。`endTurnChecks/endTurnImproved`记录检查次数和是否补回收益。
+CLI与页面统一拒绝直接复用缓存中的`end`。新的收尾检查及实际失误位置见[历史记录](https://github.com/Loremmlel/haojie2/blob/d920e181dccb425c0a77d57b473fb98f45163b69/docs/ai/AI-END-TURN-2026-09-15.md)。trace的`stage=end-turn`只和同表的回合结束分比较，不与`reply`或中途`static`分横比；对应`outcomes`包含一次仅供比较的结束回合投影，`line`是实际计划。`endTurnChecks/endTurnImproved`记录检查次数和是否补回收益。
 
 冻结2026-09-15修复后或更晚版本作为生产对照时，临时bundle入口应同时导出该版本的缓存策略：
 

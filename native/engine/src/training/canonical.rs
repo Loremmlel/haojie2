@@ -321,15 +321,7 @@ mod tests {
 
     #[test]
     fn typed_stream_matches_value_tree_for_presence_extensions_snapshots_and_rollback() {
-        let mut catalog = None;
-        crate::handle(
-            serde_json::from_slice(crate::records::RULES).unwrap(),
-            &mut catalog,
-            &mut vec![],
-            &mut crate::Resident::default(),
-        )
-        .unwrap();
-        let catalog = catalog.unwrap();
+        let catalog = crate::catalog::embedded().unwrap();
         for shrine in [false, true] {
             let mut s = crate::runtime::create(8137, shrine, &catalog).unwrap();
             for (kind, owner, x) in [("u17", 1, 3.0), ("18", 2, 5.0)] {

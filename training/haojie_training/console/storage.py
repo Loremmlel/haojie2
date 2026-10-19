@@ -12,7 +12,45 @@ from pathlib import Path
 
 import torch
 
+from ..model import ModelConfig, PolicyValueNet
+from ..runtime import Trainer
+from .config import validate
+
 LIMIT = 20_000_000_000
+FORMAT = "haojie-stream-recovery-v2"
+
+
+def restore_recovery(store, metadata, device, log):
+    """从最近有效恢复点还原学习器，损坏的新点只记日志并继续检查旧点。
+
+    读取不覆盖文件；规则、学习目标、优化器与数值健康均通过后才返回。
+    学习器恢复原有 Torch 随机状态，控制器随后接管进度和采样随机状态。
+    """
+    for name in reversed(store.names("recovery")):
+        try:
+            payload = torch.load(store.root / name, weights_only=True, map_location="cpu")
+            saved = payload["trainer"]
+            if payload["format"] != FORMAT or saved["metadata"] != {
+                **metadata,
+                "policy_source": payload["config"]["method"],
+            }:
+                raise ValueError("恢复点规则/编码不匹配")
+            validate(payload["config"])
+            trainer = Trainer(
+                PolicyValueNet(ModelConfig(**saved["config"])),
+                device,
+                precision=saved["precision"],
+                optimizer="auto",
+                objective=payload["config"]["method"],
+            )
+            trainer.restore_payload(saved, saved["metadata"])
+            health = trainer.health()
+            if not health["finite_parameters"] or not health["finite_optimizer"]:
+                raise ValueError("恢复点含非有限学习状态")
+            return trainer, payload
+        except Exception as error:
+            log(f"恢复点 {name} 无效：{error}")
+    raise ValueError("无有效恢复点；未覆盖已有文件")
 
 
 class QuotaError(RuntimeError):
@@ -189,11 +227,11 @@ class Store:
                 self.remove(old)
         return name
 
-    def metrics(self, payload):
+    def metrics(self, payload, prefix=""):
         data = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode()
         if len(data) > 2_000_000:
             raise QuotaError("指标超过2MB额度")
-        self.write("metrics/recent.json", data)
+        self.write((Path(prefix) / "metrics/recent.json").as_posix(), data)
 
     def read_metrics(self, prefix=""):
         path = self.root / prefix / "metrics/recent.json"
@@ -250,10 +288,7 @@ class ExperimentStore:
         return self.store.save_tensor(f"{self.prefix}/{category}", step, payload, keep)
 
     def metrics(self, payload):
-        data = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode()
-        if len(data) > 2_000_000:
-            raise QuotaError("指标超过2MB额度")
-        self.store.write(f"{self.prefix}/metrics/recent.json", data)
+        self.store.metrics(payload, self.prefix)
 
     def snapshot(self):
         return self.store.snapshot()

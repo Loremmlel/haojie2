@@ -14,7 +14,7 @@ pub fn describe() -> Value {
         },
         "ruleset": crate::model::RULESET,
         "rulesPackage": "haojie-rules-package-v1",
-        "rulesHash": crate::records::rules_hash(),
+        "rulesHash": crate::catalog::rules_hash(),
         "encoding": "haojie-entities-factorized-v1",
         "record": crate::records::FORMAT,
         "auditor": crate::records::AUDITOR,

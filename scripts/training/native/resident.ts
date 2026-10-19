@@ -8,29 +8,19 @@ import type { nativeClient } from './client';
 
 type Client = Awaited<ReturnType<typeof nativeClient>>;
 const canonical = <T>(value: T): T => JSON.parse(JSON.stringify(value));
-export interface CommandWindow {
-  source: string;
-  game: number;
-  start: number;
+interface CommandWindow {
   state: GameState;
   commands: Command[];
 }
-export const windowIdentity = ({ source, game, start, commands }: CommandWindow) => ({
-  source,
-  game,
-  start,
-  commands: commands.length,
-});
-
 /** 与 TrainingEnvironment 一样逐步清理表现历史；trace 保留清理前的命令结果供差分。 */
-function referenceWindow(window: CommandWindow, trace: boolean, clearHistory = true) {
+function referenceWindow(window: CommandWindow, clearHistory: boolean) {
   let state = window.state;
   const results = [];
   for (const command of window.commands) {
     state = applyCommand(state, command);
     results.push({
       status: 'available',
-      ...(trace ? { state: canonical(state) } : {}),
+      state: canonical(state),
     });
     if (clearHistory) {
       state.events = [];
@@ -88,13 +78,10 @@ export async function validateResidentProtocol(client: Client) {
   const window = {
     state,
     commands,
-    source: 'resident-contract',
-    game: 0,
-    start: 0,
   };
   for (const clearHistory of [false, true]) {
     const { revision } = await client.request({ op: 'reset', state });
-    const expected = referenceWindow(window, true, clearHistory);
+    const expected = referenceWindow(window, clearHistory);
     const result = await client.request({
       op: 'step',
       revision,
@@ -237,118 +224,5 @@ export async function validateResidentProtocol(client: Client) {
     resumeAfterFailure: true,
     randomAttackAndPassivesEquivalent: true,
     invalidSummonRollsBackPaymentAndRng: true,
-  };
-}
-
-/** 逐命令比较连续轨迹的事件及终态；不能跳过命令或在中途重置以掩盖状态漂移。 */
-export async function validateWindow(client: Client, window: CommandWindow) {
-  const before = JSON.stringify(window);
-  const { revision } = await client.request({
-    op: 'reset',
-    state: window.state,
-  });
-  const expected = referenceWindow(window, true);
-  const actual = await client.request({
-    op: 'step',
-    revision,
-    commands: window.commands,
-    trace: true,
-    clearHistory: true,
-  });
-  assert.deepEqual(actual.results, expected.results, JSON.stringify(windowIdentity(window)));
-  assert.equal(actual.revision, revision + window.commands.length);
-  assert.deepEqual(await client.request({ op: 'export' }), {
-    revision: actual.revision,
-    state: canonical(expected.state),
-  });
-  assert.equal(JSON.stringify(window), before);
-}
-
-/** 三次请求的总成本包含装载、命令批次和导出；另列批次耗时，不能将它冒充端到端。 */
-export async function benchmarkWindows(client: Client, windows: CommandWindow[]) {
-  const expected = windows.map((window) => canonical(referenceWindow(window, false)));
-  const runTs = (json: boolean) =>
-    windows.map((window) => {
-      const input = json ? canonical(window) : window;
-      const result = referenceWindow(input, false);
-      return json ? canonical(result) : result;
-    });
-  const runRust = async () => {
-    const results = [];
-    let stepMs = 0;
-    const start = performance.now();
-    for (const window of windows) {
-      const { revision } = await client.request({
-        op: 'reset',
-        state: window.state,
-      });
-      const stepStart = performance.now();
-      const result = await client.request({
-        op: 'step',
-        revision,
-        commands: window.commands,
-        clearHistory: true,
-      });
-      stepMs += performance.now() - stepStart;
-      results.push({
-        state: (await client.request({ op: 'export' })).state,
-        results: result.results,
-      });
-    }
-    const totalMs = performance.now() - start;
-    assert.deepEqual(results, expected);
-    return { stepMs, totalMs };
-  };
-  const clock = (fn: () => unknown) => {
-    const start = performance.now();
-    fn();
-    return performance.now() - start;
-  };
-  runTs(false);
-  runTs(true);
-  await runRust();
-  const rounds: {
-    tsPlainMs: number;
-    tsJsonMs: number;
-    rustStepMs: number;
-    rustTotalMs: number;
-  }[] = [];
-  for (let round = 0; round < 3; round++) {
-    let tsPlainMs = 0,
-      tsJsonMs = 0,
-      rust!: Awaited<ReturnType<typeof runRust>>;
-    const ts = () => {
-      tsPlainMs = clock(() => runTs(false));
-      tsJsonMs = clock(() => runTs(true));
-    };
-    if (round % 2 === 0) {
-      ts();
-      rust = await runRust();
-    } else {
-      rust = await runRust();
-      ts();
-    }
-    rounds.push({
-      tsPlainMs,
-      tsJsonMs,
-      rustStepMs: rust.stepMs,
-      rustTotalMs: rust.totalMs,
-    });
-  }
-  const median = (key: keyof (typeof rounds)[number]) =>
-    rounds.map((r) => r[key]).sort((a, b) => a - b)[1];
-  return {
-    name: 'resident-command-windows',
-    windows: windows.map(windowIdentity),
-    commands: windows.reduce((n, w) => n + w.commands.length, 0),
-    rounds,
-    median: {
-      tsPlainMs: median('tsPlainMs'),
-      tsJsonMs: median('tsJsonMs'),
-      rustStepMs: median('rustStepMs'),
-      rustTotalMs: median('rustTotalMs'),
-      totalVsPlain: median('tsPlainMs') / median('rustTotalMs'),
-      totalVsJson: median('tsJsonMs') / median('rustTotalMs'),
-    },
   };
 }

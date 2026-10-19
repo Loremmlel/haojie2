@@ -5,8 +5,7 @@ from haojie_training.inference import main
 from haojie_training.model import ModelConfig
 
 from .data import digest
-from .model import ImprovementNet
-from .train import FORMAT
+from .model import FORMAT, ImprovementNet
 
 
 def load_checkpoint(path):

@@ -15,7 +15,7 @@ from .batching import training_batches
 from .data import load_dataset, select_batch
 from .evaluate import evaluate, validate_split, value_baselines
 from .model import NETWORK_VERSION, ModelConfig, PolicyValueNet
-from .runtime import Trainer, checkpoint_config, resolve_device, synchronize
+from .runtime import Trainer, checkpoint_config, read_checkpoint, resolve_device, synchronize
 
 
 def initialize_weights(
@@ -24,8 +24,7 @@ def initialize_weights(
     """新一轮数据只继承同规则/编码的权重；优化器与步数重置，并记录父检查点谱系。"""
     if trainer.steps or trainer.updates or trainer.optimizer.state:
         raise ValueError("权重初始化仅允许用于尚未开始的新一轮训练")
-    config = checkpoint_config(path)
-    payload = torch.load(path, map_location="cpu", weights_only=True)
+    config, payload = read_checkpoint(path)
     previous = payload["metadata"]
     if config != trainer.model.config or any(
         previous.get(key) != metadata.get(key)
