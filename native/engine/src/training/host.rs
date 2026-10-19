@@ -26,6 +26,8 @@ pub struct Wire<R, W> {
     ply: f64,
     decision_id: u64,
     emit_decisions: bool,
+    input_refs: bool,
+    last_input_id: Option<u64>,
     tensor_bytes: Vec<u8>,
     control_bytes: Vec<u8>,
 }
@@ -83,17 +85,22 @@ impl<R: BufRead, W: Write> Inference for Wire<R, W> {
             return Ok(());
         }
         self.decision_id += 1;
-        self.tensor(
-            json!({"type":"example","index":self.command_index,"decision":self.decision_id,
+        let mut meta = json!({"type":"example","index":self.command_index,"decision":self.decision_id,
             "step":depth,"stage":stage,"actor":self.actor,"model":self.model,"selected":selected,
-            "pass":pass,"semantics":"mc-context-v2"}),
-            input,
-        )
+            "pass":pass,"semantics":"mc-context-v2"});
+        // 只引用紧邻且尚未消费的推理帧；强制选择没有前向，仍发送完整输入。
+        if let Some(id) = self.last_input_id.take() {
+            meta["inputRef"] = json!(id);
+            self.send(&meta)
+        } else {
+            self.tensor(meta, input)
+        }
     }
     fn logits(&mut self, input: &encoding::Input) -> Result<Vec<f64>, String> {
         #[cfg(feature = "kernel-profile")]
         let _profile = crate::profile::scope(crate::profile::Phase::Protocol);
         self.id += 1;
+        self.last_input_id = self.input_refs.then_some(self.id);
         self.tensor(
             json!({"type":"infer","id":self.id,"model":self.model,
                 "commandIndex":self.command_index,"ply":self.ply,"actor":self.actor}),
@@ -129,6 +136,8 @@ struct Request {
     teacher: Option<usize>,
     #[serde(default)]
     mc_context: bool,
+    #[serde(default)]
+    input_refs: bool,
     start: Start,
     model: String,
     sampler_seed: u32,
@@ -159,6 +168,7 @@ fn sample<R: BufRead, W: Write>(
         || (!request.memory && request.record.is_empty())
         || (!request.memory && (request.models.is_some() || request.teacher.is_some()))
         || (!request.memory && request.mc_context)
+        || (request.input_refs && (!request.memory || !request.mc_context))
         || request
             .models
             .as_ref()
@@ -189,6 +199,8 @@ fn sample<R: BufRead, W: Write>(
     wire.model = request.model.clone();
     wire.emit_decisions = request.mc_context && request.memory && request.teacher.is_none();
     wire.decision_id = 0;
+    wire.input_refs = request.input_refs && wire.emit_decisions;
+    wire.last_input_id = None;
     let models = request
         .models
         .unwrap_or([request.model.clone(), request.model.clone()]);
@@ -430,10 +442,12 @@ pub fn serve() -> Result<(), String> {
         ply: 0.0,
         decision_id: 0,
         emit_decisions: false,
+        input_refs: false,
+        last_input_id: None,
         tensor_bytes: Vec::new(),
         control_bytes: Vec::new(),
     };
-    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":catalog::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe(),"capabilities":["memory-examples-v1","mc-context-v2","actor-model-routing-v1","teacher-v2"]}))?;
+    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":catalog::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe(),"capabilities":["memory-examples-v1","mc-context-v2","mc-input-ref-v1","actor-model-routing-v1","teacher-v2"]}))?;
     loop {
         let request = wire.read()?;
         let result = match request["op"].as_str() {
@@ -445,6 +459,8 @@ pub fn serve() -> Result<(), String> {
                 wire.command_index = 0;
                 wire.emit_decisions = true;
                 wire.decision_id = 0;
+                wire.input_refs = request["inputRefs"] == true;
+                wire.last_input_id = None;
                 crate::exercise::run(&request, &mut wire)
             }
             Some("audit") => {

@@ -168,6 +168,7 @@
                 <p id="coverage"></p>
                 <p id="compute"></p>
                 <p id="inflight"></p>
+              <p id="performance"></p>
               </div>
               <div>
                 <h3>版本与恢复</h3>
@@ -237,7 +238,7 @@
                     name="update_limit"
                     type="number"
                     min="1"
-                    max="1000"
+                    max="16384"
                     required
                 /></label>
                 <label
@@ -253,7 +254,7 @@
                     name="environments"
                     type="number"
                     min="1"
-                    max="16"
+                    max="128"
                     aria-describedby="form-error"
                     required
                 /></label>
@@ -262,7 +263,7 @@
                     name="games_per_round"
                     type="number"
                     min="1"
-                    max="128"
+                    max="4096"
                     aria-describedby="form-error"
                     required
                 /></label>
@@ -271,7 +272,7 @@
                     name="updates_per_round"
                     type="number"
                     min="0"
-                    max="1000"
+                    max="16384"
                     aria-describedby="form-error"
                     required
                 /></label>
@@ -280,16 +281,28 @@
                     name="batch_size"
                     type="number"
                     min="1"
-                    max="32"
+                    max="256"
                     aria-describedby="form-error"
                     required
                 /></label>
+              <label>推理批量上限
+                <input name="inference_batch_size" type="number" min="1" max="256" required />
+              </label>
+              <label>组批等待（毫秒）
+                <input name="batch_wait_ms" type="number" min="0" max="10" step="0.1" required />
+              </label>
+              <label>采样推理精度
+                <select name="sampling_precision">
+                  <option value="fp32">FP32</option>
+                  <option value="bf16">BF16（设备支持时）</option>
+                </select>
+              </label>
                 <label
                   >RAM样本池（MiB）<input
                     name="pool_mib"
                     type="number"
                     min="16"
-                    max="4096"
+                    max="131072"
                     aria-describedby="form-error"
                     required
                 /></label>

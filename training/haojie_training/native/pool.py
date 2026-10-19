@@ -20,10 +20,16 @@ class Pool:
         batch_wait_ms=0,
         *,
         inference=None,
+        max_batch_size=None,
         frame_limit=256 * 1024 * 1024,
     ):
         if not 1 <= environments <= 128 or not 0 <= batch_wait_ms <= 10:
             raise ValueError("环境数须为1至128，组批等待须为0至10毫秒")
+        if max_batch_size is not None and (
+            type(max_batch_size) is not int or not 1 <= max_batch_size <= 256
+        ):
+            raise ValueError("推理批量上限必须为1至256的整数")
+        self.max_batch_size = max_batch_size or environments
         self.started = time.perf_counter()
         self.frame_limit = frame_limit
         self.events = queue.Queue(maxsize=2 * environments)
@@ -51,6 +57,7 @@ class Pool:
                 self.inference = PolicyInference(model, self.device, precision)
             else:
                 self.inference, self.model_hash = inference
+            self.precision = self.inference.precision
             self.startup_seconds = time.perf_counter() - self.started
         except BaseException:
             self.close()
@@ -75,28 +82,21 @@ class Pool:
                 break
 
     def metrics(self):
-        infer = self.inference
         return {
             "model": self.model_hash,
             "device": str(self.device),
             "precision": self.precision,
             "environments": len(self.clients),
             "batch_wait_ms": self.wait * 1000,
-            "forwards": infer.calls,
+            **self.inference.stats.snapshot(),
+            "max_batch_size": self.max_batch_size,
             "requests": self.requests,
-            "inference_seconds": infer.execution_seconds,
-            "collation_seconds": infer.collation_seconds,
             "queue_seconds": self.queue_seconds,
             "send_seconds": self.send_seconds,
             "tensor_read_seconds": self.read_seconds + sum(c.read_seconds for c in self.clients),
             "decode_validate_seconds": self.decode_seconds
             + sum(c.decode_seconds for c in self.clients),
             "tensor_bytes": self.tensor_bytes + sum(c.tensor_bytes for c in self.clients),
-            "mean_batch": infer.requests / max(1, infer.calls),
-            "batch_sizes": dict(infer.batch_sizes),
-            "entity_fill": infer.entities / max(1, infer.entity_slots),
-            "candidate_fill": infer.candidates / max(1, infer.candidate_slots),
-            "cuda_timing_sample": infer.cuda_timing,
             "response_p95_seconds": sorted(self.responses)[int((len(self.responses) - 1) * 0.95)]
             if self.responses
             else 0,
@@ -176,6 +176,8 @@ class Pool:
             if getattr(jobs, "memory", False):
                 request.update(memory=True, models=task["models"])
                 request["mcContext"] = getattr(jobs, "mc_context", False)
+                if request["mcContext"] and "mc-input-ref-v1" in self.ready.get("capabilities", []):
+                    request["inputRefs"] = True
                 if task.get("teacher"):
                     request["teacher"] = task["teacher"]
             else:
@@ -340,6 +342,7 @@ class Pool:
                         (j for j, (_, _, m) in enumerate(pending) if m["entities"] > limit),
                         len(pending),
                     )
+                    count = min(count, self.max_batch_size)
                     group, pending = pending[:count], pending[count:]
                     cancel = cancel or bool(cancel_event and cancel_event.is_set())
                     cancel = cancel or time.perf_counter() >= deadline - min(

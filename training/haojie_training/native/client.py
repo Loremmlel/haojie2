@@ -22,6 +22,7 @@ class Client:
         self.frame_limit = frame_limit
         self.events, self.identity = events, identity
         self._handshake = True
+        self._input_refs = False
         self._closed = threading.Event()
         self.read_seconds = self.decode_seconds = 0.0
         self.tensor_bytes = 0
@@ -52,6 +53,7 @@ class Client:
             del self.errors[:-8192]
 
     def _read(self):
+        last_input = None
         try:
             while line := self.process.stdout.readline(16 * 1024 * 1024 + 1):
                 if len(line) > 16 * 1024 * 1024:
@@ -59,7 +61,24 @@ class Client:
                 if not line.endswith(b"\n"):
                     raise RuntimeError("原生进程已退出")
                 meta = json.loads(line)
-                if "bytes" in meta:
+                if "inputRef" in meta:
+                    identity = (
+                        meta["inputRef"], meta.get("model"), meta.get("actor"), meta.get("index")
+                    )
+                    if (
+                        not self._input_refs or meta.get("type") != "example"
+                        or type(meta["inputRef"]) is not int or meta["inputRef"] < 1
+                        or any(value is None for value in identity)
+                        or any(key in meta for key in ("bytes", "entities", "candidates", "input"))
+                        or last_input is None
+                        or any(
+                            type(value) is not type(previous) or value != previous
+                            for value, previous in zip(identity, last_input[0])
+                        )
+                    ):
+                        raise ValueError("推理输入引用未协商、过期或身份不匹配")
+                    meta.update(last_input[1])
+                elif "bytes" in meta:
                     size = meta["bytes"]
                     entities, candidates = meta.get("entities"), meta.get("candidates")
                     if (
@@ -85,9 +104,20 @@ class Client:
                     started = time.perf_counter()
                     meta["input"] = decode(data, meta["entities"], meta["candidates"], _owned=True)
                     self.decode_seconds += time.perf_counter() - started
+                    del data, view
+                    if meta.get("type") == "infer" and self._input_refs:
+                        last_input = (
+                            (meta.get("id"), meta.get("model"), meta.get("actor"),
+                             meta.get("commandIndex")),
+                            {key: meta[key] for key in ("bytes", "entities", "candidates", "input")},
+                        )
+                if meta.get("type") in ("example", "done", "error", "teacher"):
+                    last_input = None
                 self._publish(meta)
+                del meta
             raise RuntimeError("原生进程已退出")
         except Exception as error:
+            last_input = None
             self._publish(error)
 
     def _publish(self, message):
@@ -107,6 +137,11 @@ class Client:
                 pass
 
     def send(self, value):
+        if "op" in value:
+            enabled = value.get("inputRefs") is True
+            if enabled and "mc-input-ref-v1" not in self.ready.get("capabilities", []):
+                raise ValueError("原生引擎未协商推理输入引用能力")
+            self._input_refs = enabled
         try:
             self.process.stdin.write(
                 json.dumps(value, allow_nan=False, separators=(",", ":")).encode() + b"\n"

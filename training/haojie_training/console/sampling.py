@@ -51,12 +51,15 @@ class MemoryJobs:
         self.result = None
         self.resource_failure = None
         self.cancel = None
-        self.inferences = {
-            current: PolicyInference(controller.trainer.model.eval(), controller.device)
-        }
+        # 推理执行器跨训练轮复用；历史对手也计入同一工作池，监控不再读取空统计。
+        inference = controller.pool.inference
+        inference.model.eval()
+        self.inferences = {current: inference}
         if historical:
             model, identity = historical
-            self.inferences[identity] = PolicyInference(model.eval(), controller.device)
+            self.inferences[identity] = PolicyInference(
+                model.eval(), controller.device, inference.precision, stats=inference.stats
+            )
 
     def claim(self):
         if self.assigned >= self.target:

@@ -161,6 +161,11 @@ def _collate(examples, keys, *, buffers=None, pin_memory=False):
             buffers[key] = torch.empty(elements, dtype=first.dtype, pin_memory=pin_memory)
         # 一维容量区的前缀始终连续；多维切片会让to()暗中生成非页锁定副本。
         target = buffers[key][:elements].view(shape)
+        if all(value.shape == first.shape for value in values):
+            # 同形输入一次组批；覆盖整个目标区，不额外清零或逐条调度复制。
+            torch.stack(values, out=target)
+            batch[key] = target
+            continue
         if variable:
             target.fill_(padding)
         for i, value in enumerate(values):

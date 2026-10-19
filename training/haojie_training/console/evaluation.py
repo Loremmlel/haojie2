@@ -54,6 +54,7 @@ class Evaluation:
             "commands": self.config["max_commands"],
             "plies": self.config["max_plies"],
             "temperature": self.config["temperature"],
+            "sampling_precision": self.config["sampling_precision"],
             "seeds": "fixed-eval-family-1",
         }
         self.series = hashlib.sha256(
@@ -101,11 +102,13 @@ class Evaluation:
                 None,
                 1,
                 c.device,
-                inference=(PolicyInference(model, c.device), self.weights["version"]),
+                inference=(
+                    PolicyInference(model, c.device, self.config["sampling_precision"]),
+                    self.weights["version"],
+                ),
                 frame_limit=32 * 2**20,
             )
             jobs = MemoryJobs(c, self.weights["version"], historical, game, teacher)
-            jobs.inferences[self.weights["version"]] = PolicyInference(model, c.device)
             jobs.commands, jobs.plies = self.config["max_commands"], self.config["max_plies"]
             jobs.temperature = self.config["temperature"]
 

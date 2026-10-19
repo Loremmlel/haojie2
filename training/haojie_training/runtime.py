@@ -1,6 +1,7 @@
 """共用训练步与检查点；FP32参数/Adam状态、可选AMP计算，异常不冒充成功更新。"""
 
 import math
+from collections import defaultdict
 from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
@@ -38,6 +39,14 @@ def autocast(device: torch.device, precision: str):
     )
 
 
+def _finite(tensors):
+    """每个设备只取回一次检查结果；CPU 步数不与 GPU 状态混叠。"""
+    checks = defaultdict(list)
+    for tensor in tensors:
+        checks[tensor.device].append(torch.isfinite(tensor).all())
+    return all(bool(torch.stack(values).all()) for values in checks.values())
+
+
 class Trainer:
     """
     执行一个策略/价值优化步；输入须先通过CPU边界校验。
@@ -68,7 +77,7 @@ class Trainer:
         }:
             raise ValueError("未知学习目标")
         self.objective = objective
-        self.last_losses = {}
+        self._last_losses = ()
         self.device, self.precision = device, precision
         self.model = model.to(device).train()
         if optimizer not in {"auto", "foreach", "fused"}:
@@ -93,6 +102,14 @@ class Trainer:
     def _updated(self):
         self.updates += 1
 
+    @property
+    def last_losses(self):
+        """只在报告边界同步日志标量，避免每步分别等待两次 GPU。"""
+        if not self._last_losses:
+            return {}
+        values = torch.stack(self._last_losses).cpu().tolist()
+        return dict(zip(("policy", "value"), values))
+
     def step(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         self.optimizer.zero_grad(set_to_none=True)
         with autocast(self.device, self.precision):
@@ -112,10 +129,7 @@ class Trainer:
             else:
                 loss = policy_value_loss(output, batch, self.value_weight)
                 policy_loss = loss - self.value_weight * value_loss
-            self.last_losses = {
-                "policy": float(policy_loss.detach()),
-                "value": float(value_loss.detach()),
-            }
+            self._last_losses = (policy_loss.detach(), value_loss.detach())
         if not torch.isfinite(loss):
             raise FloatingPointError("非有限损失，未执行更新")
         self.scaler.scale(loss).backward()
@@ -130,13 +144,10 @@ class Trainer:
         parameters = list(self.model.parameters())
         gradients = [p.grad for p in parameters if p.grad is not None]
         return {
-            "finite_parameters": bool(
-                torch.stack([torch.isfinite(p).all() for p in parameters]).all()
-            ),
-            "finite_gradients": bool(gradients)
-            and bool(torch.stack([torch.isfinite(g).all() for g in gradients]).all()),
-            "finite_optimizer": all(
-                bool(torch.isfinite(value).all())
+            "finite_parameters": _finite(parameters),
+            "finite_gradients": bool(gradients) and _finite(gradients),
+            "finite_optimizer": _finite(
+                value
                 for state in self.optimizer.state.values()
                 for value in state.values()
                 if isinstance(value, torch.Tensor)
@@ -214,7 +225,17 @@ class Trainer:
 def read_checkpoint(path: Path) -> tuple[ModelConfig, dict]:
     """一次读取并校验正式检查点；配置和权重始终来自同一个磁盘快照。"""
     payload = torch.load(path, map_location="cpu", weights_only=True)
-    if payload.get("format") != "haojie-checkpoint-v1" or payload.get("network") != NETWORK_VERSION:
+    if isinstance(payload, dict) and payload.get("format") == "haojie-stream-recovery-v2":
+        payload = payload.get("trainer")
+    if isinstance(payload, dict) and payload.get("format") == "haojie-stream-weights-v1":
+        # 已有 GUI 导出未写 network；显式给出的网络版本仍须相符。
+        payload.setdefault("network", NETWORK_VERSION)
+    if (
+        not isinstance(payload, dict)
+        or payload.get("format") not in {"haojie-checkpoint-v1", "haojie-stream-weights-v1"}
+        or payload.get("network") != NETWORK_VERSION
+        or any(not isinstance(payload.get(key), dict) for key in ("config", "metadata", "model"))
+    ):
         raise ValueError("检查点网络版本不兼容；旧骨架检查点需用原版本代码读取")
     return ModelConfig(**payload["config"]), payload
 

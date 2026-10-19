@@ -1,6 +1,9 @@
 """执行路径的边界、缓冲所有权、CUDA输出/梯度与固定随机取样回归。"""
 
 import copy
+import io
+import json
+from types import SimpleNamespace
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,9 +13,9 @@ import torch
 from haojie_training.batching import training_batches
 from haojie_training.data import INPUT_KEYS, collate_inputs, synthetic_batch, validate_inputs
 from haojie_training.model import ModelConfig, PolicyValueNet, policy_value_loss
-from haojie_training.native.client import decode
-from haojie_training.native.execution import PolicyInference
-from haojie_training.runtime import Trainer
+from haojie_training.native.client import Client, decode
+from haojie_training.native.execution import InferenceStats, PolicyInference
+from haojie_training.runtime import Trainer, read_checkpoint
 
 
 class ExecutionTests(unittest.TestCase):
@@ -54,6 +57,92 @@ class ExecutionTests(unittest.TestCase):
             raw = bytearray(b"".join(invalid[k][0].numpy().tobytes() for k in keys))
             with self.assertRaises(ValueError):
                 decode(raw, 4, 5)
+
+
+    def test_cpu_buffer_reuse_and_shared_statistics(self):
+        model = PolicyValueNet(ModelConfig.tiny()).eval()
+        stats = InferenceStats()
+        runners = [PolicyInference(model, "cpu", stats=stats) for _ in range(2)]
+        saved = []
+        for index, sizes in enumerate(((4, 4), (4, 7, 4), (3,))):
+            rows = [
+                {k: v[0] for k, v in synthetic_batch(model.config, 1, n, 5).items()
+                 if k in INPUT_KEYS} for n in sizes
+            ]
+            original = [{k: v.clone() for k, v in row.items()} for row in rows]
+            expected = collate_inputs(rows, model.config)
+            actual = runners[index % 2].batch(rows)
+            for key in INPUT_KEYS:
+                torch.testing.assert_close(actual[key], expected[key], rtol=0, atol=0)
+            logits = runners[index % 2](rows)
+            with torch.inference_mode():
+                torch.testing.assert_close(logits, model.policy_logits(expected), rtol=0, atol=0)
+            saved.append((logits, logits.clone()))
+            for row, before in zip(rows, original):
+                for key in INPUT_KEYS:
+                    torch.testing.assert_close(row[key], before[key], rtol=0, atol=0)
+        for value, before in saved:
+            torch.testing.assert_close(value, before, rtol=0, atol=0)
+        self.assertEqual(stats.snapshot()["inference_requests"], 6)
+        self.assertEqual(stats.snapshot()["forwards"], 3)
+        self.assertEqual(stats.snapshot()["mean_batch"], 2)
+
+    def test_input_reference_ownership_and_stale_rejection(self):
+        batch = synthetic_batch(ModelConfig.tiny(), 1, 4, 5)
+        keys = ("entities", "globals", "candidates", "kinds", "sources", "targets",
+                "entity_mask", "candidate_mask")
+        data = b"".join(batch[k][0].numpy().tobytes() for k in keys)
+        infer = {"type": "infer", "id": 1, "model": "a" * 64, "actor": 1,
+                 "commandIndex": 0, "entities": 4, "candidates": 5, "bytes": len(data)}
+        example = {"type": "example", "inputRef": 1, "model": "a" * 64,
+                   "actor": 1, "index": 0}
+
+        def read(messages, enabled=True):
+            client = Client.__new__(Client)
+            client._input_refs = enabled
+            client.read_seconds = client.decode_seconds = client.tensor_bytes = 0
+            client.frame_limit = len(data)
+            client.process = SimpleNamespace(stdout=io.BytesIO(
+                json.dumps(infer).encode() + b"\n" + data + b"".join(
+                    json.dumps(message).encode() + b"\n" for message in messages
+                )))
+            values = []
+            client._publish = values.append
+            client._read()
+            self.assertEqual(client.tensor_bytes, len(data))
+            return values
+
+        result = read([example])
+        self.assertEqual(len(result), 3)
+        for key in INPUT_KEYS:
+            self.assertEqual(result[0]["input"][key].data_ptr(),
+                             result[1]["input"][key].data_ptr())
+        for change in ({"inputRef": 2}, {"inputRef": True}, {"inputRef": -1},
+                       {"index": 1}, {"actor": 2}, {"model": "b" * 64}, {"bytes": 0}):
+            with self.subTest(change=change):
+                self.assertIsInstance(read([{**example, **change}])[-1], ValueError)
+        self.assertIsInstance(read([example], enabled=False)[-1], ValueError)
+        self.assertIsInstance(read([example, example])[-1], ValueError)
+        self.assertIsInstance(read([{"type": "done"}, example])[-1], ValueError)
+
+    def test_complete_and_exported_checkpoint_readers(self):
+        trainer = Trainer(PolicyValueNet(ModelConfig.tiny()), torch.device("cpu"))
+        self.assertEqual(trainer.last_losses, {})
+        trainer.step(synthetic_batch(trainer.model.config, 2, 4, 5))
+        self.assertEqual(set(trainer.last_losses), {"policy", "value"})
+        self.assertTrue(trainer.health()["finite_optimizer"])
+        payload = trainer.checkpoint({"test": True})
+        exported = {k: payload[k] for k in ("config", "model", "metadata")}
+        exported["format"] = "haojie-stream-weights-v1"
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "model.pt"
+            for value in (payload, {"format": "haojie-stream-recovery-v2", "trainer": payload},
+                          exported):
+                torch.save(value, path)
+                config, actual = read_checkpoint(path)
+                self.assertEqual(config, trainer.model.config)
+                for key, tensor in payload["model"].items():
+                    torch.testing.assert_close(actual["model"][key], tensor, rtol=0, atol=0)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA专项回归，需要GPU执行器")
     def test_policy_buffers_full_value_and_gradients(self):

@@ -19,6 +19,7 @@ from haojie_training.console.storage import Lease, QuotaError, Store
 from haojie_training.data import INPUT_KEYS, synthetic_batch
 from haojie_training.model import ModelConfig, PolicyValueNet
 from haojie_training.native.client import Client
+from haojie_training.native.execution import PolicyInference
 from haojie_training.runtime import Trainer
 
 
@@ -57,6 +58,7 @@ class ResourceTests(unittest.TestCase):
             counts={"tasks": 0},
             starts=None,
             trainer=SimpleNamespace(model=model),
+            pool=SimpleNamespace(inference=PolicyInference(model, "cpu")),
             device=torch.device("cpu"),
         )
         jobs = MemoryJobs(c, "current", (model, "historical"))
