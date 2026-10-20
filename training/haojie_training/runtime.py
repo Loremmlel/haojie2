@@ -110,35 +110,65 @@ class Trainer:
         values = torch.stack(self._last_losses).cpu().tolist()
         return dict(zip(("policy", "value"), values))
 
-    def step(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        self.optimizer.zero_grad(set_to_none=True)
-        with autocast(self.device, self.precision):
+    def _loss(self, batch, denominator=None):
+        mc = self.objective.startswith("decomposed-mc-q-")
+        if mc:
+            chosen, value = self.model.selected_value(batch, batch["policy"].argmax(-1))
+        else:
             output = self.model(batch)
-            logits, value = output
-            known = batch["value_mask"].float()
-            value_loss = ((value - batch["value"]).square() * known).sum() / known.sum().clamp_min(
-                1
+            _, value = output
+        known = batch["value_mask"].float()
+        if denominator is None:
+            denominator = known.sum().clamp_min(1)
+        value_loss = ((value - batch["value"]).square() * known).sum() / denominator
+        if mc:
+            policy_loss = ((chosen.tanh() - batch["value"]).square() * known).sum() / denominator
+            loss = policy_loss + self.value_weight * value_loss
+        else:
+            loss = policy_value_loss(output, batch, self.value_weight)
+            policy_loss = loss - self.value_weight * value_loss
+        return loss, policy_loss, value_loss
+
+    def step(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        return self.step_batches([batch])
+
+    def step_batches(self, batches):
+        """同一步的变长子批：整步归一化、逐组反向、只裁剪和更新一次。
+
+        样本由控制器预先抽定；分组不消耗随机数。每组释放计算图后才处理下一组，
+        保留 FP16 溢出跳步语义。同形一步不额外计算整组归一化分母。
+        """
+        if not batches:
+            raise ValueError("没有可训练子批")
+        denominator = None
+        if len(batches) > 1:
+            if not self.objective.startswith("decomposed-mc-q-"):
+                raise ValueError("变长子批当前仅用于 MC-Q 终局回归")
+            denominator = (
+                torch.stack([b["value_mask"].float().sum() for b in batches])
+                .sum()
+                .clamp_min(1)
             )
-            if self.objective.startswith("decomposed-mc-q-"):
-                # 分解节点已执行候选的 MC 收益回归；不是策略梯度，不需要回溯概率。
-                chosen = logits.gather(1, batch["policy"].argmax(-1, keepdim=True)).squeeze(1)
-                policy_loss = (
-                    (chosen.tanh() - batch["value"]).square() * known
-                ).sum() / known.sum().clamp_min(1)
-                loss = policy_loss + self.value_weight * value_loss
-            else:
-                loss = policy_value_loss(output, batch, self.value_weight)
-                policy_loss = loss - self.value_weight * value_loss
-            self._last_losses = (policy_loss.detach(), value_loss.detach())
-        if not torch.isfinite(loss):
-            raise FloatingPointError("非有限损失，未执行更新")
-        self.scaler.scale(loss).backward()
+        self.optimizer.zero_grad(set_to_none=True)
+        totals = None
+        for batch in batches:
+            with autocast(self.device, self.precision):
+                losses = self._loss(batch, denominator)
+                loss = losses[0]
+            if not torch.isfinite(loss):
+                raise FloatingPointError("非有限损失，未执行更新")
+            self.scaler.scale(loss).backward()
+            detached = tuple(value.detach() for value in losses)
+            totals = detached if totals is None else tuple(a + b for a, b in zip(totals, detached))
+            # 仅累计日志标量，不把上一子批计算图保留到下一次前向。
+            del losses, loss
+        self._last_losses = totals[1:]
         self.scaler.unscale_(self.optimizer)
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0, foreach=True)
         self.scaler.step(self.optimizer)
         self.scaler.update()
         self.steps += 1
-        return loss.detach()
+        return totals[0]
 
     def health(self) -> dict:
         parameters = list(self.model.parameters())

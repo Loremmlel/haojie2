@@ -1,6 +1,6 @@
 # Colab 与服务器持续训练
 
-入口是 [notebooks/haojie_colab.ipynb](../notebooks/haojie_colab.ipynb)。在 Colab 的“文件 → 打开笔记本 → GitHub”中选择本仓库的 `feat/server-colab-training` 分支并打开它；合并后也可选择 main。Notebook 的 `REPO_REF` 决定下载的代码版本，首次安装会打印实际提交 SHA。
+入口是 [notebooks/haojie_colab.ipynb](../notebooks/haojie_colab.ipynb)。在 Colab 的“文件 → 打开笔记本 → GitHub”中选择本仓库的 `main` 分支并打开它；合并后也可选择 main。Notebook 的 `REPO_REF` 决定下载的代码版本，首次安装会打印实际提交 SHA。
 
 ## 第一次使用
 

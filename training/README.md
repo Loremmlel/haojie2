@@ -129,3 +129,5 @@ python -m ruff format --check training/haojie_training training/tests
 ```
 
 引擎及教师资源检查、TS/Rust 规则和编码差分、安装包验证及浏览器流程随仓库 CI 维护，入口见 [CONSOLE.md](CONSOLE.md) 与[工程说明](../docs/ARCHITECTURE.md)。
+
+完整采样—更新—保存的性能测量见 [PERFORMANCE.md](PERFORMANCE.md)。

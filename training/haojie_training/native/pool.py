@@ -276,7 +276,9 @@ class Pool:
                     continue
                 until = min(deadline, time.perf_counter() + self.wait)
                 self.peak_queue = max(self.peak_queue, 1 + self.events.qsize())
-                while len(messages) < len(self.slots):
+                # MC 每槽通常先发 example 再发 infer；控制消息不能占掉推理批量名额。
+                # 仅多排空已就绪消息，不增加等待时间；上限与有界队列一致。
+                while len(messages) < 2 * len(self.slots):
                     try:
                         messages.append(
                             self.events.get(timeout=max(0, until - time.perf_counter()))
