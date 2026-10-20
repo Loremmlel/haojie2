@@ -18,7 +18,13 @@ def wait_for(controller, predicate, seconds=120):
         if predicate():
             return
         time.sleep(0.05)
-    raise TimeoutError("训练控制器未在期限内完成操作；已保留最近恢复点")
+    status = controller.status()
+    details = {
+        key: status[key]
+        for key in ("state", "updates", "counts", "runtime", "performance", "logs")
+    }
+    details["logs"] = details["logs"][-5:]
+    raise TimeoutError(f"训练控制器未在期限内完成操作；已保留最近恢复点。当前状态：{details}")
 
 
 class Session:

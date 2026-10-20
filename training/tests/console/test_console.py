@@ -176,7 +176,7 @@ class ResourceTests(unittest.TestCase):
     def test_schedule_and_unknown_not_losses(self):
         validate(defaults())
         with self.assertRaises(ValueError):
-            validate({**defaults(), "pool_mib": 5000})
+            validate({**defaults(), "pool_mib": 131073})
         result = summarize(
             [
                 {"difficulty": "easy", "result": "unfinished"},

@@ -94,7 +94,7 @@ class CloudTests(unittest.TestCase):
             third = backups.publish(stage, info, root)
             self.assertFalse(Path(first["manifest"]).exists())
             self.assertEqual(len(backups.records()), 2)
-            broken = json.loads(Path(third["manifest"]).read_text())
+            broken = json.loads(Path(third["manifest"]).read_text(encoding="utf-8"))
             (backups.root / broken["archive"]).write_bytes(b"incomplete")
             (backups.root / "interrupted.json.partial").write_bytes(b"partial")
             messages = []
@@ -105,7 +105,7 @@ class CloudTests(unittest.TestCase):
                 backups.restore(root / "restored")
             malicious = backups.records()[0][1]
             malicious["files"]["../escaped"] = {"bytes": 1, "sha256": "x"}
-            Path(second["manifest"]).write_text(json.dumps(malicious))
+            Path(second["manifest"]).write_text(json.dumps(malicious), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "没有通过完整性校验"):
                 backups.restore(root / "unsafe", selected=second["manifest"])
             self.assertFalse((root / "escaped").exists())
@@ -119,14 +119,14 @@ class CloudTests(unittest.TestCase):
             backups = Backups(root / "drive")
             published = backups.publish(stage, info, root)
             manifest = Path(published["manifest"])
-            record = json.loads(manifest.read_text())
+            record = json.loads(manifest.read_text(encoding="utf-8"))
             record["checkpoint"] = None
-            manifest.write_text(json.dumps(record))
+            manifest.write_text(json.dumps(record), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "没有通过完整性校验"):
                 backups.restore(root / "target")
             self.assertFalse((root / "target").exists())
             record["created_at"] = float("inf")
-            manifest.write_text(json.dumps(record))
+            manifest.write_text(json.dumps(record), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "存在备份清单"):
                 backups.restore(root / "target")
             self.assertFalse((root / "target").exists())
@@ -204,7 +204,7 @@ class CloudTests(unittest.TestCase):
                             log.seek(0)
                             self.fail(log.read())
                         time.sleep(0.1)
-                    address = json.loads(connection.read_text())["url"]
+                    address = json.loads(connection.read_text(encoding="utf-8"))["url"]
 
                     def api(path, body=None):
                         request = urllib.request.Request(
