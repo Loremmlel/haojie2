@@ -159,6 +159,7 @@ def monitor(controller):
         while not controller.shutdown.wait(2):
             now = time.monotonic()
             current = _processes(process)
+            elapsed = now - began
             workers = []
             for key, member in current.items():
                 delta = member["cpu"] - previous.get(key, {"cpu": 0})["cpu"]
@@ -166,14 +167,16 @@ def monitor(controller):
                     {
                         "pid": member["pid"],
                         "name": member["name"],
-                        "cpu_cores": max(0, delta) / (now - began),
+                        "cpu_cores": max(0, delta) / elapsed if elapsed > 0 else None,
                         "rss": member["rss"],
                     }
                 )
             # Linux 父进程累积已回收子进程时间；合计求差，避免短局退出丢账或重复记账。
             total = sum(row["cpu"] + row["reaped_cpu"] for row in current.values())
             prior = sum(row["cpu"] + row["reaped_cpu"] for row in previous.values())
-            cores = max(0, total - prior) / (now - began)
+            cores = (
+                max(0, total - prior) / elapsed if current and previous and elapsed > 0 else None
+            )
             capacity = cpu_capacity()
             device = controller.device
             cuda = device.type == "cuda" and torch.cuda.is_available()
@@ -182,7 +185,7 @@ def monitor(controller):
                 "rss": sum(row["rss"] for row in workers) if current else None,
                 "cpu_cores": cores if current else None,
                 "cpu_capacity": capacity,
-                "cpu_percent": cores / capacity * 100 if current else None,
+                "cpu_percent": cores / capacity * 100 if cores is not None else None,
                 "system_cpu_percent": psutil.cpu_percent(),
                 "available_ram": available_memory(),
                 "workers": max(0, len(workers) - 1) if current else None,

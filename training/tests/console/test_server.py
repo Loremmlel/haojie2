@@ -35,6 +35,7 @@ class ServerTests(unittest.TestCase):
 
         scope = {
             "display": lambda *args, **kwargs: view,
+            "print": Mock(),
             "HTML": str,
             "html": html,
             "json": json,
@@ -47,6 +48,7 @@ class ServerTests(unittest.TestCase):
         asyncio.run(eval(monitor, scope))
         self.assertEqual(scope["shown"]["resources"], {"cpu_percent": 25})
         view.update.assert_called_once()
+        scope["print"].assert_called_once()
 
     def test_parent_cpu_and_memory_limits(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -127,7 +129,7 @@ class ServerTests(unittest.TestCase):
     def test_snapshot_reports_initialization_failure_and_closed_service(self):
         with tempfile.TemporaryDirectory() as folder:
             controller = Controller(
-                Path(folder) / "missing-engine", Store(folder), device="cpu", tiny=True
+                Path(folder) / "haojie-engine", Store(folder), device="cpu", tiny=True
             )
             try:
                 future = controller.snapshot(lambda _: self.fail("初始化失败时不应冻结快照"))
@@ -141,12 +143,42 @@ class ServerTests(unittest.TestCase):
     def test_monitor_preserves_other_metrics_without_process_access(self):
         c = SimpleNamespace(device=torch.device("cpu"), shutdown=Mock(), telemetry={})
         c.shutdown.wait.side_effect = [False, True]
-        with patch.object(resources.psutil, "Process", side_effect=resources.psutil.AccessDenied()):
+        with (
+            patch.object(resources.psutil, "Process", side_effect=resources.psutil.AccessDenied()),
+            patch.object(resources.time, "monotonic", return_value=10.0),
+        ):
             resources.monitor(c)
         self.assertFalse(c.telemetry["process_tree_available"])
         self.assertIsNone(c.telemetry["cpu_cores"])
         self.assertGreater(c.telemetry["cpu_capacity"], 0)
         self.assertGreaterEqual(c.telemetry["available_ram"], 0)
+
+    def test_monitor_zero_elapsed_preserves_memory_and_recovers_next_sample(self):
+        c = SimpleNamespace(device=torch.device("cpu"), shutdown=Mock(), telemetry={})
+        baseline = {(1, 0): {"pid": 1, "name": "parent", "cpu": 1, "reaped_cpu": 0, "rss": 64}}
+        next_sample = {(1, 0): {"pid": 1, "name": "parent", "cpu": 2, "reaped_cpu": 0, "rss": 128}}
+        snapshots = []
+
+        def wait(_):
+            if c.telemetry:
+                snapshots.append(c.telemetry.copy())
+            return len(snapshots) == 2
+
+        c.shutdown.wait.side_effect = wait
+        with (
+            patch.object(resources, "_processes", side_effect=[baseline, baseline, next_sample]),
+            patch.object(resources.time, "monotonic", side_effect=[10.0, 10.0, 12.0]),
+            patch.object(resources, "cpu_capacity", return_value=2),
+        ):
+            resources.monitor(c)
+        self.assertTrue(snapshots[0]["process_tree_available"])
+        self.assertEqual(snapshots[0]["rss"], 64)
+        self.assertIsNone(snapshots[0]["cpu_cores"])
+        self.assertIsNone(snapshots[0]["cpu_percent"])
+        self.assertIsNone(snapshots[0]["processes"][0]["cpu_cores"])
+        self.assertEqual(snapshots[1]["rss"], 128)
+        self.assertEqual(snapshots[1]["cpu_cores"], 0.5)
+        self.assertEqual(snapshots[1]["cpu_percent"], 25)
 
     def test_monitor_includes_reaped_worker_cpu(self):
         c = SimpleNamespace(device=torch.device("cpu"), shutdown=Mock(), telemetry={})
