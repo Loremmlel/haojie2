@@ -4,7 +4,6 @@ import copy
 import unittest
 
 import torch
-
 from haojie_training.batching.stream import update_groups
 from haojie_training.data import collate_examples, synthetic_batch
 from haojie_training.model import ModelConfig, PolicyValueNet
@@ -47,18 +46,24 @@ class BatchTests(unittest.TestCase):
         torch.testing.assert_close(actual, loss, atol=2e-6, rtol=2e-5)
         self.assertEqual(grouped.updates, 1)
         self.assertEqual(grouped.steps, 1)
-        for (name, a), (_, b) in zip(dense.model.named_parameters(), grouped.model.named_parameters()):
+        for (name, a), (_, b) in zip(
+            dense.model.named_parameters(), grouped.model.named_parameters()
+        ):
             torch.testing.assert_close(a.grad, b.grad, atol=3e-6, rtol=2e-4, msg=name)
             torch.testing.assert_close(a, b, atol=3e-5, rtol=2e-4, msg=name)
         restored = Trainer(PolicyValueNet(config), torch.device("cpu"), objective=dense.objective)
         restored.restore_payload(copy.deepcopy(grouped.checkpoint({})), {})
-        torch.testing.assert_close(grouped.step_batches(batches), restored.step_batches(batches), atol=0, rtol=0)
+        torch.testing.assert_close(
+            grouped.step_batches(batches), restored.step_batches(batches), atol=0, rtol=0
+        )
         for a, b in zip(grouped.model.parameters(), restored.model.parameters()):
             torch.testing.assert_close(a, b, atol=0, rtol=0)
         self.assertEqual(grouped.updates, 2)
 
     def test_nonfinite_later_group_never_updates_parameters(self):
-        trainer = Trainer(PolicyValueNet(ModelConfig.tiny()), torch.device("cpu"), objective="decomposed-mc-q-v2")
+        trainer = Trainer(
+            PolicyValueNet(ModelConfig.tiny()), torch.device("cpu"), objective="decomposed-mc-q-v2"
+        )
         batch = synthetic_batch(trainer.model.config, 1, 5, 3)
         bad = {k: v.clone() for k, v in batch.items()}
         bad["value"].fill_(float("nan"))

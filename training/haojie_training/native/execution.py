@@ -77,7 +77,9 @@ class PolicyInference:
         positions, remaps = [], []
         for row in examples:
             count = len(row["sources"])
-            pointers = torch.cat((torch.zeros(1, dtype=torch.long), row["sources"] + 1, row["targets"] + 1))
+            pointers = torch.cat(
+                (torch.zeros(1, dtype=torch.long), row["sources"] + 1, row["targets"] + 1)
+            )
             unique, inverse = torch.unique(pointers, sorted=True, return_inverse=True)
             positions.append(unique)
             remaps.append((inverse[1 : 1 + count], inverse[1 + count :]))

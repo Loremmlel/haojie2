@@ -4,7 +4,6 @@ import copy
 import unittest
 
 import torch
-
 from haojie_training.data import INPUT_KEYS, collate_inputs, synthetic_batch
 from haojie_training.model import ModelConfig, PolicyValueNet
 from haojie_training.native.execution import PolicyInference
@@ -72,7 +71,9 @@ class ReadoutTests(unittest.TestCase):
         with torch.inference_mode():
             logits, value = model(batch)
             chosen, other_value = model.selected_value(batch, selected)
-        torch.testing.assert_close(chosen, logits.gather(1, selected[:, None]).squeeze(1), atol=0, rtol=0)
+        torch.testing.assert_close(
+            chosen, logits.gather(1, selected[:, None]).squeeze(1), atol=0, rtol=0
+        )
         torch.testing.assert_close(other_value, value, atol=0, rtol=0)
         rows = [{k: v[i] for k, v in batch.items() if k in INPUT_KEYS} for i in range(2)]
         self.assertIsNone(PolicyInference(model, "cpu").readout(rows, batch))

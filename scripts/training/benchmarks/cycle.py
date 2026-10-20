@@ -20,7 +20,12 @@ def digest_rows(rows):
     for row, _, _ in rows:
         meta = row["_meta"]
         h = hashlib.sha256()
-        h.update(json.dumps({k: v for k, v in meta.items() if k not in {"entered", "generation"}}, sort_keys=True).encode())
+        h.update(
+            json.dumps(
+                {k: v for k, v in meta.items() if k not in {"entered", "generation"}},
+                sort_keys=True,
+            ).encode()
+        )
         for key in sorted(k for k in row if not k.startswith("_")):
             value = row[key].contiguous()
             h.update(f"{key}:{value.dtype}:{list(value.shape)}".encode())
@@ -51,16 +56,20 @@ def main():
     parser.add_argument("--max-plies", type=int)
     parser.add_argument("--history-percent", type=int, default=0)
     parser.add_argument("--deadline", type=float, default=1800)
-    parser.add_argument("--ordered-updates", action="store_true", help="仅基准：同一采样集合按任务/决策排序，排除完成顺序对更新负载的干扰")
+    parser.add_argument(
+        "--ordered-updates",
+        action="store_true",
+        help="仅基准：同一采样集合按任务/决策排序，排除完成顺序对更新负载的干扰",
+    )
     parser.add_argument("--state-output", type=Path, help="额外保存末态模型及优化器，供容差对照")
     args = parser.parse_args()
     sys.path.insert(0, str(args.source.resolve() / "training"))
     import torch
-    from haojie_training.console.controller import Controller
-    from haojie_training.console.storage import Store
     from haojie_training.console.config import validate
     from haojie_training.console.config.resources import hardware
+    from haojie_training.console.controller import Controller
     from haojie_training.console.sampling import MemoryJobs
+    from haojie_training.console.storage import Store
     from haojie_training.runtime import synchronize
 
     # 不启动自动循环，计时驱动持有控制器；采样器、原生进程、学习器和存储均为生产实现。
@@ -80,11 +89,35 @@ def main():
     for path in sorted((args.source / "training/haojie_training").rglob("*.py")):
         source_hash.update(path.relative_to(args.source).as_posix().encode())
         source_hash.update(path.read_bytes())
-    report = {"format": "haojie-cycle-benchmark-v1", "complete": False, "torch": torch.__version__, "python": platform.python_version(), "source_sha256": source_hash.hexdigest(), "engine_sha256": hashlib.sha256(args.engine.read_bytes()).hexdigest(), "starts_sha256": starts_hash, "options": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, "hardware": hardware(), "rounds": []}
+    report = {
+        "format": "haojie-cycle-benchmark-v1",
+        "complete": False,
+        "torch": torch.__version__,
+        "python": platform.python_version(),
+        "source_sha256": source_hash.hexdigest(),
+        "engine_sha256": hashlib.sha256(args.engine.read_bytes()).hexdigest(),
+        "starts_sha256": starts_hash,
+        "options": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+        "hardware": hardware(),
+        "rounds": [],
+    }
     with tempfile.TemporaryDirectory(prefix="haojie-cycle-") as folder:
-        c = MeasuredController(args.engine, Store(Path(folder)), device=args.device, tiny=args.tiny, starts=starts)
+        c = MeasuredController(
+            args.engine, Store(Path(folder)), device=args.device, tiny=args.tiny, starts=starts
+        )
         c.thread.join()
-        c.config.update(environments=args.environments, games_per_round=args.games, updates_per_round=args.updates, batch_size=args.batch_size, inference_batch_size=args.inference_batch_size, batch_wait_ms=args.batch_wait_ms, history_percent=args.history_percent, seed=args.seed, pool_mib=256, eval_games=100000)
+        c.config.update(
+            environments=args.environments,
+            games_per_round=args.games,
+            updates_per_round=args.updates,
+            batch_size=args.batch_size,
+            inference_batch_size=args.inference_batch_size,
+            batch_wait_ms=args.batch_wait_ms,
+            history_percent=args.history_percent,
+            seed=args.seed,
+            pool_mib=256,
+            eval_games=100000,
+        )
         for key in ("max_commands", "max_plies"):
             if getattr(args, key) is not None:
                 c.config[key] = getattr(args, key)
@@ -101,7 +134,16 @@ def main():
                 raise TimeoutError("完整周期超出测量保护时间；本次不记作成功吞吐")
 
         def finish(jobs, task, message):
-            finished.append({"task": task["id"], "outcome": message["outcome"], "final_hash": message.get("finalHash"), "requests": task["requests"], "commands": task.get("commands"), "samples_seen": task["trajectory"].seen})
+            finished.append(
+                {
+                    "task": task["id"],
+                    "outcome": message["outcome"],
+                    "final_hash": message.get("finalHash"),
+                    "requests": task["requests"],
+                    "commands": task.get("commands"),
+                    "samples_seen": task["trajectory"].seen,
+                }
+            )
             return original_finish(jobs, task, message)
 
         c._progress = progress
@@ -109,7 +151,11 @@ def main():
         try:
             c._initialize()
             synchronize(c.device)
-            report.update(setup_seconds=time.perf_counter() - began, config=copy.deepcopy(c.config), parameters=sum(p.numel() for p in c.trainer.model.parameters()))
+            report.update(
+                setup_seconds=time.perf_counter() - began,
+                config=copy.deepcopy(c.config),
+                parameters=sum(p.numel() for p in c.trainer.model.parameters()),
+            )
             for index in range(args.rounds):
                 before_counts = copy.deepcopy(c.counts)
                 before_consumed, before_updates = c.samples.consumed, c.trainer.updates
@@ -122,7 +168,15 @@ def main():
                 validation = time.perf_counter()
                 sample_hash = digest_rows(c.samples.rows)
                 if args.ordered_updates:
-                    c.samples.rows = deque(sorted(c.samples.rows, key=lambda item: (item[0]["_meta"]["game"]["task"], item[0]["_meta"]["decision"] or 0)))
+                    c.samples.rows = deque(
+                        sorted(
+                            c.samples.rows,
+                            key=lambda item: (
+                                item[0]["_meta"]["game"]["task"],
+                                item[0]["_meta"]["decision"] or 0,
+                            ),
+                        )
+                    )
                 validation_seconds = time.perf_counter() - validation
                 start = time.perf_counter()
                 with c._phase("updating"):
@@ -133,8 +187,32 @@ def main():
                 c._save()
                 synchronize(c.device)
                 save_seconds = time.perf_counter() - start
-                row = {"round": index, "sample_seconds": sample_seconds, "update_seconds": update_seconds, "save_seconds": save_seconds, "cycle_seconds": sample_seconds + update_seconds + save_seconds, "validation_seconds_excluded": validation_seconds, "samples_hash": sample_hash, "counts": {k: c.counts[k] - before_counts[k] for k in ("games", "truncated", "discarded", "seen_samples", "retained_samples")}, "updates": c.trainer.updates - before_updates, "samples_consumed": c.samples.consumed - before_consumed, "sampling": dict(c.last_round), "tasks": sorted(finished, key=lambda task: task["task"])}
-                row["retained_samples_per_second"] = row["counts"]["retained_samples"] / row["cycle_seconds"]
+                row = {
+                    "round": index,
+                    "sample_seconds": sample_seconds,
+                    "update_seconds": update_seconds,
+                    "save_seconds": save_seconds,
+                    "cycle_seconds": sample_seconds + update_seconds + save_seconds,
+                    "validation_seconds_excluded": validation_seconds,
+                    "samples_hash": sample_hash,
+                    "counts": {
+                        k: c.counts[k] - before_counts[k]
+                        for k in (
+                            "games",
+                            "truncated",
+                            "discarded",
+                            "seen_samples",
+                            "retained_samples",
+                        )
+                    },
+                    "updates": c.trainer.updates - before_updates,
+                    "samples_consumed": c.samples.consumed - before_consumed,
+                    "sampling": dict(c.last_round),
+                    "tasks": sorted(finished, key=lambda task: task["task"]),
+                }
+                row["retained_samples_per_second"] = (
+                    row["counts"]["retained_samples"] / row["cycle_seconds"]
+                )
                 report["rounds"].append(row)
                 print(json.dumps(row, ensure_ascii=True), flush=True)
                 if row["updates"] != args.updates or not row["counts"]["games"]:
@@ -152,7 +230,9 @@ def main():
             report["wall_seconds"] = time.perf_counter() - began
             report["performance"] = c.performance()
             args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+            args.output.write_text(
+                json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="utf-8"
+            )
 
 
 if __name__ == "__main__":

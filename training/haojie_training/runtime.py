@@ -145,9 +145,7 @@ class Trainer:
             if not self.objective.startswith("decomposed-mc-q-"):
                 raise ValueError("变长子批当前仅用于 MC-Q 终局回归")
             denominator = (
-                torch.stack([b["value_mask"].float().sum() for b in batches])
-                .sum()
-                .clamp_min(1)
+                torch.stack([b["value_mask"].float().sum() for b in batches]).sum().clamp_min(1)
             )
         self.optimizer.zero_grad(set_to_none=True)
         totals = None

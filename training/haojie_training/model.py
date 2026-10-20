@@ -55,7 +55,9 @@ class EncoderBlock(nn.Module):
         )
         if readout is not None:
             # 最后一层只计算下游实际读取的查询；所有实体仍作为 K/V 参与注意力。
-            q = q.gather(2, readout[:, None, :, None].expand(-1, self.heads, -1, width // self.heads))
+            q = q.gather(
+                2, readout[:, None, :, None].expand(-1, self.heads, -1, width // self.heads)
+            )
             x = x.gather(1, readout[..., None].expand(-1, -1, width))
             tokens = readout.shape[1]
         attended = F.scaled_dot_product_attention(q, k, v, attn_mask=allowed, dropout_p=0.0)
