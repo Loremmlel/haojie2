@@ -1,14 +1,19 @@
 """纯 Rust/Python 信任边界与检查点接线测试；HAOJIE_NATIVE 指向交付包构建的二进制。"""
 
+import io
+import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
+from haojie_training.model import ModelConfig, PolicyValueNet
 from haojie_training.native.client import Client
-from haojie_training.native.pipeline import initialize, model_from, prepare, sample
+from haojie_training.native.model import metadata, model_from
+from haojie_training.runtime import Trainer
 
 
 class NativeTests(unittest.TestCase):
@@ -113,8 +118,10 @@ class NativeTests(unittest.TestCase):
     def test_checkpoint_rules_and_weights(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "initial.pt"
-            initialize(self.engine, path, tiny=True)
             with Client(self.engine) as client:
+                Trainer(PolicyValueNet(ModelConfig.tiny()), torch.device("cpu")).save(
+                    path, metadata(client.ready)
+                )
                 model, digest = model_from(path, client.ready)
                 payload = torch.load(path, weights_only=True)
                 self.assertTrue(
@@ -126,26 +133,51 @@ class NativeTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "哈希"):
                     model_from(path, client.ready)
 
-    def test_changed_budget_cannot_duplicate_a_sampling_prefix(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            checkpoint = root / "initial.pt"
-            initialize(self.engine, checkpoint, tiny=True)
-            records = []
-            for i, (seed, plies) in enumerate(((71, 10), (72, 10), (71, 20))):
-                output = root / f"sample-{i}"
-                sample(
-                    self.engine,
-                    checkpoint,
-                    [{"seed": seed, "rules": "classic"}],
-                    output,
-                    commands=4,
-                    plies=plies,
-                )
-                records.extend(output.glob("*.jsonl"))
-            with self.assertRaisesRegex(ValueError, "重复对局"):
-                prepare(self.engine, records, root / "data")
-            self.assertFalse((root / "data").exists())
+    def test_eof_during_frame_is_distinct_from_corruption(self):
+        for payload, kind in (
+            (b'{"type":"infer"', RuntimeError),
+            (b'{"bytes":666,"entities":1,"candidates":1}\nabc', RuntimeError),
+            (b'{"bytes":10,"entities":1,"candidates":1}\nabc', ValueError),
+            (b"{bad json}\n", ValueError),
+        ):
+            client = Client.__new__(Client)
+            client._input_refs = False
+            client.frame_limit = 256 * 1024 * 1024
+            client.process = SimpleNamespace(stdout=io.BytesIO(payload))
+            results = []
+            client._publish = results.append
+            client._read()
+            self.assertIsInstance(results[-1], kind)
+            if kind is RuntimeError:
+                self.assertEqual(str(results[-1]), "原生进程已退出")
+
+    def test_large_valid_frame_is_distinct_from_resource_and_protocol_errors(self):
+        entities = 8200
+        body = (
+            torch.zeros(entities * 64 + 32 + 64).numpy().tobytes()
+            + torch.zeros(entities, dtype=torch.int64).numpy().tobytes()
+            + torch.full((2,), -1, dtype=torch.int64).numpy().tobytes()
+            + bytes([1]) * (entities + 1)
+        )
+        self.assertGreater(len(body), 2 * 1024 * 1024)
+        header = (
+            json.dumps(
+                {"type": "infer", "bytes": len(body), "entities": entities, "candidates": 1}
+            ).encode()
+            + b"\n"
+        )
+        for limit, kind in ((4 * 1024 * 1024, dict), (1024 * 1024, MemoryError)):
+            client = Client.__new__(Client)
+            client._input_refs = False
+            client.frame_limit = limit
+            client.read_seconds = client.decode_seconds = client.tensor_bytes = 0
+            client.process = SimpleNamespace(stdout=io.BytesIO(header + body))
+            result = []
+            client._publish = result.append
+            client._read()
+            self.assertIsInstance(result[0], kind)
+            if kind is dict:
+                self.assertEqual(result[0]["input"]["entities"].shape[0], entities)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from collections import Counter, deque
 
 import torch
 
-from ..native.pipeline import example
+from ..native.model import example
 
 
 def size_of(row):

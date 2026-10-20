@@ -37,17 +37,17 @@ cargo fmt --manifest-path native/engine/Cargo.toml --check
 | `--development`（无参数兼容） | create/observe、只读查询/预检、执行、驻留状态及差分/诊断                       | 可信开发接口；仅接收 TS 重建或原生创建的规范局面，不能替代存档解析、联网鉴权或训练边界   |
 | Rust 模块                     | 类型化内核、共享查询、事务、编码与出口                                         | 内部接口；改动须维护 TS 对应和失败原子性                                                 |
 
-训练协议 `haojie-training-binary-v1`：JSON 行控制加 LE 张量；握手附完整引擎身份。记录为 `haojie-native-record-v1`，编码为 `haojie-entities-factorized-v1`，规则包为 `haojie-rules-package-v1`。具体安装、命令、张量所有权和恢复约束见 [training/NATIVE.md](../../training/NATIVE.md)。
+训练协议 `haojie-training-binary-v1`：JSON 行控制加 LE 张量；握手附完整引擎身份。记录为 `haojie-native-record-v1`，编码为 `haojie-entities-factorized-v1`，规则包为 `haojie-rules-package-v1`。共享执行层、张量所有权和旧记录边界见[原生支持](../../training/NATIVE.md)，安装见[训练包说明](../../training/README.md)。
 
-控制台能力通过训练握手 `capabilities` 显式协商：`memory-examples-v1`、`mc-context-v2`、`actor-model-routing-v1`、`teacher-v2`。`sample` 可选 `memory:true`（禁止同时传记录路径）、`models:[先手哈希,后手哈希]`、`teacher:1|2`（仅内存模式）。模型请求附实际 `actor` 与该方固定 `model`。普通内存样本在权威接受后由 `records::examples` 编码；`mcContext:true` 则发送采样器真实分解选择与 Pass 的输入张量，附 `semantics:mc-context-v2`、decision/step/stage/selected/actor/model。教师消息只有该方公开 `observation`，回复命令仍由权威引擎校验；教师评测不输出训练样本。省略字段保持完整记录CLI行为，编码/规则/记录版本未改变。流式恢复另用 `haojie-stream-recovery-v1`，见[控制台协议与生命周期](../../training/CONSOLE.md)。
+控制台能力通过训练握手 `capabilities` 显式协商：`memory-examples-v1`、`mc-context-v2`、`actor-model-routing-v1`、`teacher-v2`。`sample` 可选 `memory:true`（禁止同时传记录路径）、`models:[先手哈希,后手哈希]`、`teacher:1|2`（仅内存模式）。模型请求附实际 `actor` 与该方固定 `model`。普通内存样本在权威接受后由 `records::examples` 编码；`mcContext:true` 则发送采样器真实分解选择与 Pass 的输入张量，附 `semantics:mc-context-v2`、decision/step/stage/selected/actor/model。教师消息只有该方公开 `observation`，回复命令仍由权威引擎校验；教师评测不输出训练样本。省略内存字段时仍支持协议层完整记录，编码/规则/记录版本未改变；Python 独立记录 CLI 已移除。流式恢复另用 `haojie-stream-recovery-v1`，见[控制台协议与生命周期](../../training/CONSOLE.md)。
 
-审核器 `haojie-native-audit-v1` 的完成回执绑定同一次读取的原始字节 SHA256、规则包、完整编码 schema 和审核器源码身份。Python 的已审核对象只在当前可信进程内复用，不能从外部文件加载为缓存凭据；复用前还核对实际二进制内容与当前记录内容。来源替换之后不重新打开文件生成张量。`audit --prepare` 是推荐的单遍出口；单独 `audit` 保留，独立 TS 规则审核继续在宿主 CI 执行。
+审核器 `haojie-native-audit-v1` 的完成回执绑定同一次读取的原始字节 SHA256、规则包、完整编码 schema 和审核器源码身份。Rust `audit` 协议保留重放校验和可选编码，独立 TS 规则审核继续在宿主 CI 执行；旧 Python 审核、缓存凭据及分片准备入口已移除。
 
 开发协议仍为 `haojie-native-engine-v4`，先 `init` 提交规则、图鉴、战斗参数、抽取池、配方与可选编码 schema。保留 `run/load/bench`、`create/observe/reset/step/export`、`training-nodes`、`sample-game`；客户端在 [scripts/training/native/client.ts](../../scripts/training/native/client.ts)。`step` 检查 revision，逐条提交成功前缀，非法命令不提交资源/RNG；规则拒绝为 invalid，预检抵达随机边界为 uncertain，unsupported 必须使完整规则验收失败。权威 export 绝不能作为模型输入。
 
 ## 日常验收与交付
 
-[原生 CI](../../.github/workflows/native.yml) 在原生、规则、编码、训练宿主及测试变动时运行锁定构建、fmt/test/Clippy、release 身份、代表性双端规则/动作树/公开信息/编码/规范哈希差分，以及交付包独立安装、真实非空更新、另进程恢复和新权重采样。原有 TS 与离线浏览器 CI 保留。手动 workflow 的 endurance 开启多种子自然终局双端验收，不把长基准或毫秒阈值塞进每个 PR。
+[原生 CI](../../.github/workflows/native.yml) 在原生、规则、编码、训练宿主及测试变动时运行锁定构建、fmt/test/Clippy、release 身份、代表性双端规则/动作树/公开信息/编码/规范哈希差分，以及交付包独立安装后的控制台／云端真实更新、服务重启和备份恢复。原有 TS 与离线浏览器 CI 保留。手动 workflow 的 endurance 开启多种子自然终局双端验收，不把长基准或毫秒阈值塞进每个 PR。
 
 ```sh
 python scripts/training/native/pipeline/package.py --output artifacts/delivery/source.tar.gz

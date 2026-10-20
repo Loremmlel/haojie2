@@ -6,13 +6,13 @@ Colab / 多核服务器入口见 [COLAB.md](COLAB.md)，包含硬件初始配置
 
 ## 选择入口
 
-| 需求                           | 入口                                                   | 文档                          |
-| ------------------------------ | ------------------------------------------------------ | ----------------------------- |
-| GUI 自动训练、暂停、继续、评测 | `python -m haojie_training.console` / `haojie-console` | [控制台](CONSOLE.md)          |
-| 固定检查点采样、记录审核、恢复 | `python -m haojie_training.native`                     | [Rust＋Python CLI](NATIVE.md) |
-| 教师轨迹转张量                 | `python -m haojie_training.prepare`                    | 下文；需要仓库 Node 依赖      |
-| 张量训练、续训、评估           | `haojie_training.train` / `haojie_training.evaluate`   | 下文                          |
-| ONNX 导出、设备基准            | `haojie_training.export` / `haojie_training.benchmark` | 独立开发工具，按需运行        |
+| 需求                           | 入口                                                   | 文档                     |
+| ------------------------------ | ------------------------------------------------------ | ------------------------ |
+| GUI 自动训练、暂停、继续、评测 | `python -m haojie_training.console` / `haojie-console` | [控制台](CONSOLE.md)     |
+| 云端自动训练、备份与恢复       | `python -m haojie_training.cloud` / `haojie-cloud`     | [云端入口](COLAB.md)     |
+| 教师轨迹转张量                 | `python -m haojie_training.prepare`                    | 下文；需要仓库 Node 依赖 |
+| 张量训练、续训、评估           | `haojie_training.train` / `haojie_training.evaluate`   | 下文                     |
+| ONNX 导出、设备基准            | `haojie_training.export` / `haojie_training.benchmark` | 独立开发工具，按需运行   |
 
 现行模型和功能状态见[状态入口](../docs/ai/STATUS.md)，公开输入与动作分解见[编码协议](ENCODING.md)，TS/Rust 对应见[运行结构](../docs/ai/RUNTIME.md)。旧阶段实验、固定硬件成绩和交付报告从[历史索引](../docs/ai/HISTORY.md)查看。
 
@@ -50,18 +50,18 @@ training/.venv/bin/python -m haojie_training.console --device cpu
 
 `entity-transformer-v2` 为 6 层 Pre-LN Transformer：width 384、6 个注意力头、FFN 1536、dropout 0，共 11,695,874 个参数。64 维公开实体特征、类别嵌入和 32 维全局特征进入主干；64 维候选结合全局、来源及目标实体，输出候选评分和观察方价值。实体和候选数量可变，填充由掩码表示。候选投影及评分保留 FP32，主干和价值头使用所选精度。
 
-控制台以 `decomposed-mc-q-v2` 让真实终局收益监督实际分解选择；记录 CLI 保持 `sampled-action-imitation` 的动作监督与终局价值语义。两条路径共享模型和运行时，各自保存方法及来源。
+控制台和云端以 `decomposed-mc-q-v2` 让真实终局收益监督实际分解选择。旧记录和教师轨迹按各自的方法及来源处理；共享原生支持与记录审核边界见 [NATIVE.md](NATIVE.md)。
 
-| 模块                                     | 职责                                         |
-| ---------------------------------------- | -------------------------------------------- |
-| `console/controller.py`                  | 后台生命周期、阶段切换、控制意图及内存状态   |
-| `console/config.py`                      | 设置默认值、字段和范围校验                   |
-| `console/storage.py`                     | 配额、原子写入、实验目录及恢复点读取校验     |
-| `console/sampling.py` / `memory.py`      | 任务分配、终局样本留存与消费                 |
-| `console/evaluation.py` / `opponents.py` | 冻结评测、历史模型和正式教师                 |
-| `native/`                                | 引擎进程、二进制帧、批量推理、记录采样及审核 |
-| `model.py` / `runtime.py`                | 网络、优化器、设备精度、检查点加载和恢复     |
-| `data.py` / `prepare.py`                 | 张量校验、组批、分片及轨迹转换               |
+| 模块                                     | 职责                                       |
+| ---------------------------------------- | ------------------------------------------ |
+| `console/controller.py`                  | 后台生命周期、阶段切换、控制意图及内存状态 |
+| `console/config.py`                      | 设置默认值、字段和范围校验                 |
+| `console/storage.py`                     | 配额、原子写入、实验目录及恢复点读取校验   |
+| `console/sampling.py` / `memory.py`      | 任务分配、终局样本留存与消费               |
+| `console/evaluation.py` / `opponents.py` | 冻结评测、历史模型和正式教师               |
+| `native/`                                | 引擎进程、二进制帧、内存采样调度及批量推理 |
+| `model.py` / `runtime.py`                | 网络、优化器、设备精度、检查点加载和恢复   |
+| `data.py` / `prepare.py`                 | 张量校验、组批、分片及轨迹转换             |
 
 `runtime.read_checkpoint` 一次读取检查点并检查格式及网络版本，各入口继续核对自己的规则、数据或运行条件。`checkpoint_config` 保留为仅读取配置的兼容入口。
 
@@ -94,7 +94,7 @@ python -m haojie_training.train --data artifacts/training/pilot/encoded/train.pt
 
 `--steps` 是本次新增步数。`--resume` 恢复模型、优化器、AMP、累计步骤、随机状态及来源，要求数据、结构、目标和精度兼容。新一轮数据用互斥的 `--initialize-from 父检查点`，只继承兼容权重并重建优化器；父文件只读，祖先训练族继续排除在新验证集之外。
 
-CUDA 可用 `--precision bf16 --threads 1`，`--optimizer auto` 选择受支持的执行方式。`--length-bucket-size 256` 可减少组批填充，设置随检查点保存。设备及确定性恢复条件见 [NATIVE.md](NATIVE.md)。
+CUDA 可用 `--precision bf16 --threads 1`，`--optimizer auto` 选择受支持的执行方式。`--length-bucket-size 256` 可减少组批填充，设置随检查点保存。同设备确定性恢复使用 `--deterministic`，续训继承检查点的确定性、矩阵精度及优化器执行方式。
 
 功能烟雾检查可以使用小模型和合成数据，合成标记随检查点保留：
 

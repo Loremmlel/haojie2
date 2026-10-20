@@ -135,6 +135,11 @@ impl Queries {
                     .map_err(|e| e.clone())?
                     .inspect(c, catalog)?;
             }
+            "cast" => {
+                if crate::spells::prepare_inspection(s, c, catalog)? {
+                    return Ok(());
+                }
+            }
             "attack" => {
                 let u = self
                     .attackers

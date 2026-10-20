@@ -37,6 +37,7 @@ import {
   reroll,
   useSkill,
   cast,
+  prepareCastInspection,
   prepareSkillInspection,
   createSkillInspectionQuery,
   prepareChargeInspection,
@@ -183,6 +184,11 @@ function prepareInspection(s: GamePosition, c: Command, queries?: InspectionQuer
       if (queries) queries.skill(c);
       else prepareSkillInspection(s, c);
       break;
+    case 'cast': {
+      const result = prepareCastInspection(s, c);
+      if (result === 'uncertain') throw unresolvedRandom;
+      return result === 'available';
+    }
     case 'deploy':
       prepareDeploy(s, c);
       return true;
@@ -424,6 +430,8 @@ function transition<S extends GamePosition>(
       default:
         throw new RuleError('无法识别的游戏命令。');
     }
+    // 预检只消费合法性与随机边界；动作后的纯派生同步结果会被丢弃。
+    if (preview) return s;
     syncBanners(s);
     pruneSiphons(s);
     refreshDeployment(s, 1);

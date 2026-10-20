@@ -129,19 +129,10 @@ jobs:
         run: python3 scripts/training/native/pipeline/package.py --output artifacts/native-package/source.tar.gz
       - name: Install without host runtime or repository mounts
         run: docker build -f scripts/training/native/ci/Dockerfile -t haojie-native-check artifacts/native-package
-      - name: Nonempty update, separate-process restore and new-weight sampling
+      - name: Installed training, console and cloud recovery checks
         run: |
           mkdir -p artifacts/native-evidence
           docker run --rm --network none --user "$(id -u):$(id -g)" --env HOME=/tmp --mount type=bind,source="$PWD/artifacts/native-evidence",target=/evidence haojie-native-check
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - run: npm ci --no-audit --no-fund
-      - name: Independent host TS audit of native records and canonical state hashes
-        run: |
-          for record in artifacts/native-evidence/closure/sample-updated/*.jsonl; do
-            node --import tsx scripts/training/native/pipeline/audit.ts "$record" "$record.ts-audit.json" --summary-only
-          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

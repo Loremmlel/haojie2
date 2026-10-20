@@ -29,7 +29,7 @@ npm run deploy:check # 检查根发行物与源码构建一致
 
 ## 本地自对弈与训练
 
-先按[训练安装说明](training/NATIVE.md)安装 Python 3.12 环境、PyTorch 和训练包，并构建正式引擎：
+先按[训练安装说明](training/README.md)安装 Python 3.12 环境、PyTorch 和训练包，并构建正式引擎：
 
 ```sh
 npm run native:build
@@ -41,13 +41,13 @@ python -m haojie_training.console
 | 用途                                 | 入口                                       |
 | ------------------------------------ | ------------------------------------------ |
 | 日常训练、暂停恢复、评测与 20GB 配额 | [训练控制台](training/CONSOLE.md)          |
-| 独立原生采样、记录审核、检查点恢复   | [Rust + Python CLI](training/NATIVE.md)    |
+| 云端训练、并发采样与备份恢复         | [Colab / Linux 服务](training/COLAB.md)    |
 | 数据准备、模型训练、推理与导出       | [Python 训练包](training/README.md)        |
 | 教师数据、已有搜索记录、模型对战     | [TypeScript 训练工具](docs/ai/TRAINING.md) |
 | 模型输入和样本语义                   | [编码协议](training/ENCODING.md)           |
 | 当前实现和维护导航                   | [AI / 训练状态](docs/ai/STATUS.md)         |
 
-训练控制台使用终局收益更新 MC-Q 模型，原记录 CLI 继续保留其监督训练语义。自然棋力由冻结模型的独立评测检验；历史实验和测量见[历史索引](docs/ai/HISTORY.md)。
+训练控制台和云端服务使用终局收益更新 MC-Q 模型。自然棋力由冻结模型的独立评测检验；历史实验和测量见[历史索引](docs/ai/HISTORY.md)，共享原生支持和旧记录边界见[原生支持](training/NATIVE.md)。
 
 ## 仓库结构
 

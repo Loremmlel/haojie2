@@ -1,5 +1,9 @@
 """服务器配额、旧配置升级、安全点和有限资源监测。"""
 
+import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,11 +18,47 @@ from haojie_training.console.storage import Store
 
 
 class ServerTests(unittest.TestCase):
+    def test_allocator_default_and_user_environment_without_torch(self):
+        variables = ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF")
+        training = Path(__file__).resolve().parents[2]
+        code = (
+            "import json, os, sys\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "import haojie_training\n"
+            "assert 'torch' not in sys.modules\n"
+            "print(json.dumps({key: os.environ.get(key) for key in sys.argv[2:]}))\n"
+        )
+        for supplied in (
+            {},
+            {variables[0]: "expandable_segments:False"},
+            {variables[1]: "max_split_size_mb:128"},
+            {variables[0]: "backend:cudaMallocAsync", variables[1]: "expandable_segments:False"},
+            {variables[0]: ""},
+            {variables[1]: ""},
+        ):
+            with self.subTest(environment=supplied):
+                environment = {
+                    key: value for key, value in os.environ.items() if key not in variables
+                }
+                environment.update(supplied)
+                result = subprocess.run(
+                    [sys.executable, "-S", "-c", code, str(training), *variables],
+                    env=environment,
+                    text=True,
+                    encoding="utf-8",
+                    capture_output=True,
+                    check=True,
+                    timeout=10,
+                )
+                expected = {key: supplied.get(key) for key in variables}
+                if not supplied:
+                    expected[variables[0]] = "expandable_segments:True"
+                self.assertEqual(json.loads(result.stdout), expected)
+
     def test_notebook_and_bootstrap_syntax(self):
         import ast
         import asyncio
         import html
-        import json
 
         repo = Path(__file__).resolve().parents[3]
         notebook = json.loads((repo / "notebooks/haojie_colab.ipynb").read_text(encoding="utf-8"))

@@ -1,7 +1,7 @@
 {
   "format": "haojie-teacher-bundle-v1",
-  "commit": "da0722490002f42bd2279fcbecc82eab36bcd40e",
-  "sha256": "4c55a7338196afb404f0e0893ce3edd60686a8fcd7acaf616d554ff9df3e7b41",
+  "commit": "dba57ce1e90f6cfb6a0dcb939b90a6ead01cf541",
+  "sha256": "c74a0b4f3e08321cb728ab9f356f7a69d050b09cd4c765ee7f3a7d36f58ced23",
   "sources": {
     "scripts/training/native/teacher/index.ts": "3d7827bb7a6101782823f9f35c2c713aa424f29e73d3188817cdf4c403d1a3c9",
     "src/ai/budget.ts": "5ba5d44720b00954e4d032b57b70769fba607e7d921ba17b9e692ac40190ade5",
@@ -19,10 +19,10 @@
     "src/ai/training/queries.ts": "143ec05023e55f9aca2a94ed2ea653b7769a508dc63f353db4c1c7459fde92df",
     "src/ai/training/teacher.ts": "80775e6f01c90ab306fd87185660683bc27703b8c4471f94ab6cb3d9b88a0fec",
     "src/engine/catalog.ts": "8e6a74df54798e9466c5a0dac6960ab3108d5b294b46d52511fca57738f09f51",
-    "src/engine/commands/abilities.ts": "5c5bbe2b497835aa490a61565549db53379189bebbe17a383cbb4de4c1db7616",
+    "src/engine/commands/abilities.ts": "e027a095d50caa19d265ecbb88e4c0f8f5ca6802fefc8b0aa7a6dfa610e29cab",
     "src/engine/commands/combat.ts": "3f52090d73949b11f00dd78d21005d69811f468254647cf00ae10e9f270bfc16",
     "src/engine/commands/firelord.ts": "d9575ab357cf87ef0c80e0c680933e4569fe4b770300f0a742585a451b36bffc",
-    "src/engine/commands/game.ts": "4993a7038a4b00d8514b7a3c216f93ea6d2d494c5924d82b35b4d94532bc3d76",
+    "src/engine/commands/game.ts": "464408c1cec12d72d67290b000193df9e7cc89ccd9b7768863321360ac9b0380",
     "src/engine/commands/lifecycle.ts": "fcf5cb7c375217eb8aea54ceb38ce763ad9648a21091cdfebece96b80dc368b0",
     "src/engine/commands/movement.ts": "41b9f083922d522651f051260ccac895df0f6b9f765f296fd1d879ca1f5f74f9",
     "src/engine/commands/options.ts": "50bc578de259a376d94c6dce7b14e651abcb086ac25582b88fd515362f65e194",

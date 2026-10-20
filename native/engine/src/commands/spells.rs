@@ -1,11 +1,11 @@
 //! 法术先校验全部参数，再反制、支付和结算。伤害来源保留基地身份，AOE 按覆盖格逐包处理。
 use crate::abilities::{target, unit};
 use crate::damage::{Source, area_damage, heal, kill, protected};
-use crate::geometry::{inside, targets};
-use crate::model::{Catalog, Command, Failure, State, Unit, ensure, extra_number};
+use crate::geometry::{Target, inside, targets};
+use crate::model::{Catalog, Command, Failure, Point, State, Unit, ensure, extra_number};
 use crate::preparation::{card, draw, kind, remove_card};
 use crate::resolution::{Resolution, add_effect};
-use serde_json::json;
+use serde_json::{Value, json};
 
 pub fn cast(
     s: &mut State,
@@ -28,22 +28,10 @@ pub fn cast(
             "u26" => "inner-fire",
             _ => "buff",
         });
-        if k == "8" {
+        if k == "8" || k == "u9" {
             facts["area"] = json!(
                 crate::lifecycle::all_cells()
-                    .filter(|p| c.x.is_some_and(|x| p.x >= x && p.x <= x + 1.0)
-                        && c.y.is_some_and(|y| p.y >= y && p.y <= y + 1.0))
-                    .collect::<Vec<_>>()
-            );
-        }
-        if k == "u9" {
-            facts["area"] = json!(
-                crate::lifecycle::all_cells()
-                    .filter(|p| if c.mode.as_deref() == Some("row") {
-                        Some(p.y) == c.row
-                    } else {
-                        Some(p.x) == c.column
-                    })
+                    .filter(|p| hits(&k, c, *p))
                     .collect::<Vec<_>>()
             );
         }
@@ -60,18 +48,18 @@ pub fn cast(
     ctx.facts = previous;
     Ok(())
 }
-fn resolve(
-    s: &mut State,
-    c: &Command,
-    catalog: &Catalog,
-    ctx: &mut Resolution,
-) -> Result<(), Failure> {
+struct Prepared {
+    owner: usize,
+    card: Value,
+    target: Option<Target>,
+}
+/// 对应 TS prepareCast；选择校验完整保留在反制随机数与支付之前。
+fn prepare(s: &State, c: &Command, catalog: &Catalog) -> Result<Prepared, Failure> {
     let owner = s.active;
     let card = card(s, c)
         .filter(|v| catalog[&kind(&v["kind"]).key()].spell.is_some())
         .ok_or(Failure::Invalid("请选择法术牌。"))?;
     let k = kind(&card["kind"]).key();
-    let source = Source::effect(owner, "spell");
     let t = if c.target_id.is_some() {
         Some(target(s, c.target_id.as_deref())?)
     } else {
@@ -132,6 +120,13 @@ fn resolve(
             "不可献祭克隆军团，且友方需至少半血。",
         )?;
     }
+    Ok(Prepared {
+        owner,
+        card,
+        target: t,
+    })
+}
+fn counters(s: &State, owner: usize) -> Vec<Unit> {
     let mut mages: Vec<_> = s
         .units
         .iter()
@@ -144,7 +139,50 @@ fn resolve(
         .cloned()
         .collect();
     mages.sort_by(|a, b| extra_number(a, "deployedAt").total_cmp(&extra_number(b, "deployedAt")));
-    for mage in mages {
+    mages
+}
+fn hits(k: &str, c: &Command, p: Point) -> bool {
+    if k == "8" {
+        c.x.is_some_and(|x| p.x >= x && p.x <= x + 1.0)
+            && c.y.is_some_and(|y| p.y >= y && p.y <= y + 1.0)
+    } else if c.mode.as_deref() == Some("row") {
+        Some(p.y) == c.row
+    } else {
+        Some(p.x) == c.column
+    }
+}
+fn victims(s: &State, owner: usize, k: &str, c: &Command) -> Vec<Target> {
+    targets(s)
+        .into_iter()
+        .filter(|t| {
+            t.unit.as_ref().map(Unit::side).unwrap_or(t.owner) != owner
+                && t.footprint().into_iter().any(|p| hits(k, c, p))
+        })
+        .collect()
+}
+/// 对应 TS prepareCastInspection；没有区域目标时不复制局面，反制停在相同随机边界。
+pub fn prepare_inspection(s: &State, c: &Command, catalog: &Catalog) -> Result<bool, Failure> {
+    let prepared = prepare(s, c, catalog)?;
+    if !counters(s, prepared.owner).is_empty() {
+        return Err(Failure::Uncertain);
+    }
+    let k = kind(&prepared.card["kind"]).key();
+    Ok((k == "8" || k == "u9") && victims(s, prepared.owner, &k, c).is_empty())
+}
+fn resolve(
+    s: &mut State,
+    c: &Command,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+) -> Result<(), Failure> {
+    let Prepared {
+        owner,
+        card,
+        target: t,
+    } = prepare(s, c, catalog)?;
+    let k = kind(&card["kind"]).key();
+    let source = Source::effect(owner, "spell");
+    for mage in counters(s, owner) {
         let chance = if mage.has("archmage") {
             catalog.rule("/archmageCounterChance")
         } else {
@@ -168,18 +206,6 @@ fn resolve(
     }
     match k.as_str() {
         "8" | "u9" => {
-            let hit = |p: crate::model::Point| {
-                if k == "8" {
-                    p.x >= c.x.unwrap()
-                        && p.x <= c.x.unwrap() + 1.0
-                        && p.y >= c.y.unwrap()
-                        && p.y <= c.y.unwrap() + 1.0
-                } else if c.mode.as_deref() == Some("row") {
-                    Some(p.y) == c.row
-                } else {
-                    Some(p.x) == c.column
-                }
-            };
             if k == "8" {
                 ctx.emit(s,json!({"type":"skill","to":{"x":c.x.unwrap()+0.5,"y":c.y.unwrap()+0.5},"owner":owner,"text":"爆弹"}),None);
             } else {
@@ -192,17 +218,11 @@ fn resolve(
                     .unwrap()
                     .push(hazard);
             }
-            let victims: Vec<_> = targets(s)
-                .into_iter()
-                .filter(|t| {
-                    t.unit.as_ref().map(Unit::side).unwrap_or(t.owner) != owner
-                        && t.footprint().into_iter().any(&hit)
-                })
-                .collect();
+            let victims = victims(s, owner, &k, c);
             area_damage(
                 s,
                 &victims,
-                |p| if hit(p) { 20.0 } else { 0.0 },
+                |p| if hits(&k, c, p) { 20.0 } else { 0.0 },
                 &source,
                 catalog,
                 ctx,

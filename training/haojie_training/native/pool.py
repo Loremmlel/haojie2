@@ -6,11 +6,12 @@ from collections import deque
 
 from ..runtime import resolve_device
 from .client import Client
-from .execution import PolicyInference
 
 
-def _group_size(pending, maximum):
-    """取已按实体数排序的连续前缀，最长不超过最短的1.25倍，减少主干填充计算。"""
+def _group_size(pending, maximum, *, packed=False):
+    """取排序后的连续前缀；紧凑执行器无需限制长度比，普通执行器保留1.25倍上限。"""
+    if packed:
+        return min(len(pending), maximum)
     limit = pending[0][2]["entities"] * 5 // 4
     count = next(
         (j for j, (_, _, message) in enumerate(pending) if message["entities"] > limit),
@@ -23,13 +24,11 @@ class Pool:
     def __init__(
         self,
         executable,
-        checkpoint,
         environments,
         device="cuda",
-        precision="fp32",
         batch_wait_ms=0,
         *,
-        inference=None,
+        inference,
         max_batch_size=None,
         frame_limit=256 * 1024 * 1024,
     ):
@@ -46,7 +45,7 @@ class Pool:
         self.executable, self.clients, self.slots = executable, [], {}
         self.generations = [0] * environments
         self.last_ids = [0] * environments
-        self.device, self.precision = resolve_device(str(device)), precision
+        self.device = resolve_device(str(device))
         self.wait = batch_wait_ms / 1000
         self.responses = deque(maxlen=4096)
         self.queue_seconds = self.send_seconds = self.active_seconds = 0.0
@@ -60,13 +59,7 @@ class Pool:
             self.ready = self.clients[0].ready
             if any(c.ready != self.ready for c in self.clients):
                 raise ValueError("工作进程版本不一致")
-            if inference is None:
-                from .pipeline import model_from
-
-                model, self.model_hash = model_from(checkpoint, self.ready, self.device)
-                self.inference = PolicyInference(model, self.device, precision)
-            else:
-                self.inference, self.model_hash = inference
+            self.inference, self.model_hash = inference
             self.precision = self.inference.precision
             self.startup_seconds = time.perf_counter() - self.started
         except BaseException:
@@ -82,14 +75,19 @@ class Pool:
         )
 
     def close(self):
-        for client in self.clients:
-            client.close()
-        # Reader 已停止，清空队列持有的帧；不把历史张量留到下一次运行。
-        while True:
-            try:
-                self.events.get_nowait()
-            except queue.Empty:
-                break
+        try:
+            inference = getattr(self, "inference", None)
+            if inference is not None and hasattr(inference, "close"):
+                inference.close()
+        finally:
+            for client in self.clients:
+                client.close()
+            # Reader 已停止，清空队列持有的帧；不把历史张量留到下一次运行。
+            while True:
+                try:
+                    self.events.get_nowait()
+                except queue.Empty:
+                    break
 
     def metrics(self):
         return {
@@ -143,25 +141,63 @@ class Pool:
         self,
         jobs,
         *,
-        seconds=None,
-        drain_seconds=120,
-        stop_file=None,
         snapshot=None,
         cancel_event=None,
         keep_open=False,
     ):
-        """jobs 负责耐久任务事务；错误立即停止。deadline 包含加载、填满和排空。
-
-        请求通过独占管道绑定当前任务，并校验进程代次与跨局递增 ID。仅 EOF/断管
-        可重建槽位，单次运行最多两次；规则、张量或协议错误不重试。
-        """
-        deadline = self.started + seconds if seconds else float("inf")
+        """内存任务仅接纳完整终局；请求按独占管道、进程代次与递增 ID 校验归属。"""
         previous = time.perf_counter()
         previous_active = 0
         next_snapshot = previous
         stopping = False
         cancel = False
-        interrupted = False
+        packed = jobs.supports_packed_batches
+        waiting = deque()
+        active_inference = None
+        discarded_slots = set()
+        failed = True
+
+        def cancelled():
+            nonlocal cancel
+            cancel = cancel or bool(cancel_event and cancel_event.is_set())
+            return cancel
+
+        def respond(group, logits, leases=None):
+            cancelled()
+            for row, (i, task_id, message) in enumerate(group):
+                if leases is not None:
+                    if leases[row] in discarded_slots:
+                        continue  # 资源失败已丢弃此局；同组其他槽仍可正常完成。
+                    if leases[row] != (i, self.generations[i]):
+                        raise ValueError("响应进程代次已改变")
+                if self.slots.get(i, {}).get("id") != task_id:
+                    raise ValueError("响应归属已改变")
+                sent = time.perf_counter()
+                response = {"id": message["id"], "model": message["model"]}
+                response.update(
+                    {"cancel": True}
+                    if cancel
+                    else {"logits": logits[row, : message["candidates"]].tolist()}
+                )
+                try:
+                    self.clients[i].send(response)
+                except BrokenPipeError as error:
+                    raise RuntimeError("内存任务工作进程退出；丢弃未完成局") from error
+                self.send_seconds += time.perf_counter() - sent
+                self.responses.append(time.perf_counter() - message["received_at"])
+
+        def receive():
+            group, inference, ticket = waiting.popleft()
+            logits = inference.finish(ticket)
+            if not cancelled():
+                if any(jobs.inferences[m["model"]] is not inference for _, _, m in group):
+                    raise ValueError("模型执行器在推理未排空时被替换")
+                logits = jobs.infer([m for _, _, m in group], completed=logits)
+            respond(group, logits, ticket.slots)
+
+        def drain():
+            while waiting:
+                receive()
 
         def assign(i):
             task = jobs.claim()
@@ -182,54 +218,16 @@ class Pool:
                 "samplerSeed": task["sampler_seed"],
                 "maxCommands": jobs.commands,
                 "maxPlies": jobs.plies,
+                "memory": True,
+                "models": task["models"],
+                "mcContext": jobs.mc_context,
             }
-            if getattr(jobs, "memory", False):
-                request.update(memory=True, models=task["models"])
-                request["mcContext"] = getattr(jobs, "mc_context", False)
-                if request["mcContext"] and "mc-input-ref-v1" in self.ready.get("capabilities", []):
-                    request["inputRefs"] = True
-                if task.get("teacher"):
-                    request["teacher"] = task["teacher"]
-            else:
-                request["record"] = str(task["record"])
+            if request["mcContext"] and "mc-input-ref-v1" in self.ready.get("capabilities", []):
+                request["inputRefs"] = True
+            if task.get("teacher"):
+                request["teacher"] = task["teacher"]
             self.clients[i].send(request)
             return True
-
-        def restart(i, error):
-            if getattr(jobs, "memory", False):
-                raise RuntimeError("内存任务工作进程退出；丢弃未完成局") from error
-            task = self.slots.pop(i)
-            # 进程可能在发布完成文件后、送出回执前退出；先核对已发布文件。
-            if task["record"].exists():
-                with Client(self.executable) as verifier:
-                    verifier.send({"op": "audit", "record": str(task["record"]), "encode": False})
-                    audited = verifier.receive()["report"]
-                jobs.finish(
-                    task,
-                    {
-                        "outcome": audited["outcome"],
-                        "finalHash": audited["finalHash"],
-                        "recovered_audit": audited,
-                    },
-                )
-                self.finished += 1
-                if audited["outcome"]["reason"] == "error":
-                    raise RuntimeError("退出进程留下实现错误记录")
-            else:
-                jobs.failed(task, str(error))
-            if self.restarts >= 2:
-                raise RuntimeError("原生槽位连续退出，已停止重建") from error
-            old = self.clients[i]
-            old.close()
-            self.read_seconds += old.read_seconds
-            self.decode_seconds += old.decode_seconds
-            self.tensor_bytes += old.tensor_bytes
-            self.generations[i] += 1
-            self.last_ids[i] = 0
-            self.clients[i] = self.new_client(i)
-            if self.clients[i].ready != self.ready:
-                raise ValueError("重建进程版本不一致")
-            self.restarts += 1
 
         try:
             while True:
@@ -239,20 +237,10 @@ class Pool:
                 now = time.perf_counter()
                 self.active_seconds += (now - previous) * previous_active
                 previous = now
-                if stop_file and stop_file.exists() and not stopping:
-                    deadline = min(deadline, now + drain_seconds)
-                if (
-                    jobs.stop()
-                    or interrupted
-                    or (stop_file and stop_file.exists())
-                    or now >= deadline - drain_seconds
-                ):
+                if jobs.stop():
                     stopping = True
                     if self.stop_at is None:
                         self.stop_at = now - self.started
-                cancel = cancel or now >= deadline - min(5, seconds / 10 if seconds else 5)
-                if now >= deadline:
-                    break
                 if not stopping:
                     for i in range(len(self.clients)):
                         if i not in self.slots:
@@ -264,11 +252,15 @@ class Pool:
                     break
                 previous_active = len(self.slots)
                 if snapshot and now >= next_snapshot:
+                    drain()
                     snapshot(self.metrics())
                     next_snapshot = now + 5
+                # 设备执行期间继续接收新帧；队列暂空不阻塞回收尚未完成的票据。
+                if waiting and (cancelled() or waiting[0][2].ready()):
+                    receive()
                 before = time.perf_counter()
                 try:
-                    messages = [self.events.get(timeout=min(0.25, max(0.001, deadline - now)))]
+                    messages = [self.events.get(timeout=0.001 if waiting else 0.25)]
                 except queue.Empty:
                     self.queue_seconds += time.perf_counter() - before
                     if any(
@@ -278,13 +270,7 @@ class Pool:
                     ):
                         raise TimeoutError("原生请求超过保护时间")
                     continue
-                except KeyboardInterrupt:
-                    if interrupted:
-                        cancel = True
-                    interrupted = True
-                    deadline = min(deadline, time.perf_counter() + drain_seconds)
-                    continue
-                until = min(deadline, time.perf_counter() + self.wait)
+                until = time.perf_counter() + self.wait
                 self.peak_queue = max(self.peak_queue, 1 + self.events.qsize())
                 # MC 每槽通常先发 example 再发 infer；控制消息不能占掉推理批量名额。
                 # 仅多排空已就绪消息，不增加等待时间；上限与有界队列一致。
@@ -303,7 +289,9 @@ class Pool:
                         continue  # 已关闭管道的 EOF；不能发送到新进程。
                     if i not in self.slots:
                         raise ValueError("空闲槽位收到旧局响应")
-                    if isinstance(raw, MemoryError) and getattr(jobs, "memory", False):
+                    if isinstance(raw, MemoryError):
+                        discarded_slots.add((i, generation))
+                        pending = [item for item in pending if item[0] != i]
                         jobs.unfinished(self.slots.pop(i))
                         jobs.resource_error(str(raw))
                         self.clients[i].close()
@@ -312,10 +300,7 @@ class Pool:
                         self.clients[i] = self.new_client(i)
                         continue
                     if isinstance(raw, RuntimeError) and str(raw) == "原生进程已退出":
-                        # 同一批可能先收到推理帧；进程已退出，不能再向重建槽位回传旧请求。
-                        pending = [item for item in pending if item[0] != i]
-                        restart(i, raw)
-                        continue
+                        raise RuntimeError("内存任务工作进程退出；丢弃未完成局") from raw
                     message = self.clients[i].checked(raw)
                     task = self.slots[i]
                     task["last_activity"] = time.perf_counter()
@@ -327,16 +312,14 @@ class Pool:
                         jobs.finish(task, message)
                         if message.get("error") and message["outcome"]["reason"] != "cancelled":
                             raise RuntimeError(message["error"])
-                    elif message["type"] == "example" and getattr(jobs, "memory", False):
+                    elif message["type"] == "example":
                         jobs.example(task, message)
-                    elif message["type"] == "teacher" and getattr(jobs, "memory", False):
+                    elif message["type"] == "teacher":
                         task["commands"] = message.get("commandIndex", task.get("commands"))
                         task["ply"] = message.get("ply", task.get("ply"))
                         command = jobs.teacher_next(message)
                         self.clients[i].send({"id": message["id"], "command": command})
-                    elif message["type"] == "infer" and message.get("model") in task.get(
-                        "models", [self.model_hash]
-                    ):
+                    elif message["type"] == "infer" and message.get("model") in task["models"]:
                         if type(message.get("id")) is not int or message["id"] <= self.last_ids[i]:
                             raise ValueError("过期或重复的模型请求")
                         self.last_ids[i] = message["id"]
@@ -349,44 +332,45 @@ class Pool:
                         raise ValueError("未知或过期模型请求")
                 pending.sort(key=lambda item: item[2]["entities"])
                 while pending:
-                    count = _group_size(pending, self.max_batch_size)
+                    count = _group_size(pending, self.max_batch_size, packed=packed)
                     group, pending = pending[:count], pending[count:]
-                    cancel = cancel or bool(cancel_event and cancel_event.is_set())
-                    cancel = cancel or time.perf_counter() >= deadline - min(
-                        5, seconds / 10 if seconds else 5
-                    )
-                    logits = (
-                        None
-                        if cancel
-                        else (
-                            jobs.infer([m for _, _, m in group])
-                            if getattr(jobs, "memory", False)
-                            else self.inference([m["input"] for _, _, m in group])
-                        )
-                    )
-                    for row, (i, task_id, message) in enumerate(group):
-                        if self.slots[i]["id"] != task_id:
-                            raise ValueError("响应归属已改变")
-                        sent = time.perf_counter()
-                        response = {"id": message["id"], "model": message["model"]}
-                        response.update(
-                            {"cancel": True}
-                            if cancel
-                            else {"logits": logits[row, : message["candidates"]].tolist()}
-                        )
-                        try:
-                            self.clients[i].send(response)
-                        except BrokenPipeError as error:
-                            restart(i, error)
-                        self.send_seconds += time.perf_counter() - sent
-                        self.responses.append(time.perf_counter() - message["received_at"])
+                    identities = {m["model"] for _, _, m in group}
+                    inference = None
+                    if len(identities) == 1:
+                        inference = jobs.inferences[next(iter(identities))]
+                    if not cancelled() and getattr(inference, "supports_async", False):
+                        if inference is not active_inference:
+                            drain()
+                            if active_inference is not None:
+                                active_inference.close()
+                            active_inference = inference
+                        if len(waiting) == 2:
+                            receive()
+                        if not cancelled():
+                            ticket = inference.submit(
+                                [m["input"] for _, _, m in group],
+                                slots=[(i, self.generations[i]) for i, _, _ in group],
+                            )
+                            waiting.append((group, inference, ticket))
+                            del group
+                            continue
+                    # 混合模型及不支持异步的后端沿用原同步路由。
+                    drain()
+                    logits = None if cancelled() else jobs.infer([m for _, _, m in group])
+                    respond(group, logits)
                     # 局部变量不能将上一批张量保留到下一局或排空阶段。
                     del logits, group
                 del messages, pending, raw, message
+            failed = False
         finally:
-            for task in self.slots.values():
-                jobs.unfinished(task)
-            self.slots.clear()
-            if not keep_open or cancel:
-                self.close()
+            try:
+                if active_inference is not None:
+                    active_inference.close()
+            finally:
+                waiting.clear()
+                for task in self.slots.values():
+                    jobs.unfinished(task)
+                self.slots.clear()
+                if not keep_open or cancel or failed:
+                    self.close()
         return self.metrics()

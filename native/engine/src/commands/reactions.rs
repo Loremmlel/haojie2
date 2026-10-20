@@ -131,8 +131,11 @@ pub fn move_runner(
         finish_rush(&mut s, &u.id, catalog);
     }
     ctx.facts = None;
-    sync(&mut s, catalog);
-    terminal(&mut s, &mut ctx);
+    // 冲撞所有可拒绝后果已处理；预检丢弃局面，正式提交才同步派生状态。
+    if !preview {
+        sync(&mut s, catalog);
+        terminal(&mut s, &mut ctx);
+    }
     Ok(s)
 }
 

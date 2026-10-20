@@ -949,7 +949,10 @@ pub fn apply_prepared(
             finish(s.unit_mut(&u.id).unwrap());
         }
     }
-    sync(&mut s, catalog);
-    terminal(&mut s, &mut ctx);
+    // 预检调用者只读取合法性与随机边界，不消费派生后的局面。
+    if !preview {
+        sync(&mut s, catalog);
+        terminal(&mut s, &mut ctx);
+    }
     Ok(s)
 }

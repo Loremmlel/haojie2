@@ -18,7 +18,7 @@ from ..batching.stream import update_groups
 from ..data import collate_examples
 from ..model import NETWORK_VERSION, ModelConfig, PolicyValueNet
 from ..native.client import Client
-from ..native.pipeline import metadata, model_from
+from ..native.model import metadata, model_from
 from ..native.pool import Pool
 from ..runtime import Trainer, cpu_state, resolve_device
 from .config import METHOD as METHOD
@@ -602,7 +602,6 @@ class Controller:
 
         return Pool(
             self.engine,
-            None,
             count,
             self.device,
             batch_wait_ms=self.config["batch_wait_ms"],

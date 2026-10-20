@@ -1,6 +1,6 @@
 # TypeScript 训练接口与数据工具
 
-日常自对弈和持续学习使用[本地训练控制台](../../training/CONSOLE.md)。这里维护教师采样、旧记录编码、模型 CLI 对战和独立的 TS 规则参照；原生完整记录入口见[原生训练](../../training/NATIVE.md)。两条训练路径共用公开编码，保留各自的数据语义。
+日常自对弈和持续学习使用[本地训练控制台](../../training/CONSOLE.md)或[云端服务](../../training/COLAB.md)。这里维护教师采样、旧记录编码、模型 CLI 对战和独立的 TS 规则参照，保留各自的数据语义；共享原生执行层及旧记录审核边界见[原生支持](../../training/NATIVE.md)。
 
 网页或 CLI 增量存档可用 `npm run train:import-save -- 输入.json 输出.jsonl.gz` 转为训练轨迹，再交给已有审计和编码器。起点、未结束局标签与公开信息边界见[存档与训练转换](../session/SAVES.md)。
 

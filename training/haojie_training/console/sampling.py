@@ -61,6 +61,10 @@ class MemoryJobs:
                 model.eval(), controller.device, inference.precision, stats=inference.stats
             )
 
+    @property
+    def supports_packed_batches(self):
+        return all(runner.supports_packed_batches for runner in self.inferences.values())
+
     def claim(self):
         if self.assigned >= self.target:
             return None
@@ -130,12 +134,20 @@ class MemoryJobs:
         if message["model"] == self.current:
             task["trajectory"].add(message)
 
-    def infer(self, messages):
+    def infer(self, messages, *, completed=None):
+        """同步或异步结果共享 MC 变换；已完成张量仅用于同一模型的一组请求。"""
+        identities = {m["model"] for m in messages}
+        if completed is not None and (len(identities) != 1 or completed.shape[0] != len(messages)):
+            raise ValueError("已完成推理必须对应同一模型和完整请求组")
         width = max(m["candidates"] for m in messages)
         result = torch.zeros((len(messages), width))
-        for identity in {m["model"] for m in messages}:
+        for identity in identities:
             indices = [i for i, m in enumerate(messages) if m["model"] == identity]
-            output = self.inferences[identity]([messages[i]["input"] for i in indices])
+            output = (
+                completed
+                if completed is not None
+                else self.inferences[identity]([messages[i]["input"] for i in indices])
+            )
             if self.c.config["method"].startswith("decomposed-mc-q-"):
                 # 同一候选评分头训练 tanh(Q)，并直接用 Q/温度控制后续 Gumbel 排序。
                 output = output.tanh() / self.temperature

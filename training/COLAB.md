@@ -25,18 +25,32 @@ env CARGO_HOME=/var/tmp/haojie-tools/cargo \
 
 尚未推送的工作区也可复跑：在本地执行 `python scripts/training/native/pipeline/package.py --output artifacts/cloud-source.tar.gz`，将归档上传到服务器的新目录后解压，并在解压目录运行上述安装命令。归档包含当前 Python/Rust 源码、规则数据、已构建教师与完整周期测量入口；同名 manifest 记录每个文件及归档的 SHA256，不包含本地模型、轨迹或缓存。
 
-安装完成后可验收正式模型的 32 进程采样、更新与保存：
+安装完成后可按第二轮固定配置验收正式模型的 64 进程采样、更新与保存：
 
 ```sh
 /var/tmp/haojie-tools/venv/bin/python scripts/training/benchmarks/cycle.py \
   --engine /var/tmp/haojie-tools/native-target/release/haojie-engine \
   --starts fixtures/late-starts.json \
-  --environments 32 --games 32 --updates 16 --pool-mib 1024 \
+  --environments 64 --games 64 --updates 16 --pool-mib 4096 \
+  --threads 1 --batch-size 8 --inference-batch-size 32 --batch-wait-ms 0 \
+  --start-indices 0 2 --seed 20261004 --history-percent 0 \
   --device cuda --sampling-precision fp32 --ordered-updates \
   --output artifacts/cloud-cycle.json
 ```
 
-`fixtures/late-starts.json` 是源码归档中的真实晚盘起点；直接使用 Git 检出时改为 `tests/fixtures/native/late-starts.json.gz`。上例轮换全部四份起点，与最终 Linux 并发验收对应；复跑 Windows 性能配对的工作量时添加 `--start-indices 0 2`。去掉 `--starts` 即从新局开始，CPU 服务器将设备改为 `cpu` 并显式指定测量线程数。结果记录实际终局、截断、样本哈希、模型/引擎身份及各阶段时间；配对方法见 [PERFORMANCE.md](PERFORMANCE.md)。
+`fixtures/late-starts.json` 是源码归档中的真实晚盘起点；直接使用 Git 检出时改为 `tests/fixtures/native/late-starts.json.gz`。上例使用经典和神龛的索引 0/2；4 GiB 是主机 RAM 样本池预算。复跑首轮全部四份起点的功能验收时，移除 `--start-indices`，并将环境数与局数设为 32。去掉 `--starts` 即从新局开始，CPU 服务器将设备改为 `cpu` 并显式指定测量线程数。结果记录实际终局、截断、样本哈希、模型/引擎身份及各阶段时间；配对方法见 [PERFORMANCE.md](PERFORMANCE.md)。
+
+CUDA FP32 / BF16 正式模型在固定 Torch 2.14.0 下共用紧凑实体布局和双缓冲推理，计算沿用所选精度。GUI、Colab、历史对手和评测共用该执行器。采样仍在同一版权重下完成整轮，之后才做参数更新；暂停、保存和换模型前排空在途请求。统计中的 `packed_forwards`、`async_forwards`、`async_overlaps` 可核对实际采用的路径。CPU、XPU 和研究模型沿用普通推理，同时共享引擎、编码、训练及保存优化。
+
+64 环境的动态批量会产生不同尺寸的临时张量。训练包在导入 Torch 前默认设置 `PYTORCH_ALLOC_CONF=expandable_segments:True`，降低 CUDA 缓存预留；已有任一分配器配置都会原样保留。如果嵌入宿主已先导入 Torch，应在启动宿主进程前设置环境，例如：
+
+```sh
+if [ -z "${PYTORCH_ALLOC_CONF+x}" ] && [ -z "${PYTORCH_CUDA_ALLOC_CONF+x}" ]; then
+  export PYTORCH_ALLOC_CONF=expandable_segments:True
+fi
+```
+
+本机 Windows 和 Linux 的 Torch 2.14 / CUDA 13 验收均无不支持警告；64 环境的缓存预留峰值约为 0.62 GiB，Windows 普通分配器的同负载测量约为 2.28 GiB。实际张量峰值约为 0.58 GiB，驱动与其他程序占用另计。默认值不指定 CUDA 专属的 `backend`，不导入或探测 CUDA；该选项不写入训练恢复点。完整结果见 [PERFORMANCE.md](PERFORMANCE.md)，比较代码速度时双方使用相同的分配器配置。
 
 ## 从已有成果继续
 
@@ -46,7 +60,7 @@ env CARGO_HOME=/var/tmp/haojie-tools/cargo \
 | 电脑 GUI 的完整训练根     | 先停止电脑上的训练服务，把整个受管根复制到 Drive，将目录填入 `RESTORE_SOURCE`。复制活动清单、各实验、恢复点与历史权重；原目录不修改；不支持系统锁的远端挂载采用只读复制和前后清单/哈希核对，仍须先停止原服务。 |
 | 某个完整恢复点 `.pt`      | 将文件填入 `RESTORE_SOURCE`。继承其中的优化器、随机状态和累计进度；缺少该根的历史/基准文件时按控制台原有逻辑重建。                                                                                             |
 | 只有模型权重              | `IMPORT_WEIGHTS` 指定兼容权重；建立新优化器与新学习进度。它与完整恢复二选一。                                                                                                                                  |
-| 原始对局 JSONL / 训练分片 | 继续使用 [NATIVE.md](NATIVE.md) 的审核、分片和离线训练入口。它们不是 GUI 持续训练的恢复点。                                                                                                                    |
+| 原始对局 JSONL / 训练分片 | 原生旧记录保留 [NATIVE.md](NATIVE.md) 所列的独立审核方式，已有分片继续使用[离线训练](README.md)。恢复持续训练需要完整恢复点。                                                                                  |
 
 完整恢复保留模型、优化器、精度、已保存的随机状态、任务/更新计数、设置、活动实验，以及归档中的历史、基准、最佳、导出和小型指标。RAM 样本池和在途对局重新生成；恢复后显示实际保存的更新数。融合 CUDA 优化器须在兼容 CUDA 模式恢复，跨不兼容设备迁移用新实验继承权重。
 
@@ -68,7 +82,7 @@ env CARGO_HOME=/var/tmp/haojie-tools/cargo \
 | ---------------------- | --------------------------------------------------------------------- |
 | `environments`         | 1–128，Rust 对局进程数量；实际创建不超过本轮任务数。                  |
 | `games_per_round`      | 1–4096，本轮任务配额；可以大于环境数以便完成一局后补位。              |
-| `inference_batch_size` | 1–256，单次推理请求上限，仍按模型和实体长度分桶。                     |
+| `inference_batch_size` | 1–256，单次推理请求上限；按模型分组，普通推理另按实体长度分桶。       |
 | `batch_wait_ms`        | 0–10，额外组批窗口；默认 0，先测吞吐再增加。                          |
 | `batch_size`           | 1–256，梯度更新批量；与推理批量独立。                                 |
 | `sampling_precision`   | FP32 / BF16；默认 FP32，BF16 为显式选择并检查设备支持。               |

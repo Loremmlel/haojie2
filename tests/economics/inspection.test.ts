@@ -7,12 +7,12 @@ import {
 } from '../../src/engine/commands/game';
 import { kill } from '../../src/engine/commands/combat';
 import { ALL_CELLS } from '../../src/engine/core/geometry';
-import { emit, RuleError, withRuleInspection } from '../../src/engine/core/state';
+import { addEffect, emit, RuleError, withRuleInspection } from '../../src/engine/core/state';
 import { eventActor, withEventFacts } from '../../src/engine/core/event-facts';
 import { observe } from '../../src/ai/observation';
 import { trainingPosition } from '../../src/ai/training/queries';
 import type { Command, GameState } from '../../src/engine/types';
-import { add, fixture } from '../helpers';
+import { add, card, fixture } from '../helpers';
 
 test('嵌套预检退出后恢复事件快照和日志，保留原始事件与正式序号', () => {
   const s = fixture(),
@@ -141,4 +141,66 @@ test('攻击预检保留随机边界，不消耗正式随机数', () => {
   const c: Command = { type: 'attack', unitId: u.id, targetId: t.id };
   compare(s, [c]);
   assert.equal(inspectCommand(trainingPosition(observe(s, 1)), c).status, 'uncertain');
+});
+
+test('区域法术所有落点保留空地、全栈与2×2覆盖的完整结算预检结果', () => {
+  const s = fixture();
+  add(s, 5, 1, 2, 5);
+  add(s, 5, 2, 6, 7);
+  add(s, 'u12', 2, 6, 7).hp = 1;
+  const bomb = card(s, 8),
+    storm = card(s, 'u9');
+  compare(s, [
+    ...ALL_CELLS.map((p) => ({ type: 'cast' as const, cardId: bomb, ...p })),
+    ...Array.from({ length: 15 }, (_, row) => ({
+      type: 'cast' as const,
+      cardId: storm,
+      mode: 'row',
+      row,
+    })),
+    ...Array.from({ length: 11 }, (_, column) => ({
+      type: 'cast' as const,
+      cardId: storm,
+      mode: 'column',
+      column,
+    })),
+    { type: 'cast', cardId: bomb, x: 1, y: 4, targetId: 'missing' },
+    { type: 'cast', cardId: 'missing', x: 1, y: 4 },
+  ]);
+  assert.equal(inspectCommand(s, { type: 'cast', cardId: bomb, x: 1, y: 4 }).status, 'available');
+});
+
+test('施法参数先于反制随机边界，沉默与冻结的原生/继承反制资格一致', () => {
+  for (const kind of ['u3', 'archmage', 's5'] as const) {
+    const s = fixture(),
+      mage = add(s, kind, 2, 8, 10),
+      friend = add(s, 1, 1, 3, 4),
+      big = add(s, 5, 1, 5, 4);
+    if (kind === 's5') mage.traits = ['archmage'];
+    const bomb = card(s, 8),
+      ward = card(s, 17),
+      conversion = card(s, 22),
+      buff = card(s, 25);
+    const commands: Command[] = [
+      { type: 'cast', cardId: bomb, x: 1, y: 4 },
+      { type: 'cast', cardId: bomb, x: 9, y: 13 },
+      { type: 'cast', cardId: ward, targetId: friend.id },
+      { type: 'cast', cardId: conversion, targetId: big.id },
+      {
+        type: 'cast',
+        cardId: buff,
+        mode: 'double',
+        sacrificeIds: [friend.id, friend.id],
+      },
+    ];
+    compare(s, commands);
+    assert.equal(inspectCommand(s, commands[0]).status, 'uncertain');
+    mage.silenced = true;
+    compare(s, commands);
+    assert.equal(inspectCommand(s, commands[0]).status, 'available');
+    mage.silenced = false;
+    addEffect(s, mage, 'freeze', 1, 0, 2);
+    compare(s, commands);
+    assert.equal(inspectCommand(s, commands[0]).status, kind === 'u3' ? 'uncertain' : 'available');
+  }
 });

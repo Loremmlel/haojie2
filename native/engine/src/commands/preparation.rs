@@ -642,7 +642,10 @@ pub fn apply(
         }
         _ => return Err(Failure::Unsupported("command-kind")),
     }
-    sync(&mut s, catalog);
-    terminal(&mut s, &mut ctx);
+    // 对应 TS transition：预检只消费合法性，丢弃局面前无需同步派生状态。
+    if !preview {
+        sync(&mut s, catalog);
+        terminal(&mut s, &mut ctx);
+    }
     Ok(s)
 }

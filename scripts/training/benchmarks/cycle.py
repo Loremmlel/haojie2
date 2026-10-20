@@ -4,7 +4,9 @@ import argparse
 import copy
 import gzip
 import hashlib
+import importlib
 import json
+import os
 import platform
 import random
 import sys
@@ -127,6 +129,8 @@ def main():
     if min(args.rounds, args.updates, args.threads) < 1:
         parser.error("轮数、更新量和线程数必须为正整数")
     sys.path.insert(0, str(args.source.resolve() / "training"))
+    # 先应用所选源码的训练包启动环境，再加载 Torch，与正式入口顺序一致。
+    importlib.import_module("haojie_training")
     import torch
 
     from haojie_training.console.config import validate
@@ -202,12 +206,31 @@ def main():
             MemoryJobs.infer,
         )
         finished, last_progress = [], {}
+        progress_logged_at = began
 
         def progress(metrics):
-            nonlocal last_progress
+            nonlocal last_progress, progress_logged_at
             last_progress = metrics
             original_progress(metrics)
-            if time.perf_counter() - began > args.deadline:
+            now = time.perf_counter()
+            if now - progress_logged_at >= 30:
+                # 长周期输出实际进度；状态行走 stderr，完整结果仍由报告文件给出。
+                print(
+                    json.dumps(
+                        {
+                            "phase": c.state,
+                            "elapsed_seconds": round(now - began, 1),
+                            "finished_tasks": len(finished),
+                            "planned_tasks": args.games,
+                            "requests": metrics.get("requests", 0),
+                            "active": len(metrics.get("active", [])),
+                        }
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                progress_logged_at = now
+            if now - began > args.deadline:
                 raise TimeoutError("完整周期超出测量保护时间；本次不记作成功吞吐")
 
         def finish(jobs, task, message):
@@ -225,9 +248,9 @@ def main():
             )
             return original_finish(jobs, task, message)
 
-        def infer(jobs, messages):
+        def infer(jobs, messages, **kwargs):
             capture.add(messages)
-            return original_infer(jobs, messages)
+            return original_infer(jobs, messages, **kwargs)
 
         c._progress = progress
         MemoryJobs.finish = finish
@@ -252,6 +275,15 @@ def main():
                     "deterministic": torch.are_deterministic_algorithms_enabled(),
                     "matmul_precision": torch.get_float32_matmul_precision(),
                     "interop_threads": torch.get_num_interop_threads(),
+                    "allocator": {
+                        "backend": torch.cuda.memory.get_allocator_backend()
+                        if c.device.type == "cuda"
+                        else None,
+                        "environment": {
+                            key: os.environ.get(key)
+                            for key in ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF")
+                        },
+                    },
                 },
             )
             for index in range(args.rounds):

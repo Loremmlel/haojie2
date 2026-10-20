@@ -1,0 +1,214 @@
+"""紧凑推理的序列边界、指针映射、参数更新与回退行为。"""
+
+import unittest
+from contextlib import nullcontext
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import torch
+from torch.nn import functional as F
+
+from haojie_training.console.sampling import MemoryJobs
+from haojie_training.data import INPUT_KEYS, collate_inputs, synthetic_batch, validate_inputs
+from haojie_training.model import ModelConfig, PolicyValueNet
+from haojie_training.native.execution import InferenceStats, PolicyInference
+from haojie_training.native.packed import supports_packed
+from haojie_training.research.spatial import SpatialPolicyNet
+from haojie_training.runtime import autocast
+
+
+def examples(config):
+    rows = []
+    for i, (entities, candidates) in enumerate(((13, 6), (7, 3), (1, 1))):
+        batch = synthetic_batch(config, 1, entities, candidates, seed=17 + i)
+        row = {key: value[0] for key, value in batch.items() if key in INPUT_KEYS}
+        row["entity_mask"].fill_(True)
+        row["candidate_mask"].fill_(True)
+        row["sources"].fill_(-1)
+        row["targets"].fill_(entities - 1)
+        if i == 1:
+            row["entity_mask"][[1, 3]] = False
+            row["sources"][0] = 4
+            row["sources"][-1] = 1
+            row["candidate_mask"][-1] = False
+        elif i == 2:
+            row["entity_mask"].fill_(False)
+            row["targets"].fill_(-1)
+        rows.append(row)
+    return rows
+
+
+def reference_attention(q, k, v, batch, layout, last):
+    """CPU 小测试按累积长度切开注意力，检查生产打包结果，不提供生产替代后端。"""
+    qstarts = batch["cu_q" if last else "cu_k"].tolist()
+    kstarts = batch["cu_k"].tolist()
+    result = []
+    for qa, qb, ka, kb in zip(qstarts, qstarts[1:], kstarts, kstarts[1:]):
+        result.append(
+            F.scaled_dot_product_attention(
+                q[qa:qb].transpose(0, 1).unsqueeze(0),
+                k[ka:kb].transpose(0, 1).unsqueeze(0),
+                v[ka:kb].transpose(0, 1).unsqueeze(0),
+                dropout_p=0.0,
+            )
+            .squeeze(0)
+            .transpose(0, 1)
+        )
+    return torch.cat(result)
+
+
+class PackedTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        torch.set_num_threads(1)
+
+    def test_compaction_sequence_boundaries_weights_and_ownership(self):
+        torch.manual_seed(73)
+        model = PolicyValueNet(ModelConfig.tiny()).eval()
+        rows = examples(model.config)
+        saved = [{key: value.clone() for key, value in row.items()} for row in rows]
+        dense = collate_inputs(rows, model.config)
+        validate_inputs(dense, model.config)
+        stats = InferenceStats()
+        with patch("haojie_training.native.execution.supports_packed", return_value=True):
+            runner = PolicyInference(model, "cpu", stats=stats)
+        self.assertTrue(runner.supports_packed_batches)
+        batch, layout = runner.packed.batch(rows)
+        self.assertEqual(batch["cu_k"].tolist(), [0, 14, 20, 21])
+        self.assertEqual(batch["cu_q"].tolist(), [0, 2, 5, 6])
+        self.assertEqual(layout["entities"], 18)
+        self.assertEqual(batch["entities"].shape[0], 21)
+        self.assertEqual(batch["cu_k"].dtype, torch.int32)
+        with patch("haojie_training.native.packed._attention", side_effect=reference_attention):
+            with torch.inference_mode():
+                expected = model.policy_logits(dense)
+            actual = runner(rows)
+            torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-5)
+            self.assertTrue(
+                torch.equal(
+                    actual.argsort(dim=-1, stable=True), expected.argsort(dim=-1, stable=True)
+                )
+            )
+            retained = actual.clone()
+            # 更新原模块而非重建执行器；前向必须即时读取新参数。
+            with torch.no_grad():
+                model.policy[-1].weight.mul_(0.5)
+            updated = runner(rows)
+            with torch.inference_mode():
+                expected = model.policy_logits(dense)
+            torch.testing.assert_close(updated, expected, atol=2e-6, rtol=2e-5)
+            self.assertFalse(torch.equal(updated, actual))
+            runner(rows[:1])
+        torch.testing.assert_close(actual, retained, atol=0, rtol=0)
+        for row, before in zip(rows, saved):
+            for key in INPUT_KEYS:
+                torch.testing.assert_close(row[key], before[key], atol=0, rtol=0)
+        # 普通及紧凑执行器共用统计，返回结果不依赖下一批主机容量。
+        PolicyInference(model, "cpu", stats=stats)(rows[:1])
+        self.assertEqual(stats.snapshot()["forwards"], 4)
+        self.assertEqual(stats.snapshot()["packed_forwards"], 3)
+        self.assertEqual(stats.snapshot()["inference_requests"], 8)
+
+    def test_fallbacks_and_historical_capability(self):
+        model = PolicyValueNet(ModelConfig.tiny()).eval()
+        self.assertFalse(PolicyInference(model, "cpu").supports_packed_batches)
+        self.assertFalse(PolicyInference(model, "cpu", "bf16").supports_async)
+        self.assertFalse(supports_packed(model, torch.device("xpu"), "bf16"))
+        self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
+        self.assertFalse(supports_packed(model, torch.device("cuda"), "bf16"))
+        research = SpatialPolicyNet(model.config).eval()
+        self.assertFalse(supports_packed(research, torch.device("cuda"), "fp32"))
+        # 使用小配置代替正式配置检查版本和后端门槛，无须建立 CUDA 上下文。
+        with (
+            patch("haojie_training.native.packed.ModelConfig", return_value=model.config),
+            patch("torch.backends.cuda.is_built", return_value=True),
+            patch("torch.backends.cuda.mem_efficient_sdp_enabled", return_value=True),
+            patch("torch.__version__", "2.14.0+cu130"),
+            patch("torch.version.cuda", "13.0"),
+            patch("torch.cuda.device", return_value=nullcontext()),
+            patch("torch.backends.cuda.can_use_efficient_attention", return_value=True) as usable,
+        ):
+            self.assertTrue(supports_packed(model, torch.device("cuda"), "fp32"))
+            query = usable.call_args.args[0].query
+            self.assertEqual(
+                query.shape, (1, model.config.heads, 1, model.config.width // model.config.heads)
+            )
+            self.assertEqual(query.data_ptr(), model.entity_projection.weight.data_ptr())
+            self.assertEqual(query.dtype, torch.float32)
+            self.assertFalse(query.requires_grad)
+            self.assertTrue(supports_packed(model, torch.device("cuda"), "bf16"))
+            self.assertEqual(usable.call_args.args[0].query.dtype, torch.bfloat16)
+            with patch("torch.backends.cuda.can_use_efficient_attention", return_value=False):
+                self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
+                self.assertFalse(supports_packed(model, torch.device("cuda"), "bf16"))
+                self.assertFalse(PolicyInference(model, "cuda").supports_packed_batches)
+            with patch("torch.version.cuda", None):
+                self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
+                self.assertFalse(PolicyInference(model, "cuda").supports_packed_batches)
+            with patch("torch.__version__", "2.15.0"):
+                self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
+            with patch("torch.backends.cuda.mem_efficient_sdp_enabled", return_value=False):
+                self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
+        jobs = MemoryJobs.__new__(MemoryJobs)
+        jobs.inferences = {"current": SimpleNamespace(supports_packed_batches=True)}
+        self.assertTrue(jobs.supports_packed_batches)
+        jobs.inferences["historical"] = SimpleNamespace(supports_packed_batches=False)
+        self.assertFalse(jobs.supports_packed_batches)
+        jobs.inferences["historical"].supports_packed_batches = True
+        self.assertTrue(jobs.supports_packed_batches)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA 紧凑推理需要 GPU 执行器")
+    def test_cuda_packed_logits_update_and_timing(self):
+        self._cuda_packed_logits_update_and_timing("fp32", 2e-6, 2e-5)
+
+    @unittest.skipUnless(
+        torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        "CUDA BF16 紧凑推理需要支持的 GPU 执行器",
+    )
+    def test_cuda_bf16_packed_logits_update_and_timing(self):
+        self._cuda_packed_logits_update_and_timing("bf16", 3e-3, 3e-3)
+
+    def _cuda_packed_logits_update_and_timing(self, precision, atol, rtol):
+        torch.manual_seed(73)
+        model = PolicyValueNet().cuda().eval()
+        runner = PolicyInference(model, "cuda", precision)
+        if not runner.supports_packed_batches:
+            self.skipTest("本 Torch/CUDA 后端沿用普通推理")
+        rows = examples(model.config)
+        batch = {key: value.cuda() for key, value in collate_inputs(rows, model.config).items()}
+        with torch.inference_mode(), autocast(torch.device("cuda"), precision):
+            expected = model.policy_logits(batch).cpu()
+        dtypes = []
+        handle = model.blocks[0].qkv.register_forward_hook(
+            lambda _module, _inputs, output: dtypes.append(output.dtype)
+        )
+        try:
+            actual = runner(rows)
+        finally:
+            handle.remove()
+        self.assertEqual(dtypes, [torch.bfloat16 if precision == "bf16" else torch.float32])
+        torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
+        self.assertTrue(
+            torch.equal(actual.argsort(dim=-1, stable=True), expected.argsort(dim=-1, stable=True))
+        )
+        retained = actual.clone()
+        with torch.no_grad():
+            model.policy[-1].weight.mul_(0.5)
+        updated = runner(rows)
+        with torch.inference_mode(), autocast(torch.device("cuda"), precision):
+            expected = model.policy_logits(batch).cpu()
+        torch.testing.assert_close(updated, expected, atol=atol, rtol=rtol)
+        self.assertTrue(
+            torch.equal(updated.argsort(dim=-1, stable=True), expected.argsort(dim=-1, stable=True))
+        )
+        self.assertFalse(torch.equal(actual, updated))
+        torch.testing.assert_close(actual, retained, atol=0, rtol=0)
+        self.assertEqual(actual.device.type, "cpu")
+        stats = runner.stats.snapshot()
+        self.assertEqual(stats["packed_forwards"], 2)
+        self.assertEqual(stats["cuda_timing_sample"]["batches"], 1)
+        self.assertEqual(stats["entity_fill"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

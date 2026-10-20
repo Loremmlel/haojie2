@@ -73,7 +73,7 @@ import {
   template,
 } from '../core/state';
 import { advanceUnit } from './lifecycle';
-import type { Card, Command, GamePosition, Kind, Player, Source, Unit } from '../types';
+import type { Card, Command, GamePosition, Kind, Player, Point, Source, Unit } from '../types';
 export function chargeAction(s: GamePosition, c: Command) {
   return withEventFacts(s, { action: 'charge', actor: eventActor(findUnit(s, c.unitId)) }, () => {
     const u = findUnit(s, c.unitId),
@@ -643,12 +643,8 @@ export function cast(s: GamePosition, c: Command, ctx: Resolution) {
     u17: 'clock',
     u26: 'inner-fire',
   };
-  const area =
-    kind === 8
-      ? ALL_CELLS.filter((p) => p.x >= c.x! && p.x <= c.x! + 1 && p.y >= c.y! && p.y <= c.y! + 1)
-      : kind === 'u9'
-        ? ALL_CELLS.filter((p) => (c.mode === 'row' ? p.y === c.row : p.x === c.column))
-        : undefined;
+  const hit = castArea(kind, c);
+  const area = hit ? ALL_CELLS.filter(hit) : undefined;
   const target = c.targetId ? targetById(s, c.targetId) : undefined;
   return withEventFacts(
     s,
@@ -661,13 +657,12 @@ export function cast(s: GamePosition, c: Command, ctx: Resolution) {
     () => resolveCast(s, c, ctx),
   );
 }
-function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
+/** 施法选择必须在反制随机数与支付之前校验；预检和结算共用这一顺序。 */
+function prepareCast(s: GamePosition, c: Command) {
   const owner = s.active,
     card = s.hands[owner].find((v) => v.id === c.cardId);
   ensure(card && definition(card.kind).spell !== undefined, '请选择法术牌。');
-  const source: Source = { owner, base: owner, kind: 'spell' };
-  // 消耗随机数或卡牌前先校验选择；applyCommand 会克隆完整局面。
-  let target = c.targetId ? findTarget(s, c.targetId) : undefined;
+  const target = c.targetId ? findTarget(s, c.targetId) : undefined;
   if ([17, 18, 22, 'u17'].includes(card.kind))
     ensure(target?.unit && allegiance(s, target.unit) === owner, '请选择友方随从。');
   if (card.kind === 22) ensure(!refusesConversion(target!.unit!), '大肉比不能使用策反。');
@@ -694,9 +689,35 @@ function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
       '不可献祭克隆军团，且友方需至少半血。',
     );
   }
-  for (const mage of s.units
+  return { owner, card, target };
+}
+function spellCounters(s: GamePosition, owner: Player) {
+  return s.units
     .filter((u) => u.owner !== owner && canCounterSpell(s, u))
-    .sort((a, b) => a.deployedAt - b.deployedAt))
+    .sort((a, b) => a.deployedAt - b.deployedAt);
+}
+function castArea(kind: Kind | undefined, c: Command): ((p: Point) => boolean) | undefined {
+  if (kind === 8) return (p) => p.x >= c.x! && p.x <= c.x! + 1 && p.y >= c.y! && p.y <= c.y! + 1;
+  if (kind === 'u9') return (p) => (c.mode === 'row' ? p.y === c.row : p.x === c.column);
+}
+function castVictims(s: GamePosition, owner: Player, hit: (p: Point) => boolean) {
+  return targets(s).filter(
+    (t) =>
+      (t.unit ? allegiance(s, t.unit) : t.owner) !== owner &&
+      (t.unit ? cells(t.unit) : [t]).some(hit),
+  );
+}
+/** 空区域没有伤害后果；存在反制时，参数通过后的第一个随机边界已确定。 */
+export function prepareCastInspection(s: GamePosition, c: Command) {
+  const { owner, card } = prepareCast(s, c);
+  if (spellCounters(s, owner).length) return 'uncertain';
+  const hit = castArea(card.kind, c);
+  if (hit && !castVictims(s, owner, hit).length) return 'available';
+}
+function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
+  const { owner, card, target } = prepareCast(s, c);
+  const source: Source = { owner, base: owner, kind: 'spell' };
+  for (const mage of spellCounters(s, owner))
     if (random(s, [0, counterChance(mage), 1]) < counterChance(mage)) {
       if (hasTrait(mage, 'archmage')) {
         mage.maxHp += COMBAT_RULES.archmageCounterHealth;
@@ -719,19 +740,10 @@ function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
     }
   switch (card.kind) {
     case 8: {
-      const victims = targets(s).filter((t) =>
-        (t.unit ? cells(t.unit) : [t]).some(
-          (p) => p.x >= c.x! && p.x <= c.x! + 1 && p.y >= c.y! && p.y <= c.y! + 1,
-        ),
-      );
+      const hit = castArea(card.kind, c)!;
+      const victims = castVictims(s, owner, hit);
       emit(s, { type: 'skill', to: { x: c.x! + 0.5, y: c.y! + 0.5 }, owner, text: '爆弹' });
-      areaDamage(
-        s,
-        victims.filter((t) => (t.unit ? allegiance(s, t.unit) : t.owner) !== owner),
-        (p) => (p.x >= c.x! && p.x <= c.x! + 1 && p.y >= c.y! && p.y <= c.y! + 1 ? 20 : 0),
-        source,
-        ctx,
-      );
+      areaDamage(s, victims, (p) => (hit(p) ? 20 : 0), source, ctx);
       break;
     }
     case 17:
@@ -766,16 +778,9 @@ function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
       const axis = c.mode as 'row' | 'column',
         line = axis === 'row' ? c.row! : c.column!;
       own(s, 'hazards').push({ id: `hazard${s.serial++}`, owner, axis, line, due: s.ply + 2 });
-      const victims = targets(s).filter((t) =>
-        (t.unit ? cells(t.unit) : [t]).some((p) => (axis === 'row' ? p.y === line : p.x === line)),
-      );
-      areaDamage(
-        s,
-        victims.filter((t) => (t.unit ? allegiance(s, t.unit) : t.owner) !== owner),
-        (p) => ((axis === 'row' ? p.y === line : p.x === line) ? 20 : 0),
-        source,
-        ctx,
-      );
+      const hit = castArea(card.kind, c)!;
+      const victims = castVictims(s, owner, hit);
+      areaDamage(s, victims, (p) => (hit(p) ? 20 : 0), source, ctx);
       break;
     }
     case 'u17':

@@ -9,7 +9,7 @@
 | 安装、页面操作、评测与实验恢复         | [训练控制台](../../training/CONSOLE.md)                           |
 | Colab / Linux 安装、并发采样与备份恢复 | [云端入口](../../training/COLAB.md)                               |
 | 引擎与训练性能、固定工作量完整周期对照 | [性能验收](../../training/PERFORMANCE.md)                         |
-| 完整记录采样、审核、分片与独立训练 CLI | [原生训练](../../training/NATIVE.md)                              |
+| 共享原生支持、旧记录与 TS 审核边界     | [原生支持](../../training/NATIVE.md)                              |
 | Python 模型、数据准备、训练与推理      | [训练包](../../training/README.md)                                |
 | 教师采样、模型对战、旧搜索记录编码     | [TS 训练接口](TRAINING.md)                                        |
 | 公开输入和样本语义                     | [编码协议](../../training/ENCODING.md)                            |
@@ -17,6 +17,6 @@
 | 网页中的三档手工搜索 AI                | [AI 算法](AI.md)                                                  |
 | 既往学习实验、性能与失败证据           | [历史索引](HISTORY.md)                                            |
 
-控制台的三档教师复用生产 AI，通过随包 JavaScript 和嵌入式 V8 运行；日常训练服务无需 Node。原记录 CLI 保持既有策略监督和终局价值语义，独立 resident CLI 采样固定检查点。旧搜索记录使用专门的访问分布编码器。
+控制台的三档教师复用生产 AI，通过随包 JavaScript 和嵌入式 V8 运行；日常训练服务无需 Node。旧 Python 独立记录 CLI 已移除，已有记录保留原版本及来源，Rust 协议与 TS 独立审核继续维护。旧搜索记录使用专门的访问分布编码器。
 
 当前神经模型处于实验阶段，网页发行版继续使用原三档教师搜索。MC-Q v2 已有功能、可控学习任务和自然局验收；自然棋力以固定权重、规则、预算及独立种子的评测为依据。既往结果见[交付记录](https://github.com/Loremmlel/haojie2/blob/d920e181dccb425c0a77d57b473fb98f45163b69/docs/ai/console/DELIVERY-2026-10-04.md)。

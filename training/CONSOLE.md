@@ -4,7 +4,7 @@
 
 ## 安装与启动
 
-维护者构建正式引擎与随包教师：`npm run native:build`、`npm run train:teacher:build`。安装包须带同版本教师静态资源；`npm run train:teacher:check` 检查是否过期。源码修改时才需要构建工具，训练进程不启动 Node。Python 3.12、PyTorch 和设备安装见 [NATIVE.md](NATIVE.md)。已有本仓库环境直接启动：
+维护者构建正式引擎与随包教师：`npm run native:build`、`npm run train:teacher:build`。安装包须带同版本教师静态资源；`npm run train:teacher:check` 检查是否过期。源码修改时才需要构建工具，训练进程不启动 Node。Python 3.12、PyTorch 和设备安装见 [训练包说明](README.md)。已有本仓库环境直接启动：
 
 ```powershell
 & .\training\.venv\Scripts\python.exe -m haojie_training.console

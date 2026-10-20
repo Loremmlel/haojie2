@@ -99,7 +99,6 @@ class Evaluation:
             c._close_pool()
             c.pool = Pool(
                 c.engine,
-                None,
                 1,
                 c.device,
                 inference=(

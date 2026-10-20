@@ -60,7 +60,8 @@ def main():
             env=env,
         )
         run([*uv, "pip", "check", "--python", python], env=env)
-    probe = """import json, torch
+    probe = """import haojie_training
+import json, torch
 from haojie_training.console.config.resources import hardware, server_defaults
 print(json.dumps({"torch": torch.__version__, "hardware": hardware(),
                   "initial_settings": server_defaults(DEVICE)}, indent=2, ensure_ascii=False))

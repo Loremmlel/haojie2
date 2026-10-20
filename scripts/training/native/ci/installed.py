@@ -16,55 +16,39 @@ def main():
     import haojie_training
 
     source = args.source.resolve(strict=True)
+    engine = args.engine.resolve(strict=True)
     if source in Path(haojie_training.__file__).resolve().parents:
         raise RuntimeError("验收必须使用独立安装的包，不能从源码或 PYTHONPATH 回退")
-    env = {**os.environ, "HAOJIE_NATIVE": str(args.engine.resolve(strict=True))}
+    env = {**os.environ, "HAOJIE_NATIVE": str(engine)}
     env.pop("PYTHONPATH", None)
-    for argv in (
-        [source / "scripts/training/native/ci/verify.py", "--engine", args.engine],
-        [
-            "-m",
-            "unittest",
-            "discover",
-            "-s",
-            source / "training/tests",
-            "-p",
-            "test_native*.py",
-            "-v",
-        ],
-        [
-            "-m",
-            "unittest",
-            "discover",
-            "-s",
-            source / "training/tests",
-            "-p",
-            "test_resident.py",
-            "-v",
-        ],
-        [
-            "-m",
-            "unittest",
-            "discover",
-            "-s",
-            source / "training/tests/console",
-            "-p",
-            "test_*.py",
-            "-v",
-        ],
-        [
-            source / "scripts/training/native/pipeline/accept.py",
-            "--engine",
-            args.engine,
-            "--starts",
-            source / "fixtures/late-starts.json",
-            "--output",
-            args.output,
-        ],
+    args.output.mkdir(parents=True, exist_ok=False)
+    for name, argv in (
+        ("identity", [source / "scripts/training/native/ci/verify.py", "--engine", engine]),
+        (
+            "maintained-tests",
+            [
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                source / "training/tests",
+                "-p",
+                "test_*.py",
+                "-v",
+            ],
+        ),
     ):
-        subprocess.run(
-            [sys.executable, *map(str, argv)], env=env, check=True, timeout=1200
-        )
+        # 源码根只提供随包测试与基准脚本；训练包仍从独立环境的 site-packages 导入。
+        with (args.output / f"{name}.log").open("x", encoding="utf-8") as log:
+            subprocess.run(
+                [sys.executable, *map(str, argv)],
+                cwd=source,
+                env=env,
+                check=True,
+                timeout=1200,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
 
 
 if __name__ == "__main__":
