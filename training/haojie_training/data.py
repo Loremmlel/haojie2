@@ -158,7 +158,9 @@ def _collate(examples, keys, *, buffers=None, pin_memory=False):
         elements = prod(shape)
         old = buffers.get(key)
         if old is None or old.numel() < elements:
-            buffers[key] = torch.empty(elements, dtype=first.dtype, pin_memory=pin_memory)
+            # 外部也可能在 inference_mode 中调用；容量区必须能在后续普通调用中复用。
+            with torch.inference_mode(False):
+                buffers[key] = torch.empty(elements, dtype=first.dtype, pin_memory=pin_memory)
         # 一维容量区的前缀始终连续；多维切片会让to()暗中生成非页锁定副本。
         target = buffers[key][:elements].view(shape)
         if all(value.shape == first.shape for value in values):

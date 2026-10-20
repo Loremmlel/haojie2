@@ -47,12 +47,19 @@ class EncoderBlock(nn.Module):
             nn.Linear(config.ffn, config.width),
         )
 
-    def forward(self, x: Tensor, allowed: Tensor) -> Tensor:
+    def forward(self, x: Tensor, allowed: Tensor, readout: Tensor | None = None) -> Tensor:
         batch, tokens, width = x.shape
         qkv = self.qkv(self.attention_norm(x))
         q, k, v = qkv.reshape(batch, tokens, 3, self.heads, width // self.heads).permute(
             2, 0, 3, 1, 4
         )
+        if readout is not None:
+            # 最后一层只计算下游实际读取的查询；所有实体仍作为 K/V 参与注意力。
+            q = q.gather(
+                2, readout[:, None, :, None].expand(-1, self.heads, -1, width // self.heads)
+            )
+            x = x.gather(1, readout[..., None].expand(-1, -1, width))
+            tokens = readout.shape[1]
         attended = F.scaled_dot_product_attention(q, k, v, attn_mask=allowed, dropout_p=0.0)
         x = x + self.output(attended.transpose(1, 2).reshape(batch, tokens, width))
         return x + self.ffn(self.ffn_norm(x))
@@ -93,7 +100,7 @@ class PolicyValueNet(nn.Module):
             nn.Tanh(),
         )
 
-    def encode(self, batch: dict[str, Tensor]) -> Tensor:
+    def encode(self, batch: dict[str, Tensor], readout: Tensor | None = None) -> Tensor:
         """训练与策略推理共用主干，动作前缀仍完整参与编码。"""
         entities = self.entity_projection(batch["entities"]) + self.kind_embedding(batch["kinds"])
         entities = self.entity_context(batch, entities)
@@ -103,8 +110,8 @@ class PolicyValueNet(nn.Module):
             (torch.ones_like(batch["entity_mask"][:, :1]), batch["entity_mask"]), dim=1
         )
         allowed = self.attention_mask(batch, valid)
-        for block in self.blocks:
-            x = block(x, allowed)
+        for index, block in enumerate(self.blocks):
+            x = block(x, allowed, readout if index == len(self.blocks) - 1 else None)
         return self.norm(x)
 
     def score_policy(self, batch: dict[str, Tensor], x: Tensor) -> Tensor:
@@ -127,6 +134,40 @@ class PolicyValueNet(nn.Module):
     def policy_logits(self, batch: dict[str, Tensor]) -> Tensor:
         """原生采样只消费策略，不计算或传回价值头。"""
         return self.score_policy(batch, self.encode(batch))
+
+    def policy_readout(self, batch, positions, sources, targets):
+        """原网络的稀疏末层读取；位置表由 CPU 执行器生成，不缓存局面或模型权重。
+
+        此优化仅适用于原骨架。研究子类可能依赖其他实体的末层输出，仍走完整前向。
+        候选顺序、有效遮罩和公开输入保持不变；只重映射末层表示的读取下标。
+        """
+        if type(self) is not PolicyValueNet:
+            return self.policy_logits(batch)
+        x = self.encode(batch, positions)
+        return self.score_policy({**batch, "sources": sources - 1, "targets": targets - 1}, x)
+
+    def selected_value(self, batch, selected):
+        """MC-Q 仅监督已选候选；一次主干得到全局、来源和目标，跳过无梯度的其他评分。
+
+        末层之前的各层及末层 K/V 保留所有实体。重复指针的梯度经 gather 自动相加；损失权重、
+        价值头和检查点参数完全共用原实现。研究模型保留其完整上下文扩展。
+        """
+        if type(self) is not PolicyValueNet:
+            logits, value = self(batch)
+            return logits.gather(1, selected[:, None]).squeeze(1), value
+        sources = batch["sources"].gather(1, selected[:, None]) + 1
+        targets = batch["targets"].gather(1, selected[:, None]) + 1
+        positions = torch.cat((torch.zeros_like(sources), sources, targets), dim=1)
+        x = self.encode(batch, positions)
+        index = selected[:, None, None].expand(-1, 1, self.config.action_features)
+        chosen = {
+            **batch,
+            "candidates": batch["candidates"].gather(1, index),
+            "sources": torch.zeros_like(sources),
+            "targets": torch.ones_like(targets),
+            "candidate_mask": batch["candidate_mask"].gather(1, selected[:, None]),
+        }
+        return self.score_policy(chosen, x).squeeze(1), self.value(x[:, 0]).squeeze(-1).float()
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         x = self.encode(batch)

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import torch
 
 from ..data import INPUT_KEYS, _collate
+from ..model import PolicyValueNet
 from ..runtime import autocast
 
 
@@ -69,9 +70,36 @@ class PolicyInference:
         self.stats.candidate_slots += size * actions
         return result
 
+    def readout(self, examples, batch):
+        """CPU 上收集末层实际使用的实体；完整前层和 K/V 不裁剪，研究模型不改路径。"""
+        if type(self.model) is not PolicyValueNet or batch["entities"].shape[1] < 32:
+            return None
+        positions, remaps = [], []
+        for row in examples:
+            count = len(row["sources"])
+            pointers = torch.cat(
+                (torch.zeros(1, dtype=torch.long), row["sources"] + 1, row["targets"] + 1)
+            )
+            unique, inverse = torch.unique(pointers, sorted=True, return_inverse=True)
+            positions.append(unique)
+            remaps.append((inverse[1 : 1 + count], inverse[1 + count :]))
+        # 查询几乎全宽时沿用原前向，避免索引开销抵消收益。
+        width = max(len(p) for p in positions)
+        if width * 4 >= (batch["entities"].shape[1] + 1) * 3:
+            return None
+        indices = torch.zeros((len(examples), width), dtype=torch.long, pin_memory=self.pinned)
+        sources = torch.zeros(batch["sources"].shape, dtype=torch.long, pin_memory=self.pinned)
+        targets = torch.zeros_like(sources, pin_memory=self.pinned)
+        for i, (position, (source, target)) in enumerate(zip(positions, remaps)):
+            indices[i, : len(position)] = position
+            sources[i, : len(source)] = source
+            targets[i, : len(target)] = target
+        return indices, sources, targets
+
     def __call__(self, examples):
         before = time.perf_counter()
         batch = self.batch(examples)
+        readout = self.readout(examples, batch)
         self.stats.collation_seconds += time.perf_counter() - before
         before = time.perf_counter()
         # 每256批取一组设备事件，只作分账诊断；计时开销仍包含在总墙钟内。
@@ -84,10 +112,16 @@ class PolicyInference:
             if events:
                 events[0].record(torch.cuda.current_stream(self.device))
             batch = {k: v.to(self.device, non_blocking=self.pinned) for k, v in batch.items()}
+            if readout is not None:
+                readout = tuple(v.to(self.device, non_blocking=self.pinned) for v in readout)
             if events:
                 events[1].record(torch.cuda.current_stream(self.device))
             # cpu() 是每批唯一结果同步；返回独立结果后才可重用主机输入。
-            output = self.model.policy_logits(batch)
+            output = (
+                self.model.policy_logits(batch)
+                if readout is None
+                else self.model.policy_readout(batch, *readout)
+            )
             if events:
                 events[2].record(torch.cuda.current_stream(self.device))
             logits = output.cpu()

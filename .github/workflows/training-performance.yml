@@ -1,0 +1,112 @@
+name: Training cycle performance
+on:
+  pull_request:
+    paths:
+      - 'training/haojie_training/model.py'
+      - 'training/haojie_training/runtime.py'
+      - 'training/haojie_training/batching/**'
+      - 'training/haojie_training/native/**'
+      - 'training/haojie_training/data.py'
+      - 'training/haojie_training/console/**'
+      - 'training/tests/compute/**'
+      - 'scripts/training/benchmarks/**'
+      - '.github/workflows/training-performance.yml'
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Fixed baseline commit to compare against
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: cycle-performance-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      BASE_REF: ${{ inputs.base_ref || github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - name: Freeze both source trees
+        run: |
+          git rev-parse --verify --end-of-options "${BASE_REF}^{commit}" > /tmp/cycle-base-ref
+          git worktree add --detach ../cycle-baseline "$(cat /tmp/cycle-base-ref)"
+          mkdir -p artifacts/cycle-performance
+          git rev-parse HEAD > artifacts/cycle-performance/head-ref.txt
+          cp /tmp/cycle-base-ref artifacts/cycle-performance/base-ref.txt
+          lscpu > artifacts/cycle-performance/cpu.txt
+      - name: Build both native engines
+        run: |
+          cargo build --locked --release --manifest-path ../cycle-baseline/native/engine/Cargo.toml --target-dir ../cycle-native-base
+          cargo build --locked --release --manifest-path native/engine/Cargo.toml --target-dir artifacts/native-target
+      - name: Install exact training runtime and format checker
+        run: |
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
+          python -m pip install './training[dev]'
+      - name: Check touched Python modules
+        run: |
+          git diff --name-only --diff-filter=ACMR "$(cat /tmp/cycle-base-ref)" HEAD -- '*.py' > /tmp/cycle-python-files
+          xargs -r ruff check --config training/pyproject.toml < /tmp/cycle-python-files
+          xargs -r ruff format --check --config training/pyproject.toml < /tmp/cycle-python-files
+      - name: Default network complete self-play, updates and checkpoint pairs
+        run: |
+          set -euo pipefail
+          for trial in 1 2 3; do
+            sides='before after'
+            if [ "$trial" = '2' ]; then sides='after before'; fi
+            for side in $sides; do
+              source="$PWD"
+              engine="$PWD/artifacts/native-target/release/haojie-engine"
+              if [ "$side" = 'before' ]; then
+                source="$(realpath ../cycle-baseline)"
+                engine="$(realpath ../cycle-native-base/release/haojie-engine)"
+              fi
+              python scripts/training/benchmarks/cycle.py \
+                --source "$source" --engine "$engine" \
+                --output "artifacts/cycle-performance/$side-$trial.json" \
+                --starts tests/fixtures/native/late-starts.json.gz --start-indices 0 2 \
+                --games 2 --environments 2 --updates 16 --ordered-updates
+            done
+          done
+          python scripts/training/benchmarks/compare.py \
+            --before artifacts/cycle-performance/before-{1,2,3}.json \
+            --after artifacts/cycle-performance/after-{1,2,3}.json \
+            --output artifacts/cycle-performance/comparison.json
+      - name: Eight-process complete cycle, small network
+        run: |
+          set -euo pipefail
+          for side in before after; do
+            source="$PWD"
+            engine="$PWD/artifacts/native-target/release/haojie-engine"
+            if [ "$side" = 'before' ]; then
+              source="$(realpath ../cycle-baseline)"
+              engine="$(realpath ../cycle-native-base/release/haojie-engine)"
+            fi
+            python scripts/training/benchmarks/cycle.py \
+              --source "$source" --engine "$engine" \
+              --output "artifacts/cycle-performance/$side-8env.json" \
+              --starts tests/fixtures/native/late-starts.json.gz \
+              --games 8 --environments 8 --updates 16 --ordered-updates --tiny
+          done
+          python scripts/training/benchmarks/compare.py \
+            --before artifacts/cycle-performance/before-8env.json \
+            --after artifacts/cycle-performance/after-8env.json \
+            --output artifacts/cycle-performance/comparison-8env.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cycle-performance
+          path: artifacts/cycle-performance
+          retention-days: 30

@@ -14,6 +14,7 @@ from dataclasses import asdict
 
 import torch
 
+from ..batching.stream import update_groups
 from ..data import collate_examples
 from ..model import NETWORK_VERSION, ModelConfig, PolicyValueNet
 from ..native.client import Client
@@ -670,12 +671,19 @@ class Controller:
             if self.cancel.is_set() or not self.samples.rows:
                 break
             examples = self.samples.batch(self.config["batch_size"], self.rng)
-            batch = collate_examples(examples, self.trainer.model.config)
-            batch = {
-                k: v.to(self.device, non_blocking=self.device.type == "cuda")
-                for k, v in batch.items()
-            }
-            self.trainer.step(batch)
+            groups = (
+                update_groups(examples, self.trainer.model.config)
+                if self.config["method"].startswith("decomposed-mc-q-")
+                else [examples]
+            )
+            batches = [
+                {
+                    k: v.to(self.device, non_blocking=self.device.type == "cuda")
+                    for k, v in collate_examples(group, self.trainer.model.config).items()
+                }
+                for group in groups
+            ]
+            self.trainer.step_batches(batches)
             self.update_progress = step + 1
             if self.snapshot_requests:
                 self._snapshots()
