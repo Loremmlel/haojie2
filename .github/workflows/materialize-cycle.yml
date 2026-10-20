@@ -20,13 +20,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Restore the checksum-verified patch
+      - name: Restore the checksum-verified source patch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import base64, gzip, hashlib, json, os, subprocess, urllib.request
-          from pathlib import Path
           chunks = []
           for sha in ['6f3285c54d61003c9b0c8ef2d73823303015419f', 'dccddfc175b35ae870dcc10a60e8bdf136b1c970', '89d4a9b9545f2aae529d66d7918d451bb14269b5']:
               request = urllib.request.Request(
@@ -39,7 +38,7 @@ jobs:
               chunks.append(chunk)
           data = b''.join(chunks)
           assert hashlib.sha256(data).hexdigest() == '9c972c3e8f87f2c90d244c2dbee5b2cface127f763b4e373e8f706e3a1498a03'
-          subprocess.run(['git', 'apply', '--index', '-'], input=gzip.decompress(data), check=True)
+          subprocess.run(['git', 'apply', '--index', '--exclude=.github/**', '-'], input=gzip.decompress(data), check=True)
           subprocess.run(['git', 'config', 'user.name', 'HinanawiTS'], check=True)
           subprocess.run(['git', 'config', 'user.email', '110825227+Loremmlel@users.noreply.github.com'], check=True)
           subprocess.run(['git', 'commit', '-m', 'perf: reduce complete self-play and training cycle compute with matched-work benchmarks'], check=True)
@@ -50,21 +49,19 @@ jobs:
           node-version: '22'
       - run: npm ci --no-audit --no-fund
       - run: python -m pip install ruff==0.15.6
-      - name: Format touched source and remove this one-time workflow
+      - name: Format touched source
         run: |
           python - <<'PY'
           import subprocess
-          from pathlib import Path
           base = '732329f0f699c5e7462e8aef05728971a01d6c20'
           paths = subprocess.check_output(['git', 'diff', '--name-only', '--diff-filter=ACMR', base, 'HEAD'], text=True).splitlines()
-          Path('.github/workflows/materialize-cycle.yml').unlink()
-          paths.remove('.github/workflows/materialize-cycle.yml')
+          paths = [p for p in paths if not p.startswith('.github/')]
           python_paths = [p for p in paths if p.endswith('.py')]
           subprocess.run(['ruff', 'check', '--config', 'training/pyproject.toml', '--fix', *python_paths])
           subprocess.run(['ruff', 'format', '--config', 'training/pyproject.toml', *python_paths], check=True)
           subprocess.run(['npx', 'prettier', '--config', 'config/prettier.json', '--ignore-path', 'config/prettierignore', '--ignore-unknown', '--write', *paths], check=True)
           subprocess.run(['git', 'add', '-A'], check=True)
-          subprocess.run(['git', 'commit', '-m', 'style: format complete-cycle implementation and remove transfer workflow'], check=True)
+          subprocess.run(['git', 'commit', '-m', 'style: format complete-cycle implementation'], check=True)
           subprocess.run(['git', 'push', 'origin', 'HEAD:perf/complete-training-cycle'], check=True)
           subprocess.run(['ruff', 'check', '--config', 'training/pyproject.toml', *python_paths], check=True)
           PY
