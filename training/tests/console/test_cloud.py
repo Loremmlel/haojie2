@@ -243,8 +243,11 @@ class CloudTests(unittest.TestCase):
         torch.set_num_threads(1)
         engine = os.environ["HAOJIE_NATIVE"]
         repo = Path(__file__).resolve().parents[3]
+        fixture = repo / "tests/fixtures/native/late-starts.json.gz"
         starts = json.loads(
-            gzip.decompress((repo / "tests/fixtures/native/late-starts.json.gz").read_bytes())
+            gzip.decompress(fixture.read_bytes())
+            if fixture.exists()
+            else (repo / "fixtures/late-starts.json").read_bytes()
         )[:2]
         environments = int(os.environ.get("HAOJIE_TEST_ENVIRONMENTS", "4"))
         settings = {
@@ -254,7 +257,8 @@ class CloudTests(unittest.TestCase):
             "updates_per_round": 2,
             "batch_size": 2,
             "pool_mib": 16,
-            "max_commands": 500,
+            # 生命周期验收保留真实终局，同时限制尾局预算；截断样本照常丢弃。
+            "max_commands": 32,
             "max_plies": 60,
             "history_every": 2,
             "eval_games": 100000,
