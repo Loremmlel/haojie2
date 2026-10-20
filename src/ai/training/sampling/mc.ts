@@ -49,7 +49,17 @@ export function mcSearch(
       remaining = Array<boolean>(count).fill(true);
     while (remaining.some(Boolean)) {
       if (++nodes > 4096) throw Error('参数解码预算耗尽');
-      const input = structuredClone(node.input);
+      // 数值编码结构固定；保留独立数组，回调留存和重试不会互相污染。
+      const input: EncodedDecision = {
+        entities: node.input.entities.map((row) => row.slice()),
+        kinds: node.input.kinds.slice(),
+        entity_mask: node.input.entity_mask.slice(),
+        globals: node.input.globals.slice(),
+        candidates: node.input.candidates.map((row) => row.slice()),
+        sources: node.input.sources.slice(),
+        targets: node.input.targets.slice(),
+        candidate_mask: [],
+      };
       if (pass) {
         const row = Array<number>(64).fill(0);
         row[63] = 1;

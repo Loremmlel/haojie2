@@ -8,9 +8,10 @@ import threading
 import time
 import uuid
 from collections import deque
+from concurrent.futures import Future
+from contextlib import contextmanager
 from dataclasses import asdict
 
-import psutil
 import torch
 
 from ..data import collate_examples
@@ -21,6 +22,7 @@ from ..native.pool import Pool
 from ..runtime import Trainer, resolve_device
 from .config import METHOD as METHOD
 from .config import defaults, validate
+from .config.resources import available_memory
 from .evaluation import evaluate_slice
 from .memory import SamplePool
 from .opponents import ready
@@ -67,6 +69,23 @@ class Controller:
         self.config = defaults()
         self.tiny, self.imported, self.starts = tiny, imported, starts
         self.lock = threading.RLock()
+        self.snapshot_requests = deque()
+        self.phase, self.phase_started = "idle", time.monotonic()
+        self.phase_seconds = dict.fromkeys(
+            ("idle", "sampling", "updating", "evaluating", "saving"), 0.0
+        )
+        self.last_round = {}
+        self.sampling_totals = dict.fromkeys(
+            (
+                "requests",
+                "inference_requests",
+                "forwards",
+                "inference_seconds",
+                "collation_seconds",
+                "tensor_bytes",
+            ),
+            0,
+        )
         self.cancel, self.eval_cancel, self.shutdown = (threading.Event() for _ in range(3))
         self.wake = threading.Event()
         self.state, self.error = "idle", None
@@ -135,7 +154,7 @@ class Controller:
                     "generation": self.generation,
                     "readiness": self.readiness,
                     "execution": {
-                        "sampling": "fp32",
+                        "sampling": self.config["sampling_precision"],
                         "updating": self.execution_precision,
                         "optimizer": "auto",
                     },
@@ -178,6 +197,7 @@ class Controller:
                     "evaluations": self.evaluations,
                     "logs": list(self.logs),
                     "resources": self.telemetry,
+                    "performance": self.performance(),
                     "external": self.external,
                     "learning_status": (
                         "可开始收益驱动训练"
@@ -188,6 +208,70 @@ class Controller:
                     + self._strength_note(),
                 }
             )
+
+    def performance(self):
+        with self.lock:
+            seconds = self.phase_seconds.copy()
+            seconds[self.phase] += time.monotonic() - self.phase_started
+            return {
+                "phase": self.phase,
+                "phase_seconds": seconds,
+                "sampling": self.sampling_totals.copy(),
+                "last_round": self.last_round.copy(),
+            }
+
+    @contextmanager
+    def _phase(self, name):
+        """阶段墙钟独占记账；采样期间的保存归入 saving，避免重复相加。"""
+        with self.lock:
+            now, previous = time.monotonic(), self.phase
+            self.phase_seconds[previous] += now - self.phase_started
+            self.phase, self.phase_started = name, now
+        try:
+            yield
+        finally:
+            with self.lock:
+                now = time.monotonic()
+                self.phase_seconds[name] += now - self.phase_started
+                self.phase, self.phase_started = previous, now
+
+    def snapshot(self, callback):
+        """在训练线程安全点保存，再冻结本地文件；压缩和远端写入由调用者执行。
+
+        Future 返回回调结果；HTTP 不接受或执行回调，备份错误不冒充训练失败。
+        """
+        future = Future()
+        with self.lock:
+            if self.shutdown.is_set():
+                future.set_exception(RuntimeError("训练服务已关闭"))
+            else:
+                self.snapshot_requests.append((callback, future))
+                self.wake.set()
+        return future
+
+    def _snapshots(self):
+        while True:
+            with self.lock:
+                if not self.snapshot_requests:
+                    return
+                callback, future = self.snapshot_requests.popleft()
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                with self._phase("saving"):
+                    self._save()
+                    result = callback(self)
+                future.set_result(result)
+            except Exception as error:
+                self.log(f"备份快照失败：{error}")
+                future.set_exception(error)
+
+    def _reject_snapshots(self, error):
+        with self.lock:
+            while self.snapshot_requests:
+                _, future = self.snapshot_requests.popleft()
+                if future.set_running_or_notify_cancel():
+                    future.set_exception(error)
 
     def _strength_note(self):
         if not self.evaluations:
@@ -416,6 +500,7 @@ class Controller:
     def _weights(self):
         return {
             "format": "haojie-stream-weights-v1",
+            "network": NETWORK_VERSION,
             "version": self.version,
             "config": asdict(self.trainer.model.config),
             "metadata": self.meta,
@@ -435,6 +520,10 @@ class Controller:
         self.history_step = self.trainer.updates
 
     def _save(self):
+        with self._phase("saving"):
+            self._save_state()
+
+    def _save_state(self):
         self.want_save = False
         health = self.trainer.health()
         if not health["finite_parameters"] or not health["finite_optimizer"]:
@@ -485,8 +574,9 @@ class Controller:
             "inflight_bytes": sum(t["trajectory"].used for t in self.pool.slots.values()),
             "inflight_samples": sum(t["trajectory"].seen for t in self.pool.slots.values()),
         }
-        if psutil.virtual_memory().available < 256 * 2**20:
+        if available_memory() < 256 * 2**20:
             raise MemoryError("可用RAM不足256MiB；已暂停并丢弃在途局")
+        self._snapshots()
         if self._due_save() and not self.cancel.is_set():
             self._save()
         if time.monotonic() - self.last_metrics >= 60:
@@ -502,6 +592,7 @@ class Controller:
                 "losses": self.losses,
                 "evaluations": self.evaluations,
                 "logs": list(self.logs),
+                "performance": self.performance(),
             }
         )
 
@@ -513,16 +604,21 @@ class Controller:
             None,
             count,
             self.device,
-            inference=(PolicyInference(self.trainer.model, self.device), self.version),
-            frame_limit=min(
-                32 * 2**20, max(4 * 2**20, psutil.virtual_memory().available // (16 * count))
+            batch_wait_ms=self.config["batch_wait_ms"],
+            max_batch_size=self.config["inference_batch_size"],
+            inference=(
+                PolicyInference(self.trainer.model, self.device, self.config["sampling_precision"]),
+                self.version,
             ),
+            frame_limit=min(32 * 2**20, max(4 * 2**20, available_memory() // (16 * count))),
         )
 
     def _sample(self):
         self.state = "sampling"
         if self.pool is None:
-            self.pool = self._new_pool(self.config["environments"])
+            self.pool = self._new_pool(
+                min(self.config["environments"], self.config["games_per_round"])
+            )
         self.pool.model_hash = self.version
         historical = None
         names = self.store.names("history")
@@ -539,9 +635,29 @@ class Controller:
                 break
             del weight
         jobs = MemoryJobs(self, self.version, historical)
-        self.pool.run(jobs, cancel_event=self.cancel, keep_open=True, snapshot=self._progress)
-        self.runtime["inflight_bytes"] = 0
-        self.runtime["active"] = []
+        before = self.pool.metrics()
+        began = self.performance()["phase_seconds"]["sampling"]
+        games, samples = self.counts["games"], self.counts["retained_samples"]
+        try:
+            self.pool.run(jobs, cancel_event=self.cancel, keep_open=True, snapshot=self._progress)
+        finally:
+            after = self.pool.metrics()
+            elapsed = self.performance()["phase_seconds"]["sampling"] - began
+            delta = {key: after[key] - before[key] for key in self.sampling_totals}
+            with self.lock:
+                for key, value in delta.items():
+                    self.sampling_totals[key] += value
+                self.last_round = {
+                    **delta,
+                    "seconds": elapsed,
+                    "games": self.counts["games"] - games,
+                    "retained_samples": self.counts["retained_samples"] - samples,
+                    "mean_batch": delta["inference_requests"] / max(1, delta["forwards"]),
+                    "requests_per_second": delta["requests"] / max(0.001, elapsed),
+                    "environments": len(self.pool.clients),
+                }
+            self.runtime["inflight_bytes"] = 0
+            self.runtime["active"] = []
 
     def _update(self):
         self.state = "updating"
@@ -555,9 +671,14 @@ class Controller:
                 break
             examples = self.samples.batch(self.config["batch_size"], self.rng)
             batch = collate_examples(examples, self.trainer.model.config)
-            batch = {k: v.to(self.device) for k, v in batch.items()}
+            batch = {
+                k: v.to(self.device, non_blocking=self.device.type == "cuda")
+                for k, v in batch.items()
+            }
             self.trainer.step(batch)
             self.update_progress = step + 1
+            if self.snapshot_requests:
+                self._snapshots()
         self.version = identity(self.trainer.model)
         if self.update_progress:
             self.generation += 1
@@ -584,6 +705,7 @@ class Controller:
         # 一组四局覆盖三档教师和基准，随后归还学习器，避免确认被长采样轮无限稀释。
         for _ in range(4):
             evaluate_slice(self)
+            self._snapshots()
             if not self.evaluation or self.cancel.is_set() or self.eval_cancel.is_set():
                 break
 
@@ -649,6 +771,7 @@ class Controller:
                     or self.want_eval
                     or self.evaluation
                     or self.want_export
+                    or self.snapshot_requests
                 ):
                     if self.state == "pausing":
                         self._pause()
@@ -656,6 +779,7 @@ class Controller:
                     self.wake.clear()
                     continue
                 self._initialize()
+                self._snapshots()
                 if self.want_export:
                     self.want_export = False
                     name = self.store.save_tensor(
@@ -668,16 +792,20 @@ class Controller:
                 if self._due_evaluation():
                     self.want_eval = True
                 if (self.want_eval or self.evaluation) and not self.cancel.is_set():
-                    self._evaluate()
+                    with self._phase("evaluating"):
+                        self._evaluate()
                 if self.want_run and not self.cancel.is_set():
-                    self._sample()
+                    with self._phase("sampling"):
+                        self._sample()
                     if not self.cancel.is_set():
-                        self._update()
+                        with self._phase("updating"):
+                            self._update()
                         if self._due_save():
                             self._save()
                 if (not self.want_run and not self.evaluation) or self.cancel.is_set():
                     self._pause()
             except Exception as error:
+                self._reject_snapshots(error)
                 self.want_run = self.want_eval = self.want_save = self.want_export = False
                 self.cancel.set()
                 self.eval_cancel.set()
@@ -795,3 +923,6 @@ class Controller:
         self.eval_cancel.set()
         self.wake.set()
         self.thread.join(timeout=20)
+        self._reject_snapshots(RuntimeError("训练服务已关闭，快照未执行"))
+        if self.thread.is_alive():
+            raise TimeoutError("训练线程仍在结束当前操作，请等待进程退出后再打开同一目录")

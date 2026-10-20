@@ -10,53 +10,12 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import psutil
 import torch
 
+from .config.resources import monitor as monitor
 from .controller import Controller
 from .opponents import ASSETS
 from .storage import Lease, Store
-
-
-def monitor(controller):
-    process = psutil.Process()
-    process.cpu_percent()
-    psutil.cpu_percent()
-    handle = None
-    if controller.device.type == "cuda":
-        try:
-            import pynvml
-
-            pynvml.nvmlInit()
-            handle = pynvml.nvmlDeviceGetHandleByIndex(controller.device.index or 0)
-        except Exception:
-            pass
-    while not controller.shutdown.wait(2):
-        try:
-            children = process.children(recursive=True)
-            controller.telemetry = {
-                "rss": process.memory_info().rss + sum(p.memory_info().rss for p in children),
-                "cpu_percent": psutil.cpu_percent(),
-                "available_ram": psutil.virtual_memory().available,
-                "workers": len(children),
-                "gpu_allocated": torch.cuda.memory_allocated()
-                if torch.cuda.is_available()
-                else None,
-                "gpu_reserved": torch.cuda.memory_reserved() if torch.cuda.is_available() else None,
-                "gpu_utilization": None,
-            }
-            if handle is not None:
-                try:
-                    controller.telemetry["gpu_utilization"] = pynvml.nvmlDeviceGetUtilizationRates(
-                        handle
-                    ).gpu
-                    controller.telemetry["gpu_total"] = pynvml.nvmlDeviceGetMemoryInfo(handle).total
-                except Exception:
-                    pass
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-    if handle is not None:
-        pynvml.nvmlShutdown()
 
 
 def http_server(controller, port=8765):
@@ -166,13 +125,16 @@ def main():
     )
     parser.add_argument("--tiny", action="store_true", help="接线验收小模型；默认使用现有正式结构")
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--torch-threads", type=int, default=1, help="Torch CPU 算子线程数")
     args = parser.parse_args()
+    if args.torch_threads < 1:
+        parser.error("--torch-threads 必须为正整数")
     engine = args.engine or Path(
         "artifacts/native-target/release/haojie-engine" + (".exe" if os.name == "nt" else "")
     )
     if not engine.is_file():
         parser.error("原生引擎未安装，请先构建或用 --engine 指定正式 haojie-engine")
-    torch.set_num_threads(1)
+    torch.set_num_threads(args.torch_threads)
     torch.set_num_interop_threads(1)
     if (
         args.root.exists()

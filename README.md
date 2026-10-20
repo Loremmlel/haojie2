@@ -1,5 +1,7 @@
 # 浩劫 3.0 · 神龛 / haojie2
 
+服务器与 Colab 集中训练见 [快速启动](training/COLAB.md) 和 [Notebook](notebooks/haojie_colab.ipynb)。
+
 React + TypeScript 回合制战棋，支持经典 / 神龛模式、同屏双人和三档本地 AI。游戏发行物是一个可离线打开的 HTML，React、样式、棋子、特效和 AI Worker 全部内联。
 
 仓库也包含 **Rust 规则引擎 + Python 训练控制台**：在本机页面管理自对弈、持续训练、暂停恢复、历史对手和真实三档 AI 评测。训练模型尚未接入网页发行版，网页继续使用现有手工搜索 AI。

@@ -1,5 +1,7 @@
 # 无 Node 的 Rust＋Python 训练入口
 
+服务器自动学习入口见 [COLAB.md](COLAB.md)；它复用控制台 MC-Q 流程，与本文固定检查点的 resident 记录采样分别维护。
+
 日常长期训练优先使用[本地训练控制台](CONSOLE.md)：内存样本、持续更新、暂停继续、统一配额。本文保留完整记录/严格复现研究模式，独立 `resident` 采样固定检查点，不自动升级为控制台数据路径。
 
 复用 `entity-transformer-v2`、候选交叉熵和终局价值损失、AdamW、分片与检查点。Rust 负责环境、公开观察、参数树、执行、记录、审核与编码；Python 组织批量前向与学习。功能验收的 `ModelConfig.tiny()` 有151938个可训练参数，不是固定 TinyPolicy；去掉 `init --tiny` 使用原默认模型。

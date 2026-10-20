@@ -51,6 +51,7 @@ class ResidentTests(unittest.TestCase):
             (b"{bad json}\n", ValueError),
         ):
             client = Client.__new__(Client)
+            client._input_refs = False
             client.frame_limit = 256 * 1024 * 1024
             client.process = SimpleNamespace(stdout=io.BytesIO(payload))
             results = []
@@ -77,6 +78,7 @@ class ResidentTests(unittest.TestCase):
         )
         for limit, kind in ((4 * 1024 * 1024, dict), (1024 * 1024, MemoryError)):
             client = Client.__new__(Client)
+            client._input_refs = False
             client.frame_limit = limit
             client.read_seconds = client.decode_seconds = client.tensor_bytes = 0
             client.process = SimpleNamespace(stdout=io.BytesIO(header + body))

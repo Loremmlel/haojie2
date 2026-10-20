@@ -196,6 +196,12 @@ impl McSampling<'_> {
         }
         let count = node.choices.len() + usize::from(pass);
         let mut remaining = vec![true; count];
+        // 输入由当前递归节点独占；重试只更新掩码并追加新增的公开日志。
+        let mut input = node.input;
+        if pass {
+            crate::records::add_pass(&mut input);
+        }
+        let mut appended = 0;
         while remaining.iter().any(|v| *v) {
             self.nodes += 1;
             self.metrics.nodes += 1;
@@ -204,16 +210,13 @@ impl McSampling<'_> {
             }
             let i;
             {
-                let mut input = node.input.clone();
-                if pass {
-                    crate::records::add_pass(&mut input);
-                }
                 input.candidate_mask.clone_from(&remaining);
-                for event in &self.journal {
+                for event in &self.journal[appended..] {
                     input.entities.tail.push(*event);
                     input.kinds.push(250);
                     input.entity_mask.push(true);
                 }
+                appended = self.journal.len();
                 self.metrics.max_entities = self.metrics.max_entities.max(input.entities.len());
                 self.metrics.max_candidates = self.metrics.max_candidates.max(count);
                 let available = remaining.iter().filter(|v| **v).count();

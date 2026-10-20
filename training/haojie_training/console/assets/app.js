@@ -324,7 +324,7 @@ function render(s) {
   );
   text(
     'compute',
-    `进程树RAM ${bytes(s.resources.rss)} · CPU ${number(s.resources.cpu_percent)}% · GPU利用率：${s.resources.gpu_utilization == null ? '不可用' : number(s.resources.gpu_utilization) + '%'}`,
+    `进程树 RAM ${s.resources.rss == null ? '不可用' : bytes(s.resources.rss)} · CPU ${s.resources.cpu_cores == null ? '不可用' : number(s.resources.cpu_cores)} / ${number(s.resources.cpu_capacity)} 核时间 · GPU利用率 ${s.resources.gpu_utilization == null ? '不可用' : number(s.resources.gpu_utilization) + '%'}`,
   );
   text(
     'consumption',
@@ -355,6 +355,14 @@ function render(s) {
   text(
     'inflight',
     `在途样本 ${bytes(s.runtime.inflight_bytes)} · 活跃局 ${s.runtime.active?.length ?? 0} · 显存 ${bytes(s.resources.gpu_allocated)} / 预留 ${bytes(s.resources.gpu_reserved)}`,
+  );
+  const perf = s.performance;
+  const round = perf?.last_round;
+  text(
+    'performance',
+    perf
+      ? `阶段 ${perf.phase} · 累计采样 ${number(perf.phase_seconds.sampling)} 秒 / 更新 ${number(perf.phase_seconds.updating)} 秒 / 保存 ${number(perf.phase_seconds.saving)} 秒 · 上一轮真实终局 ${number(round?.games)} · 推理请求 ${number(round?.requests_per_second)} 次/秒`
+      : '等待阶段统计',
   );
   text('version', `当前行为 / 学习器：${s.version?.slice(0, 16) ?? '尚未初始化'}`);
   text(
@@ -483,7 +491,9 @@ $('settings').addEventListener('submit', (event) => {
     if (field.name && !field.disabled) {
       field.setAttribute('aria-invalid', String(!field.validity.valid));
       if (!field.validity.valid) invalid ??= field;
-      values[field.name] = field.name === 'method' ? field.value : Number(field.value);
+      values[field.name] = ['method', 'sampling_precision'].includes(field.name)
+        ? field.value
+        : Number(field.value);
     }
   text('form-error', invalid ? '请在标注的范围内填写数值。' : '');
   if (invalid) {

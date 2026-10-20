@@ -24,6 +24,10 @@
 
 导出文件采用 `haojie-stream-weights-v1`，包含模型参数、网络配置、版本及规则元数据；恢复点另含完整优化器和学习状态。已有实验恢复点的受管根禁止通过启动参数导入覆盖；在页面选择新实验继承权重。
 
+## 服务器执行选项
+
+并发环境上限 128；本轮任务数最多 4096，实际创建 `min(environments, games_per_round)` 个进程。`inference_batch_size`、`batch_size` 和 `batch_wait_ms` 分别控制推理上限、梯度更新批量及组批等待。当前模型和历史模型共享数字统计，CUDA BF16 采样为显式选项；原有恢复点补齐新执行选项后保留旧参数。服务器初始配置、阶段监控与备份见 [COLAB.md](COLAB.md)。
+
 ## 方法与样本语义
 
 方法 `decomposed-mc-q-v2`，内存协议 `mc-context-v2`，恢复协议 `haojie-stream-recovery-v2`。模型仍为 `entity-transformer-v2`，默认11,695,874参数；网络维度及正式游戏记录协议不变。旧权重可在规则/编码兼容时继承，旧 MC-v1 数据池不复用，旧优化器不能冒充 v2 同实验恢复。记录 CLI 的旧路径继续读取历史数据。

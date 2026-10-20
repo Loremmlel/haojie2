@@ -14,7 +14,7 @@ import torch
 
 from ..model import ModelConfig, PolicyValueNet
 from ..runtime import Trainer
-from .config import validate
+from .config import upgrade
 
 LIMIT = 20_000_000_000
 FORMAT = "haojie-stream-recovery-v2"
@@ -35,7 +35,7 @@ def restore_recovery(store, metadata, device, log):
                 "policy_source": payload["config"]["method"],
             }:
                 raise ValueError("恢复点规则/编码不匹配")
-            validate(payload["config"])
+            payload["config"] = upgrade(payload["config"])
             trainer = Trainer(
                 PolicyValueNet(ModelConfig(**saved["config"])),
                 device,
