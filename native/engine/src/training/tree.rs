@@ -51,7 +51,8 @@ pub struct Tree<'a> {
     queries: RefCell<crate::inspection::Queries>,
     targets: Vec<geometry::Target>,
     target_index: HashMap<String, usize>,
-    stats: RefCell<HashMap<crate::entities::EntityHandle, crate::stats::Stats>>,
+    // 只读局面的实体数组在本树内不变；地址仅作身份键，不解引用，也不缓存临时能力投影。
+    stats: RefCell<HashMap<*const Unit, crate::stats::Stats>>,
     routes: RefCell<HashMap<(crate::entities::EntityHandle, usize), Vec<String>>>,
     pub encoding: OnceCell<Result<crate::encoding::BaseEncoding, String>>,
     pub encoding_workspace: RefCell<crate::encoding::Workspace>,
@@ -81,7 +82,8 @@ impl<'a> Tree<'a> {
         catalog: &'a Catalog,
     ) -> Result<Self, String> {
         let mut queries = crate::inspection::Queries::default();
-        let actions = actions::actions(&state, actor, catalog, &mut queries)?;
+        let mut stats = HashMap::new();
+        let actions = actions::actions(&state, actor, catalog, &mut queries, &mut stats)?;
         let targets = geometry::targets(&state);
         let mut target_index = HashMap::new();
         for (i, t) in targets.iter().enumerate() {
@@ -97,7 +99,7 @@ impl<'a> Tree<'a> {
             queries: RefCell::new(queries),
             targets,
             target_index,
-            stats: RefCell::new(HashMap::new()),
+            stats: RefCell::new(stats),
             routes: RefCell::new(HashMap::new()),
             encoding: OnceCell::new(),
             encoding_workspace: RefCell::default(),
@@ -132,12 +134,7 @@ impl<'a> Tree<'a> {
     fn range(&self, u: &Unit) -> f64 {
         self.stats
             .borrow_mut()
-            .entry(
-                self.state
-                    .entities
-                    .handle(&self.state, &u.id)
-                    .expect("当前只读实体"),
-            )
+            .entry(u as *const Unit)
             .or_insert_with(|| crate::stats::stats(&self.state, u, self.catalog))
             .range
     }
@@ -154,16 +151,24 @@ impl<'a> Tree<'a> {
         key: String,
         p: Prefix,
         subject: Option<String>,
+        initial: bool,
     ) -> Result<Option<Choice>, String> {
         let p = self.prepare(p);
         let status = if p.steps.is_empty() {
-            actions::inspect(
-                &self.state,
-                self.actor,
-                &p.command,
-                self.catalog,
-                &mut self.queries.borrow_mut(),
-            )?
+            // 根动作命令没有经过参数扩展，复用同一只读局面已经完成的预检。
+            match initial
+                .then_some(self.actions[p.action].initial_inspection)
+                .flatten()
+            {
+                Some(status) => status,
+                None => actions::inspect(
+                    &self.state,
+                    self.actor,
+                    &p.command,
+                    self.catalog,
+                    &mut self.queries.borrow_mut(),
+                )?,
+            }
         } else {
             "parameter"
         };
@@ -210,6 +215,31 @@ impl<'a> Tree<'a> {
         let a = &self.actions[p.action];
         let step = &p.steps[0];
         let s = &self.state;
+        if step.kind == "point"
+            && p.steps.len() == 1
+            && let Some(domain) = actions::points(
+                s,
+                self.actor,
+                c,
+                self.catalog,
+                &mut self.queries.borrow_mut(),
+            )?
+        {
+            return Ok(domain
+                .into_iter()
+                .map(|(at, status)| Choice {
+                    key: format!("{},{}", at.x, at.y),
+                    command: Command {
+                        x: Some(at.x),
+                        y: Some(at.y),
+                        ..c.clone()
+                    },
+                    status,
+                    subject: None,
+                    next: None,
+                })
+                .collect());
+        }
         let mut result = vec![];
         let mut add = |key: String,
                        command: Command,
@@ -225,7 +255,7 @@ impl<'a> Tree<'a> {
                     p.steps[1..].to_vec()
                 },
             };
-            if let Some(c) = self.choice(key, next, subject)? {
+            if let Some(c) = self.choice(key, next, subject, false)? {
                 result.push(c);
             }
             Ok(())
@@ -410,7 +440,7 @@ impl<'a> Tree<'a> {
         let node = if cursor.is_empty() {
             let mut choices = vec![];
             for i in 0..self.actions.len() {
-                if let Some(c) = self.choice(i.to_string(), self.start(i), None)? {
+                if let Some(c) = self.choice(i.to_string(), self.start(i), None, true)? {
                     choices.push(c);
                 }
             }

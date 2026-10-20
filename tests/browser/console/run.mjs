@@ -10,7 +10,8 @@ const python =
   process.env.HAOJIE_PYTHON ||
   (process.platform === 'win32' ? 'training/.venv/Scripts/python.exe' : 'python');
 const engine = resolve(
-  process.env.HAOJIE_NATIVE || 'artifacts/native-target/release/haojie-engine.exe',
+  process.env.HAOJIE_NATIVE ||
+    `artifacts/native-target/release/haojie-engine${process.platform === 'win32' ? '.exe' : ''}`,
 );
 const processes = [];
 async function start(root, quota = 20_000_000_000) {

@@ -1,6 +1,12 @@
 import { own, isRuntimePosition, exportOwnedPosition } from '../runtime/position';
 import { emptyFor } from './movement';
-import { attackPath, piercingTargets, validAttackRoute } from '../core/geometry';
+import {
+  ALL_CELLS,
+  attackPath,
+  createPlacementQuery,
+  piercingTargets,
+  validAttackRoute,
+} from '../core/geometry';
 import {
   activateAura,
   captureClockFrame,
@@ -94,6 +100,11 @@ function inspectionQueries(s: GamePosition) {
     move: createMoveQuery(s),
     skill: createSkillInspectionQuery(s),
     charge: createChargeInspectionQuery(s),
+    deployment: memoizePreparation((cardId: string | undefined) => {
+      const card = deployCard(s, cardId);
+      return template(card.kind, s.active, s.turns[s.active], { x: 1, y: 1 });
+    }),
+    placement: memoizePreparation(() => createPlacementQuery(s)),
     attacker: memoizePreparation((id: string | undefined) => projectedAttacker(s, id)),
     transit: memoizePreparation(() => transitUnit(s)),
     fork: createPositionFork(s),
@@ -101,12 +112,16 @@ function inspectionQueries(s: GamePosition) {
 }
 /** 只读部署资格供预检与结算复用；返回手牌引用只在结算副本上消费。 */
 function prepareDeploy(s: GamePosition, c: Command) {
-  const card = s.hands[s.active].find((v) => v.id === c.cardId);
-  ensure(card && canDeployKind(card.kind), '请选择待部署随从。');
+  const card = deployCard(s, c.cardId);
   const to = point(c.x, c.y),
     ghost = template(card.kind, s.active, s.turns[s.active], to);
   ensure(canPlace(s, ghost, to, true), '非法部署：检查行权限、占位、基地与独行侠禁区。');
   return { card, to };
+}
+function deployCard(s: GamePosition, cardId: string | undefined) {
+  const card = s.hands[s.active].find((v) => v.id === cardId);
+  ensure(card && canDeployKind(card.kind), '请选择待部署随从。');
+  return card;
 }
 function attackTarget(s: GamePosition, c: Command, u: Unit) {
   if (c.path)
@@ -220,19 +235,8 @@ export function createGame(seed = 20260907, mode: 'classic' | 'shrine' = 'classi
   else beginTurn(s, resolution());
   return s;
 }
-/**
- * 在内部状态分支上执行一次完整命令，包括同步触发的反应和回合切换。
- * 任意校验失败直接抛出 RuleError；原局面的卡牌、人头和随机状态保持不变。
- * preview 仅供预检阻止未知随机结果，不能将预检副本作为权威局面提交。
- */
-function transition<S extends GamePosition>(
-  previous: S,
-  c: Command,
-  randomSource?: RandomSource,
-  preview = false,
-  queries?: InspectionQueries,
-  exportSnapshot = true,
-): S {
+/** 共用命令族的阶段资格；同一只读批次中的落点不改变这些条件。 */
+function prepareTransition(previous: GamePosition, c: Command, queries?: InspectionQueries) {
   ensure(previous.version === 2, '此命令只接受浩劫2.0局面；旧版对局不会被静默迁移。');
   ensure(!previous.winner, '对局已经结束，可悔棋或开新局。');
   ensure(!previous.pending.length || c.type === 'react', '请先处理当前待结算效果。');
@@ -242,7 +246,7 @@ function transition<S extends GamePosition>(
     !transit || c.type === 'react' || (c.type === 'move' && c.unitId === transit.id),
     '冲撞移动正在经过其他占位，必须先完成弹出或回到空地。',
   );
-  let s = previous;
+  const s = previous;
   const giant =
     c.type === 'skill' && (c.ability ?? allPieces(s).find((u) => u.id === c.unitId)?.kind) === 'u7';
   if (s.phase === 'shrine-draft') ensure(c.type === 'choose-shrine', '请先秘密选择神龛。');
@@ -277,6 +281,22 @@ function transition<S extends GamePosition>(
       s.phase === 'play' || s.phase === 'shrine-setup' || giant,
       '先完成回合开始的召唤选择，再进入行动阶段。',
     );
+}
+/**
+ * 在内部状态分支上执行一次完整命令，包括同步触发的反应和回合切换。
+ * 任意校验失败直接抛出 RuleError；原局面的卡牌、人头和随机状态保持不变。
+ * preview 仅供预检阻止未知随机结果，不能将预检副本作为权威局面提交。
+ */
+function transition<S extends GamePosition>(
+  previous: S,
+  c: Command,
+  randomSource?: RandomSource,
+  preview = false,
+  queries?: InspectionQueries,
+  exportSnapshot = true,
+): S {
+  prepareTransition(previous, c, queries);
+  let s = previous;
   const prepared = preview ? prepareInspection(s, c, queries) : false;
   if (prepared === true) return previous;
   s = queries ? (queries.fork() as S) : forkPosition(previous, !preview);
@@ -443,10 +463,14 @@ export function applyCommand(
   ensure(hasRandomState(previous), '权威结算需要完整随机状态；玩家视图不能代替GameState。');
   return transition(previous, c, randomSource);
 }
-/** 内部连续环境拥有局面；共享提交只交回环境，不可作为外部可修改快照暴露。 */
-export function applyRuntimeCommand(previous: GameState, c: Command): GameState {
+/** 内部环境与搜索拥有局面；随机源仅供模拟，共享结果不可作为外部可修改快照暴露。 */
+export function applyRuntimeCommand(
+  previous: GameState,
+  c: Command,
+  randomSource?: RandomSource,
+): GameState {
   ensure(hasRandomState(previous), '权威结算需要完整随机状态；玩家视图不能代替GameState。');
-  return transition(previous, c, undefined, false, undefined, false);
+  return transition(previous, c, randomSource, false, undefined, false);
 }
 const unresolvedRandom = Symbol('preview requires private randomness');
 export type CommandInspection =
@@ -460,9 +484,39 @@ export function inspectCommand(s: GamePosition, c: Command): CommandInspection {
  * 同步只读批次的预检器；调用期间不得修改局面及其子对象，新局面须创建新实例。
  * 只复用派生查询，不缓存实际结算或正式随机数；单次 inspectCommand 保持无缓存入口。
  */
-export function createCommandInspector(s: GamePosition): (c: Command) => CommandInspection {
+export function createCommandInspector(s: GamePosition) {
   const queries = inspectionQueries(s);
-  return (c) => inspect(s, c, queries);
+  const query = (c: Command) => inspect(s, c, queries);
+  return Object.assign(query, {
+    /** 完整落点域只准备一次公共资格；冲撞仍逐落点执行原有完整预检。 */
+    points(c: Command): { point: Point; inspection: CommandInspection }[] | undefined {
+      if (c.type !== 'move' && c.type !== 'deploy') return;
+      try {
+        return withRuleInspection(() => {
+          prepareTransition(s, c, queries);
+          const domain =
+            c.type === 'move'
+              ? queries.move.points(c)
+              : (() => {
+                  const ghost = queries.deployment(c.cardId);
+                  const placement = queries.placement(undefined);
+                  return ALL_CELLS.filter((to) => placement.canPlace(ghost, to, true)).map(
+                    (point) => ({ point, complete: true }),
+                  );
+                })();
+          return domain.flatMap(({ point, complete }) => {
+            const inspection = complete
+              ? ({ status: 'available' } as const)
+              : query({ ...c, ...point });
+            return inspection.status === 'invalid' ? [] : [{ point: { ...point }, inspection }];
+          });
+        });
+      } catch (error) {
+        if (error instanceof RuleError) return [];
+        throw error;
+      }
+    },
+  });
 }
 function inspect(s: GamePosition, c: Command, queries?: InspectionQueries): CommandInspection {
   try {

@@ -58,10 +58,14 @@ const spec = (
   icon = 'spark',
   free = false,
 ): ActionSpec => ({ id, label, command, steps, icon, free });
-export function unitActions(s: GamePosition, u: Unit): ActionSpec[] {
+export function unitActions(
+  s: GamePosition,
+  u: Unit,
+  attributes: typeof getStats = getStats,
+): ActionSpec[] {
   if (isLandmark(u) && u.hp <= 0) return [];
   const result: ActionSpec[] = [],
-    stats = getStats(s, u),
+    stats = attributes(s, u),
     command = { unitId: u.id };
   if (stats.move > 0)
     result.push(spec('move', '移动', { type: 'move', ...command }, [square()], 'move'));
@@ -273,7 +277,7 @@ export function unitActions(s: GamePosition, u: Unit): ActionSpec[] {
         onceUsed: usage?.once ?? false,
         freeUsed: usage?.free ?? -1,
       };
-      for (const a of unitActions(s, borrowed))
+      for (const a of unitActions(s, borrowed, attributes))
         if (a.command.type === 'skill' || a.command.type === 'charge')
           result.push({
             ...a,
@@ -400,6 +404,7 @@ export function actionError(
   s: GamePosition,
   a: ActionSpec,
   inspectError = queryCommandError,
+  attributes: typeof getStats = getStats,
 ): string | null {
   const id = a.id.split(':')[0];
   if (!a.steps.length) return inspectError(s, a.command);
@@ -413,7 +418,7 @@ export function actionError(
     return '请先完成召唤阶段。';
   const u = a.command.unitId ? allPieces(s).find((v) => v.id === a.command.unitId) : undefined;
   if (!u) return null;
-  const stats = getStats(s, u);
+  const stats = attributes(s, u);
   const reserve = chargeFor(u, a.command.ability ?? u.kind);
   const moveCharge = moveChargeKind(u);
   const usage =

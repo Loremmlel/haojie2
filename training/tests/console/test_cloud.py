@@ -1,4 +1,4 @@
-"""真实小模型闭环与本地模拟 Drive：恢复优化器，拒绝半份归档和活跃导入。"""
+"""真实训练闭环与本地模拟 Drive：恢复优化器，拒绝半份归档和活跃导入。"""
 
 import copy
 import errno
@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
+
 from haojie_training.cloud.backup import Backups, freeze, import_root
 from haojie_training.cloud.session import Session, wait_for
 from haojie_training.console.config import defaults
@@ -242,6 +243,11 @@ class CloudTests(unittest.TestCase):
     def test_real_training_backup_restart_and_optimizer_continuation(self):
         torch.set_num_threads(1)
         engine = os.environ["HAOJIE_NATIVE"]
+        device = os.environ.get("HAOJIE_TEST_DEVICE", "cpu")
+        self.assertIn(device, {"cpu", "cuda"})
+        if device == "cuda" and not torch.cuda.is_available():
+            self.skipTest("CUDA 云端恢复验收需要 GPU 执行器")
+        tiny = os.environ.get("HAOJIE_TEST_FULL_MODEL") != "1"
         repo = Path(__file__).resolve().parents[3]
         fixture = repo / "tests/fixtures/native/late-starts.json.gz"
         starts = json.loads(
@@ -268,10 +274,10 @@ class CloudTests(unittest.TestCase):
             session = Session(
                 engine,
                 root / "local",
-                device="cpu",
+                device=device,
                 settings=settings,
                 backup_dir=root / "drive",
-                tiny=True,
+                tiny=tiny,
                 starts=starts,
             )
             restored = None
@@ -296,6 +302,14 @@ class CloudTests(unittest.TestCase):
                 optimizer = copy.deepcopy(c.trainer.optimizer.state_dict())
                 updates = c.trainer.updates
                 result = session.backup.request().result(timeout=60)
+                saved_rng = c.rng.getstate()
+                saved_cpu_rng = torch.get_rng_state()
+                saved_device_rng = torch.cuda.get_rng_state(c.device) if device == "cuda" else None
+                saved_sample_totals = {
+                    key: value
+                    for key, value in c.samples.snapshot().items()
+                    if key not in {"bytes", "samples"}
+                }
                 self.assertEqual(result["updates"], updates)
                 self.assertEqual(peak, environments)
                 perf = c.performance()
@@ -307,9 +321,9 @@ class CloudTests(unittest.TestCase):
                 restored = Session(
                     engine,
                     root / "restored",
-                    device="cpu",
+                    device=device,
                     backup_dir=root / "drive",
-                    tiny=True,
+                    tiny=tiny,
                     starts=starts,
                 )
                 other = restored.controller
@@ -317,29 +331,53 @@ class CloudTests(unittest.TestCase):
                 self.assertEqual(other.counts, saved_counts)
                 self.assertEqual(other.config, saved_config)
                 self.assertEqual(identity(other.trainer.model), model_hash)
+                self.assertEqual(other.rng.getstate(), saved_rng)
+                torch.testing.assert_close(torch.get_rng_state(), saved_cpu_rng, rtol=0, atol=0)
+                if saved_device_rng is not None:
+                    torch.testing.assert_close(
+                        torch.cuda.get_rng_state(other.device), saved_device_rng, rtol=0, atol=0
+                    )
                 actual = other.trainer.optimizer.state_dict()
                 self.assertEqual(actual["param_groups"], optimizer["param_groups"])
+                self.assertTrue(optimizer["state"])
                 for key, state in optimizer["state"].items():
+                    self.assertTrue({"step", "exp_avg", "exp_avg_sq"} <= state.keys())
                     for field, value in state.items():
                         if isinstance(value, torch.Tensor):
+                            # 暂停及自动备份可迁移设备；恢复要求 Adam 数值逐项一致。
                             torch.testing.assert_close(
-                                actual["state"][key][field], value, rtol=0, atol=0
+                                actual["state"][key][field].cpu(), value.cpu(), rtol=0, atol=0
                             )
                         else:
                             self.assertEqual(actual["state"][key][field], value)
                 self.assertFalse(other.samples.rows)
+                self.assertEqual(other.samples.used, 0)
+                for key, value in saved_sample_totals.items():
+                    self.assertEqual(other.samples.snapshot()[key], value, key)
                 self.assertTrue(other.store.names("baseline"))
                 self.assertEqual(other.store.names("history"), c.store.names("history"))
                 restored.command("start")
                 wait_for(
                     other, lambda: other.trainer.updates > updates, max(120, environments * 15)
                 )
+                restored.command("pause")
+                wait_for(other, lambda: other.state == "paused")
+                self.assertIsNone(other.pool)
+                self.assertGreater(other.counts["games"], saved_counts["games"])
+                self.assertGreater(other.samples.consumed, saved_sample_totals["consumed"])
+                self.assertNotEqual(identity(other.trainer.model), model_hash)
                 print(
                     json.dumps(
                         {
                             "environments": environments,
+                            "device": str(c.device),
+                            "parameters": sum(p.numel() for p in c.trainer.model.parameters()),
                             "peak_active": peak,
                             "updates": updates,
+                            "restored_updates": other.trainer.updates,
+                            "rng_restored": True,
+                            "restored_pool_samples": 0,
+                            "counts": other.counts,
                             "sampling": perf["sampling"],
                         }
                     )

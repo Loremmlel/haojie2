@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import torch
+
 from haojie_training.console.config import defaults, resources, upgrade, validate
 from haojie_training.console.controller import Controller
 from haojie_training.console.storage import Store
@@ -74,12 +75,33 @@ class ServerTests(unittest.TestCase):
                 ),
             ):
                 self.assertEqual(resources.cpu_capacity(), 2)
+                self.assertEqual(resources.torch_threads("cpu"), 2)
                 self.assertEqual(resources.available_memory(), 2**30)
                 profile = resources.server_defaults("cuda")
                 validate(profile)
                 self.assertEqual(profile["environments"], 4)
                 self.assertEqual(profile["games_per_round"], 8)
                 self.assertEqual(profile["pool_mib"], 256)
+
+    def test_cpu_threads_respect_quota_explicit_override_and_auto_device(self):
+        for capacity, expected in ((0.5, 1), (3.9, 3), (16, 4)):
+            with (
+                self.subTest(capacity=capacity),
+                patch.object(resources, "cpu_capacity", return_value=capacity),
+            ):
+                self.assertEqual(resources.torch_threads("cpu"), expected)
+                self.assertEqual(resources.torch_threads("cpu", 8), 8)
+                self.assertEqual(resources.torch_threads("cuda", 2), 2)
+        with self.assertRaisesRegex(ValueError, "非负"):
+            resources.torch_threads("cpu", -1)
+        for cuda, xpu, expected in ((False, False, 3), (True, False, 1), (True, True, 1)):
+            with (
+                self.subTest(cuda=cuda, xpu=xpu),
+                patch.object(resources, "cpu_capacity", return_value=3.9),
+                patch.object(torch.cuda, "is_available", return_value=cuda),
+                patch.object(torch.xpu, "is_available", return_value=xpu),
+            ):
+                self.assertEqual(resources.torch_threads(), expected)
 
     def test_clean_page_cache_can_be_reclaimed_but_dirty_cache_cannot(self):
         for v2 in (True, False):

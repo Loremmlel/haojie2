@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import torch
+
 from haojie_training.batching import training_batches
 from haojie_training.data import INPUT_KEYS, collate_inputs, synthetic_batch, validate_inputs
 from haojie_training.model import ModelConfig, PolicyValueNet, policy_value_loss

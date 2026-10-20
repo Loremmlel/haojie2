@@ -20,7 +20,7 @@ from ..model import NETWORK_VERSION, ModelConfig, PolicyValueNet
 from ..native.client import Client
 from ..native.pipeline import metadata, model_from
 from ..native.pool import Pool
-from ..runtime import Trainer, resolve_device
+from ..runtime import Trainer, cpu_state, resolve_device
 from .config import METHOD as METHOD
 from .config import defaults, validate
 from .config.resources import available_memory
@@ -33,9 +33,9 @@ from .storage import FORMAT, restore_recovery
 
 def identity(model):
     digest = hashlib.sha256()
-    for name, value in model.state_dict().items():
+    for name, value in cpu_state(model.state_dict()).items():
         digest.update(name.encode())
-        digest.update(value.detach().cpu().contiguous().numpy().tobytes())
+        digest.update(value.contiguous().numpy().tobytes())
     return digest.hexdigest()
 
 
@@ -506,7 +506,7 @@ class Controller:
             "config": asdict(self.trainer.model.config),
             "metadata": self.meta,
             "updates": self.trainer.updates,
-            "model": {k: v.detach().cpu() for k, v in self.trainer.model.state_dict().items()},
+            "model": cpu_state(self.trainer.model.state_dict()),
         }
 
     def _history(self):

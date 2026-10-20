@@ -4,6 +4,7 @@ import copy
 import unittest
 
 import torch
+
 from haojie_training.data import INPUT_KEYS, collate_inputs, synthetic_batch
 from haojie_training.model import ModelConfig, PolicyValueNet
 from haojie_training.native.execution import PolicyInference

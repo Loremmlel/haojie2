@@ -2,7 +2,7 @@ import type { Command, Player } from '../../engine/types';
 import { ensure } from '../../engine/core/state';
 import type { Observation } from '../types';
 import { TrainingActionTree } from './action-tree';
-import { encodeDecision, type EncodedDecision } from './encoding/decision';
+import { createDecisionEncoder, type EncodedDecision } from './encoding/decision';
 
 export type PolicyEvaluator = (
   input: EncodedDecision,
@@ -84,6 +84,7 @@ export async function decodeCommand(
   if (cancelled()) return result;
   const start = performance.now();
   const tree = new TrainingActionTree(observation, actor);
+  const encode = createDecisionEncoder(observation, actor);
   stats.treeMs += performance.now() - start;
   const visit = async (cursor: number[]): Promise<boolean> => {
     if (cancelled()) return false;
@@ -113,7 +114,7 @@ export async function decodeCommand(
         return false;
       }
       const encodingStart = performance.now();
-      const input = encodeDecision(observation, actor, node);
+      const input = encode(node);
       stats.encodingMs += performance.now() - encodingStart;
       stats.maxEntities = Math.max(stats.maxEntities, input.entities.length);
       stats.evaluations++;

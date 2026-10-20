@@ -84,7 +84,7 @@ export function moveUnit(s: GamePosition, c: Command, ctx: Resolution) {
 export function prepareMove(s: GamePosition, c: Command) {
   const u = { ...actor(s, c.unitId) },
     to = point(c.x, c.y);
-  return moveDestinations(s, u)(to);
+  return checkedDestination(moveDestinations(s, u), to);
 }
 /** 同一攻击者的公共预算只准备一次；落点仍按原规则逐个验证，冲撞后果继续完整预检。 */
 export function createMoveQuery(s: GamePosition) {
@@ -93,11 +93,25 @@ export function createMoveQuery(s: GamePosition) {
   const destinations = memoizePreparation((id: string | undefined) =>
     moveDestinations(s, { ...source(id) }, (placement ??= createPlacementQuery(s))),
   );
-  return (c: Command) => {
+  const inspect = (c: Command) => {
     source(c.unitId);
     const to = point(c.x, c.y);
-    return destinations(c.unitId)(to);
+    return checkedDestination(destinations(c.unitId), to);
   };
+  return Object.assign(inspect, {
+    points(c: Command) {
+      const destination = destinations(c.unitId);
+      return ALL_CELLS.flatMap((to) => {
+        const prepared = destination.at(to);
+        return prepared ? [{ point: to, complete: prepared.path !== undefined }] : [];
+      });
+    },
+  });
+}
+function checkedDestination(destination: ReturnType<typeof moveDestinations>, to: Point) {
+  const prepared = destination.at(to);
+  ensure(prepared, destination.error);
+  return prepared;
 }
 function moveDestinations(
   s: GamePosition,
@@ -117,12 +131,12 @@ function moveDestinations(
       );
       u.moves = 5;
     }
-    return (to: Point) => {
-      ensure(
-        u.moves > 0 && distance(u, to) === 1 && canEnter(s, u, to),
-        '每次沿四向移动一格，不能越界或使大体型重叠。',
-      );
-      return { to, starting, charged, moves: u.moves, path: undefined };
+    return {
+      error: '每次沿四向移动一格，不能越界或使大体型重叠。',
+      at: (to: Point) =>
+        u.moves > 0 && distance(u, to) === 1 && canEnter(s, u, to)
+          ? { to, starting, charged, moves: u.moves, path: undefined }
+          : null,
     };
   }
   let limit = getStats(s, u).move;
@@ -137,14 +151,12 @@ function moveDestinations(
       }
       u.moves = Math.floor(limit);
     }
-    return (to: Point) => {
-      ensure(
-        u.moves > 0 &&
-          distance(u, to) === 1 &&
-          (query ? query.canPlace(u, to) : canPlace(s, u, to)),
-        '2×2每次整体向一个方向移动一小格，四格均须合法且不能重叠。',
-      );
-      return { to, starting, charged, moves: u.moves, path: [{ x: u.x, y: u.y }, to] };
+    return {
+      error: '2×2每次整体向一个方向移动一小格，四格均须合法且不能重叠。',
+      at: (to: Point) =>
+        u.moves > 0 && distance(u, to) === 1 && (query ? query.canPlace(u, to) : canPlace(s, u, to))
+          ? { to, starting, charged, moves: u.moves, path: [{ x: u.x, y: u.y }, to] }
+          : null,
     };
   }
   if (charged !== undefined) {
@@ -155,13 +167,15 @@ function moveDestinations(
     if (limit % 1) limit *= 2;
   }
   let field: ((to: Point) => Point[] | null) | undefined;
-  return (to: Point) => {
-    const straight = hasTrait(u, 13) && !u.silenced;
-    const path = query
-      ? (field ??= query.movementField(u, limit, straight))(to)
-      : movementPath(s, u, to, limit, straight);
-    ensure(path, '移动距离、路径、占位或独行侠禁区不合法。');
-    return { to, starting, charged, moves: u.moves, path };
+  return {
+    error: '移动距离、路径、占位或独行侠禁区不合法。',
+    at: (to: Point) => {
+      const straight = hasTrait(u, 13) && !u.silenced;
+      const path = query
+        ? (field ??= query.movementField(u, limit, straight))(to)
+        : movementPath(s, u, to, limit, straight);
+      return path ? { to, starting, charged, moves: u.moves, path } : null;
+    },
   };
 }
 function resolveMove(

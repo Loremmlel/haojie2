@@ -1,22 +1,19 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { createGame, applyRuntimeCommand } from '../../../../src/engine/commands/game';
 import { parseCommand, actorCommandError } from '../../../../src/engine/online/authority';
 import { observe } from '../../../../src/ai/observation';
 import { TrainingActionTree } from '../../../../src/ai/training/action-tree';
-import { encodeDecision } from '../../../../src/ai/training/encoding/decision';
+import { createDecisionEncoder } from '../../../../src/ai/training/encoding/decision';
 import type { GameState, Player } from '../../../../src/engine/types';
 import { cells } from '../../../../src/engine/core/geometry';
 import { RuleError } from '../../../../src/engine/core/state';
 import { nativeHash } from './hash';
+import { readRecordLines } from '../../records/io';
 
 const [input, output] = process.argv.slice(2);
 const summaryOnly = process.argv.includes('--summary-only');
 assert.ok(input && output);
-const lines = readFileSync(input, 'utf8')
-  .trim()
-  .split('\n')
-  .map((line) => JSON.parse(line));
 let state: GameState | undefined,
   previous = '',
   commands = 0;
@@ -41,7 +38,7 @@ function step(actor: Player, command: unknown) {
   assert.equal(actorCommandError(state, actor, c), null);
   state = clean(applyRuntimeCommand(state, c));
 }
-for (const envelope of lines) {
+for await (const envelope of readRecordLines(input)) {
   const { sha256, ...content } = envelope;
   assert.equal(content.previous, previous);
   assert.equal(nativeHash(content), sha256);
@@ -65,14 +62,15 @@ for (const envelope of lines) {
     const occupied = state.units.flatMap((u) => cells(u).map((p) => `${p.x},${p.y}`));
     coverage.stacked += Number(new Set(occupied).size < occupied.length);
     const observation = observe(state, row.actor),
-      tree = new TrainingActionTree(observation, row.actor);
+      tree = new TrainingActionTree(observation, row.actor),
+      encode = createDecisionEncoder(observation, row.actor);
     for (let depth = 0; depth < row.path.length; depth++) {
       const node = tree.node(row.path.slice(0, depth));
       assert.ok(node.choices[row.path[depth]]);
       if (depth === row.path.length - 1)
         assert.deepEqual(node.choices[row.path[depth]].command, row.command);
       if (summaryOnly) continue;
-      const encoded = encodeDecision(observation, row.actor, node);
+      const encoded = encode(node);
       if (row.optional && depth === 0) {
         const pass = Array(64).fill(0);
         pass[63] = 1;
@@ -106,6 +104,7 @@ for (const envelope of lines) {
     assert.equal(row.winner, state.winner ?? null);
   }
 }
+assert.ok(state, '记录缺少初始局面');
 writeFileSync(output, JSON.stringify({ commands, examples, coverage }), { flag: 'wx' });
 console.log(
   JSON.stringify({ commands, examples: examples.length, coverage, finalHash: nativeHash(state) }),

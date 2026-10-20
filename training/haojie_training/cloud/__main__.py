@@ -10,6 +10,7 @@ from pathlib import Path
 
 import torch
 
+from ..console.config.resources import torch_threads
 from ..console.server import http_server
 from .session import Session
 
@@ -31,18 +32,21 @@ def main():
         "--paused", action="store_true", help="加载后暂停，先通过 Notebook 查看设置"
     )
     parser.add_argument("--port", type=int, default=0)
-    parser.add_argument("--torch-threads", type=int, default=1, help="Torch CPU 算子线程数")
+    parser.add_argument(
+        "--torch-threads",
+        type=int,
+        default=0,
+        help="Torch CPU 算子线程数，0 按设备及有效核配额自动选择",
+    )
     parser.add_argument("--connection-file", type=Path, help="将本机 API 地址写入指定本地文件")
     parser.add_argument("--tiny", action="store_true", help="功能验收小模型")
     args = parser.parse_args()
-    if args.torch_threads < 1:
-        parser.error("--torch-threads 必须为正整数")
-    torch.set_num_threads(args.torch_threads)
-    torch.set_num_interop_threads(1)
     engine = args.engine or Path(
         "artifacts/native-target/release/haojie-engine" + (".exe" if os.name == "nt" else "")
     )
     try:
+        torch.set_num_threads(torch_threads(args.device, args.torch_threads))
+        torch.set_num_interop_threads(1)
         settings = json.loads(args.settings.read_text(encoding="utf-8")) if args.settings else None
         session = Session(
             engine,

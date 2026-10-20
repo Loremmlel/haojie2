@@ -25,12 +25,13 @@ export function distribution(
   salt = 0,
   sampleKey?: string,
   keyOf: typeof positionKey = positionKey,
+  apply: typeof applyCommand = applyCommand,
 ): Distribution {
   let attempts = 0;
   const run = (tape: readonly number[], fallback?: (cuts: readonly number[]) => number) => {
     let i = 0;
     attempts++;
-    const result = applyCommand(s, c, (cuts) => {
+    const result = apply(s, c, (cuts) => {
       if (i < tape.length) return tape[i++];
       if (fallback) return fallback(cuts);
       const unique = [...new Set(cuts)].sort((a, b) => a - b);

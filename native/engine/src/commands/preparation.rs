@@ -222,18 +222,21 @@ fn choose_summons(s: &mut State, c: &Command, ctx: &mut Resolution) -> Result<()
     );
     Ok(())
 }
+pub fn deploy_card(s: &State, c: &Command, catalog: &Catalog) -> Result<Value, Failure> {
+    card(s, c)
+        .filter(|v| {
+            let d = &catalog[&kind(&v["kind"]).key()];
+            d.spell.is_none() && d.weapon.is_none() && !d.aura
+        })
+        .ok_or(Failure::Invalid("请选择待部署随从。"))
+}
 /// 对应 TS prepareDeploy；先只读检查部署域，通过后才复制和模拟完整结算。
 pub fn prepare_deploy(
     s: &State,
     c: &Command,
     catalog: &Catalog,
 ) -> Result<(Value, Point), Failure> {
-    let card = card(s, c)
-        .filter(|v| {
-            let d = &catalog[&kind(&v["kind"]).key()];
-            d.spell.is_none() && d.weapon.is_none() && !d.aura
-        })
-        .ok_or(Failure::Invalid("请选择待部署随从。"))?;
+    let card = deploy_card(s, c, catalog)?;
     let (Some(x), Some(y)) = (c.x, c.y) else {
         return Err(Failure::Invalid("请选择棋盘格。"));
     };

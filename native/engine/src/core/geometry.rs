@@ -1,4 +1,5 @@
 use crate::model::{Catalog, Point, State, Unit};
+use std::cell::OnceCell;
 
 pub fn inside(p: Point) -> bool {
     p.x.fract() == 0.0
@@ -507,6 +508,7 @@ pub struct PlacementQuery {
     occupants: Vec<Vec<usize>>,
     friends: [Vec<usize>; 3],
     loners: [Vec<usize>; 3],
+    rows: [OnceCell<Vec<usize>>; 3],
 }
 impl PlacementQuery {
     pub fn new(s: &State) -> Self {
@@ -514,6 +516,7 @@ impl PlacementQuery {
             occupants: vec![vec![]; 117],
             friends: Default::default(),
             loners: Default::default(),
+            rows: Default::default(),
         };
         for (i, u) in s.units.iter().enumerate() {
             for p in cells(u, u.at()) {
@@ -533,6 +536,9 @@ impl PlacementQuery {
     }
     pub fn can_place(&self, s: &State, u: &Unit, at: Point, catalog: &Catalog) -> bool {
         placement(s, u, at, catalog, false, Some(self))
+    }
+    pub fn can_deploy(&self, s: &State, u: &Unit, at: Point, catalog: &Catalog) -> bool {
+        placement(s, u, at, catalog, true, Some(self))
     }
 }
 fn placement(
@@ -568,10 +574,14 @@ fn placement(
         let over: Vec<_> = s.units.iter().filter(|v| covers(v, at)).collect();
         return over.len() <= 1 && over.iter().all(|v| v.side() == u.owner);
     }
-    let rows = if deployment {
-        deployment_rows(s, u.owner)
+    let uncached_rows;
+    let rows = if !deployment {
+        &[][..]
+    } else if let Some(q) = query {
+        q.rows[u.owner].get_or_init(|| deployment_rows(s, u.owner))
     } else {
-        vec![]
+        uncached_rows = deployment_rows(s, u.owner);
+        &uncached_rows
     };
     if deployment
         && !u.has("u27")

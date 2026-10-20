@@ -3,6 +3,7 @@
 import math
 from collections import defaultdict
 from contextlib import nullcontext
+from copy import copy
 from dataclasses import asdict
 from pathlib import Path
 
@@ -27,6 +28,35 @@ def resolve_device(name: str) -> torch.device:
 def synchronize(device: torch.device) -> None:
     if device.type != "cpu":
         getattr(torch, device.type).synchronize(device)
+
+
+def cpu_state(value):
+    """在调用者独占学习状态的边界复制到 CPU；整棵状态只同步一次设备。
+
+    模型及 Adam 状态的许多小张量先排队传回，全部完成后才交给哈希或序列化。
+    CPU 张量保持原引用，调用者仍须在下一次更新前消费此状态。
+    """
+    devices = set()
+
+    def transfer(item):
+        if isinstance(item, torch.Tensor):
+            if item.device.type != "cpu":
+                devices.add(item.device)
+            return item.detach().to("cpu", non_blocking=True)
+        if isinstance(item, dict):
+            result = copy(item)
+            result.update((key, transfer(child)) for key, child in item.items())
+            return result
+        if isinstance(item, list):
+            return [transfer(child) for child in item]
+        if isinstance(item, tuple):
+            return tuple(transfer(child) for child in item)
+        return item
+
+    result = transfer(value)
+    for device in devices:
+        synchronize(device)
+    return result
 
 
 def autocast(device: torch.device, precision: str):
@@ -192,28 +222,30 @@ class Trainer:
 
     def checkpoint(self, metadata):
         """供统一配额出口使用；调用者必须在更新边界消费，不能并发修改参数。"""
-        return {
-            "format": "haojie-checkpoint-v1",
-            "network": NETWORK_VERSION,
-            "config": asdict(self.model.config),
-            "metadata": metadata,
-            "precision": self.precision,
-            "value_weight": self.value_weight,
-            "model": self.model.state_dict(),
-            "optimizer": self.optimizer.state_dict(),
-            "scaler": self.scaler.state_dict(),
-            "steps": self.steps,
-            "updates": self.updates,
-            "rng_cpu": torch.get_rng_state(),
-            "rng_device": None
-            if self.device.type == "cpu"
-            else getattr(torch, self.device.type).get_rng_state(self.device),
-            "device_type": self.device.type,
-            "execution": {
-                "deterministic": torch.are_deterministic_algorithms_enabled(),
-                "matmul_precision": torch.get_float32_matmul_precision(),
-            },
-        }
+        return cpu_state(
+            {
+                "format": "haojie-checkpoint-v1",
+                "network": NETWORK_VERSION,
+                "config": asdict(self.model.config),
+                "metadata": metadata,
+                "precision": self.precision,
+                "value_weight": self.value_weight,
+                "model": self.model.state_dict(),
+                "optimizer": self.optimizer.state_dict(),
+                "scaler": self.scaler.state_dict(),
+                "steps": self.steps,
+                "updates": self.updates,
+                "rng_cpu": torch.get_rng_state(),
+                "rng_device": None
+                if self.device.type == "cpu"
+                else getattr(torch, self.device.type).get_rng_state(self.device),
+                "device_type": self.device.type,
+                "execution": {
+                    "deterministic": torch.are_deterministic_algorithms_enabled(),
+                    "matmul_precision": torch.get_float32_matmul_precision(),
+                },
+            }
+        )
 
     def restore(self, path: Path, metadata: dict) -> None:
         payload = torch.load(path, map_location="cpu", weights_only=True)

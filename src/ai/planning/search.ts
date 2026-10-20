@@ -1,5 +1,7 @@
 import { draftDecision } from './shrines';
 import { deploymentRows } from '../../engine/core/geometry';
+import { applyRuntimeCommand } from '../../engine/commands/game';
+import { importRuntimePosition } from '../../engine/runtime/position';
 import type { Command, GameState, Player } from '../../engine/types';
 import {
   iterateCandidateGroups,
@@ -437,7 +439,7 @@ export function* search(
   limits: Partial<SearchLimits> = {},
 ): Generator<void, Decision> {
   const cfg = DIFFICULTIES[difficulty],
-    s = imagined(observation),
+    s = importRuntimePosition(imagined(observation)),
     max = Math.max(40, limits.simulations ?? cfg.nodes);
   const reserve = s.phase === 'play' && !s.pending.length ? Math.min(160, Math.floor(max / 5)) : 0;
   const searchMax = max - reserve;
@@ -676,5 +678,14 @@ function distribution(
   salt = 0,
   sampleKey?: string,
 ) {
-  return rawDistribution(s, c, limit, samples, salt, sampleKey, ctx.keys.positionKey);
+  return rawDistribution(
+    s,
+    c,
+    limit,
+    samples,
+    salt,
+    sampleKey,
+    ctx.keys.positionKey,
+    applyRuntimeCommand,
+  );
 }

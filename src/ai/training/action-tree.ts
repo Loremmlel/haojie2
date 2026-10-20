@@ -21,6 +21,7 @@ import {
 import { parseCommand } from '../../engine/online/authority';
 import { SYNTHESIS_RECIPES, synthesisDestinations } from '../../engine/setup/synthesis';
 import type { SelectionStep } from '../../engine/commands/options';
+import type { CommandInspection } from '../../engine/commands/game';
 import type { Command, Player, Unit, Target } from '../../engine/types';
 import type { Observation } from '../types';
 import {
@@ -102,6 +103,10 @@ export class TrainingActionTree {
   readonly actions: TrainingAction[];
   readonly #nodes = new Map<string, ActionNode>();
   readonly #inspect;
+  readonly #initialInspections = new WeakMap<
+    Command,
+    { signature: string; result: CommandInspection }
+  >();
   readonly #targets: Target[];
   readonly #targetIndex = new Map<string, number>();
   readonly #stats = new Map<Unit, ReturnType<typeof getStats>>();
@@ -115,7 +120,20 @@ export class TrainingActionTree {
     for (const [index, target] of this.#targets.entries())
       if (!this.#targetIndex.has(target.id)) this.#targetIndex.set(target.id, index);
     this.#inspect = createTrainingCommandInspector(observation, actor);
-    this.actions = trainingActionSpace(observation, actor, this.#inspect).actions;
+    this.actions = trainingActionSpace(
+      observation,
+      actor,
+      (command) => {
+        const result = this.#inspect(command);
+        if (result.status !== 'invalid')
+          this.#initialInspections.set(command, {
+            signature: JSON.stringify(command),
+            result,
+          });
+        return result;
+      },
+      (_s, unit) => this.#attributes(unit),
+    ).actions;
   }
 
   #prepare(prefix: Prefix): Prefix {
@@ -153,11 +171,26 @@ export class TrainingActionTree {
     return stats;
   }
 
-  #choice(key: string, prefix: Prefix, subject?: string): ActionChoice | null {
+  #choice(
+    key: string,
+    prefix: Prefix,
+    subject?: string,
+    initial = false,
+    inspection?: CommandInspection,
+  ): ActionChoice | null {
     prefix = this.#prepare(prefix);
     if (prefix.steps.length)
-      return { key, command: prefix.command, next: prefix, subject, status: 'parameter' };
-    const result = this.#inspect(prefix.command);
+      return {
+        key,
+        command: prefix.command,
+        next: prefix,
+        subject,
+        status: 'parameter',
+      };
+    const result =
+      inspection ??
+      (initial ? this.#initialInspections.get(prefix.command)?.result : undefined) ??
+      this.#inspect(prefix.command);
     return result.status === 'invalid'
       ? null
       : { key, command: prefix.command, subject, status: result.status };
@@ -165,6 +198,10 @@ export class TrainingActionTree {
 
   #start(action: TrainingAction): Prefix {
     const command = canonicalEngineCommand(this.observation, this.actor, action.command);
+    const initial = this.#initialInspections.get(action.command);
+    // 公开动作可被调用者改写；比对预检时的内容快照，根叶子仍持有独立命令副本。
+    if (initial && JSON.stringify(command) === initial.signature)
+      this.#initialInspections.set(command, initial);
     const steps: Step[] = [
       ...Array.from({ length: action.materialCount ?? 0 }, (): Step => ({ kind: 'material' })),
       ...action.steps,
@@ -180,11 +217,23 @@ export class TrainingActionTree {
     const result: ActionChoice[] = [];
     // 同一节点的后续参数说明只读；需要推进时才创建共享尾部，空分支不分配。
     let remaining: Step[] | undefined;
-    const add = (key: string, command: Command, subject?: string, repeat = false) => {
+    const add = (
+      key: string,
+      command: Command,
+      subject?: string,
+      repeat = false,
+      inspection?: CommandInspection,
+    ) => {
       const choice = this.#choice(
         key,
-        { action, command, steps: repeat ? steps : (remaining ??= steps.slice(1)) },
+        {
+          action,
+          command,
+          steps: repeat ? steps : (remaining ??= steps.slice(1)),
+        },
         subject,
+        false,
+        inspection,
       );
       if (choice) result.push(choice);
     };
@@ -218,6 +267,12 @@ export class TrainingActionTree {
         }
         break;
       case 'point': {
+        const domain = steps.length === 1 ? this.#inspect.points(c) : undefined;
+        if (domain) {
+          for (const { point, inspection } of domain)
+            add(`${point.x},${point.y}`, { ...c, ...point }, undefined, false, inspection);
+          break;
+        }
         let points = ALL_CELLS;
         if (c.type === 'synthesize' && c.materialIds?.length === 3) {
           const recipe = SYNTHESIS_RECIPES.find((r) => r.id === c.recipeId)!;
@@ -272,7 +327,7 @@ export class TrainingActionTree {
     let node: ActionNode;
     if (!cursor.length) {
       const choices = this.actions.flatMap((a, i) => {
-        const choice = this.#choice(String(i), this.#start(a));
+        const choice = this.#choice(String(i), this.#start(a), undefined, true);
         return choice ? [choice] : [];
       });
       node = { cursor: [], stage: 'action', choices };

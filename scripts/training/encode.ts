@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TrainingActionTree } from '../../src/ai/training/action-tree';
-import { encodeDecision } from '../../src/ai/training/encoding/decision';
+import { createDecisionEncoder } from '../../src/ai/training/encoding/decision';
 import { ENCODING_SCHEMA } from '../../src/ai/training/encoding/schema';
 import { HAOJIE_RULESET } from '../../src/engine/online/player-view';
 import { ensure } from '../../src/engine/core/state';
@@ -89,6 +89,7 @@ export async function* encodeTeacherFile(path: string) {
           cause: error,
         });
       }
+      const encode = createDecisionEncoder(row.observation, row.actor);
       for (const [step, { node, selected }] of trace.entries())
         yield {
           type: 'example',
@@ -99,7 +100,7 @@ export async function* encodeTeacherFile(path: string) {
           command: row.command.type,
           stage: node.stage,
           selected,
-          input: encodeDecision(row.observation, row.actor, node),
+          input: encode(node),
         };
       count++;
     } else if (row.type === 'outcome') {

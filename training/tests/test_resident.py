@@ -16,7 +16,7 @@ from haojie_training.native.audit import audit
 from haojie_training.native.client import Client
 from haojie_training.native.execution import PolicyInference
 from haojie_training.native.pipeline import BatchJobs
-from haojie_training.native.pool import Pool
+from haojie_training.native.pool import Pool, _group_size
 from haojie_training.native.resident import Ledger, task_identity
 from haojie_training.native.stream import prepare_pool, prepare_record
 
@@ -24,6 +24,35 @@ from haojie_training.native.stream import prepare_pool, prepare_record
 class ZeroPolicy:
     def policy_logits(self, batch):
         return torch.zeros(batch["candidate_mask"].shape)
+
+
+class GroupingTests(unittest.TestCase):
+    def test_length_boundary_capacity_and_order(self):
+        for lengths, maximum, expected in (
+            ([], 32, []),
+            ([1, 1, 2, 3], 32, [[1, 1], [2], [3]]),
+            ([100, 124, 125, 126, 157, 158], 32, [[100, 124, 125], [126, 157], [158]]),
+            ([4097], 32, [[4097]]),
+            ([100] * 5, 2, [[100, 100], [100, 100], [100]]),
+            ([100, 125, 126], 1, [[100], [125], [126]]),
+        ):
+            with self.subTest(lengths=lengths, maximum=maximum):
+                original = [(i, i, {"entities": n}) for i, n in enumerate(lengths)]
+                pending = list(original)
+                groups = []
+                while pending:
+                    count = _group_size(pending, maximum)
+                    self.assertGreater(count, 0)
+                    self.assertLessEqual(count, maximum)
+                    groups.append(pending[:count])
+                    pending = pending[count:]
+                self.assertEqual(
+                    [[item[2]["entities"] for item in group] for group in groups], expected
+                )
+                # 相同长度的请求也按原身份核对，不能以长度相同掩盖重复、漏项或换序。
+                actual = [item for group in groups for item in group]
+                self.assertEqual(actual, original)
+                self.assertTrue(all(a is b for a, b in zip(actual, original, strict=True)))
 
 
 class ResidentTests(unittest.TestCase):

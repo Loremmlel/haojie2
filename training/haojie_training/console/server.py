@@ -13,6 +13,7 @@ from pathlib import Path
 import torch
 
 from .config.resources import monitor as monitor
+from .config.resources import torch_threads
 from .controller import Controller
 from .opponents import ASSETS
 from .storage import Lease, Store
@@ -125,16 +126,22 @@ def main():
     )
     parser.add_argument("--tiny", action="store_true", help="接线验收小模型；默认使用现有正式结构")
     parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument("--torch-threads", type=int, default=1, help="Torch CPU 算子线程数")
+    parser.add_argument(
+        "--torch-threads",
+        type=int,
+        default=0,
+        help="Torch CPU 算子线程数，0 按设备及有效核配额自动选择",
+    )
     args = parser.parse_args()
-    if args.torch_threads < 1:
-        parser.error("--torch-threads 必须为正整数")
     engine = args.engine or Path(
         "artifacts/native-target/release/haojie-engine" + (".exe" if os.name == "nt" else "")
     )
     if not engine.is_file():
         parser.error("原生引擎未安装，请先构建或用 --engine 指定正式 haojie-engine")
-    torch.set_num_threads(args.torch_threads)
+    try:
+        torch.set_num_threads(torch_threads(args.device, args.torch_threads))
+    except (ValueError, RuntimeError) as error:
+        parser.error(str(error))
     torch.set_num_interop_threads(1)
     if (
         args.root.exists()

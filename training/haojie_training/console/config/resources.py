@@ -9,6 +9,8 @@ from pathlib import Path
 import psutil
 import torch
 
+from ...runtime import resolve_device
+
 
 def _read(path):
     try:
@@ -55,6 +57,17 @@ def cpu_capacity():
             if budget > 0 and period > 0:
                 capacity = min(capacity, budget / period)
     return capacity
+
+
+def torch_threads(device="auto", requested=0):
+    """0 按有效 CPU 配额选择至多四线程；加速器默认单线程，显式值原样保留。"""
+    if requested < 0:
+        raise ValueError("--torch-threads 必须为非负整数，0 表示自动")
+    if requested:
+        return requested
+    if resolve_device(device).type != "cpu":
+        return 1
+    return min(4, max(1, math.floor(cpu_capacity())))
 
 
 def _memory():

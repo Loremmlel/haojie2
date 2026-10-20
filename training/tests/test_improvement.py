@@ -10,14 +10,13 @@ from haojie_training.data import synthetic_batch
 from haojie_training.model import ModelConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from haojie_training.research.spatial import SpatialPolicyNet  # noqa: E402
 from scripts.training.improvement.model import (  # noqa: E402
     ImprovementNet,
     expanded_fields,
     relation_edges,
 )
 from scripts.training.improvement.value.train import features  # noqa: E402
-
-from haojie_training.research.spatial import SpatialPolicyNet  # noqa: E402
 
 
 class ImprovementTests(unittest.TestCase):

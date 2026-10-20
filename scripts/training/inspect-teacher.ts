@@ -8,7 +8,7 @@ import { decisionOwner } from '../../src/ai/observation';
 import { HAOJIE_RULESET } from '../../src/engine/online/player-view';
 import { encodingSourceHash } from './encode';
 import { TrainingActionTree } from '../../src/ai/training/action-tree';
-import { encodeDecision } from '../../src/ai/training/encoding/decision';
+import { createDecisionEncoder } from '../../src/ai/training/encoding/decision';
 import { readTrainingRecords } from './records/replay';
 import { hashRecordFile } from './records/io';
 
@@ -145,11 +145,12 @@ export async function inspectTeacherFiles(paths: string[], encodeInputs = false)
             totalCandidates: 0,
           });
           const trace = new TrainingActionTree(observation, owner).trace(row.command);
+          const encode = createDecisionEncoder(observation, owner);
           summary.commands++;
           summary.multiChoiceCommands += Number(trace.some((s) => s.node.choices.length > 1));
           summary.multiChoiceRoots += Number(trace[0].node.choices.length > 1);
           for (const { node } of trace) {
-            const input = encodeDecision(observation, owner, node);
+            const input = encode(node);
             summary.examples++;
             summary.forcedExamples += Number(node.choices.length === 1);
             summary.maxEntities = Math.max(summary.maxEntities, input.entities.length);

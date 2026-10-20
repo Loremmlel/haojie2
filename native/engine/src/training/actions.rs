@@ -1,10 +1,11 @@
 //! 公开动作说明与 TS commands/options、training/queries 对齐；不评分、不裁剪参数域。
 use crate::inspection::Queries;
-use crate::model::{Catalog, Command, Failure, State, Unit, extra_number};
+use crate::model::{Catalog, Command, Failure, Point, State, Unit, extra_number};
 use crate::movement::{charge_kind, reserve};
 use crate::preparation::kind;
-use crate::stats::{attack_charge, stats};
+use crate::stats::{Stats, attack_charge, stats};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct Step {
@@ -39,6 +40,7 @@ pub struct Action {
     pub free: bool,
     pub materials: Vec<String>,
     pub chosen: Vec<crate::model::Kind>,
+    pub initial_inspection: Option<&'static str>,
 }
 fn action(id: &str, c: Command, steps: Vec<Step>) -> Action {
     Action {
@@ -48,6 +50,7 @@ fn action(id: &str, c: Command, steps: Vec<Step>) -> Action {
         free: false,
         materials: vec![],
         chosen: vec![],
+        initial_inspection: None,
     }
 }
 pub fn array(v: &Value) -> &[Value] {
@@ -105,19 +108,63 @@ pub fn inspect(
     if !permitted_command(s, actor, c) {
         return Ok("invalid");
     }
-    match queries.inspect(s, c, catalog) {
+    inspection_status(queries.inspect(s, c, catalog))
+}
+fn inspection_status(result: Result<(), Failure>) -> Result<&'static str, String> {
+    match result {
         Ok(_) => Ok("available"),
         Err(Failure::Uncertain) => Ok("uncertain"),
         Err(Failure::Invalid(_) | Failure::InvalidOwned(_)) => Ok("invalid"),
         Err(Failure::Unsupported(r)) => Err(format!("unsupported training inspection: {r}")),
     }
 }
+pub fn points(
+    s: &State,
+    actor: usize,
+    c: &Command,
+    catalog: &Catalog,
+    queries: &mut Queries,
+) -> Result<Option<Vec<(Point, &'static str)>>, String> {
+    if c.kind != "move" && c.kind != "deploy" {
+        return Ok(None);
+    }
+    if !permitted_command(s, actor, c) {
+        return Ok(Some(vec![]));
+    }
+    let domain = match queries.points(s, c, catalog) {
+        Ok(Some(domain)) => domain,
+        Ok(None) => return Ok(None),
+        Err(Failure::Invalid(_) | Failure::InvalidOwned(_)) => return Ok(Some(vec![])),
+        Err(error) => return Err(format!("point preparation failed: {error:?}")),
+    };
+    let mut points = vec![];
+    for (at, complete) in domain {
+        let status = if complete {
+            "available"
+        } else {
+            inspection_status(queries.inspect(
+                s,
+                &Command {
+                    x: Some(at.x),
+                    y: Some(at.y),
+                    ..c.clone()
+                },
+                catalog,
+            ))?
+        };
+        if status != "invalid" {
+            points.push((at, status));
+        }
+    }
+    Ok(Some(points))
+}
 fn allowed(
     s: &State,
     actor: usize,
-    a: &Action,
+    a: &mut Action,
     catalog: &Catalog,
     queries: &mut Queries,
+    attributes: &mut HashMap<*const Unit, Stats>,
 ) -> Result<bool, String> {
     if !permitted_command(s, actor, &a.command) {
         return Ok(false);
@@ -126,7 +173,9 @@ fn allowed(
         return Ok(true);
     }
     if a.steps.is_empty() {
-        return Ok(inspect(s, actor, &a.command, catalog, queries)? != "invalid");
+        let status = inspect(s, actor, &a.command, catalog, queries)?;
+        a.initial_inspection = Some(status);
+        return Ok(status != "invalid");
     }
     let c = &a.command;
     let id = a.id.split(':').next().unwrap();
@@ -149,7 +198,9 @@ fn allowed(
     let Some(u) = c.unit_id.as_deref().and_then(|id| s.unit(id)) else {
         return Ok(true);
     };
-    let stats = stats(s, u, catalog);
+    let stats = attributes
+        .entry(u as *const Unit)
+        .or_insert_with(|| stats(s, u, catalog));
     let ability = c.ability.clone().unwrap_or(u.kind.clone());
     let r = reserve(u, &ability, catalog);
     let borrowed = ability != u.kind;
@@ -215,12 +266,11 @@ fn allowed(
     }
     Ok(true)
 }
-fn unit_actions(s: &State, u: &Unit, catalog: &Catalog) -> Vec<Action> {
+fn unit_actions(s: &State, u: &Unit, catalog: &Catalog, st: &Stats) -> Vec<Action> {
     if catalog.by_kind(&u.kind).landmark.is_some() && u.hp <= 0.0 {
         return vec![];
     }
     let mut result = vec![];
-    let st = stats(s, u, catalog);
     let point = || Step::new("point");
     let target = |r, only| Step::target(r, "targetId", only);
     let base = |t| Command {
@@ -387,7 +437,8 @@ fn unit_actions(s: &State, u: &Unit, catalog: &Catalog) -> Vec<Action> {
             let usage = u.ability_usage.as_ref().and_then(|m| m.get(&k.key()));
             borrowed.once_used = usage.is_some_and(|v| v.once);
             borrowed.free_used = usage.map(|v| v.free).unwrap_or(-1.0);
-            for mut a in unit_actions(s, &borrowed, catalog) {
+            // 借用能力投影改变种类及使用次数，不能按原实体句柄命中属性缓存。
+            for mut a in unit_actions(s, &borrowed, catalog, &stats(s, &borrowed, catalog)) {
                 if ["skill", "charge"].contains(&a.command.kind.as_str()) {
                     a.id = format!("{}:{}", a.id, k.key());
                     a.command.ability = Some(k.clone());
@@ -537,6 +588,7 @@ pub fn actions(
     actor: usize,
     catalog: &Catalog,
     queries: &mut Queries,
+    attributes: &mut HashMap<*const Unit, Stats>,
 ) -> Result<Vec<Action>, String> {
     let mut candidates = vec![];
     let simple = |c: Command| action(&c.kind, c.clone(), vec![]);
@@ -604,7 +656,10 @@ pub fn actions(
             }
         }
         for u in s.pieces().filter(|u| u.owner == actor) {
-            candidates.extend(unit_actions(s, u, catalog));
+            let stats = attributes
+                .entry(u as *const Unit)
+                .or_insert_with(|| stats(s, u, catalog));
+            candidates.extend(unit_actions(s, u, catalog, stats));
         }
         if actor == s.active {
             for c in array(&s.extra["hands"][actor.to_string()]) {
@@ -644,7 +699,7 @@ pub fn actions(
         .any(|a| a["kind"] == "laoqian" && a["usedPly"] != s.ply);
     let mut result = vec![];
     for mut a in candidates {
-        if allowed(s, actor, &a, catalog, queries)? {
+        if allowed(s, actor, &mut a, catalog, queries, attributes)? {
             if can_choose && let Some(p) = pool(s, &a.command, catalog) {
                 a.chosen = catalog.pools[p].clone();
             }

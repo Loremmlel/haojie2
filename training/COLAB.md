@@ -10,6 +10,34 @@
 
 CPU-only 功能调试可将 `DEVICE=cpu`；默认模型保持原结构，Notebook 不默认使用验收用 tiny 模型。
 
+普通 Linux 或 WSL 可将全部工具安装到独立目录。安装脚本尊重 `CARGO_HOME`、`RUSTUP_HOME` 和 `UV_CACHE_DIR`；未指定时 Cargo 仍使用 `~/.cargo`。新装 Rust 使用 `--no-modify-path`，脚本仅为构建子进程设置 PATH，不修改 shell 启动文件。主机 Python 需要可用的 pip；示例从仓库根执行：
+
+```sh
+env CARGO_HOME=/var/tmp/haojie-tools/cargo \
+  RUSTUP_HOME=/var/tmp/haojie-tools/rustup \
+  UV_CACHE_DIR=/var/tmp/haojie-tools/uv-cache \
+  python3 scripts/colab/bootstrap.py \
+  --venv /var/tmp/haojie-tools/venv \
+  --target /var/tmp/haojie-tools/native-target --device cuda
+```
+
+选择本地磁盘上不会随短任务退出而清空的目录；WSL 的工具和构建输出优先放在 Linux 文件系统。需要先安装 CUDA 依赖、稍后再验收设备时，可用 `--backend cu130 --device cpu`：该组合仍安装指定 CUDA 分发，仅跳过安装末尾的 GPU 矩阵检查。
+
+尚未推送的工作区也可复跑：在本地执行 `python scripts/training/native/pipeline/package.py --output artifacts/cloud-source.tar.gz`，将归档上传到服务器的新目录后解压，并在解压目录运行上述安装命令。归档包含当前 Python/Rust 源码、规则数据、已构建教师与完整周期测量入口；同名 manifest 记录每个文件及归档的 SHA256，不包含本地模型、轨迹或缓存。
+
+安装完成后可验收正式模型的 32 进程采样、更新与保存：
+
+```sh
+/var/tmp/haojie-tools/venv/bin/python scripts/training/benchmarks/cycle.py \
+  --engine /var/tmp/haojie-tools/native-target/release/haojie-engine \
+  --starts fixtures/late-starts.json \
+  --environments 32 --games 32 --updates 16 --pool-mib 1024 \
+  --device cuda --sampling-precision fp32 --ordered-updates \
+  --output artifacts/cloud-cycle.json
+```
+
+`fixtures/late-starts.json` 是源码归档中的真实晚盘起点；直接使用 Git 检出时改为 `tests/fixtures/native/late-starts.json.gz`。上例轮换全部四份起点，与最终 Linux 并发验收对应；复跑 Windows 性能配对的工作量时添加 `--start-indices 0 2`。去掉 `--starts` 即从新局开始，CPU 服务器将设备改为 `cpu` 并显式指定测量线程数。结果记录实际终局、截断、样本哈希、模型/引擎身份及各阶段时间；配对方法见 [PERFORMANCE.md](PERFORMANCE.md)。
+
 ## 从已有成果继续
 
 | 已有成果                  | 参数与行为                                                                                                                                                                                                     |
@@ -22,7 +50,7 @@ CPU-only 功能调试可将 `DEVICE=cpu`；默认模型保持原结构，Noteboo
 
 完整恢复保留模型、优化器、精度、已保存的随机状态、任务/更新计数、设置、活动实验，以及归档中的历史、基准、最佳、导出和小型指标。RAM 样本池和在途对局重新生成；恢复后显示实际保存的更新数。融合 CUDA 优化器须在兼容 CUDA 模式恢复，跨不兼容设备迁移用新实验继承权重。
 
-非空本地根会继续使用本地状态，不自动被 Drive 覆盖。要显式恢复另一份归档，应选择新的 `LOCAL_ROOT`，保留原根。手工导入完成后，下一次启动可清空 `RESTORE_SOURCE`，继续该本地根。旧恢复点只补齐新增的三个执行选项，原有学习参数保留；Notebook 中的数字 0、“沿用”和等待时间 -1 表示不覆盖已有参数。
+非空本地根会继续使用本地状态，不自动被 Drive 覆盖。要显式恢复另一份归档，应选择新的 `LOCAL_ROOT`，保留原根。手工导入完成后，下一次启动可清空 `RESTORE_SOURCE`，继续该本地根。旧恢复点只补齐新增的三个执行选项，原有学习参数保留；Notebook 的采样/更新设置中，数字 0、“沿用”和等待时间 -1 表示不覆盖已有参数。`TORCH_THREADS=0` 是单独的服务启动选项，表示按本次设备和有效核配额自动选择线程数。
 
 ## 周期备份与退出
 
@@ -36,18 +64,20 @@ CPU-only 功能调试可将 `DEVICE=cpu`；默认模型保持原结构，Noteboo
 
 ## 服务器配置与测量
 
-| 设置                   | 范围 / 含义                                                  |
-| ---------------------- | ------------------------------------------------------------ |
-| `environments`         | 1–128，Rust 对局进程数量；实际创建不超过本轮任务数。         |
-| `games_per_round`      | 1–4096，本轮任务配额；可以大于环境数以便完成一局后补位。     |
-| `inference_batch_size` | 1–256，单次推理请求上限，仍按模型和实体长度分桶。            |
-| `batch_wait_ms`        | 0–10，额外组批窗口；默认 0，先测吞吐再增加。                 |
-| `batch_size`           | 1–256，梯度更新批量；与推理批量独立。                        |
-| `sampling_precision`   | FP32 / BF16；默认 FP32，BF16 为显式选择并检查设备支持。      |
-| `pool_mib`             | 16–131072，RAM 样本池预算；模型、进程和缓冲另占内存。        |
-| `--torch-threads`      | Torch CPU 算子线程数，默认 1；不限制 Rust 子进程使用其他核。 |
+| 设置                   | 范围 / 含义                                                           |
+| ---------------------- | --------------------------------------------------------------------- |
+| `environments`         | 1–128，Rust 对局进程数量；实际创建不超过本轮任务数。                  |
+| `games_per_round`      | 1–4096，本轮任务配额；可以大于环境数以便完成一局后补位。              |
+| `inference_batch_size` | 1–256，单次推理请求上限，仍按模型和实体长度分桶。                     |
+| `batch_wait_ms`        | 0–10，额外组批窗口；默认 0，先测吞吐再增加。                          |
+| `batch_size`           | 1–256，梯度更新批量；与推理批量独立。                                 |
+| `sampling_precision`   | FP32 / BF16；默认 FP32，BF16 为显式选择并检查设备支持。               |
+| `pool_mib`             | 16–131072，RAM 样本池预算；模型、进程和缓冲另占内存。                 |
+| `--torch-threads`      | Torch CPU 算子线程数，默认 0 自动选择；不限制 Rust 子进程使用其他核。 |
 
 新实验的服务器初值根据 CPU affinity、可见 cgroup 各层 CPU 时间配额、RAM 限额与可回收缓存生成，自动环境数最多 32，可手动调到 128。恢复实验不会自动改变已有学习节奏。当前仍是一轮采样之后更新，不引入异步旧策略训练或修改对局随机流。
+
+Torch 线程数独立于自动环境配置：控制台、cloud CLI 和 Notebook 默认均为 0（自动），CPU 使用 `min(4, max(1, floor(有效核配额)))` 个算子线程，CUDA/XPU 使用 1 个；算子间线程数固定为 1。Notebook 的 `TORCH_THREADS` 和 CLI 的 `--torch-threads` 可指定正整数覆盖。该值在服务启动时确定，不写入设置 JSON 或恢复点；重新启动时仍按本次启动参数选择，恢复点中的模型、优化器和学习参数保持原值。多个引擎进程和模型算子共同使用 CPU。
 
 固定同一个检查点、每轮任务数、模型、训练批次和种子，分别测 4/8/16/32 环境。面板报告累计/最近一轮采样墙钟、请求数、真实终局、有效保留样本和平均实际推理批量，另报告互斥的采样/更新/评测/保存阶段时间。CPU 统计来自本服务进程树并按有效配额归一化，包含已回收子进程耗时；无权限读取时显示未知。GPU 报告利用率、分配与保留显存。
 
@@ -66,12 +96,23 @@ python -m haojie_training.cloud \
 `server-settings.json` 只填写需要覆盖的设置，例如：
 
 ```json
-{ "environments": 16, "games_per_round": 32, "inference_batch_size": 32, "batch_size": 8 }
+{
+  "environments": 16,
+  "games_per_round": 32,
+  "inference_batch_size": 32,
+  "batch_size": 8
+}
 ```
 
 ## 验证与平台资料
 
 纯 Python 回归覆盖组批所有权、协议引用身份、CPU/RAM 配额、旧设置升级、备份上传中断、损坏回退、源目录保护和快照生命周期。原生 CI 运行真实模型更新、归档、重启、优化器逐张量比较、续训，以及 32 个 Rust 进程的集成测试。Notebook 单元格接受语法检查；安装和依赖解析失败会保留日志而不是偷偷更换仓库版本。
+
+2026-10-20 已在 WSL Ubuntu 24.04 的独立目录完成 Python 3.12.3、Torch 2.14.0+cu130、Rust 1.98.1 安装、依赖一致性检查及 release 引擎构建，并通过 Notebook 语法与异步监控单测。安装记录位于本地 `artifacts/performance-20261020/linux/bootstrap.log`，依赖与引擎身份见同目录 `environment.json`。
+
+最终源码在同一 Linux 环境通过 CPU 小模型 32 进程的备份恢复验收（实际峰值 32），以及 CUDA 正式模型的双进程恢复验收。CPU 采样和更新均为 FP32；CUDA 采样为 FP32、更新为 BF16，这是基线和当前实现共有的默认精度。两者均逐项核对 Adam 状态、Python/Torch CPU/CUDA 随机状态、累计样本账目与空 RAM 样本池，再重新采样并继续更新。日志分别为上述目录中的 `final/cpu32-tiny-recovery.log`、`final/cuda-full-recovery.log`。现有 `CloudTests.test_real_training_backup_restart_and_optimizer_continuation` 可用 `HAOJIE_TEST_ENVIRONMENTS`、`HAOJIE_TEST_DEVICE=cpu|cuda` 和 `HAOJIE_TEST_FULL_MODEL=1` 选择验收配置；默认仍为 CPU 小模型。该生命周期测试保留 32 命令预算。
+
+正式模型还完成了全部四份晚盘起点的 32 进程完整周期：32 局均真实终局，保留 3800 条样本、完成 16 次更新与保存，容量淘汰为零。报告为 `final/cuda32-late.json`；性能配对与自然开局记录见 [PERFORMANCE.md](PERFORMANCE.md)。
 
 真实 Colab GPU 性能和实际 Drive 挂载仍须在用户分配的运行时验收；本地目录模拟测试验证的是备份协议与续训状态。
 

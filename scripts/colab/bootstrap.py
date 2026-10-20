@@ -73,12 +73,23 @@ if DEVICE == "cuda":
     assert y[0, 0].item() == 64
 """
     run([python, "-c", probe.replace("DEVICE", repr(args.device))])
-    cargo_bin = Path.home() / ".cargo/bin"
+    cargo_bin = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin"
     if not (cargo_bin / "rustup").exists():
         with tempfile.TemporaryDirectory(prefix="haojie-rustup-") as temporary:
             installer = Path(temporary) / "rustup.sh"
             urllib.request.urlretrieve("https://sh.rustup.rs", installer)
-            run(["sh", installer, "-y", "--profile", "minimal", "--default-toolchain", "none"])
+            run(
+                [
+                    "sh",
+                    installer,
+                    "-y",
+                    "--no-modify-path",
+                    "--profile",
+                    "minimal",
+                    "--default-toolchain",
+                    "none",
+                ]
+            )
     env = {**os.environ, "PATH": f"{cargo_bin}{os.pathsep}{os.environ.get('PATH', '')}"}
     run([cargo_bin / "rustup", "toolchain", "install", "1.98.1", "--profile", "minimal"], env=env)
     run(

@@ -4,6 +4,7 @@ import copy
 import unittest
 
 import torch
+
 from haojie_training.batching.stream import update_groups
 from haojie_training.data import collate_examples, synthetic_batch
 from haojie_training.model import ModelConfig, PolicyValueNet

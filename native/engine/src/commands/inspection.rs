@@ -15,10 +15,75 @@ pub struct Queries {
     attackers: HashMap<Option<String>, Result<Unit, Failure>>,
     charges: HashMap<ChargeKey, Result<(), Failure>>,
     skills: HashMap<SkillKey, Result<abilities::SkillInspection, Failure>>,
+    deployments: HashMap<Option<String>, Result<Unit, Failure>>,
     placement: OnceCell<geometry::PlacementQuery>,
     hut: OnceCell<Vec<Point>>,
 }
 impl Queries {
+    /// 与 TS points 共用来源和精确落点判定；false 表示冲撞仍须完整预检。
+    pub fn points(
+        &mut self,
+        s: &State,
+        c: &Command,
+        catalog: &Catalog,
+    ) -> Result<Option<Vec<(Point, bool)>>, Failure> {
+        if c.kind != "move" && c.kind != "deploy" {
+            return Ok(None);
+        }
+        movement::stage_with_transit(s, c, || {
+            self.transit
+                .get_or_init(|| movement::transit(s, catalog).map(str::to_owned))
+                .clone()
+        })?;
+        let query = self
+            .placement
+            .get_or_init(|| geometry::PlacementQuery::new(s));
+        if c.kind == "deploy" {
+            let ghost = self
+                .deployments
+                .entry(c.card_id.clone())
+                .or_insert_with(|| {
+                    let card = preparation::deploy_card(s, c, catalog)?;
+                    Ok(crate::resolution::template(
+                        s,
+                        &preparation::kind(&card["kind"]).key(),
+                        s.active,
+                        Point { x: 1.0, y: 1.0 },
+                        "preview",
+                        catalog,
+                    ))
+                })
+                .as_ref()
+                .map_err(Clone::clone)?;
+            return Ok(Some(
+                geometry::all_cells()
+                    .filter(|&at| query.can_deploy(s, ghost, at, catalog))
+                    .map(|at| (at, true))
+                    .collect(),
+            ));
+        }
+        let u = self
+            .actors
+            .entry(c.unit_id.clone())
+            .or_insert_with(|| movement::actor(s, c, catalog).map(Unit::fork))
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let source = self
+            .moves
+            .entry(c.unit_id.clone())
+            .or_insert_with(|| movement::move_source(s, u.fork(), catalog))
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let mut points = vec![];
+        for at in geometry::all_cells() {
+            match movement::move_destination(s, source, at, catalog, Some(query)) {
+                Ok(path) => points.push((at, path.is_some())),
+                Err(Failure::Invalid(_) | Failure::InvalidOwned(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(Some(points))
+    }
     pub fn inspect(&mut self, s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
         #[cfg(feature = "kernel-profile")]
         let _profile = crate::profile::scope(crate::profile::Phase::Preparation);

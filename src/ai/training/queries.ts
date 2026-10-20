@@ -5,7 +5,7 @@ import {
   unitActions,
   type ActionSpec,
 } from '../../engine/commands/options';
-import { createCommandInspector } from '../../engine/commands/game';
+import { createCommandInspector, type CommandInspection } from '../../engine/commands/game';
 import { actorCommandError, parseCommand } from '../../engine/online/authority';
 import {
   ALL_CELLS,
@@ -14,7 +14,7 @@ import {
   selectableAttackRoutes,
 } from '../../engine/core/geometry';
 import { allPieces } from '../../engine/core/traits';
-import { ensure } from '../../engine/core/state';
+import { ensure, getStats } from '../../engine/core/state';
 import { definition } from '../../engine/catalog';
 import {
   availableSyntheses,
@@ -48,12 +48,18 @@ export function createTrainingInspector(observation: Observation, actor: Player)
 export function createTrainingCommandInspector(observation: Observation, actor: Player) {
   const s = trainingPosition(observation);
   const inspect = createCommandInspector(s);
-  return (command: Command) => {
+  const query = (command: Command) => {
     const error = actorCommandError(s, actor, command);
     return error
       ? { status: 'invalid' as const, message: error }
       : inspect(command.type === 'choose-shrine' ? { ...command, player: actor } : command);
   };
+  return Object.assign(query, {
+    points(command: Command) {
+      if (command.type !== 'move' && command.type !== 'deploy') return;
+      return actorCommandError(s, actor, command) ? [] : inspect.points(command);
+    },
+  });
 }
 
 export interface TrainingAction extends ActionSpec {
@@ -70,7 +76,11 @@ export interface TrainingAction extends ActionSpec {
 export function trainingActionSpace(
   observation: Observation,
   actor: Player,
-  inspect = createTrainingCommandInspector(observation, actor),
+  inspect: (command: Command) => CommandInspection = createTrainingCommandInspector(
+    observation,
+    actor,
+  ),
+  attributes: typeof getStats = getStats,
 ) {
   const s = trainingPosition(observation);
   const actions: TrainingAction[] = [];
@@ -81,7 +91,7 @@ export function trainingActionSpace(
   const add = (a: TrainingAction) => {
     if (
       actorCommandError(s, actor, a.command) ||
-      (!a.materialCount && actionError(s, a, inspectError))
+      (!a.materialCount && actionError(s, a, inspectError, attributes))
     )
       return;
     const pool = commandSummonPool(s, a.command);
@@ -119,7 +129,7 @@ export function trainingActionSpace(
         for (const type of ['summon', 'extra-summon'] as const)
           for (const ultimate of [false, true]) simple({ type, ultimate });
         for (const piece of allPieces(s))
-          if (piece.owner === actor) for (const a of unitActions(s, piece)) add(a);
+          if (piece.owner === actor) for (const a of unitActions(s, piece, attributes)) add(a);
         if (actor === s.active) {
           for (const card of s.hands[actor]) for (const a of cardActions(s, card)) add(a);
           add({

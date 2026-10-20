@@ -9,6 +9,16 @@ from .client import Client
 from .execution import PolicyInference
 
 
+def _group_size(pending, maximum):
+    """取已按实体数排序的连续前缀，最长不超过最短的1.25倍，减少主干填充计算。"""
+    limit = pending[0][2]["entities"] * 5 // 4
+    count = next(
+        (j for j, (_, _, message) in enumerate(pending) if message["entities"] > limit),
+        len(pending),
+    )
+    return min(count, maximum)
+
+
 class Pool:
     def __init__(
         self,
@@ -339,12 +349,7 @@ class Pool:
                         raise ValueError("未知或过期模型请求")
                 pending.sort(key=lambda item: item[2]["entities"])
                 while pending:
-                    limit = pending[0][2]["entities"] * 2
-                    count = next(
-                        (j for j, (_, _, m) in enumerate(pending) if m["entities"] > limit),
-                        len(pending),
-                    )
-                    count = min(count, self.max_batch_size)
+                    count = _group_size(pending, self.max_batch_size)
                     group, pending = pending[:count], pending[count:]
                     cancel = cancel or bool(cancel_event and cancel_event.is_set())
                     cancel = cancel or time.perf_counter() >= deadline - min(

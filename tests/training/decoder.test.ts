@@ -4,6 +4,7 @@ import { applyCommand, type Command, type GameState, type Player } from '../../s
 import { observe, decisionOwner } from '../../src/ai/observation';
 import { TrainingActionTree } from '../../src/ai/training/action-tree';
 import { decodeCommand, type PolicyEvaluator } from '../../src/ai/training/decoder';
+import { encodeDecision } from '../../src/ai/training/encoding/decision';
 import { COMMANDS } from '../../src/ai/training/encoding/schema';
 import { TrainingEnvironment } from '../../src/match/training';
 import { trainingGeometry } from '../../src/ai/training/queries';
@@ -26,7 +27,7 @@ async function decodeExpected(state: GameState, actor: Player, command: Command)
   const choices = trace.filter(({ node }) => node.choices.length > 1);
   let calls = 0;
   const result = await decodeCommand(observation, actor, async (input) => {
-    assert.equal(input.candidates.length, choices[calls].node.choices.length);
+    assert.deepEqual(input, encodeDecision(observation, actor, choices[calls].node));
     const selected = choices[calls++].selected;
     return { logits: input.candidates.map((_, i) => (i === selected ? 10 : -10)), value: 0 };
   });

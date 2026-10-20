@@ -9,6 +9,7 @@ on:
       - 'training/haojie_training/data.py'
       - 'training/haojie_training/console/**'
       - 'training/tests/compute/**'
+      - 'native/engine/**'
       - 'scripts/training/benchmarks/**'
       - '.github/workflows/training-performance.yml'
   workflow_dispatch:

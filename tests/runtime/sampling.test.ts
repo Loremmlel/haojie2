@@ -7,6 +7,7 @@ import {
   applyRuntimeCommand,
   inspectCommand,
   createCommandInspector,
+  createGame,
 } from '../../src/engine/commands/game';
 import { observe } from '../../src/ai/observation';
 import { TrainingActionTree } from '../../src/ai/training/action-tree';
@@ -16,6 +17,90 @@ import {
 } from '../../src/ai/training/encoding/decision';
 import { TinyPolicy } from '../../scripts/training/sampling/policy';
 import { RuleError, ensure } from '../../src/engine/core/state';
+import { createTrainingCommandInspector, trainingActionSpace } from '../../src/ai/training/queries';
+import { ALL_CELLS } from '../../src/engine/core/geometry';
+import type { Command } from '../../src/engine/types';
+
+test('根动作沿用预检后仍保持随机边界、操作者权限和新局面隔离', () => {
+  const play = fixture();
+  add(play, 15, 1, 4, 6);
+  add(play, 1, 1, 5, 6).traits = [5, 21];
+  const states = [
+    createGame(731270001),
+    createGame(741270001, 'shrine'),
+    play,
+    { ...play, phase: 'summon' as const, summonSlots: 1 },
+    applyCommand(play, { type: 'end' }),
+  ];
+  const statuses = new Set<string>();
+  for (const state of states)
+    for (const actor of [1, 2] as const) {
+      const observation = observe(state, actor);
+      const before = structuredClone(observation);
+      const tree = new TrainingActionTree(observation, actor);
+      assert.deepEqual(tree.actions, trainingActionSpace(observation, actor).actions);
+      const inspect = createTrainingCommandInspector(observation, actor);
+      for (const choice of tree.node().choices) {
+        if (choice.next) continue;
+        const result = inspect(choice.command);
+        assert.equal(choice.status, result.status);
+        assert.notEqual(result.status, 'invalid');
+        statuses.add(choice.status);
+      }
+      assert.deepEqual(observation, before);
+    }
+  assert.ok(statuses.has('available'));
+  assert.ok(statuses.has('uncertain'));
+});
+
+test('公开根动作被改写后重新预检，根叶子命令保留独立副本', () => {
+  const observation = observe(createGame(731270001));
+  const tree = new TrainingActionTree(observation, 1);
+  const summon = tree.actions.find((a) => a.command.type === 'summon')!;
+  summon.command.type = 'end';
+  assert.ok(!tree.node().choices.some((choice) => choice.command.type === 'end'));
+
+  const offered = observe(createGame(731270002));
+  offered.summonOffer = { owner: 1, groups: [[], [], []], count: 2 };
+  const choices = new TrainingActionTree(offered, 1);
+  choices.actions[0].command.offerIndices![1] = 0;
+  assert.ok(
+    choices.node().choices.every((choice) => new Set(choice.command.offerIndices).size === 2),
+    '原地改写数组参数也必须使旧预检失效',
+  );
+
+  const original = new TrainingActionTree(observation, 1);
+  const action = original.actions.find((a) => a.command.type === 'summon')!;
+  const leaf = original.node().choices.find((choice) => choice.command.type === 'summon')!;
+  leaf.command.type = 'end';
+  assert.equal(action.command.type, 'summon', '修改返回的命令不能改写动作列表');
+});
+
+test('移动与部署点域保留逐命令预检顺序和冲撞后果，公共阶段失败仍为空域', () => {
+  const s = fixture();
+  const normal = add(s, 1, 1, 2, 5);
+  const giant = add(s, 5, 1, 6, 5);
+  const runner = add(s, 'u12', 1, 4, 5);
+  runner.mode = 'move';
+  runner.moves = 1;
+  add(s, 2, 2, 4, 6);
+  s.hands[1].push({ id: 'domain-card', kind: 23, drawnAt: 0, summonedPly: s.ply });
+  const commands: Command[] = [
+    ...[normal, giant, runner].map((u) => ({ type: 'move' as const, unitId: u.id })),
+    { type: 'deploy', cardId: 'domain-card' },
+  ];
+  for (const state of [s, { ...s, phase: 'summon' as const }]) {
+    const inspect = createCommandInspector(state);
+    for (const command of commands) {
+      const expected = ALL_CELLS.flatMap((point) => {
+        const inspection = inspectCommand(state, { ...command, ...point });
+        return inspection.status === 'invalid' ? [] : [{ point, inspection }];
+      });
+      assert.deepEqual(inspect.points(command), expected);
+    }
+  }
+  assert.equal(createTrainingCommandInspector(observe(s, 2), 2).points(commands[0])?.length, 0);
+});
 
 test('批次拒绝与随机边界不泄漏预检模式，新观察重建准备，正式错误保留调用栈', () => {
   const s = fixture(),
@@ -84,7 +169,12 @@ test('外部别名资源走整图兼容入口，保留引用关系且不修改�
   u.traits = [21];
   u.abilityCharges = {};
   v.abilityCharges = u.abilityCharges;
-  const command = { type: 'charge' as const, unitId: u.id, ability: 21, mode: 'skill' as const };
+  const command = {
+    type: 'charge' as const,
+    unitId: u.id,
+    ability: 21,
+    mode: 'skill' as const,
+  };
   for (const apply of [applyCommand, applyRuntimeCommand]) {
     const next = apply(s, command);
     assert.equal(next.units[0].abilityCharges, next.units[1].abilityCharges);
