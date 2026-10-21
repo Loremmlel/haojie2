@@ -8,6 +8,9 @@ import torch
 from ..native.execution import PolicyInference
 from .memory import Trajectory
 
+# 持续局的协议路由与权重摘要分开；每条训练样本另记实际行为版本。
+CURRENT_ROUTE = hashlib.sha256(b"haojie-continuous-current-v1").hexdigest()
+
 
 def task_plan(config, task_id):
     """默认八项平衡组合；自定义比例使用独立散列流，与槽位、评测和完成顺序无关。"""
@@ -36,11 +39,22 @@ def task_plan(config, task_id):
 class MemoryJobs:
     memory = True
 
-    def __init__(self, controller, current, historical=None, evaluation=None, teacher=None):
+    def __init__(
+        self,
+        controller,
+        current,
+        historical=None,
+        evaluation=None,
+        teacher=None,
+        *,
+        continuous=False,
+    ):
         self.c = controller
+        self.continuous = continuous and evaluation is None
         self.mc_context = controller.config["method"] == "decomposed-mc-q-v2"
         self.temperature = controller.config["temperature"]
-        self.current, self.historical = current, historical
+        self.current = CURRENT_ROUTE if self.continuous else current
+        self.version, self.historical = current, historical
         self.evaluation, self.teacher = evaluation, teacher
         self.commands, self.plies = (
             controller.config["max_commands"],
@@ -54,15 +68,34 @@ class MemoryJobs:
         # 推理执行器跨训练轮复用；历史对手也计入同一工作池，监控不再读取空统计。
         inference = controller.pool.inference
         inference.model.eval()
-        self.inferences = {current: inference}
+        self.inferences = {self.current: inference}
         if historical:
             model, identity = historical
             self.inferences[identity] = PolicyInference(
                 model.eval(), controller.device, inference.precision, stats=inference.stats
             )
 
+    def next_window(self, current, historical):
+        """所有在途局停在新决策根后发布权重；历史对手仍按整局冻结。"""
+        self.version, self.historical = current, historical
+        self.target = self.finished + self.c.config["games_per_round"]
+        inference = self.inferences[self.current]
+        inference.model.eval()
+        if historical and historical[1] not in self.inferences:
+            model, version = historical
+            self.inferences[version] = PolicyInference(
+                model.eval(), self.c.device, inference.precision, stats=inference.stats
+            )
+
+    def release_unused(self):
+        """只释放没有在途对局引用的冻结历史版本。"""
+        used = {model for task in self.c.pool.slots.values() for model in task["models"]}
+        for version in list(self.inferences):
+            if version != self.current and version not in used:
+                self.inferences.pop(version).close()
+
     def claim(self):
-        if self.assigned >= self.target:
+        if (self.finished if self.continuous else self.assigned) >= self.target:
             return None
         self.assigned += 1
         counter = "eval_tasks" if self.evaluation else "tasks"
@@ -70,7 +103,7 @@ class MemoryJobs:
         task_id = self.c.counts[counter]
         plan = task_plan(self.c.config, task_id)
         models = [self.current, self.current]
-        if self.historical and plan["history"] and self.historical[1] != self.current:
+        if self.historical and plan["history"] and self.historical[1] != self.version:
             models[2 - plan["current_side"]] = self.historical[1]
         start = plan["start"]
         if self.c.starts:
@@ -86,6 +119,13 @@ class MemoryJobs:
             "models": tuple(models),
             "matchup": matchup,
         }
+        if self.continuous:
+            context.pop("models")
+            context.update(
+                policy_mode="continuous-root-v1",
+                initial_models=tuple(self.version if m == self.current else m for m in models),
+                started_generation=self.c.generation,
+            )
         task = {
             "id": task_id,
             "start": start,
@@ -128,7 +168,12 @@ class MemoryJobs:
                 raise ValueError("决策身份重复或样本语义不匹配")
             task["last_decision"] = message["decision"]
         if message["model"] == self.current:
-            task["trajectory"].add(message)
+            behavior = (
+                {"behavior_version": self.version, "behavior_generation": self.c.generation}
+                if self.continuous
+                else None
+            )
+            task["trajectory"].add(message, behavior=behavior)
 
     def infer(self, messages, *, completed=None):
         """同步或异步结果共享 MC 变换；已完成张量仅用于同一模型的一组请求。"""

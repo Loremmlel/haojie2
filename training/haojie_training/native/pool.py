@@ -54,6 +54,10 @@ class Pool:
         self.read_seconds = self.decode_seconds = self.tensor_bytes = 0
         self.assigned = self.finished = self.requests = 0
         self.first_done = self.stop_at = None
+        self.parked = {}
+        self.paused_at = self.running_since = None
+        self.sampling_seconds = self.yield_count = 0
+        self.closed = False
         try:
             for i in range(environments):
                 self.clients.append(self.new_client(i))
@@ -83,6 +87,9 @@ class Pool:
         finally:
             for client in self.clients:
                 client.close()
+            self.closed = True
+            self.slots.clear()
+            self.parked.clear()
             # Reader 已停止，清空队列持有的帧；不把历史张量留到下一次运行。
             while True:
                 try:
@@ -114,6 +121,11 @@ class Pool:
             "queue_capacity": self.events.maxsize,
             "peak_queue": self.peak_queue,
             "active_slot_seconds": self.active_seconds,
+            "sampling_seconds": self.sampling_seconds
+            + (time.perf_counter() - self.running_since if self.running_since is not None else 0),
+            "yield_count": self.yield_count,
+            "parked": len(self.parked),
+            "closed": self.closed,
             "refills": self.refills,
             "refill_seconds": self.refill_seconds,
             "restarts": self.restarts,
@@ -132,6 +144,7 @@ class Pool:
                     "requests": t["requests"],
                     "commands": t.get("commands"),
                     "ply": t.get("ply"),
+                    "parked": i in self.parked,
                     "seconds": time.perf_counter() - t["began"],
                 }
                 for i, t in self.slots.items()
@@ -145,18 +158,44 @@ class Pool:
         snapshot=None,
         cancel_event=None,
         keep_open=False,
+        yield_when=None,
     ):
-        """内存任务仅接纳完整终局；请求按独占管道、进程代次与递增 ID 校验归属。"""
+        """仅接纳真实终局；可在各槽下一决策根前让出，保留原生局面和未回复请求。
+
+        yield_when 只在 keep_open 时可用；回调仅判断窗口是否结束。让出前排空
+        当前根的推理，调用者可更新权重，再以同一任务管理器继续。取消或错误
+        仍丢弃未结束局，逐项调用 unfinished 后关闭，不把暂停伪装成终局。
+        """
+        if yield_when is not None and not keep_open:
+            raise ValueError("保留在途局的采样窗口要求 keep_open=True")
         previous = time.perf_counter()
+        # 独立测试可注入已有槽位；正常池由构造器初始化这些计数。
+        self.parked = getattr(self, "parked", {})
+        self.yield_count = getattr(self, "yield_count", 0)
+        self.sampling_seconds = getattr(self, "sampling_seconds", 0)
+        if getattr(self, "paused_at", None) is not None:
+            paused = previous - self.paused_at
+            for task in self.slots.values():
+                if "last_activity" in task:
+                    task["last_activity"] += paused
+            for _, _, message in self.parked.values():
+                message["received_at"] += paused
+        self.paused_at, self.running_since = None, previous
         previous_active = 0
         next_snapshot = previous
-        stopping = False
+        stopping = yielding = yielded = False
         cancel = False
         waiting = deque()
         active_inferences = set()
         inference_cleanup = ExitStack()
         discarded_slots = set()
         failed = True
+
+        def check_yield():
+            nonlocal yielding, stopping
+            if not yielding and yield_when is not None and yield_when():
+                yielding = stopping = True
+            return yielding
 
         def cancelled():
             nonlocal cancel
@@ -209,6 +248,7 @@ class Pool:
                 began_wall=time.time(),
                 last_activity=time.perf_counter(),
                 requests=0,
+                startup_model=self.model_hash,
             )
             self.slots[i] = task
             self.assigned += 1
@@ -230,7 +270,51 @@ class Pool:
             self.clients[i].send(request)
             return True
 
+        def dispatch(pending):
+            # 模型按首次就绪顺序轮流取一批，桶内按长度组批；同槽仍只有一个请求。
+            by_model = {}
+            for item in pending:
+                i, _, message = item
+                if yield_when is not None:
+                    self.slots[i]["last_root"] = (message["commandIndex"], message["actor"])
+                by_model.setdefault(message["model"], []).append(item)
+            groups = deque(by_model.values())
+            for pending in groups:
+                pending.sort(key=lambda item: item[2]["entities"])
+            while groups:
+                pending = groups.popleft()
+                inference = jobs.inferences[pending[0][2]["model"]]
+                count = _group_size(
+                    pending, self.max_batch_size, packed=inference.supports_packed_batches
+                )
+                group = pending[:count]
+                if count < len(pending):
+                    groups.append(pending[count:])
+                if not cancelled() and getattr(inference, "supports_async", False):
+                    if inference not in active_inferences:
+                        active_inferences.add(inference)
+                        inference_cleanup.callback(inference.close)
+                    if len(waiting) == 2:
+                        receive()
+                    if not cancelled():
+                        ticket = inference.submit(
+                            [m["input"] for _, _, m in group],
+                            slots=[(i, self.generations[i]) for i, _, _ in group],
+                        )
+                        waiting.append((group, inference, ticket))
+                        continue
+                # 不支持异步的后端沿用同步路由；当前/历史模型无需在切换时排空。
+                drain()
+                logits = None if cancelled() else jobs.infer([m for _, _, m in group])
+                respond(group, logits)
+
         try:
+            if self.parked and not cancelled() and not check_yield():
+                pending = list(self.parked.values())
+                self.parked.clear()
+                previous_active = len(self.slots)
+                dispatch(pending)
+                del pending
             while True:
                 if cancel_event and cancel_event.is_set():
                     cancel = True
@@ -238,6 +322,7 @@ class Pool:
                 now = time.perf_counter()
                 self.active_seconds += (now - previous) * previous_active
                 previous = now
+                check_yield()
                 if jobs.stop():
                     stopping = True
                     if self.stop_at is None:
@@ -249,9 +334,13 @@ class Pool:
                             if assign(i) and self.finished:
                                 self.refills += 1
                                 self.refill_seconds += time.perf_counter() - before
+                if yielding and len(self.parked) == len(self.slots):
+                    drain()
+                    yielded = True
+                    break
                 if not self.slots:
                     break
-                previous_active = len(self.slots)
+                previous_active = len(self.slots) - len(self.parked)
                 if snapshot and now >= next_snapshot:
                     drain()
                     snapshot(self.metrics())
@@ -266,8 +355,8 @@ class Pool:
                     self.queue_seconds += time.perf_counter() - before
                     if any(
                         now - t["last_activity"] > 900
-                        for t in self.slots.values()
-                        if "last_activity" in t
+                        for i, t in self.slots.items()
+                        if i not in self.parked and "last_activity" in t
                     ):
                         raise TimeoutError("原生请求超过保护时间")
                     continue
@@ -293,6 +382,7 @@ class Pool:
                     if isinstance(raw, MemoryError):
                         discarded_slots.add((i, generation))
                         pending = [item for item in pending if item[0] != i]
+                        self.parked.pop(i, None)
                         jobs.unfinished(self.slots.pop(i))
                         jobs.resource_error(str(raw))
                         client = self.clients[i]
@@ -312,7 +402,9 @@ class Pool:
                     message = self.clients[i].checked(raw)
                     task = self.slots[i]
                     task["last_activity"] = time.perf_counter()
-                    if message["type"] == "done" and message.get("model") == self.model_hash:
+                    if message["type"] == "done" and message.get("model") == task.get(
+                        "startup_model", self.model_hash
+                    ):
                         self.slots.pop(i)
                         self.finished += 1
                         if self.first_done is None:
@@ -330,6 +422,13 @@ class Pool:
                     elif message["type"] == "infer" and message.get("model") in task["models"]:
                         if type(message.get("id")) is not int or message["id"] <= self.last_ids[i]:
                             raise ValueError("过期或重复的模型请求")
+                        if yield_when is not None and (
+                            type(message.get("commandIndex")) is not int
+                            or message["commandIndex"] < 0
+                            or type(message.get("actor")) is not int
+                            or message["actor"] not in (1, 2)
+                        ):
+                            raise ValueError("采样窗口请求缺少合法决策根身份")
                         self.last_ids[i] = message["id"]
                         task["commands"] = message.get("commandIndex")
                         task["ply"] = message.get("ply")
@@ -338,54 +437,41 @@ class Pool:
                         pending.append((i, task["id"], message))
                     else:
                         raise ValueError("未知或过期模型请求")
-                # 模型按首次就绪顺序轮流取一批，桶内按长度组批；同槽仍只有一个请求。
-                by_model = {}
-                for item in pending:
-                    by_model.setdefault(item[2]["model"], []).append(item)
-                if pending:
-                    del item
-                groups = deque(by_model.values())
-                for pending in groups:
-                    pending.sort(key=lambda item: item[2]["entities"])
-                while groups:
-                    pending = groups.popleft()
-                    inference = jobs.inferences[pending[0][2]["model"]]
-                    count = _group_size(
-                        pending, self.max_batch_size, packed=inference.supports_packed_batches
-                    )
-                    group = pending[:count]
-                    if count < len(pending):
-                        groups.append(pending[count:])
-                    if not cancelled() and getattr(inference, "supports_async", False):
-                        if inference not in active_inferences:
-                            active_inferences.add(inference)
-                            inference_cleanup.callback(inference.close)
-                        if len(waiting) == 2:
-                            receive()
-                        if not cancelled():
-                            ticket = inference.submit(
-                                [m["input"] for _, _, m in group],
-                                slots=[(i, self.generations[i]) for i, _, _ in group],
-                            )
-                            waiting.append((group, inference, ticket))
-                            del group
-                            continue
-                    # 不支持异步的后端沿用同步路由；当前/历史模型无需在切换时排空。
-                    drain()
-                    logits = None if cancelled() else jobs.infer([m for _, _, m in group])
-                    respond(group, logits)
-                    # 局部变量不能将上一批张量保留到下一局或排空阶段。
-                    del logits, group
-                del messages, pending, by_model, groups, raw, message
+                # 同一批的 done 可使窗口达标；统一判断后才决定新根是否执行。
+                if check_yield():
+                    continuing = []
+                    for item in pending:
+                        i, _, message = item
+                        if self.slots[i].get("last_root") == (
+                            message["commandIndex"],
+                            message["actor"],
+                        ):
+                            continuing.append(item)
+                        else:
+                            self.parked[i] = item
+                    pending = continuing
+                dispatch(pending)
+                del messages, pending, raw, message
             failed = False
         finally:
             try:
                 inference_cleanup.close()
+            except BaseException:
+                failed = True
+                raise
             finally:
                 waiting.clear()
-                for task in self.slots.values():
-                    jobs.unfinished(task)
-                self.slots.clear()
+                ended = time.perf_counter()
+                self.sampling_seconds += ended - self.running_since
+                self.running_since = None
+                if yielded and not cancel and not failed:
+                    self.yield_count += 1
+                    self.paused_at = ended
+                else:
+                    for task in self.slots.values():
+                        jobs.unfinished(task)
+                    self.slots.clear()
+                    self.parked.clear()
                 if not keep_open or cancel or failed:
                     self.close()
         return self.metrics()

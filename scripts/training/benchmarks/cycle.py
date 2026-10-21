@@ -193,6 +193,8 @@ def main():
             args.engine, Store(Path(folder)), device=args.device, tiny=args.tiny, starts=starts
         )
         c.thread.join()
+        # 固定工作量基准保留整批排空；生产持续池的更新延迟由 tail.py 单独计量。
+        c.continuous_selfplay = False
         c.config.update(
             environments=args.environments,
             games_per_round=args.games,

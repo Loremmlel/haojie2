@@ -85,6 +85,9 @@ class Evaluation:
         began = time.monotonic()
         teacher = None
         historical = None
+        # 评测使用独立进程；训练长局停留在决策根，评测结束后原槽继续。
+        sampling_pool, sampling_jobs, sampling_runtime = c.pool, c.sampling_jobs, c.runtime
+        c.pool = c.sampling_jobs = None
         try:
             model = PolicyValueNet(ModelConfig(**self.weights["config"]))
             model.load_state_dict(self.weights["model"])
@@ -96,7 +99,6 @@ class Evaluation:
             else:
                 teacher = Teacher(game["difficulty"])
                 game["budget"] = teacher.budget
-            c._close_pool()
             c.pool = Pool(
                 c.engine,
                 1,
@@ -108,6 +110,7 @@ class Evaluation:
                 frame_limit=32 * 2**20,
             )
             jobs = MemoryJobs(c, self.weights["version"], historical, game, teacher)
+            c.sampling_jobs = jobs
             jobs.commands, jobs.plies = self.config["max_commands"], self.config["max_plies"]
             jobs.temperature = self.config["temperature"]
 
@@ -148,10 +151,12 @@ class Evaluation:
         except Exception as error:
             game.update(result="error", error=str(error)[:1000])
         finally:
-            c._close_pool()
-            if teacher:
-                teacher.close()
-            c.runtime = {"active": [], "inflight_bytes": 0}
+            try:
+                c._close_pool()
+                if teacher:
+                    teacher.close()
+            finally:
+                c.pool, c.sampling_jobs, c.runtime = sampling_pool, sampling_jobs, sampling_runtime
         game["seconds"] = time.monotonic() - began
         self.index += 1
         if self.index == len(self.plan) or c.cancel.is_set() or c.eval_cancel.is_set():
