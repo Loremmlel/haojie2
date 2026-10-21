@@ -7,7 +7,8 @@ from unittest.mock import patch
 import torch
 
 from scripts.training.benchmarks.compare import compare, validate_round
-from scripts.training.benchmarks.cycle import RequestCapture, hardware_identity
+from scripts.training.benchmarks.cycle import RequestCapture, capture_samples, hardware_identity
+from scripts.training.benchmarks.replay import compare_cases
 
 
 def report():
@@ -15,12 +16,13 @@ def report():
         "format": "haojie-cycle-benchmark-v2",
         "complete": True,
         "measurement_eligible": True,
+        "network": "entity-transformer-v2",
         "torch": "test",
         "python": "test",
         "parameters": 10,
         "model_config": {"width": 2},
         "initial_model_sha256": "initial",
-        "config": {"games_per_round": 2, "updates_per_round": 1},
+        "config": {"games_per_round": 2, "updates_per_round": 1, "batch_size": 8},
         "starts_sha256": None,
         "hardware_identity": {"cpu_model": "test", "cpu_capacity": 2},
         "execution": {"device": "cpu", "update_precision": "fp32"},
@@ -114,6 +116,11 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(set(capture.rows[0]), {"entities", "candidates"})
         row["entities"].zero_()
         self.assertEqual(capture.rows[0]["entities"].sum().item(), 16)
+        row["value"] = torch.tensor(0.5)
+        samples = capture_samples([(row, 1, 0)], {"entities", "value"})
+        self.assertEqual(set(samples[0]), {"entities", "value"})
+        row["value"].zero_()
+        self.assertEqual(samples[0]["value"].item(), 0.5)
 
     def test_cpu_thread_tuning_requires_explicit_comparison_and_keeps_work_checks(self):
         before, after = report(), report()
@@ -136,6 +143,96 @@ class BenchmarkTests(unittest.TestCase):
         after["options"]["ordered_updates"] = False
         with self.assertRaisesRegex(ValueError, "ordered-updates"):
             compare(before, after)
+
+    def test_network_change_is_explicit_and_same_network_remains_strict(self):
+        before, after = report(), report()
+        after["rounds"][0]["samples_hash"] = "different"
+        with self.assertRaisesRegex(ValueError, "samples_hash"):
+            compare(before, after, allow_network_change=True)
+        after["network"] = "entity-transformer-v3"
+        with self.assertRaisesRegex(ValueError, "allow-network-change"):
+            compare(before, after)
+        after["rounds"][0]["counts"].update(games=2, truncated=0, retained_samples=18)
+        after["rounds"][0]["tasks"][1]["outcome"].update(terminated=True, reason="terminal")
+        after["rounds"][0]["tasks"][1]["final_hash"] = "another-terminal"
+        result = compare(before, after, allow_network_change=True)[0]
+        self.assertFalse(result["matched_work"])
+        self.assertNotIn("time_reduction_percent", result)
+        self.assertEqual(result["after"]["samples_hash"], "different")
+        before.pop("network")
+        with self.assertRaisesRegex(ValueError, "allow-network-change"):
+            compare(before, after, allow_network_change=True)
+
+    def test_architecture_comparison_keeps_budget_consumption_and_completion_gates(self):
+        for edit in (
+            lambda r: r["config"].update(batch_size=4),
+            lambda r: r.update(initial_model_sha256="different"),
+            lambda r: r.update(measurement_eligible=False),
+            lambda r: r["rounds"][0].update(updates=0),
+            lambda r: r["rounds"][0].update(samples_consumed=7),
+            lambda r: r["rounds"][0]["tasks"][0].update(task=3),
+            lambda r: r["rounds"][0]["counts"].update(discarded=1),
+            lambda r: r["rounds"][0]["tasks"][0]["outcome"].update(reason="error"),
+        ):
+            before, after = report(), report()
+            after["network"] = "entity-transformer-v3"
+            edit(after)
+            with self.assertRaises(ValueError):
+                compare(before, after, allow_network_change=True)
+        before, after = report(), report()
+        after["network"] = "entity-transformer-v3"
+        for side in (before, after):
+            side["rounds"][0]["samples_consumed"] = 7
+        with self.assertRaisesRegex(ValueError, "完整且相同"):
+            compare(before, after, allow_network_change=True)
+
+    def test_fixed_replay_requires_actual_initial_weights_inputs_and_updates(self):
+        before = {
+            "network": "v2",
+            "source_sha256": "source",
+            "torch": "test",
+            "python": "test",
+            "hardware_identity": {},
+            "model_config": {},
+            "parameters": 10,
+            "initial_model_sha256": "weights",
+            "execution": {},
+            "options": {"updates": 3},
+            "requests_sha256": "requests",
+            "samples_sha256": "samples",
+            "training_batch_sha256": "batch",
+            "work": {"updates": 3},
+            "timed_updates": 3,
+            "warmup_updates": 1,
+            "weight_max_change": 0.1,
+            "health": {
+                "finite_gradients": True,
+                "finite_parameters": True,
+                "finite_optimizer": True,
+            },
+            "seconds": {"training_b8": 10},
+        }
+        after = copy.deepcopy(before)
+        after["seconds"]["training_b8"] = 5
+        self.assertEqual(
+            compare_cases([before], [after])["training_b8"]["time_reduction_percent"], 50
+        )
+        for edit in (
+            lambda r: r.update(initial_model_sha256="other"),
+            lambda r: r.update(requests_sha256="other"),
+            lambda r: r.update(training_batch_sha256="other"),
+            lambda r: r.update(timed_updates=2),
+            lambda r: r.update(warmup_updates=0),
+            lambda r: r.update(weight_max_change=0),
+            lambda r: r["health"].update(finite_gradients=False),
+        ):
+            candidate = copy.deepcopy(after)
+            edit(candidate)
+            with self.assertRaises(ValueError):
+                compare_cases([before], [candidate])
+        after["source_sha256"] = "another-source"
+        with self.assertRaisesRegex(ValueError, "同侧"):
+            compare_cases([before, before], [before, after])
 
     def test_dynamic_memory_is_not_hardware_identity(self):
         hardware = {"logical_cpus": 8, "cpu_capacity": 2, "gpus": [], "ram_available": 100}

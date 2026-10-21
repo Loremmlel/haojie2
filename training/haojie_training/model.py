@@ -6,7 +6,37 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-NETWORK_VERSION = "entity-transformer-v2"
+NETWORK_VERSION = "entity-transformer-v3"
+HISTORY_LAYERS = 2
+RECENT_JOURNAL = 16
+
+
+def active_tokens(batch: dict[str, Tensor]) -> Tensor:
+    """历史先完整交互两层；近期日志及有效候选引用继续接受每层更新。
+
+    亡者角色使用编码第零列的精确值，日志使用独立类别；字段和原实体索引保持不变。
+    全局始终活跃，遮罩实体和候选不提升；集合取自完整输入，不能随 MC 已选候选改变。
+    """
+    global_mask = torch.ones_like(batch["entity_mask"][:, :1])
+    valid = torch.cat((global_mask, batch["entity_mask"]), dim=1)
+    journal = batch["kinds"] == 250
+    # 日志按发生顺序追加；只数有效条目，保留最近搜索分支的完整深层交互。
+    older_journal = (journal & batch["entity_mask"]).flip(1).cumsum(1).flip(1) > RECENT_JOURNAL
+    history = (journal & older_journal) | (~journal & (batch["entities"][..., 0] == 5 / 32))
+    active = torch.cat((global_mask, batch["entity_mask"] & ~history), dim=1)
+    for key in ("sources", "targets"):
+        pointers = torch.where(batch["candidate_mask"], batch[key] + 1, 0)
+        active = active.scatter(1, pointers, True)
+    return active & valid
+
+
+def history_queries(batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
+    """按原位置排列活跃查询，各行补齐索引仍唯一，避免重复 scatter 放大梯度。"""
+    active = active_tokens(batch)
+    positions = torch.arange(active.shape[1], device=active.device)
+    order = (positions + (~active).long() * active.shape[1]).argsort(dim=1)
+    indices = order[:, positions < active.sum(dim=1).max()]
+    return indices, active.gather(1, indices)
 
 
 @dataclass(frozen=True)
@@ -54,7 +84,7 @@ class EncoderBlock(nn.Module):
             2, 0, 3, 1, 4
         )
         if readout is not None:
-            # 最后一层只计算下游实际读取的查询；所有实体仍作为 K/V 参与注意力。
+            # 仅计算所需查询；中层更新活跃实体，末层读取候选，所有实体仍参与 K/V。
             q = q.gather(
                 2, readout[:, None, :, None].expand(-1, self.heads, -1, width // self.heads)
             )
@@ -101,7 +131,11 @@ class PolicyValueNet(nn.Module):
         )
 
     def encode(self, batch: dict[str, Tensor], readout: Tensor | None = None) -> Tensor:
-        """训练与策略推理共用主干，动作前缀仍完整参与编码。"""
+        """前两层完整交互，中间层仅更新活跃查询；完整历史继续作为每层 K/V。
+
+        历史表示只在本次前向内复用，不 detach，深层读取仍训练其编码。末层沿用
+        完整或稀疏读出；研究子类的关系遮罩和实体扩展保留原有完整路径。
+        """
         entities = self.entity_projection(batch["entities"]) + self.kind_embedding(batch["kinds"])
         entities = self.entity_context(batch, entities)
         global_token = self.global_projection(batch["globals"]).unsqueeze(1)
@@ -110,8 +144,21 @@ class PolicyValueNet(nn.Module):
             (torch.ones_like(batch["entity_mask"][:, :1]), batch["entity_mask"]), dim=1
         )
         allowed = self.attention_mask(batch, valid)
+        queries = (
+            history_queries(batch)
+            if type(self) is PolicyValueNet and len(self.blocks) > HISTORY_LAYERS + 1
+            else None
+        )
         for index, block in enumerate(self.blocks):
-            x = block(x, allowed, readout if index == len(self.blocks) - 1 else None)
+            last = index == len(self.blocks) - 1
+            if queries is not None and HISTORY_LAYERS <= index and not last:
+                positions, query_valid = queries
+                gather = positions[..., None].expand(-1, -1, x.shape[-1])
+                updated = block(x, allowed, positions)
+                updated = torch.where(query_valid[..., None], updated, x.gather(1, gather))
+                x = x.scatter(1, gather, updated)
+            else:
+                x = block(x, allowed, readout if last else None)
         return self.norm(x)
 
     def score_policy(self, batch: dict[str, Tensor], x: Tensor) -> Tensor:
@@ -149,7 +196,7 @@ class PolicyValueNet(nn.Module):
     def selected_value(self, batch, selected):
         """MC-Q 仅监督已选候选；一次主干得到全局、来源和目标，跳过无梯度的其他评分。
 
-        末层之前的各层及末层 K/V 保留所有实体。重复指针的梯度经 gather 自动相加；损失权重、
+        各层 K/V 保留所有实体，活跃集合取自完整候选。重复指针的梯度经 gather 自动相加；损失权重、
         价值头和检查点参数完全共用原实现。研究模型保留其完整上下文扩展。
         """
         if type(self) is not PolicyValueNet:

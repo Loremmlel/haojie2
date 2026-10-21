@@ -61,6 +61,7 @@ jobs:
           git diff --name-only --diff-filter=ACMR "$(cat /tmp/cycle-base-ref)" HEAD -- '*.py' > /tmp/cycle-python-files
           xargs -r ruff check --config training/pyproject.toml < /tmp/cycle-python-files
           xargs -r ruff format --check --config training/pyproject.toml < /tmp/cycle-python-files
+          python -m unittest training.tests.compute.test_benchmarks
       - name: Default network complete self-play, updates and checkpoint pairs
         run: |
           set -euo pipefail
@@ -81,11 +82,21 @@ jobs:
                 --games 2 --environments 2 --updates 16 --ordered-updates
             done
           done
-          python scripts/training/benchmarks/compare.py \
+      - name: Compare complete cycles with explicit network-version gate
+        id: comparison
+        run: |
+          set -euo pipefail
+          flags=()
+          changed=$(python -c 'import json; a=json.load(open("artifacts/cycle-performance/before-1.json")); b=json.load(open("artifacts/cycle-performance/after-1.json")); print(str(a["network"] != b["network"]).lower())')
+          echo "network_changed=$changed" >> "$GITHUB_OUTPUT"
+          if [ "$changed" = 'true' ]; then flags+=(--allow-network-change); fi
+          python scripts/training/benchmarks/compare.py "${flags[@]}" \
             --before artifacts/cycle-performance/before-{1,2,3}.json \
             --after artifacts/cycle-performance/after-{1,2,3}.json \
             --output artifacts/cycle-performance/comparison.json
       - name: Eight-process mixed-opponent cycles, small network
+        env:
+          NETWORK_CHANGED: ${{ steps.comparison.outputs.network_changed }}
         run: |
           set -euo pipefail
           for side in before after; do
@@ -102,10 +113,27 @@ jobs:
               --games 8 --environments 8 --rounds 2 --history-percent 50 \
               --updates 16 --ordered-updates --tiny
           done
-          python scripts/training/benchmarks/compare.py \
+          flags=()
+          if [ "$NETWORK_CHANGED" = 'true' ]; then flags+=(--allow-network-change); fi
+          python scripts/training/benchmarks/compare.py "${flags[@]}" \
             --before artifacts/cycle-performance/before-8env.json \
             --after artifacts/cycle-performance/after-8env.json \
             --output artifacts/cycle-performance/comparison-8env.json
+      - name: Capture baseline tensors and compare fixed work for changed network
+        if: steps.comparison.outputs.network_changed == 'true'
+        run: |
+          python scripts/training/benchmarks/cycle.py \
+            --source ../cycle-baseline --engine ../cycle-native-base/release/haojie-engine \
+            --output artifacts/cycle-performance/capture.json \
+            --starts tests/fixtures/native/late-starts.json.gz --start-indices 0 2 \
+            --games 2 --environments 2 --updates 1 --ordered-updates \
+            --requests-output artifacts/cycle-performance/requests.pt \
+            --samples-output artifacts/cycle-performance/samples.pt
+          python scripts/training/benchmarks/replay.py \
+            --before-source ../cycle-baseline --after-source . \
+            --requests artifacts/cycle-performance/requests.pt \
+            --samples artifacts/cycle-performance/samples.pt \
+            --output artifacts/cycle-performance/fixed-replay.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

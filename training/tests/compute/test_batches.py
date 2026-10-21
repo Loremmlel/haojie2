@@ -28,11 +28,19 @@ class BatchTests(unittest.TestCase):
 
     def test_grouped_loss_gradients_and_restore_are_one_logical_step(self):
         torch.manual_seed(29)
-        config = ModelConfig.tiny()
+        config = ModelConfig(width=64, layers=4, heads=4, ffn=256)
         model = PolicyValueNet(config)
         rows = []
         for n in (9, 15, 160, 190):
             batch = synthetic_batch(config, 1, n, 23)
+            batch["entities"][..., 0] = 2 / 32
+            batch["kinds"].fill_(1)
+            batch["entities"][:, 1 : n // 3, 0] = 5 / 32
+            batch["kinds"][:, n // 3 : 2 * n // 3] = 250
+            batch["entities"][:, n // 3 : 2 * n // 3, 0] = torch.arange(2 * n // 3 - n // 3) / 4096
+            batch["sources"].fill_(-1)
+            batch["targets"].fill_(0)
+            batch["targets"][:, 0] = 1
             rows.append({k: v[0] for k, v in batch.items()})
         # 第一组无终局标签，第二组有标签；不能简单平均两组损失。
         rows[0]["value_mask"].fill_(False)
