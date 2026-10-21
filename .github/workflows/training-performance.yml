@@ -62,6 +62,7 @@ jobs:
           xargs -r ruff check --config training/pyproject.toml < /tmp/cycle-python-files
           xargs -r ruff format --check --config training/pyproject.toml < /tmp/cycle-python-files
           python -m unittest training.tests.compute.test_benchmarks
+          python scripts/training/benchmarks/causal_memory/check.py
       - name: Default network complete self-play, updates and checkpoint pairs
         run: |
           set -euo pipefail
