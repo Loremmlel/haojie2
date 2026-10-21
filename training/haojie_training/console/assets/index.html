@@ -208,6 +208,10 @@
           <form id="settings" class="panel" novalidate>
             <details>
               <summary>高级设置（默认可直接开始）</summary>
+              <p id="sampling-help">
+                累计完成设定局数后更新模型；长局保留到下一轮，空位继续开新局。
+                预算截断也计入完成数，仅真实终局产生训练样本。
+              </p>
               <div class="form-grid">
                 <label
                   >经典规则占比（%）<input
@@ -259,12 +263,12 @@
                     required
                 /></label>
                 <label
-                  >每轮采样局数<input
+                  >每轮完成局数<input
                     name="games_per_round"
                     type="number"
                     min="1"
                     max="4096"
-                    aria-describedby="form-error"
+                    aria-describedby="sampling-help form-error"
                     required
                 /></label>
                 <label

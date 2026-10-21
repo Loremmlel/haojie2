@@ -172,7 +172,8 @@ function render(s) {
     'active-games',
     (s.runtime.active ?? [])
       .map(
-        (g) => `局${g.task} · ply ${g.ply ?? '初始化'} · ${Math.round(g.seconds)}秒 · 等待实际终局`,
+        (g) =>
+          `局${g.task} · ply ${g.ply ?? '初始化'} · ${Math.round(g.seconds)}秒 · ${g.parked ? '保留待续' : '对局中'}`,
       )
       .join('；'),
   );
@@ -197,6 +198,12 @@ function render(s) {
       : '尚未评测 · 训练损失不代表对战棋力',
   );
   text('state', states[s.state]);
+  text(
+    'sampling-help',
+    s.config.method === 'decomposed-mc-q-v2'
+      ? '累计完成设定局数后更新模型；长局保留到下一轮，空位继续开新局。预算截断也计入完成数，仅真实终局产生训练样本。'
+      : '旧模仿方法在本轮全部对局结束后更新模型；仅真实终局产生训练样本。',
+  );
   text('device', `${s.device.toUpperCase()} · 单一服务会话`);
   $('error').hidden = !s.error;
   text('error', s.error ?? '');
@@ -336,7 +343,7 @@ function render(s) {
       Object.entries(s.pool.coverage ?? {})
         .map(([k, v]) => `${k} ${v}`)
         .join(' / ') || '等待终局'
-    }；年龄上限${s.pool.max_age}个行为版本。`,
+    }；入池后最多保留${s.pool.max_age}轮更新。`,
   );
   text(
     'matchups',
@@ -354,20 +361,20 @@ function render(s) {
   );
   text(
     'inflight',
-    `在途样本 ${bytes(s.runtime.inflight_bytes)} · 活跃局 ${s.runtime.active?.length ?? 0} · 显存 ${bytes(s.resources.gpu_allocated)} / 预留 ${bytes(s.resources.gpu_reserved)}`,
+    `在途样本 ${bytes(s.runtime.inflight_bytes)} · 进行中 ${s.runtime.active?.length ?? 0} 局（保留待续 ${s.runtime.parked ?? 0}） · 显存 ${bytes(s.resources.gpu_allocated)} / 预留 ${bytes(s.resources.gpu_reserved)}`,
   );
   const perf = s.performance;
   const round = perf?.last_round;
   text(
     'performance',
     perf
-      ? `阶段 ${perf.phase} · 累计采样 ${number(perf.phase_seconds.sampling)} 秒 / 更新 ${number(perf.phase_seconds.updating)} 秒 / 保存 ${number(perf.phase_seconds.saving)} 秒 · 上一轮真实终局 ${number(round?.games)} · 推理请求 ${number(round?.requests_per_second)} 次/秒`
+      ? `阶段 ${perf.phase} · 累计采样 ${number(perf.phase_seconds.sampling)} 秒 / 更新 ${number(perf.phase_seconds.updating)} 秒 / 保存 ${number(perf.phase_seconds.saving)} 秒 · 上一轮真实终局 ${number(round?.games)} · 跨轮保留 ${number(round?.carried_games)} 局 · 平均活跃 ${number(round?.mean_active_environments)} 环境 · 推理请求 ${number(round?.requests_per_second)} 次/秒`
       : '等待阶段统计',
   );
   text('version', `当前行为 / 学习器：${s.version?.slice(0, 16) ?? '尚未初始化'}`);
   text(
     'opponents',
-    `历史对手：${s.history.length}/${s.config.history_size} · ${s.history.map((n) => Number(n.split('/').at(-1).split('.')[0])).join('、') || '尚未纳入'} 更新`,
+    `历史对手：${s.history.length}/${s.config.history_size} 份存档 · ${s.runtime.historical_models ?? 0} 份使用中 · ${s.history.map((n) => Number(n.split('/').at(-1).split('.')[0])).join('、') || '尚未纳入'} 更新`,
   );
   text('checkpoints', `完整恢复点 ${s.recoveries.length} 份（保留最近2份）`);
   text(

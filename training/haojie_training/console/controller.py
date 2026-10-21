@@ -96,6 +96,9 @@ class Controller:
         self.want_run = self.want_save = self.want_eval = False
         self.want_restore = self.want_export = False
         self.trainer = self.pool = None
+        self.sampling_jobs = None
+        # 生产 MC-Q 使用跨轮对局；固定任务集基准可显式关闭以核对相同轨迹。
+        self.continuous_selfplay = True
         self.version = None
         self.meta = None
         self.rng = random.Random(self.config["seed"])
@@ -585,6 +588,9 @@ class Controller:
             **metrics,
             "inflight_bytes": sum(t["trajectory"].used for t in self.pool.slots.values()),
             "inflight_samples": sum(t["trajectory"].seen for t in self.pool.slots.values()),
+            "historical_models": max(0, len(self.sampling_jobs.inferences) - 1)
+            if self.sampling_jobs
+            else 0,
         }
         if available_memory() < 256 * 2**20:
             raise MemoryError("可用RAM不足256MiB；已暂停并丢弃在途局")
@@ -624,14 +630,17 @@ class Controller:
             frame_limit=min(32 * 2**20, max(4 * 2**20, available_memory() // (16 * count))),
         )
 
-    def _sample(self):
-        self.state = "sampling"
-        if self.pool is None:
-            self.pool = self._new_pool(
-                min(self.config["environments"], self.config["games_per_round"])
-            )
-        self.pool.model_hash = self.version
-        historical = None
+    def _historical(self, jobs=None):
+        # 历史模型按整局冻结，达到驻留上限时继续选择已有版本，不阻塞当前策略更新。
+        if jobs:
+            jobs.release_unused()
+        if not self.config["history_percent"]:
+            return None
+        if jobs:
+            versions = [version for version in jobs.inferences if version != jobs.current]
+            if len(versions) >= self.config["history_size"]:
+                version = versions[self.generation % len(versions)]
+                return jobs.inferences[version].model, version
         names = self.store.names("history")
         # 先去除同权重，再按训练轮次选择；评测/优化抽样不改变历史轮转。
         for name in (
@@ -640,17 +649,42 @@ class Controller:
         ):
             weight = torch.load(self.store.root / name, weights_only=True, map_location="cpu")
             if weight["version"] != self.version:
+                if jobs and weight["version"] in jobs.inferences:
+                    return jobs.inferences[weight["version"]].model, weight["version"]
                 old = PolicyValueNet(self.trainer.model.config)
                 old.load_state_dict(weight["model"])
-                historical = (old.to(self.device).eval(), weight["version"])
-                break
+                return old.to(self.device).eval(), weight["version"]
             del weight
-        jobs = MemoryJobs(self, self.version, historical)
+        return None
+
+    def _sample(self):
+        self.state = "sampling"
+        continuous = self.continuous_selfplay and self.config["method"] == METHOD
+        if self.pool is None:
+            count = self.config["environments"]
+            self.pool = self._new_pool(
+                count if continuous else min(count, self.config["games_per_round"])
+            )
+        self.pool.model_hash = self.version
+        jobs = self.sampling_jobs if continuous else None
+        historical = self._historical(jobs)
+        if jobs is None:
+            jobs = MemoryJobs(self, self.version, historical, continuous=continuous)
+            self.sampling_jobs = jobs
+        else:
+            jobs.next_window(self.version, historical)
         before = self.pool.metrics()
         began = self.performance()["phase_seconds"]["sampling"]
         games, samples = self.counts["games"], self.counts["retained_samples"]
+        finished = jobs.finished
         try:
-            self.pool.run(jobs, cancel_event=self.cancel, keep_open=True, snapshot=self._progress)
+            self.pool.run(
+                jobs,
+                cancel_event=self.cancel,
+                keep_open=True,
+                snapshot=self._progress,
+                yield_when=(lambda: jobs.finished >= jobs.target) if continuous else None,
+            )
         finally:
             after = self.pool.metrics()
             elapsed = self.performance()["phase_seconds"]["sampling"] - began
@@ -666,9 +700,21 @@ class Controller:
                     "mean_batch": delta["inference_requests"] / max(1, delta["forwards"]),
                     "requests_per_second": delta["requests"] / max(0.001, elapsed),
                     "environments": len(self.pool.clients),
+                    "completed_tasks": jobs.finished - finished,
+                    "carried_games": len(self.pool.slots),
+                    "mean_active_environments": (
+                        after["active_slot_seconds"] - before["active_slot_seconds"]
+                    )
+                    / max(0.001, elapsed),
                 }
-            self.runtime["inflight_bytes"] = 0
-            self.runtime["active"] = []
+            self.runtime = {
+                **after,
+                "inflight_bytes": sum(t["trajectory"].used for t in self.pool.slots.values()),
+                "inflight_samples": sum(t["trajectory"].seen for t in self.pool.slots.values()),
+                "historical_models": max(0, len(jobs.inferences) - 1) if continuous else 0,
+            }
+            if not continuous:
+                self.sampling_jobs = None
 
     def _update(self):
         self.state = "updating"
@@ -738,8 +784,17 @@ class Controller:
 
     def _close_pool(self):
         if self.pool:
-            self.pool.close()
-            self.pool = None
+            try:
+                if self.sampling_jobs:
+                    for task in self.pool.slots.values():
+                        self.sampling_jobs.unfinished(task)
+                    for inference in self.sampling_jobs.inferences.values():
+                        inference.close()
+            finally:
+                try:
+                    self.pool.close()
+                finally:
+                    self.pool = self.sampling_jobs = None
 
     def _pause(self):
         failed = self.state == "error"

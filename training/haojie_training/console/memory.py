@@ -32,7 +32,7 @@ class Trajectory:
     def rows(self):
         return self.choices + self.passes
 
-    def add(self, message):
+    def add(self, message, *, behavior=None):
         self.seen += 1
         key = "pass" if message.get("pass") else message.get("stage", "unknown")
         self.coverage[key] += 1
@@ -56,6 +56,7 @@ class Trajectory:
             "pass": message.get("pass", False),
             "decision": message.get("decision"),
             "entered": time.time(),
+            **(behavior or {}),
         }
         item = (row, message["actor"], message["step"], size_of(row))
         if len(group) < limit:

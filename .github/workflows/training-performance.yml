@@ -134,6 +134,14 @@ jobs:
             --requests artifacts/cycle-performance/requests.pt \
             --samples artifacts/cycle-performance/samples.pt \
             --output artifacts/cycle-performance/fixed-replay.json
+      - name: Real long-tail update windows, small network
+        run: |
+          for mode in finite continuous; do
+            python scripts/training/benchmarks/tail.py \
+              --source . --engine artifacts/native-target/release/haojie-engine \
+              --mode "$mode" --tiny --windows 2 \
+              --output "artifacts/cycle-performance/tail-$mode.json"
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
