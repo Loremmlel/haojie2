@@ -24,7 +24,8 @@ else:
 
 def hardware_identity(hardware):
     """只记录稳定型号和资源配额；动态可用内存、利用率不参与负载一致性。"""
-    cpu_model = platform.processor()
+    # platform.processor() 会启动 uname；已支持的平台直接读型号，其余保留架构标识。
+    cpu_model = platform.machine()
     if sys.platform == "linux":
         for line in Path("/proc/cpuinfo").read_text().splitlines():
             if line.startswith("model name"):
