@@ -287,9 +287,6 @@ def read_checkpoint(path: Path) -> tuple[ModelConfig, dict]:
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if isinstance(payload, dict) and payload.get("format") == "haojie-stream-recovery-v2":
         payload = payload.get("trainer")
-    if isinstance(payload, dict) and payload.get("format") == "haojie-stream-weights-v1":
-        # 已有 GUI 导出未写 network；显式给出的网络版本仍须相符。
-        payload.setdefault("network", NETWORK_VERSION)
     if (
         not isinstance(payload, dict)
         or payload.get("format") not in {"haojie-checkpoint-v1", "haojie-stream-weights-v1"}

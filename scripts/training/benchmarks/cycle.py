@@ -91,6 +91,11 @@ def digest_rows(rows):
     return hashlib.sha256("".join(sorted(parts)).encode()).hexdigest()
 
 
+def capture_samples(rows, keys):
+    """诊断产物仅复制公开输入和真实标签；任务元数据及内存池所有权留在控制器。"""
+    return [{key: row[key].clone() for key in sorted(keys)} for row, _, _ in rows]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[3])
@@ -126,6 +131,11 @@ def main():
         type=Path,
         help="单独捕获最多128条代表形状的公开推理输入；本次运行不进入性能对照",
     )
+    parser.add_argument(
+        "--samples-output",
+        type=Path,
+        help="单独保存首轮更新前的真实样本及标签；本次运行不进入性能对照",
+    )
     args = parser.parse_args()
     if min(args.rounds, args.updates, args.threads) < 1:
         parser.error("轮数、更新量和线程数必须为正整数")
@@ -140,6 +150,7 @@ def main():
     from haojie_training.console.sampling import MemoryJobs
     from haojie_training.console.storage import Store
     from haojie_training.data import INPUT_KEYS
+    from haojie_training.model import NETWORK_VERSION
     from haojie_training.runtime import synchronize
 
     # 不启动自动循环，计时驱动持有控制器；采样器、原生进程、学习器和存储均为生产实现。
@@ -164,7 +175,8 @@ def main():
     report = {
         "format": "haojie-cycle-benchmark-v2",
         "complete": False,
-        "measurement_eligible": args.requests_output is None,
+        "measurement_eligible": args.requests_output is None and args.samples_output is None,
+        "network": NETWORK_VERSION,
         "torch": torch.__version__,
         "python": platform.python_version(),
         "source_sha256": source_hash.hexdigest(),
@@ -311,6 +323,28 @@ def main():
                             ),
                         )
                     )
+                if args.samples_output and index == 0:
+                    samples = capture_samples(
+                        c.samples.rows, INPUT_KEYS | {"policy", "value", "value_mask"}
+                    )
+                    args.samples_output.parent.mkdir(parents=True, exist_ok=True)
+                    torch.save(
+                        {
+                            "format": "haojie-cycle-samples-v1",
+                            "network": NETWORK_VERSION,
+                            "source_sha256": report["source_sha256"],
+                            "engine_sha256": report["engine_sha256"],
+                            "samples_hash": sample_hash,
+                            "samples": samples,
+                        },
+                        args.samples_output,
+                    )
+                    report["sample_capture"] = {"samples": len(samples)}
+                    with args.samples_output.open("rb") as captured:
+                        report["sample_capture"]["sha256"] = hashlib.file_digest(
+                            captured, "sha256"
+                        ).hexdigest()
+                    del samples
                 validation_seconds = time.perf_counter() - validation
                 start = time.perf_counter()
                 with c._phase("updating"):

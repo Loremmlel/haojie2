@@ -6,7 +6,7 @@ from math import prod
 import torch
 
 from ..data import _collate
-from ..model import ModelConfig, PolicyValueNet
+from ..model import HISTORY_LAYERS, ModelConfig, PolicyValueNet, active_tokens
 
 
 def supports_packed(model, device, precision):
@@ -36,7 +36,7 @@ def supports_packed(model, device, precision):
         )
 
 
-def _attention(q, k, v, batch, layout, last):
+def _attention(q, k, v, batch, layout, query):
     # 与 Torch 2.14 jagged SDPA 相同的 1MHK 布局；累积长度是 CUDA int32。
     # 官方对应：torch/nested/_internal/sdpa.py 的 memory efficient 分支。
     return torch.ops.aten._efficient_attention_forward(
@@ -44,9 +44,9 @@ def _attention(q, k, v, batch, layout, last):
         k.unsqueeze(0),
         v.unsqueeze(0),
         None,
-        batch["cu_q"] if last else batch["cu_k"],
+        batch[f"cu_{query}"],
         batch["cu_k"],
-        layout["max_q"] if last else layout["max_k"],
+        layout[f"max_{query}"],
         layout["max_k"],
         0.0,
         0,
@@ -74,7 +74,7 @@ class PackedPolicy:
                     )
             return old[:count].view(shape)
 
-        records, lengths, queries = [], [], []
+        records, lengths, queries, active_lengths = [], [], [], []
         for row in examples:
             # 原生请求通常没有填充，直接复制切片，省去索引表及一次实体复制。
             if row["entity_mask"].all():
@@ -93,11 +93,17 @@ class PackedPolicy:
                 sorted=True,
                 return_inverse=True,
             )
-            records.append((valid, positions, inverse))
+            active = active_tokens({key: value.unsqueeze(0) for key, value in row.items()})[0]
+            if valid is not None:
+                active = torch.cat((active[:1], active[1:].index_select(0, valid)))
+            active = active.nonzero().flatten()
+            records.append((valid, positions, inverse, active))
             lengths.append(length + 1)
             queries.append(len(positions))
+            active_lengths.append(len(active))
         starts = list(accumulate(lengths, initial=0))
         read_starts = list(accumulate(queries, initial=0))
+        active_starts = list(accumulate(active_lengths, initial=0))
         size, actions, reads = len(examples), max(len(r["sources"]) for r in examples), max(queries)
         config = self.model.config
         batch = {
@@ -107,7 +113,9 @@ class PackedPolicy:
             "global_indices": empty("global_indices", (size,), torch.long),
             "cu_k": empty("cu_k", (size + 1,), torch.int32),
             "cu_q": empty("cu_q", (size + 1,), torch.int32),
+            "cu_active": empty("cu_active", (size + 1,), torch.int32),
             "readout": empty("readout", (read_starts[-1],), torch.long),
+            "active": empty("active", (active_starts[-1],), torch.long),
             "head_indices": empty("head_indices", (size, reads), torch.long),
             "sources": empty("sources", (size, actions), torch.long),
             "targets": empty("targets", (size, actions), torch.long),
@@ -116,10 +124,12 @@ class PackedPolicy:
         batch["targets"].fill_(-1)
         batch["cu_k"].copy_(torch.tensor(starts, dtype=torch.int32))
         batch["cu_q"].copy_(torch.tensor(read_starts, dtype=torch.int32))
+        batch["cu_active"].copy_(torch.tensor(active_starts, dtype=torch.int32))
         batch["global_indices"].copy_(torch.tensor(starts[:-1], dtype=torch.long))
-        for i, (row, (valid, positions, inverse)) in enumerate(zip(examples, records)):
+        for i, (row, (valid, positions, inverse, active)) in enumerate(zip(examples, records)):
             start, end = starts[i : i + 2]
             qstart, qend = read_starts[i : i + 2]
+            astart, aend = active_starts[i : i + 2]
             count = len(row["sources"])
             batch["entities"][start].zero_()
             batch["kinds"][start] = 0
@@ -128,6 +138,7 @@ class PackedPolicy:
                 batch[key][start + 1 : end].copy_(values)
             batch["globals"][i].copy_(row["globals"])
             batch["readout"][qstart:qend].copy_(positions + start)
+            batch["active"][astart:aend].copy_(active + start)
             batch["head_indices"][i].fill_(qstart)
             batch["head_indices"][i, : len(positions)].copy_(torch.arange(qstart, qend))
             batch["sources"][i, :count].copy_(inverse[1 : 1 + count] - 1)
@@ -143,6 +154,7 @@ class PackedPolicy:
         return batch, {
             "max_k": max(lengths),
             "max_q": max(queries),
+            "max_active": max(active_lengths),
             "size": size,
             "entities": starts[-1] - size,
             "candidates": sum(len(row["sources"]) for row in examples),
@@ -150,7 +162,7 @@ class PackedPolicy:
         }
 
     def forward(self, batch, layout):
-        """前层完整 Q/K/V，末层只读取所需 Q；候选头复用原模型方法。"""
+        """浅层全量交互，中层只更新活跃查询，末层读出；每层保留全部 K/V。"""
         model = self.model
         x = model.entity_projection(batch["entities"]) + model.kind_embedding(batch["kinds"])
         # 与普通encode的cat类型提升一致：AMP全局投影并入FP32残差流。
@@ -161,12 +173,17 @@ class PackedPolicy:
             qkv = block.qkv(block.attention_norm(x)).view(-1, 3, block.heads, width // block.heads)
             q, k, v = qkv.unbind(1)
             last = index == len(model.blocks) - 1
-            if last:
-                q = q.index_select(0, batch["readout"])
-                x = x.index_select(0, batch["readout"])
-            attended = _attention(q, k, v, batch, layout, last).reshape(-1, width)
-            x = x + block.output(attended)
-            x = x + block.ffn(block.ffn_norm(x))
+            query = "q" if last else "active" if index >= HISTORY_LAYERS else "k"
+            positions = batch["readout" if last else "active"] if query != "k" else None
+            residual = x
+            if positions is not None:
+                q = q.index_select(0, positions)
+                residual = x.index_select(0, positions)
+            attended = _attention(q, k, v, batch, layout, query).reshape(-1, width)
+            updated = residual + block.output(attended)
+            updated = updated + block.ffn(block.ffn_norm(updated))
+            # 中层仅回写活跃项，历史表示仍连接计算图，并继续作为下一层的 K/V。
+            x = x.index_copy(0, positions, updated) if query == "active" else updated
         x = model.norm(x)
         head = x.index_select(0, batch["head_indices"].flatten()).view(
             layout["size"], batch["head_indices"].shape[1], width

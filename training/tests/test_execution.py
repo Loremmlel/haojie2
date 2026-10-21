@@ -160,7 +160,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(set(trainer.last_losses), {"policy", "value"})
         self.assertTrue(trainer.health()["finite_optimizer"])
         payload = trainer.checkpoint({"test": True})
-        exported = {k: payload[k] for k in ("config", "model", "metadata")}
+        exported = {k: payload[k] for k in ("config", "model", "metadata", "network")}
         exported["format"] = "haojie-stream-weights-v1"
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "model.pt"
@@ -174,6 +174,13 @@ class ExecutionTests(unittest.TestCase):
                 self.assertEqual(config, trainer.model.config)
                 for key, tensor in payload["model"].items():
                     torch.testing.assert_close(actual["model"][key], tensor, rtol=0, atol=0)
+            for network in (None, "entity-transformer-v2"):
+                old = {**exported, "network": network}
+                if network is None:
+                    del old["network"]
+                torch.save(old, path)
+                with self.assertRaisesRegex(ValueError, "网络版本不兼容"):
+                    read_checkpoint(path)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA专项回归，需要GPU执行器")
     def test_policy_buffers_full_value_and_gradients(self):

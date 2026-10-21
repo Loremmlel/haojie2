@@ -17,15 +17,30 @@ from haojie_training.runtime import autocast
 
 def examples(config):
     rows = []
-    for i, (entities, candidates) in enumerate(((13, 6), (7, 3), (1, 1))):
+    for i, (entities, candidates) in enumerate(((31, 6), (7, 3), (1, 1))):
         batch = synthetic_batch(config, 1, entities, candidates, seed=17 + i)
         row = {key: value[0] for key, value in batch.items() if key in INPUT_KEYS}
         row["entity_mask"].fill_(True)
         row["candidate_mask"].fill_(True)
         row["sources"].fill_(-1)
         row["targets"].fill_(entities - 1)
-        if i == 1:
+        row["entities"][:, 0] = 2 / 32
+        row["kinds"].clamp_max_(127)
+        if i == 0:
+            row["entities"][[1, 2, 3, 9, 12], 0] = 5 / 32
+            row["kinds"][[4, 5]] = 250
+            row["kinds"][13:] = 250
+            # 日志第零列不是角色；被屏蔽候选引用的有效亡者仍保持冻结。
+            row["entities"][[4, 14], 0] = 5 / 32
+            # 近期窗口只数有效日志；中间孔洞不能挤掉第16条有效记录。
+            row["entity_mask"][17] = False
+            row["targets"].fill_(12)
+            row["sources"][-1] = 9
+            row["candidate_mask"][-1] = False
+        elif i == 1:
             row["entity_mask"][[1, 3]] = False
+            row["entities"][[2, 4, 6], 0] = 5 / 32
+            row["kinds"][[0, 5]] = 250
             row["sources"][0] = 4
             row["sources"][-1] = 1
             row["candidate_mask"][-1] = False
@@ -36,9 +51,9 @@ def examples(config):
     return rows
 
 
-def reference_attention(q, k, v, batch, layout, last):
+def reference_attention(q, k, v, batch, layout, query):
     """CPU 小测试按累积长度切开注意力，检查生产打包结果，不提供生产替代后端。"""
-    qstarts = batch["cu_q" if last else "cu_k"].tolist()
+    qstarts = batch[f"cu_{query}"].tolist()
     kstarts = batch["cu_k"].tolist()
     result = []
     for qa, qb, ka, kb in zip(qstarts, qstarts[1:], kstarts, kstarts[1:]):
@@ -62,7 +77,7 @@ class PackedTests(unittest.TestCase):
 
     def test_compaction_sequence_boundaries_weights_and_ownership(self):
         torch.manual_seed(73)
-        model = PolicyValueNet(ModelConfig.tiny()).eval()
+        model = PolicyValueNet(ModelConfig(width=64, layers=4, heads=4, ffn=256)).eval()
         rows = examples(model.config)
         saved = [{key: value.clone() for key, value in row.items()} for row in rows]
         dense = collate_inputs(rows, model.config)
@@ -72,10 +87,16 @@ class PackedTests(unittest.TestCase):
             runner = PolicyInference(model, "cpu", stats=stats)
         self.assertTrue(runner.supports_packed_batches)
         batch, layout = runner.packed.batch(rows)
-        self.assertEqual(batch["cu_k"].tolist(), [0, 14, 20, 21])
-        self.assertEqual(batch["cu_q"].tolist(), [0, 2, 5, 6])
-        self.assertEqual(layout["entities"], 18)
-        self.assertEqual(batch["entities"].shape[0], 21)
+        self.assertEqual(batch["cu_k"].tolist(), [0, 31, 37, 38])
+        self.assertEqual(batch["cu_q"].tolist(), [0, 3, 6, 7])
+        self.assertEqual(batch["cu_active"].tolist(), [0, 24, 29, 30])
+        self.assertEqual(
+            batch["active"].tolist(),
+            [0, 1, 7, 8, 9, 11, 12, 13, *range(15, 31), 31, 32, 34, 35, 36, 37],
+        )
+        self.assertEqual(layout["max_active"], 24)
+        self.assertEqual(layout["entities"], 35)
+        self.assertEqual(batch["entities"].shape[0], 38)
         self.assertEqual(batch["cu_k"].dtype, torch.int32)
         with patch("haojie_training.native.packed._attention", side_effect=reference_attention):
             with torch.inference_mode():
@@ -88,6 +109,17 @@ class PackedTests(unittest.TestCase):
                 )
             )
             retained = actual.clone()
+            # 无效候选改指其他亡者或旧日志，不得改变有效候选的上下文和输出。
+            masked = [{key: value.clone() for key, value in row.items()} for row in rows]
+            masked[0]["sources"][-1], masked[0]["targets"][-1] = 1, 4
+            masked[1]["sources"][-1], masked[1]["targets"][-1] = 2, 2
+            masked_output = runner(masked)
+            torch.testing.assert_close(
+                masked_output[dense["candidate_mask"]],
+                actual[dense["candidate_mask"]],
+                atol=2e-6,
+                rtol=2e-5,
+            )
             # 更新原模块而非重建执行器；前向必须即时读取新参数。
             with torch.no_grad():
                 model.policy[-1].weight.mul_(0.5)
@@ -103,9 +135,9 @@ class PackedTests(unittest.TestCase):
                 torch.testing.assert_close(row[key], before[key], atol=0, rtol=0)
         # 普通及紧凑执行器共用统计，返回结果不依赖下一批主机容量。
         PolicyInference(model, "cpu", stats=stats)(rows[:1])
-        self.assertEqual(stats.snapshot()["forwards"], 4)
-        self.assertEqual(stats.snapshot()["packed_forwards"], 3)
-        self.assertEqual(stats.snapshot()["inference_requests"], 8)
+        self.assertEqual(stats.snapshot()["forwards"], 5)
+        self.assertEqual(stats.snapshot()["packed_forwards"], 4)
+        self.assertEqual(stats.snapshot()["inference_requests"], 11)
 
     def test_fallbacks_and_device_capability(self):
         model = PolicyValueNet(ModelConfig.tiny()).eval()

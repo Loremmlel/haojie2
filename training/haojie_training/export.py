@@ -163,17 +163,19 @@ def main():
     for precision in ("fp32", "mixed-fp16"):
         path = args.output / f"{precision}.onnx"
         wrapped = ExportNet(model, mixed=precision == "mixed-fp16").eval()
-        torch.onnx.export(
-            wrapped,
-            tuple(example[key] for key in INPUTS),
-            str(path),
-            input_names=list(INPUTS),
-            output_names=["logits", "value"],
-            dynamic_shapes=(shapes,),
-            dynamo=True,
-            opset_version=18,
-            external_data=False,
-        )
+        # CPU 融合 SDPA 会对动态历史查询数设置额外 guard；数学后端保留同一注意力图。
+        with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.MATH):
+            torch.onnx.export(
+                wrapped,
+                tuple(example[key] for key in INPUTS),
+                str(path),
+                input_names=list(INPUTS),
+                output_names=["logits", "value"],
+                dynamic_shapes=(shapes,),
+                dynamo=True,
+                opset_version=18,
+                external_data=False,
+            )
         onnx.checker.check_model(str(path))
         options = ort.SessionOptions()
         options.intra_op_num_threads = 4

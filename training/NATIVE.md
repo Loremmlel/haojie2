@@ -26,7 +26,7 @@ Rust 的 `--training` 协议继续保留 `sample` 和 `audit`，供协议验证�
 | 二进制训练协议 | `haojie-training-binary-v1`                      |
 | 原生记录       | `haojie-native-record-v1`                        |
 | 编码           | `haojie-entities-factorized-v1`                  |
-| 模型 / 检查点  | `entity-transformer-v2` / `haojie-checkpoint-v1` |
+| 模型 / 检查点  | `entity-transformer-v3` / `haojie-checkpoint-v1` |
 
 JSON 行控制与 LE 张量共同组成训练协议。模型只接收公开编码，每个接收帧独立持有字节区；采样仍校验请求身份、模型版本和有限输出。规则和采样算法的 TS/Rust 对应见[运行结构](../docs/ai/RUNTIME.md)。
 
