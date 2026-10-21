@@ -108,26 +108,6 @@ def hardware():
     }
 
 
-def server_defaults(device="auto"):
-    """服务器起步配置按 CPU/RAM 选槽；推理和更新批量仍可单独调节。"""
-    from . import defaults
-
-    config = defaults()
-    cuda = str(device).startswith("cuda") or device == "auto" and torch.cuda.is_available()
-    memory = available_memory()
-    workers = min(32, max(1, math.ceil(cpu_capacity() * (2 if cuda else 1))))
-    workers = min(workers, max(1, memory // (256 * 2**20)))
-    config.update(
-        environments=workers,
-        games_per_round=workers * 2,
-        inference_batch_size=min(32, workers),
-        pool_mib=min(32768, max(64, memory // (4 * 2**20))),
-        update_limit=max(256, workers * 64),
-        eval_games=max(64, workers * 4),
-    )
-    return config
-
-
 def _processes(process):
     result = {}
     if process is None:

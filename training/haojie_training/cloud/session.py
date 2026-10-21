@@ -4,7 +4,7 @@ import threading
 import time
 from pathlib import Path
 
-from ..console.config.resources import hardware, monitor, server_defaults
+from ..console.config.resources import hardware, monitor
 from ..console.controller import Controller
 from ..console.storage import Lease, Store
 from .backup import Backups, BackupWorker, import_root
@@ -47,6 +47,7 @@ class Session:
         scratch=None,
         tiny=False,
         starts=None,
+        threads=None,
     ):
         root = Path(root).absolute()
         if settings is not None and not isinstance(settings, dict):
@@ -102,23 +103,22 @@ class Session:
                 tiny=tiny,
                 imported=Path(import_weights).resolve() if import_weights else None,
                 starts=starts,
+                threads=threads,
             )
             controller = self.controller
-            if controller.store.names("recovery"):
+            recovering = bool(controller.store.names("recovery"))
+            if recovering:
                 controller.command("restore")
                 wait_for(controller, lambda: controller.state == "paused")
-            else:
-                controller.command(
-                    "settings", {**server_defaults(str(controller.device)), **(settings or {})}
-                )
+            if settings:
+                controller.command("settings", settings)
+            if not recovering:
                 # 保存同时初始化模型；权重导入仍走控制器的兼容检查。
                 controller.command("save")
                 wait_for(
                     controller,
                     lambda: controller.saved_at is not None and controller.state == "paused",
                 )
-            if settings:
-                controller.command("settings", settings)
             for message in self.messages:
                 controller.log(message)
             if self.restoration:

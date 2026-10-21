@@ -2,13 +2,11 @@
 
 import unittest
 from contextlib import nullcontext
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
 from torch.nn import functional as F
 
-from haojie_training.console.sampling import MemoryJobs
 from haojie_training.data import INPUT_KEYS, collate_inputs, synthetic_batch, validate_inputs
 from haojie_training.model import ModelConfig, PolicyValueNet
 from haojie_training.native.execution import InferenceStats, PolicyInference
@@ -109,7 +107,7 @@ class PackedTests(unittest.TestCase):
         self.assertEqual(stats.snapshot()["packed_forwards"], 3)
         self.assertEqual(stats.snapshot()["inference_requests"], 8)
 
-    def test_fallbacks_and_historical_capability(self):
+    def test_fallbacks_and_device_capability(self):
         model = PolicyValueNet(ModelConfig.tiny()).eval()
         self.assertFalse(PolicyInference(model, "cpu").supports_packed_batches)
         self.assertFalse(PolicyInference(model, "cpu", "bf16").supports_async)
@@ -149,13 +147,6 @@ class PackedTests(unittest.TestCase):
                 self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
             with patch("torch.backends.cuda.mem_efficient_sdp_enabled", return_value=False):
                 self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
-        jobs = MemoryJobs.__new__(MemoryJobs)
-        jobs.inferences = {"current": SimpleNamespace(supports_packed_batches=True)}
-        self.assertTrue(jobs.supports_packed_batches)
-        jobs.inferences["historical"] = SimpleNamespace(supports_packed_batches=False)
-        self.assertFalse(jobs.supports_packed_batches)
-        jobs.inferences["historical"].supports_packed_batches = True
-        self.assertTrue(jobs.supports_packed_batches)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA 紧凑推理需要 GPU 执行器")
     def test_cuda_packed_logits_update_and_timing(self):

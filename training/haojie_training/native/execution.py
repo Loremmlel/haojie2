@@ -23,6 +23,7 @@ class InferenceStats:
     async_calls: int = 0
     async_overlaps: int = 0
     async_discarded: int = 0
+    inflight: int = 0
     submit_seconds: float = 0.0
     wait_seconds: float = 0.0
     requests: int = 0
@@ -256,7 +257,9 @@ class PolicyInference:
         ticket = InferenceTicket(
             index, slots, event, logits, (batch, device_batch, device_readout, output), events
         )
-        self.stats.async_overlaps += bool(self._slots)
+        # 当前与历史模型共用统计，跨执行器的在途工作同样计入重叠。
+        self.stats.async_overlaps += self.stats.inflight > 0
+        self.stats.inflight += 1
         self._tickets[index] = ticket
         self._slots.update(slots)
         elapsed = time.perf_counter() - before
@@ -277,6 +280,7 @@ class PolicyInference:
         self._record_timing(ticket.timing)
         self._tickets[ticket.buffer] = None
         self._slots.difference_update(ticket.slots)
+        self.stats.inflight -= 1
         ticket.owners = ()
 
     def finish(self, ticket):

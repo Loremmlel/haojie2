@@ -37,6 +37,8 @@ async function state() {
 }
 async function load(name) {
   await page.locator('input[type=file]').setInputFiles(`artifacts/feedback4-fixtures/${name}.json`);
+  // 文件读取及导入回调结束后才清空输入，避免导出上一个场景。
+  await page.waitForFunction(() => document.querySelector('input[type=file]').value === '');
   const expected = JSON.parse(await readFile(`artifacts/feedback4-fixtures/${name}.json`, 'utf8'));
   assert.deepEqual((await state()).present, expected.present);
 }

@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 
 import torch
 
+from haojie_training.console import config
 from haojie_training.console.config import defaults, resources, upgrade, validate
 from haojie_training.console.controller import Controller
 from haojie_training.console.storage import Store
@@ -113,15 +114,96 @@ class ServerTests(unittest.TestCase):
                     "virtual_memory",
                     return_value=SimpleNamespace(total=64 * 2**30, available=48 * 2**30),
                 ),
+                patch.object(torch.cuda, "is_available", return_value=True),
             ):
                 self.assertEqual(resources.cpu_capacity(), 2)
                 self.assertEqual(resources.torch_threads("cpu"), 2)
                 self.assertEqual(resources.available_memory(), 2**30)
-                profile = resources.server_defaults("cuda")
+                profile = defaults("cuda")
                 validate(profile)
-                self.assertEqual(profile["environments"], 4)
-                self.assertEqual(profile["games_per_round"], 8)
+                self.assertEqual(profile["environments"], 1)
+                self.assertEqual(profile["games_per_round"], 2)
                 self.assertEqual(profile["pool_mib"], 256)
+
+    def test_shared_defaults_scale_and_new_experiments_keep_explicit_settings(self):
+        with (
+            patch.object(config, "cpu_capacity", return_value=40),
+            patch.object(config, "available_memory", return_value=64 * 2**30),
+            patch.object(torch.cuda, "is_available", return_value=True),
+            patch.object(torch.xpu, "is_available", return_value=False),
+            patch.object(Controller, "_loop"),
+            tempfile.TemporaryDirectory() as folder,
+        ):
+            automatic = defaults()
+            self.assertEqual(automatic["environments"], 80)
+            self.assertEqual(automatic["games_per_round"], 160)
+            self.assertEqual(automatic["inference_batch_size"], 32)
+            self.assertEqual(automatic["batch_size"], 8)
+            c = Controller(Path(folder) / "unused-engine", Store(folder), device="cpu")
+            try:
+                self.assertEqual(c.config, defaults("cpu"))
+                self.assertEqual(c.config["environments"], 40)
+                c.command(
+                    "new-experiment",
+                    {"device": "cuda:1", "config": {"classic_percent": 100, "batch_size": 3}},
+                )
+                self.assertEqual(c.new_request[1], torch.device("cuda:1"))
+                self.assertEqual(
+                    c.new_request[2], {**automatic, "classic_percent": 100, "batch_size": 3}
+                )
+                validate(c.new_request[2])
+            finally:
+                c.close()
+            with patch.object(config, "cpu_capacity", return_value=128):
+                self.assertEqual(defaults("cuda")["environments"], 128)
+            with patch.object(config, "resolve_device", return_value=torch.device("xpu")):
+                self.assertEqual(defaults()["environments"], 80)
+
+    def test_initialization_uses_selected_gpu_precision_and_current_thread_policy(self):
+        c = Controller.__new__(Controller)
+        c.device = torch.device("cuda:1")
+        c.requested_threads = 0
+        c.trainer = Mock()
+        c._device = Mock()
+        with (
+            patch.object(torch, "get_num_threads", return_value=4),
+            patch.object(torch, "set_num_threads") as set_threads,
+            patch.object(torch.cuda, "is_available", return_value=True),
+        ):
+            c._initialize()
+            set_threads.assert_called_once_with(1)
+            c.requested_threads = 3
+            c._initialize()
+            set_threads.assert_called_with(3)
+            c.requested_threads = None
+            set_threads.reset_mock()
+            c._initialize()
+            set_threads.assert_not_called()
+
+        c.trainer, c.imported, c.tiny = None, None, True
+        c.engine, c.store, c.config = "unused", Mock(), defaults("cpu")
+        c.store.names.return_value = []
+
+        def bf16_supported():
+            selected.assert_called_once_with(torch.device("cuda:1"))
+            selected.return_value.__enter__.assert_called_once()
+            return True
+
+        with (
+            patch("haojie_training.console.controller.Client") as client,
+            patch("haojie_training.console.controller.metadata", return_value={}),
+            patch("haojie_training.console.controller.PolicyValueNet"),
+            patch(
+                "haojie_training.console.controller.Trainer", side_effect=RuntimeError("done")
+            ) as trainer,
+            patch.object(torch, "manual_seed"),
+            patch.object(torch.cuda, "device") as selected,
+            patch.object(torch.cuda, "is_bf16_supported", side_effect=bf16_supported),
+        ):
+            client.return_value.__enter__.return_value.ready = {"capabilities": ["mc-context-v2"]}
+            with self.assertRaisesRegex(RuntimeError, "done"):
+                c._initialize()
+            self.assertEqual(trainer.call_args.kwargs["precision"], "bf16")
 
     def test_cpu_threads_respect_quota_explicit_override_and_auto_device(self):
         for capacity, expected in ((0.5, 1), (3.9, 3), (16, 4)):
@@ -166,7 +248,7 @@ class ServerTests(unittest.TestCase):
                     self.assertEqual(resources.available_memory(), 256 * 2**20)
 
     def test_old_recovery_options_and_server_ranges(self):
-        original = defaults()
+        original = {**defaults(), "inference_batch_size": 32}
         legacy = {
             k: v
             for k, v in original.items()

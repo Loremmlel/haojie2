@@ -3,6 +3,7 @@
 import queue
 import time
 from collections import deque
+from contextlib import ExitStack
 
 from ..runtime import resolve_device
 from .client import Client
@@ -151,9 +152,9 @@ class Pool:
         next_snapshot = previous
         stopping = False
         cancel = False
-        packed = jobs.supports_packed_batches
         waiting = deque()
-        active_inference = None
+        active_inferences = set()
+        inference_cleanup = ExitStack()
         discarded_slots = set()
         failed = True
 
@@ -294,10 +295,17 @@ class Pool:
                         pending = [item for item in pending if item[0] != i]
                         jobs.unfinished(self.slots.pop(i))
                         jobs.resource_error(str(raw))
-                        self.clients[i].close()
+                        client = self.clients[i]
+                        client.close()
                         self.generations[i] += 1
                         self.last_ids[i] = 0
                         self.clients[i] = self.new_client(i)
+                        # 替换成功后合并已停止的 Reader；重建失败仍由旧 Client 计账。
+                        self.read_seconds += client.read_seconds
+                        self.decode_seconds += client.decode_seconds
+                        self.tensor_bytes += client.tensor_bytes
+                        self.restarts += 1
+                        del client
                         continue
                     if isinstance(raw, RuntimeError) and str(raw) == "原生进程已退出":
                         raise RuntimeError("内存任务工作进程退出；丢弃未完成局") from raw
@@ -330,20 +338,28 @@ class Pool:
                         pending.append((i, task["id"], message))
                     else:
                         raise ValueError("未知或过期模型请求")
-                pending.sort(key=lambda item: item[2]["entities"])
-                while pending:
-                    count = _group_size(pending, self.max_batch_size, packed=packed)
-                    group, pending = pending[:count], pending[count:]
-                    identities = {m["model"] for _, _, m in group}
-                    inference = None
-                    if len(identities) == 1:
-                        inference = jobs.inferences[next(iter(identities))]
+                # 模型按首次就绪顺序轮流取一批，桶内按长度组批；同槽仍只有一个请求。
+                by_model = {}
+                for item in pending:
+                    by_model.setdefault(item[2]["model"], []).append(item)
+                if pending:
+                    del item
+                groups = deque(by_model.values())
+                for pending in groups:
+                    pending.sort(key=lambda item: item[2]["entities"])
+                while groups:
+                    pending = groups.popleft()
+                    inference = jobs.inferences[pending[0][2]["model"]]
+                    count = _group_size(
+                        pending, self.max_batch_size, packed=inference.supports_packed_batches
+                    )
+                    group = pending[:count]
+                    if count < len(pending):
+                        groups.append(pending[count:])
                     if not cancelled() and getattr(inference, "supports_async", False):
-                        if inference is not active_inference:
-                            drain()
-                            if active_inference is not None:
-                                active_inference.close()
-                            active_inference = inference
+                        if inference not in active_inferences:
+                            active_inferences.add(inference)
+                            inference_cleanup.callback(inference.close)
                         if len(waiting) == 2:
                             receive()
                         if not cancelled():
@@ -354,18 +370,17 @@ class Pool:
                             waiting.append((group, inference, ticket))
                             del group
                             continue
-                    # 混合模型及不支持异步的后端沿用原同步路由。
+                    # 不支持异步的后端沿用同步路由；当前/历史模型无需在切换时排空。
                     drain()
                     logits = None if cancelled() else jobs.infer([m for _, _, m in group])
                     respond(group, logits)
                     # 局部变量不能将上一批张量保留到下一局或排空阶段。
                     del logits, group
-                del messages, pending, raw, message
+                del messages, pending, by_model, groups, raw, message
             failed = False
         finally:
             try:
-                if active_inference is not None:
-                    active_inference.close()
+                inference_cleanup.close()
             finally:
                 waiting.clear()
                 for task in self.slots.values():

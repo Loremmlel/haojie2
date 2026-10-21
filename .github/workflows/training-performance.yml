@@ -85,7 +85,7 @@ jobs:
             --before artifacts/cycle-performance/before-{1,2,3}.json \
             --after artifacts/cycle-performance/after-{1,2,3}.json \
             --output artifacts/cycle-performance/comparison.json
-      - name: Eight-process complete cycle, small network
+      - name: Eight-process mixed-opponent cycles, small network
         run: |
           set -euo pipefail
           for side in before after; do
@@ -99,7 +99,8 @@ jobs:
               --source "$source" --engine "$engine" \
               --output "artifacts/cycle-performance/$side-8env.json" \
               --starts tests/fixtures/native/late-starts.json.gz \
-              --games 8 --environments 8 --updates 16 --ordered-updates --tiny
+              --games 8 --environments 8 --rounds 2 --history-percent 50 \
+              --updates 16 --ordered-updates --tiny
           done
           python scripts/training/benchmarks/compare.py \
             --before artifacts/cycle-performance/before-8env.json \

@@ -23,7 +23,7 @@ from ..native.pool import Pool
 from ..runtime import Trainer, cpu_state, resolve_device
 from .config import METHOD as METHOD
 from .config import defaults, validate
-from .config.resources import available_memory
+from .config.resources import available_memory, torch_threads
 from .evaluation import evaluate_slice
 from .memory import SamplePool
 from .opponents import ready
@@ -46,7 +46,9 @@ class Controller:
     才切换持久化身份。设置校验和恢复文件校验分别由 config、storage 负责。
     """
 
-    def __init__(self, engine, store, *, device="auto", tiny=False, imported=None, starts=None):
+    def __init__(
+        self, engine, store, *, device="auto", tiny=False, imported=None, starts=None, threads=None
+    ):
         self.engine, self.store = engine, store
         self.root_store = store
         manifest = store.root / "active.json"
@@ -66,8 +68,9 @@ class Controller:
         self.update_budget = 0
         self.execution_precision = "fp32"
         self.readiness = {"training": False, "engine": "等待检查", "teacher": ready()}
+        self.requested_threads = threads
         self.device = resolve_device(device)
-        self.config = defaults()
+        self.config = defaults(self.device)
         self.tiny, self.imported, self.starts = tiny, imported, starts
         self.lock = threading.RLock()
         self.snapshot_requests = deque()
@@ -313,7 +316,7 @@ class Controller:
                     raise ValueError("继承来源无效")
                 device = values.get("device", str(self.device))
                 selected_device = resolve_device(device)
-                config = {**defaults(), **values.get("config", {})}
+                config = {**defaults(selected_device), **values.get("config", {})}
                 validate(config)
                 self.new_request = (source, selected_device, config)
                 self.state, self.error = "starting", None
@@ -411,6 +414,11 @@ class Controller:
             self.wake.set()
 
     def _initialize(self):
+        # CLI 的自动线程策略随新实验设备更新；嵌入调用保留其自行选择的进程线程数。
+        if self.requested_threads is not None:
+            threads = torch_threads(str(self.device), self.requested_threads)
+            if torch.get_num_threads() != threads:
+                torch.set_num_threads(threads)
         if self.trainer:
             self._device(self.device)
             return
@@ -435,12 +443,15 @@ class Controller:
             torch.manual_seed(self.config["seed"])
             model = PolicyValueNet(ModelConfig.tiny() if self.tiny else ModelConfig())
         if payload is None:
+            precision = "fp32"
+            if self.device.type == "cuda":
+                with torch.cuda.device(self.device):
+                    if torch.cuda.is_bf16_supported():
+                        precision = "bf16"
             trainer = Trainer(
                 model,
                 self.device,
-                precision="bf16"
-                if self.device.type == "cuda" and torch.cuda.is_bf16_supported()
-                else "fp32",
+                precision=precision,
                 optimizer="auto",
                 objective=self.config["method"],
             )
