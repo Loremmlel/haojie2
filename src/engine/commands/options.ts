@@ -48,8 +48,18 @@ const target = (
   field: SelectionStep['field'] = 'targetId',
   range = true,
   unitOnly = true,
-): SelectionStep => ({ kind: 'target', label, relation, field, range, unitOnly });
-const square = (label = '选择高亮落点'): SelectionStep => ({ kind: 'point', label });
+): SelectionStep => ({
+  kind: 'target',
+  label,
+  relation,
+  field,
+  range,
+  unitOnly,
+});
+const square = (label = '选择高亮落点'): SelectionStep => ({
+  kind: 'point',
+  label,
+});
 const spec = (
   id: string,
   label: string,
@@ -117,7 +127,12 @@ export function unitActions(
           'attack-path',
           '自选穿透路径',
           { type: 'attack', ...command, mode: 'damage', path: [] },
-          [{ kind: 'path', label: '先选自身出发格，再逐格选择路径；可转弯，选好后确认攻击' }],
+          [
+            {
+              kind: 'path',
+              label: '先选自身出发格，再逐格选择路径；可转弯，选好后确认攻击',
+            },
+          ],
           'sword',
         ),
       );
@@ -134,6 +149,25 @@ export function unitActions(
     );
   if (u.mode === 'move' || u.mode === 'attack')
     result.push(spec('finish', '结束本次操作', { type: 'finish-mode', ...command }, [], 'check'));
+  result.push(...abilityActions(u));
+  if (!u.silenced)
+    for (const kind of u.traits ?? []) {
+      // 继承只增加技能和蓄力；不生成随后丢弃的移动/攻击，也不重算投影的完整属性。
+      const borrowed = { ...u, kind, traits: undefined };
+      for (const a of abilityActions(borrowed))
+        result.push({
+          ...a,
+          id: `${a.id}:${kind}`,
+          label: `${definition(kind).name} · ${a.label}`,
+          command: { ...a.command, ability: kind },
+        });
+    }
+  return result;
+}
+function abilityActions(u: Unit): ActionSpec[] {
+  if (isLandmark(u) && u.hp <= 0) return [];
+  const result: ActionSpec[] = [],
+    command = { unitId: u.id };
   if (moveChargeKind(u) === u.kind)
     result.push(
       spec('charge-move', '蓄力 · 移动', { type: 'charge', ...command, mode: 'move' }, [], 'clock'),
@@ -266,26 +300,6 @@ export function unitActions(
         break;
     }
   }
-  if (!u.silenced)
-    for (const kind of u.traits ?? []) {
-      const usage = u.abilityUsage?.[kind];
-      const borrowed = {
-        ...u,
-        ...chargeFor(u, kind),
-        kind,
-        traits: undefined,
-        onceUsed: usage?.once ?? false,
-        freeUsed: usage?.free ?? -1,
-      };
-      for (const a of unitActions(s, borrowed, attributes))
-        if (a.command.type === 'skill' || a.command.type === 'charge')
-          result.push({
-            ...a,
-            id: `${a.id}:${kind}`,
-            label: `${definition(kind).name} · ${a.label}`,
-            command: { ...a.command, ability: kind },
-          });
-    }
   return result;
 }
 export function cardActions(s: GamePosition, c: Card): ActionSpec[] {
@@ -335,7 +349,13 @@ export function cardActions(s: GamePosition, c: Card): ActionSpec[] {
       spec('blast', '施放爆弹', { type: 'cast', ...base }, [square('选择2×2爆弹区域的左上格')]),
     );
   else if (c.kind === 25) {
-    result.push(spec('reforge-one', '重铸 · 召唤一次', { type: 'cast', ...base, mode: 'single' }));
+    result.push(
+      spec('reforge-one', '重铸 · 召唤一次', {
+        type: 'cast',
+        ...base,
+        mode: 'single',
+      }),
+    );
     result.push(
       spec('reforge-two', '献祭两名 · 召唤两次', { type: 'cast', ...base, mode: 'double' }, [
         target('选择第一名至少半血的友方', 'friend', 'sacrificeIds', false),

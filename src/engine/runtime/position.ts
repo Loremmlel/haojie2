@@ -1,4 +1,4 @@
-import type { GamePosition, Unit, Landmark, Kind } from '../types';
+import type { GamePosition, Unit, Landmark, Kind, DeathRecord } from '../types';
 import { cloneRuleData } from '../core/clone';
 import { CATALOG } from '../catalog';
 
@@ -112,9 +112,19 @@ export function own<K extends keyof GamePosition>(s: GamePosition, key: K): Game
     if (key === 'clockFrames') {
       const frames = s.clockFrames!;
       s.clockFrames = { 1: { ...frames[1] }, 2: { ...frames[2] } };
+    } else if (key === 'deaths') {
+      // 历史条目只读共享；复活修改单条前由 ownDeathRecord 分离。
+      s.deaths = s.deaths.slice();
     } else s[key] = cloneRuleData(s[key]);
   }
   return s[key];
+}
+
+/** 正常运行分支只分离将要改写的历史条目；整图兼容副本继续保留外部别名关系。 */
+export function ownDeathRecord(s: GamePosition, index: number): DeathRecord {
+  const deaths = own(s, 'deaths');
+  if (branchSources.has(s)) deaths[index] = { ...deaths[index] };
+  return deaths[index];
 }
 
 function register<S extends GamePosition>(s: S, previous?: EntityTable, graphClone = false): S {

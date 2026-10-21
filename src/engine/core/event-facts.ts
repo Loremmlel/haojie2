@@ -60,9 +60,25 @@ export function eventActor(p?: Point): EventActor | undefined {
 
 // 同步作用域与模拟随机源相同，不将上下文存入局面。
 const contexts = new WeakMap<GamePosition, EventFacts>();
-export function withEventFacts<T>(s: GamePosition, facts: EventFacts, run: () => T): T {
+let suppressedDepth = 0;
+/** 同步预检只抑制展示事实；嵌套或异常退出均恢复此前作用域。 */
+export function withoutEventFacts<T>(run: () => T): T {
+  suppressedDepth++;
+  try {
+    return run();
+  } finally {
+    suppressedDepth--;
+  }
+}
+export function withEventFacts<T>(
+  s: GamePosition,
+  facts: EventFacts | (() => EventFacts),
+  run: () => T,
+): T {
+  if (suppressedDepth) return run();
+  const value = typeof facts === 'function' ? facts() : facts;
   const previous = contexts.get(s);
-  contexts.set(s, { ...facts, ...(previous?.causeId ? { parentId: previous.causeId } : {}) });
+  contexts.set(s, { ...value, ...(previous?.causeId ? { parentId: previous.causeId } : {}) });
   try {
     return run();
   } finally {

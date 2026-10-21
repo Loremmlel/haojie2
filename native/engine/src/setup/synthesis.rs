@@ -39,7 +39,8 @@ pub fn destinations(s: &State, recipe: &Value, ids: &[String], catalog: &Catalog
     {
         return vec![];
     }
-    let mut view = s.clone();
+    // 对应 TS 的材料移除浅视图；几何查询不修改共享实体或冷字段。
+    let mut view = s.fork();
     if recipe["source"] == "board" {
         view.units.retain(|u| !ids.contains(&u.id));
     }
@@ -83,7 +84,7 @@ pub fn synthesize(
         crate::shrines::point(c)?
     };
     let valid = materials(s, recipe);
-    let mut view = s.clone();
+    let mut view = s.fork();
     if recipe["source"] == "board" {
         view.units.retain(|u| !ids.contains(&u.id));
     }

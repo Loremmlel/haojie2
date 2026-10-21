@@ -84,8 +84,10 @@ pub fn step_typed(
     if !crate::actions::permitted_command(state, actor, command) {
         return Err("unauthorized actor".into());
     }
-    let mut next = crate::command::apply_runtime(state, command, catalog)
-        .map_err(|e| format!("rule rejected command: {e:?}"))?;
+    let mut next = crate::resolution::without_presentation(|| {
+        crate::command::apply_runtime(state, command, catalog)
+    })
+    .map_err(|e| format!("rule rejected command: {e:?}"))?;
     next.events.clear();
     next.extra.insert("log".into(), serde_json::json!([]));
     Ok(next)
@@ -102,7 +104,9 @@ pub fn attempt(
     if !crate::actions::permitted_command(state, actor, command) {
         return Err("unauthorized actor".into());
     }
-    match crate::command::apply_runtime(state, command, catalog) {
+    match crate::resolution::without_presentation(|| {
+        crate::command::apply_runtime(state, command, catalog)
+    }) {
         Ok(mut next) => {
             next.events.clear();
             next.extra.insert("log".into(), serde_json::json!([]));
@@ -119,6 +123,134 @@ pub fn attempt(
                 Ok(Err(message))
             } else {
                 Err(message)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ChargeMode, Point};
+    use serde_json::json;
+
+    #[test]
+    fn training_presentation_preserves_formal_state_rng_serial_and_rejection() {
+        let catalog = crate::catalog::embedded().unwrap();
+        for action in ["attack", "charge", "equip", "rush", "end", "summon"] {
+            let mut state = crate::runtime::create(73127, false, &catalog).unwrap();
+            state.phase = "play".into();
+            state.summon_slots = 0.0;
+            state.turns.insert("1".into(), 3.0);
+            state.turns.insert("2".into(), 3.0);
+            let kind = match action {
+                "attack" => "1",
+                "charge" => "15",
+                "rush" => "u12",
+                _ => "26",
+            };
+            let mut source = crate::resolution::template(
+                &state,
+                kind,
+                1,
+                Point { x: 4.0, y: 4.0 },
+                "source",
+                &catalog,
+            );
+            source.born = 0.0;
+            source.reserve.charge = if action == "charge" { 0.0 } else { 2.0 };
+            source.reserve.ready_charge = source.reserve.charge;
+            source.reserve.charge_type = if action == "rush" {
+                ChargeMode::Move
+            } else {
+                ChargeMode::Attack
+            };
+            let mut target = crate::resolution::template(
+                &state,
+                if action == "attack" { "17p" } else { "26" },
+                2,
+                Point { x: 4.0, y: 5.0 },
+                "target",
+                &catalog,
+            );
+            target.born = 0.0;
+            target.hp = 1000.0;
+            target.max_hp = 1000.0;
+            state.units = vec![source, target];
+            let mut command = Command::new(if action == "rush" { "move" } else { action });
+            match action {
+                "attack" => {
+                    command.unit_id = Some("source".into());
+                    command.target_id = Some("target".into());
+                }
+                "charge" => {
+                    command.unit_id = Some("source".into());
+                    command.mode = Some("attack".into());
+                }
+                "equip" => {
+                    state.extra.get_mut("hands").unwrap()["1"] =
+                        json!([{"id":"weapon","kind":"s2","drawnAt":0,"summonedPly":1}]);
+                    command.card_id = Some("weapon".into());
+                    command.target_id = Some("source".into());
+                }
+                "rush" => {
+                    command.unit_id = Some("source".into());
+                    command.x = Some(4.0);
+                    command.y = Some(5.0);
+                }
+                "summon" => {
+                    state.phase = "summon".into();
+                    state.summon_slots = 1.0;
+                    command.ultimate = Some(false);
+                }
+                _ => {}
+            }
+            let frozen = serde_json::to_value(&state).unwrap();
+            let mut expected = crate::command::apply_runtime(&state, &command, &catalog).unwrap();
+            let raw = crate::resolution::without_presentation(|| {
+                crate::command::apply_runtime(&state, &command, &catalog)
+            })
+            .unwrap();
+            assert_eq!(raw.events.len(), expected.events.len(), "{action}");
+            assert_eq!(raw.serial, expected.serial, "{action}");
+            assert_eq!(raw.extra["rng"], expected.extra["rng"], "{action}");
+            expected.events.clear();
+            expected.extra.insert("log".into(), json!([]));
+            let actual = step_typed(&state, 1, &command, &catalog).unwrap();
+            let attempted = attempt(&state, 1, &command, "uncertain", &catalog)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                serde_json::to_value(&expected).unwrap(),
+                "{action}"
+            );
+            assert_eq!(
+                serde_json::to_value(attempted).unwrap(),
+                serde_json::to_value(&expected).unwrap(),
+                "{action}"
+            );
+            assert_eq!(serde_json::to_value(&state).unwrap(), frozen, "{action}");
+            if action == "attack" {
+                command.target_id = Some("missing".into());
+                let error = format!(
+                    "rule rejected command: {:?}",
+                    crate::command::apply_runtime(&state, &command, &catalog)
+                        .err()
+                        .unwrap()
+                );
+                assert_eq!(
+                    step_typed(&state, 1, &command, &catalog).err().unwrap(),
+                    error
+                );
+                assert_eq!(
+                    attempt(&state, 1, &command, "uncertain", &catalog)
+                        .unwrap()
+                        .err()
+                        .unwrap(),
+                    error
+                );
+                assert_eq!(serde_json::to_value(&state).unwrap(), frozen);
             }
         }
     }

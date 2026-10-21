@@ -10,7 +10,8 @@ pub fn describe() -> Value {
             "rustc": env!("HAOJIE_RUSTC"),
             "target": env!("HAOJIE_TARGET"),
             "profile": env!("HAOJIE_PROFILE"),
-            "kernelProfile": cfg!(feature = "kernel-profile")
+            "kernelProfile": cfg!(feature = "kernel-profile"),
+            "allocator": crate::allocation::NAME
         },
         "ruleset": crate::model::RULESET,
         "rulesPackage": "haojie-rules-package-v1",
@@ -44,5 +45,6 @@ mod tests {
             identity["build"]["kernelProfile"],
             cfg!(feature = "kernel-profile")
         );
+        assert_eq!(identity["build"]["allocator"], crate::allocation::NAME);
     }
 }

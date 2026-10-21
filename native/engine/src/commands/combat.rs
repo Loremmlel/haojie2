@@ -5,6 +5,8 @@ use crate::movement::{actor, consume, finish, reserve, sync};
 use crate::resolution::{Resolution, active_target, add_effect, normalize_guards, terminal};
 use crate::stats::{Stats, attack_charge, stats};
 use serde_json::{Value, json};
+use std::borrow::Cow;
+use std::rc::Rc;
 
 #[derive(Default, Clone)]
 pub struct Options {
@@ -12,7 +14,7 @@ pub struct Options {
     pub unlimited: bool,
     pub force_hostile: bool,
     pub mode: Option<String>,
-    pub direction: Option<String>,
+    pub direction: Option<Cow<'static, str>>,
     pub path: Option<Vec<crate::model::Point>>,
     pub no_pierce: bool,
     pub amount: Option<f64>,
@@ -21,9 +23,10 @@ pub struct Options {
 pub struct Prepared {
     ally: bool,
     healing: bool,
-    stats: Stats,
+    attack: f64,
     path: Vec<crate::model::Point>,
     can_pierce: bool,
+    source_stats: Option<Rc<Stats>>,
 }
 pub fn healing_attack(u: &Unit, catalog: &Catalog) -> bool {
     catalog.by_kind(&u.kind).attack < 0.0
@@ -36,6 +39,8 @@ fn prepare(
     t: &Target,
     o: &Options,
     catalog: &Catalog,
+    query: Option<&mut crate::geometry::AttackQuery>,
+    attributes: Option<&Stats>,
 ) -> Result<Prepared, Failure> {
     #[cfg(feature = "kernel-profile")]
     let _profile = crate::profile::scope(crate::profile::Phase::Preparation);
@@ -88,7 +93,15 @@ fn prepare(
                     .is_some_and(|v| catalog.by_kind(&v.kind).landmark.is_some())),
         "非穿透攻击优先命中地标上的友方棋子或叠放栈顶。",
     )?;
-    let computed = stats(s, u, catalog);
+    let local_attributes;
+    // 预检只复用模式选择前的攻击力与射程，不将其余字段当作投影后的完整属性。
+    let computed = match attributes {
+        Some(computed) => computed,
+        None => {
+            local_attributes = stats(s, u, catalog);
+            &local_attributes
+        }
+    };
     ensure(
         u.silenced || !u.has("firelord"),
         "炎魔之王不能普通攻击；沉默会移除此限制。",
@@ -172,16 +185,39 @@ fn prepare(
         }
         path
     } else {
-        attack_path(s, u, t, limit, o.direction.as_deref(), can_pierce)
+        match query {
+            Some(query) => query.path(s, u, t, limit, o.direction.as_deref(), can_pierce),
+            None => attack_path(s, u, t, limit, o.direction.as_deref(), can_pierce),
+        }
     }
     .ok_or(Failure::Invalid("目标不在射程内，或所选攻击路径被阻挡。"))?;
     Ok(Prepared {
         ally,
         healing,
-        stats: computed,
+        attack: computed.attack,
         path,
         can_pierce,
+        source_stats: None,
     })
+}
+enum AttackRoll {
+    Charger,
+    SuperCritical,
+    Vampire,
+}
+impl AttackRoll {
+    // 正式掷骰与预检共用随机来源分类；概率为 1 时仍须进入同一个随机边界。
+    fn for_kind(kind: &Kind) -> Option<Self> {
+        if kind.is("1") {
+            Some(Self::Charger)
+        } else if kind.is("u1") {
+            Some(Self::SuperCritical)
+        } else if kind.is("u8") {
+            Some(Self::Vampire)
+        } else {
+            None
+        }
+    }
 }
 fn attack_roll(
     s: &mut State,
@@ -195,32 +231,34 @@ fn attack_roll(
         return Ok(amount);
     }
     for k in u.kinds() {
-        if k.is("1") {
+        if let Some(roll) = AttackRoll::for_kind(&k) {
             let r = s.random(ctx.preview)?;
-            amount += if r < catalog.rule("/charger/heavyChance") {
-                catalog.rule("/charger/heavyBonus")
-            } else if r < catalog.rule("/charger/criticalChance") {
-                catalog.rule("/charger/bonus")
-            } else {
-                0.0
-            };
-        }
-        if k.is("u1") {
-            let r = s.random(ctx.preview)?;
-            amount = if r < catalog.rule("/superCritical/lethalChance") {
-                catalog.rule("/superCritical/lethalDamage")
-            } else if r < catalog.rule("/superCritical/lethalChance")
-                + catalog.rule("/superCritical/doubleChance")
-            {
-                amount * 2.0
-            } else {
-                amount
-            };
-        }
-        if k.is("u8") {
-            let r = s.random(ctx.preview)?;
-            if r < vampire(u, catalog).min(1.0) {
-                amount *= 2.0;
+            match roll {
+                AttackRoll::Charger => {
+                    amount += if r < catalog.rule("/charger/heavyChance") {
+                        catalog.rule("/charger/heavyBonus")
+                    } else if r < catalog.rule("/charger/criticalChance") {
+                        catalog.rule("/charger/bonus")
+                    } else {
+                        0.0
+                    };
+                }
+                AttackRoll::SuperCritical => {
+                    amount = if r < catalog.rule("/superCritical/lethalChance") {
+                        catalog.rule("/superCritical/lethalDamage")
+                    } else if r < catalog.rule("/superCritical/lethalChance")
+                        + catalog.rule("/superCritical/doubleChance")
+                    {
+                        amount * 2.0
+                    } else {
+                        amount
+                    };
+                }
+                AttackRoll::Vampire => {
+                    if r < vampire(u, catalog).min(1.0) {
+                        amount *= 2.0;
+                    }
+                }
             }
         }
         if k.is("u27") && base {
@@ -288,10 +326,11 @@ fn knockback(
             x: follower.x + dx,
             y: follower.y + dy,
         };
-        let mut view = s.clone();
+        // 仅过滤占位的只读视图；对应 TS canPlace 的忽略列表，不导出快照。
+        let mut view = s.fork();
         view.units.retain(|v| v.id != follower.id);
         let can_first = can_place(&view, &v, first, catalog);
-        let mut view = s.clone();
+        let mut view = s.fork();
         view.units.retain(|x| x.id != v.id);
         if can_first && can_place(&view, follower, to, catalog) {
             ctx.emit(s,json!({"type":"move","from":follower.actor_event(),"to":to,"unitId":follower.id,"owner":follower.owner,"text":"连带击退"}),None);
@@ -331,7 +370,7 @@ pub fn perform(
     catalog: &Catalog,
     ctx: &mut Resolution,
 ) -> Result<(), Failure> {
-    let p = prepare(s, u, t, o, catalog)?;
+    let p = prepare(s, u, t, o, catalog, None, None)?;
     perform_prepared(s, u, t, o, catalog, ctx, p)
 }
 // 预检已经算出的属性和路径直接进入同一次结算；连锁攻击仍各自准备。
@@ -345,11 +384,9 @@ fn perform_prepared(
     p: Prepared,
 ) -> Result<(), Failure> {
     let hit_start = ctx.attack_hits.len();
-    let previous = ctx.enter(
-        u.actor_event(),
-        t.actor(),
-        if p.healing { "mend" } else { "attack" },
-    );
+    let previous = ctx.enter(|| {
+        json!({"actor":u.actor_event(),"subject":t.actor(),"action":if p.healing { "mend" } else { "attack" }})
+    });
     let result = resolve(s, u, t, &p, o, catalog, ctx);
     ctx.facts = previous;
     result?;
@@ -428,7 +465,7 @@ fn resolve(
                         direction: None,
                         path: Some(prefix),
                         no_pierce: true,
-                        amount: Some(p.stats.attack),
+                        amount: Some(p.attack),
                         weapon_first: Some(!current.weapon_first_used),
                         ..o.clone()
                     },
@@ -533,7 +570,7 @@ fn resolve(
     let amount = attack_roll(
         s,
         u,
-        o.amount.unwrap_or(p.stats.attack),
+        o.amount.unwrap_or(p.attack),
         t.unit.is_none(),
         catalog,
         ctx,
@@ -787,18 +824,15 @@ pub fn retaliate(
         force_hostile: true,
         ..Default::default()
     };
-    match prepare(s, u, t, &options, catalog) {
+    let prepared = match prepare(s, u, t, &options, catalog, None, None) {
         Err(Failure::Invalid(_)) => return Ok(()),
         Err(e) => return Err(e),
-        Ok(_) => {}
-    }
+        Ok(prepared) => prepared,
+    };
     ctx.retaliations.insert(pair);
-    perform(s, u, t, &options, catalog, ctx)
+    perform_prepared(s, u, t, &options, catalog, ctx, prepared)
 }
-/// 只投影攻击者的本次操作；与 TS chooseMode + attackTarget 的预检边界相同。
-pub fn projected_attacker(s: &State, c: &Command, catalog: &Catalog) -> Result<Unit, Failure> {
-    let mut u = actor(s, c, catalog)?.clone();
-    let computed = stats(s, &u, catalog);
+fn choose_attack(mut u: Unit, computed: &Stats) -> Result<Unit, Failure> {
     ensure(
         u.mode == "none" || u.mode == "attack",
         "本回合已选择另一操作模式，剩余攻击不能换成移动或技能。",
@@ -814,17 +848,36 @@ pub fn projected_attacker(s: &State, c: &Command, catalog: &Catalog) -> Result<U
         u.shots = 0.0;
         u.moves = 0.0;
     }
-    ensure(
-        stats(s, &u, catalog).remaining > 0.0,
-        "本次攻击操作次数已用完。",
-    )?;
+    // 与 TS chooseMode 同式：模式重置不改变剩余攻击是否为正，无须重算整份属性。
+    ensure(computed.remaining > 0.0, "本次攻击操作次数已用完。")?;
     Ok(u)
 }
-fn attack_target(s: &State, c: &Command, u: &Unit, catalog: &Catalog) -> Result<Target, Failure> {
+/// 只投影攻击者的本次操作，并保留 TS chooseMode 原时点的只读属性。
+pub fn projected_attacker(
+    s: &State,
+    c: &Command,
+    catalog: &Catalog,
+    attributes: impl FnOnce(&Unit) -> Rc<Stats>,
+) -> Result<(Unit, Rc<Stats>), Failure> {
+    let raw = actor(s, c, catalog)?;
+    let computed = attributes(raw);
+    Ok((choose_attack(raw.fork(), &computed)?, computed))
+}
+fn attack_target(
+    s: &State,
+    c: &Command,
+    u: &Unit,
+    catalog: &Catalog,
+    range: Option<f64>,
+) -> Result<Target, Failure> {
     if let Some(path) = &c.path {
         ensure(
             u.weapon("u28")
-                && crate::geometry::valid_attack_route(u, path, stats(s, u, catalog).range),
+                && crate::geometry::valid_attack_route(
+                    u,
+                    path,
+                    range.unwrap_or_else(|| stats(s, u, catalog).range),
+                ),
             "所选穿透路径不合法。",
         )?;
     }
@@ -846,19 +899,46 @@ fn attack_target(s: &State, c: &Command, u: &Unit, catalog: &Catalog) -> Result<
         .ok_or(Failure::Invalid("请选择有效的目标。"))?;
     Ok(t)
 }
-fn command_attack(s: &State, c: &Command, catalog: &Catalog) -> Result<(Unit, Target), Failure> {
-    let u = projected_attacker(s, c, catalog)?;
-    let t = attack_target(s, c, &u, catalog)?;
+fn command_attack(
+    s: &State,
+    c: &Command,
+    catalog: &Catalog,
+    attributes: Option<&Stats>,
+) -> Result<(Unit, Target), Failure> {
+    let u = actor(s, c, catalog)?.clone();
+    let local_attributes;
+    let computed = match attributes {
+        Some(computed) => computed,
+        None => {
+            local_attributes = stats(s, &u, catalog);
+            &local_attributes
+        }
+    };
+    let u = choose_attack(u, computed)?;
+    let t = attack_target(s, c, &u, catalog, attributes.map(|v| v.range))?;
     Ok((u, t))
+}
+/// 沉默能力仍可能被击杀继承；与 TS 一样保守检查全部实体，包含休眠地标。
+pub fn deterministic_attack_position(s: &State) -> bool {
+    !s.units.iter().chain(s.landmarks()).any(|u| {
+        u.native_and_traits().any(|kind| {
+            ["s3", "s12", "17p", "20", "u18"]
+                .iter()
+                .any(|key| kind.is(key))
+        })
+    })
 }
 pub fn prepare_inspection(
     s: &State,
     c: &Command,
     u: &Unit,
     catalog: &Catalog,
-) -> Result<Prepared, Failure> {
-    let t = attack_target(s, c, u, catalog)?;
-    prepare(
+    query: &mut crate::geometry::AttackQuery,
+    attributes: &Rc<Stats>,
+    deterministic: impl FnOnce() -> bool,
+) -> Result<Option<Prepared>, Failure> {
+    let t = attack_target(s, c, u, catalog, Some(attributes.range))?;
+    let mut prepared = prepare(
         s,
         u,
         &t,
@@ -869,7 +949,45 @@ pub fn prepare_inspection(
             ..Default::default()
         },
         catalog,
-    )
+        Some(query),
+        Some(attributes),
+    )?;
+    // 必须先通过全部资格与几何校验，再判断这两个不会越过规则拒绝的窄分支。
+    if prepared.ally && prepared.healing {
+        let effects = t
+            .unit
+            .as_ref()
+            .map(|v| &v.effects)
+            .unwrap_or_else(|| &s.base_effects[&t.owner.to_string()]);
+        if !effects
+            .iter()
+            .any(|e| e.kind == "mark" && s.active_effect(e, t.unit.as_ref()))
+            && (u.silenced || (!u.has("s3") && !u.has("s12")))
+        {
+            return Ok(None);
+        }
+    } else if !prepared.can_pierce
+        && !prepared.healing
+        && !u.silenced
+        && !u
+            .effects
+            .iter()
+            .any(|e| e.kind == "execute" && s.active_effect(e, Some(u)))
+        && u.native_and_traits()
+            .any(|kind| AttackRoll::for_kind(kind).is_some())
+    {
+        return Err(Failure::Uncertain);
+    }
+    if !prepared.can_pierce
+        && deterministic()
+        && !u
+            .native_and_traits()
+            .any(|kind| AttackRoll::for_kind(kind).is_some())
+    {
+        return Ok(None);
+    }
+    prepared.source_stats = Some(Rc::clone(attributes));
+    Ok(Some(prepared))
 }
 /// 只接受经 TS 重建的规范局面；阶段校验后复制，反应/攻击失败均不提交副本。
 /// 成功后统一刷新保护、光环、虹吸与部署行，再检查终局，不驱动 UI 或选招。
@@ -894,8 +1012,7 @@ pub fn apply_prepared(
     } else {
         crate::profile::Phase::Settlement
     });
-    let mut s = previous.fork();
-    s.events.clear();
+    let mut s = previous.fork_command();
     normalize_guards(&mut s);
     let mut ctx = Resolution {
         preview,
@@ -904,9 +1021,17 @@ pub fn apply_prepared(
     if c.kind == "react" {
         crate::reactions::react(&mut s, c, catalog, &mut ctx)?;
     } else {
-        let (u, t) = command_attack(&s, c, catalog)?;
-        let mut hit_ids = vec![t.id.clone()];
-        if u.piercing() && c.mode.as_deref() != Some("heal") {
+        let source_stats = if preview {
+            prepared.as_ref().and_then(|p| p.source_stats.as_deref())
+        } else {
+            None
+        };
+        let (u, t) = command_attack(&s, c, catalog, source_stats)?;
+        let mut hit_ids = vec![];
+        if !preview {
+            hit_ids.push(t.id.clone());
+        }
+        if !preview && u.piercing() && c.mode.as_deref() != Some("heal") {
             let path = c
                 .path
                 .clone()
@@ -936,17 +1061,20 @@ pub fn apply_prepared(
         };
         let p = match prepared {
             Some(p) => p,
-            None => prepare(&s, &u, &t, &options, catalog)?,
+            None => prepare(&s, &u, &t, &options, catalog, None, None)?,
         };
         perform_prepared(&mut s, &u, &t, &options, catalog, &mut ctx, p)?;
-        if let Some(current) = s.unit_mut(&u.id) {
-            current.attacked.extend(hit_ids);
-            current.shots += 1.0;
-        }
-        if let Some(current) = s.unit(&u.id).cloned()
-            && current.shots >= stats(&s, &current, catalog).actions
-        {
-            finish(s.unit_mut(&u.id).unwrap());
+        // 预检在完整攻击链返回后只读取合法性，尾部操作记账不会再触发规则拒绝或随机。
+        if !preview {
+            if let Some(current) = s.unit_mut(&u.id) {
+                current.attacked.extend(hit_ids);
+                current.shots += 1.0;
+            }
+            if let Some(current) = s.unit(&u.id).cloned()
+                && current.shots >= stats(&s, &current, catalog).actions
+            {
+                finish(s.unit_mut(&u.id).unwrap());
+            }
         }
     }
     // 预检调用者只读取合法性与随机边界，不消费派生后的局面。

@@ -287,9 +287,10 @@ impl Canonical for State {
             &[
                 field("active", &self.active),
                 field("baseEffects", &self.base_effects),
-                field("bases", &self.bases),
+                field("bases", &*self.bases),
                 optional("clockFrames", &self.clock_frames),
-                field("deployRows", &self.deploy_rows),
+                field("deaths", &self.deaths),
+                field("deployRows", &*self.deploy_rows),
                 field("events", &self.events),
                 optional("landmarks", &self.landmarks),
                 field("pending", &self.pending),
@@ -412,6 +413,41 @@ mod tests {
             for p in [1, 2] {
                 same(crate::runtime::public_view(&s, p).unwrap().position());
             }
+            // 两个共享 JSON 字段仍保留未知键与顺序；普通快照和内部分支任一写入都隔离。
+            for key in ["0", "10", "2", "未知🌸"] {
+                s.bases
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(key.into(), json!({"nested":[1]}));
+                s.deploy_rows
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(key.into(), json!({"nested":[1]}));
+            }
+            let unchanged = serde_json::to_value(&s).unwrap();
+            let unchanged_hash = hash(&s);
+            let mut snapshot = s.clone();
+            let mut branch = s.fork();
+            assert!(std::ptr::eq(&*s.bases, &*snapshot.bases));
+            assert!(std::ptr::eq(&*s.deploy_rows, &*branch.deploy_rows));
+            snapshot.bases["未知🌸"]["nested"][0] = json!(2);
+            snapshot.deploy_rows["未知🌸"]["nested"][0] = json!(2);
+            branch.bases["1"] = json!(7);
+            branch.deploy_rows["1"] = json!([3, 2, 1]);
+            assert_eq!(serde_json::to_value(&s).unwrap(), unchanged);
+            assert_eq!(hash(&s), unchanged_hash);
+            same(&snapshot);
+            same(&branch);
+            let frozen_snapshot = serde_json::to_string(&snapshot).unwrap();
+            s.bases["1"] = json!(9);
+            s.deploy_rows["1"] = json!([1]);
+            assert_eq!(serde_json::to_string(&snapshot).unwrap(), frozen_snapshot);
+            let loaded: State = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_string(&loaded).unwrap(),
+                serde_json::to_string(&s).unwrap()
+            );
+            same(&s);
             // flatten 的覆盖次序也属于旧规范，即使可信调用者传入同名扩展。
             s.extra.insert("active".into(), json!(77));
             s.units[0].extra.insert("hp".into(), json!(null));

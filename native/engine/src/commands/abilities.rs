@@ -1,16 +1,17 @@
 //! 主动技能复用移动、攻击、伤害与部署入口。继承能力只投影自己的次数和蓄力。
 use crate::damage::{Source, area_damage, damage, kill, lower_max, protected};
 use crate::geometry::{
-    Target, attack_path, can_place, find_target, movement_path, point_target, ring, square,
-    targets, top_target,
+    PlacementQuery, PointAttackQuery, Target, attack_path, can_place, find_target, movement_path,
+    point_target, ring, square, targets, top_target,
 };
 use crate::model::{Catalog, Command, Failure, Point, State, Unit, ensure, extra_number, number};
 use crate::movement::{actor, choose_skill, finish, reserve};
 use crate::resolution::{Resolution, add_effect, deploy_unit, template};
 use crate::shrines::point;
-use crate::stats::{prune_siphons, stats};
+use crate::stats::{banner_count, prune_siphons, stats};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 pub fn unit(s: &State, id: Option<&str>) -> Result<Unit, Failure> {
     s.unit(id.unwrap_or(""))
@@ -191,11 +192,7 @@ fn prepare_revival(
     Ok((record, to))
 }
 fn revival_record(s: &State, u: &Unit, id: Option<&str>) -> Result<Value, Failure> {
-    let record = s.extra["deaths"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["id"].as_str() == id);
+    let record = s.deaths.iter().find(|r| r["id"].as_str() == id);
     ensure(
         record.is_some_and(|r| {
             r["kind"] != "grave"
@@ -206,7 +203,7 @@ fn revival_record(s: &State, u: &Unit, id: Option<&str>) -> Result<Value, Failur
         }),
         "只能选择前两个己方回合窗口内尚未复活的友方阵亡记录。",
     )?;
-    Ok(record.unwrap().clone())
+    Ok(record.unwrap().as_ref().clone())
 }
 fn revival_destination(
     s: &State,
@@ -231,15 +228,101 @@ pub struct SkillInspection {
     unit: Unit,
     key: String,
     range: f64,
+    survives_revival: bool,
     records: HashMap<Option<String>, Result<Value, Failure>>,
-    targets: HashMap<Option<String>, Result<Target, Failure>>,
+    targets: HashMap<Option<Rc<str>>, Result<Target, Failure>>,
+    point_query: Option<Box<(PlacementQuery, PointAttackQuery)>>,
 }
 impl SkillInspection {
-    pub fn inspect(&mut self, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
+    /// 对应 TS skillInspection.points；只批量最后落点，不提前删去亡者参数节点。
+    pub fn points(
+        &mut self,
+        c: &Command,
+        catalog: &Catalog,
+    ) -> Result<Option<Vec<(Point, bool)>>, Failure> {
+        if self.key == "u24" {
+            let mut points = vec![];
+            for at in crate::geometry::all_cells() {
+                let candidate = Command {
+                    x: Some(at.x),
+                    y: Some(at.y),
+                    ..c.clone()
+                };
+                match prepare_ice_mark(&self.unit, &candidate) {
+                    Ok(_) => points.push((at, true)),
+                    Err(Failure::Invalid(_) | Failure::InvalidOwned(_)) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            return Ok(Some(points));
+        }
+        if !["u19", "19"].contains(&self.key.as_str()) {
+            return Ok(None);
+        }
+        let kind = if self.key == "u19" {
+            let s = self.view.as_ref().expect("复活保存只读局面");
+            let record = self
+                .records
+                .entry(c.death_id.clone())
+                .or_insert_with(|| revival_record(s, &self.unit, c.death_id.as_deref()))
+                .as_ref()
+                .map_err(Clone::clone)?;
+            crate::preparation::kind(&record["kind"]).key()
+        } else {
+            "wall".into()
+        };
+        let s = self.view.as_ref().expect("落点保存只读局面");
+        // 每个点域只创建一次模板；空间索引和纯落点射程场由同一来源共享。
+        let mut ghost = template(
+            s,
+            &kind,
+            self.unit.owner,
+            Point { x: 1.0, y: 1.0 },
+            "preview",
+            catalog,
+        );
+        let landmark = catalog.by_kind(&ghost.kind).landmark.is_some();
+        let query = self.point_query.get_or_insert_with(|| {
+            Box::new((
+                PlacementQuery::new(s),
+                PointAttackQuery::new(s, &self.unit, self.range),
+            ))
+        });
+        let (placement, reachable) = query.as_ref();
+        let complete = self.key != "u19" || self.survives_revival;
+        let mut points = vec![];
+        for at in crate::geometry::all_cells() {
+            // 地标原格判定须看到当前候选，与逐点 template 的坐标保持一致。
+            if landmark {
+                ghost.x = at.x;
+                ghost.y = at.y;
+            }
+            if placement.can_place(s, &ghost, at, catalog) && reachable.has(at) {
+                points.push((at, complete));
+            }
+        }
+        Ok(Some(points))
+    }
+    pub fn inspect(&mut self, c: &Command, catalog: &Catalog) -> Result<bool, Failure> {
+        if self.key == "6" {
+            return Ok(true);
+        }
+        if self.key == "u24" {
+            prepare_ice_mark(&self.unit, c)?;
+            return Ok(true);
+        }
         let Some(s) = &self.view else {
-            return Ok(());
+            return Ok(false);
         };
         match self.key.as_str() {
+            "19" => {
+                prepare_wall(s, &self.unit, c, self.range, catalog)?;
+                return Ok(true);
+            }
+            "u21" => {
+                friend(s, &self.unit, c.target_id.as_deref(), self.range)?;
+                return Ok(true);
+            }
             "u19" => {
                 let record = self
                     .records
@@ -248,6 +331,7 @@ impl SkillInspection {
                     .as_ref()
                     .map_err(Clone::clone)?;
                 revival_destination(s, &self.unit, c, self.range, record, catalog)?;
+                return Ok(self.survives_revival);
             }
             "7" => {
                 let target = self
@@ -272,7 +356,7 @@ impl SkillInspection {
             }
             _ => unreachable!(),
         }
-        Ok(())
+        Ok(false)
     }
 }
 /// 冰痕正式入口在公共资格之前读取坐标，预检须保持错误顺序。
@@ -299,13 +383,21 @@ pub fn prepare_inspection(
     let mut view = s.fork();
     project_resources(&mut view, &raw, k, catalog);
     let (u, range) = begin_skill(&mut view, c, &key, catalog)?;
+    // 入场只可能新增旗帜；用真实旗帜修正旧镜像后，保守判定费用是否会使施法者死亡。
+    let survives_revival = key == "u19"
+        && u.max_hp + 10.0 * banner_count(&view, u.owner) as f64 - extra_number(&u, "bannerHp")
+            > 20.0;
     Ok(SkillInspection {
-        view: ["u19", "7", "14"].contains(&key.as_str()).then_some(view),
+        view: ["u19", "7", "14", "19", "u21"]
+            .contains(&key.as_str())
+            .then_some(view),
         unit: u,
         key,
         range,
+        survives_revival,
         records: HashMap::new(),
         targets: HashMap::new(),
+        point_query: None,
     })
 }
 fn project_resources(s: &mut State, raw: &Unit, k: &crate::model::Kind, catalog: &Catalog) {
@@ -313,10 +405,10 @@ fn project_resources(s: &mut State, raw: &Unit, k: &crate::model::Kind, catalog:
         return;
     }
     let r = reserve(raw, k, catalog);
-    let key = k.key();
+    let key = k.key_ref();
     let u = s.unit_mut(&raw.id).unwrap();
     u.reserve = r;
-    let usage = raw.ability_usage.as_ref().and_then(|v| v.get(&key));
+    let usage = raw.ability_usage.as_ref().and_then(|v| v.get(key.as_ref()));
     u.once_used = usage.is_some_and(|v| v.once);
     u.free_used = usage.map(|v| v.free).unwrap_or(-1.0);
 }
@@ -333,25 +425,29 @@ pub fn skill(
     let inherited = k != raw.kind;
     let native = reserve(&raw, &raw.kind, catalog);
     project_resources(s, &raw, &k, catalog);
-    let mut facts = json!({"action":match key.as_str(){"5"=>"quake","7"|"u23"=>"pull","21"=>"rush","u6"=>"cross","u14"=>"siphon","u24"=>"ice-mark",_=>"buff"},"ability":k,"actor":raw.actor_event()});
-    if key == "5" {
-        facts["area"] = json!(
-            crate::lifecycle::all_cells()
-                .filter(|p| ring(&raw, &[*p]))
-                .collect::<Vec<_>>()
-        );
-    }
-    if key == "u6" {
-        facts["area"] = json!(
-            crate::lifecycle::all_cells()
-                .filter(|p| square(&raw, *p) && (Some(p.x) == c.x || Some(p.y) == c.y))
-                .collect::<Vec<_>>()
-        );
-    }
-    if key == "u24" {
-        facts["area"] = json!([point(c)?]);
-    }
-    let previous = ctx.facts.replace(facts);
+    // 冰痕原事实构造会先校验坐标；预检跳过展示分配仍须保持这处错误顺序。
+    let ice_point = if key == "u24" { Some(point(c)?) } else { None };
+    let previous = ctx.replace_facts(|| {
+        let mut facts = json!({"action":match key.as_str(){"5"=>"quake","7"|"u23"=>"pull","21"=>"rush","u6"=>"cross","u14"=>"siphon","u24"=>"ice-mark",_=>"buff"},"ability":k,"actor":raw.actor_event()});
+        if key == "5" {
+            facts["area"] = json!(
+                crate::lifecycle::all_cells()
+                    .filter(|p| ring(&raw, &[*p]))
+                    .collect::<Vec<_>>()
+            );
+        }
+        if key == "u6" {
+            facts["area"] = json!(
+                crate::lifecycle::all_cells()
+                    .filter(|p| square(&raw, *p) && (Some(p.x) == c.x || Some(p.y) == c.y))
+                    .collect::<Vec<_>>()
+            );
+        }
+        if let Some(to) = ice_point {
+            facts["area"] = json!([to]);
+        }
+        facts
+    });
     let mut a = c.target_id.as_deref().and_then(|id| find_target(s, id));
     let b = c.second_id.as_deref().and_then(|id| find_target(s, id));
     let links: Vec<_> = s.siphons.iter().map(|l| l["id"].clone()).collect();
@@ -516,13 +612,7 @@ fn resolve_skill(
             }
         }
         "19" => {
-            let to = point(c)?;
-            let ghost = template(s, "wall", u.owner, to, "preview", catalog);
-            ensure(
-                can_place(s, &ghost, to, catalog)
-                    && attack_path(s, &u, &point_target(to), range, None, false).is_some(),
-                "路障须放在射程内合法空格。",
-            )?;
+            let to = prepare_wall(s, &u, c, range, catalog)?;
             let id = format!("u{}", s.serial);
             deploy_unit(s, "wall", u.owner, to, None, false, catalog, ctx);
             extra(s, &id, "expiresAt", json!(s.ply + 2.0));
@@ -690,14 +780,11 @@ fn resolve_skill(
                 None
             };
             deploy_unit(s, &key, u.owner, to, group.as_deref(), false, catalog, ctx);
-            s.extra
-                .get_mut("deaths")
-                .unwrap()
-                .as_array_mut()
-                .unwrap()
+            let record = Rc::make_mut(&mut s.deaths)
                 .iter_mut()
                 .find(|r| r["id"] == record["id"])
-                .unwrap()["revived"] = json!(true);
+                .unwrap();
+            Rc::make_mut(record)["revived"] = json!(true);
             lower_max(s, &u.id, 20.0, catalog, ctx)?;
         }
         "u21" => {
@@ -732,8 +819,7 @@ fn resolve_skill(
             u.extra.remove("hookExpiresAt");
         }
         "u24" => {
-            let to = point(c)?;
-            ensure(square(&u, to), "标记须位于自身11×11区域。")?;
+            let to = prepare_ice_mark(&u, c)?;
             let mark = json!({"id":format!("ice{}",s.serial),"sourceId":u.id,"owner":u.owner,"x":to.x,"y":to.y,"due":s.ply+u.offset+2.0});
             s.serial += 1;
             s.extra
@@ -761,4 +847,377 @@ fn resolve_skill(
     ctx.emit(s,json!({"type":"skill","to":current.actor_event(),"owner":u.owner,"text":catalog[k].skill.as_deref().unwrap_or("技能"),"ultimate":catalog.by_kind(&u.kind).tier!="normal"}),Some(format!("{}施放技能",catalog.by_kind(&u.kind).name)));
     prune_siphons(s, catalog);
     Ok(())
+}
+
+/// 冰痕落点由只读预检与正式效果共同校验，顺序保持先坐标再覆盖范围。
+fn prepare_ice_mark(u: &Unit, c: &Command) -> Result<Point, Failure> {
+    let to = point(c)?;
+    ensure(square(u, to), "标记须位于自身11×11区域。")?;
+    Ok(to)
+}
+
+/// 制造路障只需要精确落点资格；预检与正式效果共享相同的空格和射程判断。
+fn prepare_wall(
+    s: &State,
+    u: &Unit,
+    c: &Command,
+    range: f64,
+    catalog: &Catalog,
+) -> Result<Point, Failure> {
+    let to = point(c)?;
+    let ghost = template(s, "wall", u.owner, to, "preview", catalog);
+    ensure(
+        can_place(s, &ghost, to, catalog)
+            && attack_path(s, u, &point_target(to), range, None, false).is_some(),
+        "路障须放在射程内合法空格。",
+    )?;
+    Ok(to)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lazy_skill_facts_keep_ice_coordinates_before_silence_rejection() {
+        let catalog = crate::catalog::embedded().unwrap();
+        let mut state = crate::runtime::create(73127, false, &catalog).unwrap();
+        state.phase = "play".into();
+        state.summon_slots = 0.0;
+        state.ply = 5.0;
+        state.turns.insert("1".into(), 3.0);
+        let mut source = template(
+            &state,
+            "u24",
+            1,
+            Point { x: 4.0, y: 4.0 },
+            "ice-source",
+            &catalog,
+        );
+        source.born = 0.0;
+        source.silenced = true;
+        state.units = vec![source];
+        for preview in [false, true] {
+            let mut context = Resolution {
+                preview,
+                ..Default::default()
+            };
+            let mut command = Command {
+                unit_id: Some(Rc::from("ice-source")),
+                ..Command::new("skill")
+            };
+            assert!(matches!(
+                skill(&mut state.fork(), &command, &catalog, &mut context),
+                Err(Failure::Invalid("请选择棋盘格。"))
+            ));
+            command.x = Some(4.0);
+            command.y = Some(4.0);
+            assert!(matches!(
+                skill(&mut state.fork(), &command, &catalog, &mut context),
+                Err(Failure::Invalid("沉默已移除此随从的技能。"))
+            ));
+        }
+    }
+
+    #[test]
+    fn shared_revival_point_domains_preserve_large_clone_and_landmark_history() {
+        let catalog = crate::catalog::embedded().unwrap();
+        for owner in [1, 2] {
+            for size in [1, 2] {
+                for range in [1.5, 4.0] {
+                    let mut source = crate::runtime::create(73127, false, &catalog).unwrap();
+                    source.phase = "play".into();
+                    source.active = owner;
+                    source.summon_slots = 0.0;
+                    source.ply = 5.0;
+                    source.turns.insert("1".into(), 3.0);
+                    source.turns.insert("2".into(), 3.0);
+                    let y = if owner == 1 { 4.0 } else { 8.0 };
+                    let mut mage =
+                        template(&source, "u19", owner, Point { x: 4.0, y }, "mage", &catalog);
+                    mage.born = 0.0;
+                    mage.size = size as f64;
+                    mage.range_bonus = range - 4.0;
+                    source.units = vec![mage];
+                    for (kind, side, at, id) in [
+                        ("u25", owner, Point { x: 6.0, y }, "clone-a"),
+                        ("u25", owner, Point { x: 6.0, y }, "clone-b"),
+                        ("wall", 3 - owner, Point { x: 7.0, y }, "wall"),
+                    ] {
+                        let unit = template(&source, kind, side, at, id, &catalog);
+                        source.units.push(unit);
+                    }
+                    source.landmarks = Some(vec![template(
+                        &source,
+                        "s1",
+                        3 - owner,
+                        Point { x: 6.0, y: y + 1.0 },
+                        "landmark",
+                        &catalog,
+                    )]);
+                    source.deaths = Rc::new(
+                        ["1", "5", "u25", "s1"]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, kind)| {
+                                Rc::new(json!({"id":format!("record-{i}"),"kind":catalog[kind].id,
+                                    "owner":owner,"ply":4,"revived":false}))
+                            })
+                            .collect(),
+                    );
+                    let before = serde_json::to_value(&source).unwrap();
+                    let mut batch = crate::inspection::Queries::default();
+                    for record in source.deaths.iter() {
+                        let prefix: Command = serde_json::from_value(json!({
+                            "type":"skill","unitId":"mage","deathId":record["id"]
+                        }))
+                        .unwrap();
+                        let mut expected = vec![];
+                        let mut inspector = crate::inspection::Queries::default();
+                        for at in crate::geometry::all_cells() {
+                            let candidate = Command {
+                                x: Some(at.x),
+                                y: Some(at.y),
+                                ..prefix.clone()
+                            };
+                            let status = crate::actions::inspect(
+                                &source,
+                                owner,
+                                &candidate,
+                                &catalog,
+                                &mut inspector,
+                            )
+                            .unwrap();
+                            if status != "invalid" {
+                                expected.push((at, status));
+                            }
+                        }
+                        assert_eq!(
+                            crate::actions::points(&source, owner, &prefix, &catalog, &mut batch)
+                                .unwrap()
+                                .unwrap(),
+                            expected,
+                            "{owner}:{size}:{range}:{}",
+                            record["kind"]
+                        );
+                    }
+                    assert_eq!(serde_json::to_value(&source).unwrap(), before);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn final_skill_point_domains_match_individual_inspections_and_keep_prefix_failures() {
+        let catalog = crate::catalog::embedded().unwrap();
+        for ability in ["u19", "19", "u24"] {
+            for inherited in [false, true] {
+                for max_hp in if ability == "u19" {
+                    &[5.0, 25.0][..]
+                } else {
+                    &[25.0][..]
+                } {
+                    let mut source = crate::runtime::create(73127, false, &catalog).unwrap();
+                    source.phase = "play".into();
+                    source.summon_slots = 0.0;
+                    source.ply = 5.0;
+                    source.turns.insert("1".into(), 3.0);
+                    let mut mage = template(
+                        &source,
+                        if inherited { "4" } else { ability },
+                        1,
+                        Point { x: 4.0, y: 4.0 },
+                        "mage",
+                        &catalog,
+                    );
+                    mage.born = 0.0;
+                    mage.hp = *max_hp;
+                    mage.max_hp = *max_hp;
+                    mage.traits = Some(vec![catalog[ability].id.clone()]);
+                    if ability == "u19" {
+                        mage.traits
+                            .as_mut()
+                            .unwrap()
+                            .push(crate::model::Kind::Number(20));
+                    }
+                    source.units = vec![mage];
+                    source.deaths = Rc::new(vec![
+                        Rc::new(json!({"id":"recent","kind":1,"owner":1,"ply":4,"revived":false})),
+                        Rc::new(json!({"id":"used","kind":1,"owner":1,"ply":4,"revived":true})),
+                        Rc::new(json!({"id":"old","kind":1,"owner":1,"ply":0,"revived":false})),
+                        Rc::new(json!({"id":"enemy","kind":1,"owner":2,"ply":4,"revived":false})),
+                    ]);
+                    let command: Command = serde_json::from_value(
+                        json!({"type":"skill","unitId":"mage","ability":catalog[ability].id}),
+                    )
+                    .unwrap();
+                    for phase in ["play", "summon"] {
+                        source.phase = phase.into();
+                        let before = serde_json::to_value(&source).unwrap();
+                        for death_id in if ability == "u19" {
+                            &["recent", "used", "old", "enemy", "missing"][..]
+                        } else {
+                            &[""][..]
+                        } {
+                            let mut prefix = command.clone();
+                            if ability == "u19" {
+                                prefix.death_id = Some((*death_id).into());
+                            }
+                            let mut expected = vec![];
+                            let mut inspector = crate::inspection::Queries::default();
+                            for at in crate::geometry::all_cells() {
+                                let candidate = Command {
+                                    x: Some(at.x),
+                                    y: Some(at.y),
+                                    ..prefix.clone()
+                                };
+                                let status = crate::actions::inspect(
+                                    &source,
+                                    1,
+                                    &candidate,
+                                    &catalog,
+                                    &mut inspector,
+                                )
+                                .unwrap();
+                                if status != "invalid" {
+                                    expected.push((at, status));
+                                }
+                            }
+                            let actual = crate::actions::points(
+                                &source,
+                                1,
+                                &prefix,
+                                &catalog,
+                                &mut crate::inspection::Queries::default(),
+                            )
+                            .unwrap()
+                            .unwrap();
+                            assert_eq!(
+                                actual, expected,
+                                "{ability}:{inherited}:{max_hp}:{phase}:{death_id}"
+                            );
+                            assert!(
+                                crate::actions::points(
+                                    &source,
+                                    2,
+                                    &prefix,
+                                    &catalog,
+                                    &mut crate::inspection::Queries::default()
+                                )
+                                .unwrap()
+                                .unwrap()
+                                .is_empty()
+                            );
+                            if phase == "play" && ability == "u19" && *death_id == "recent" {
+                                assert!(!actual.is_empty());
+                                assert!(actual.iter().all(|(_, status)| *status
+                                    == if *max_hp > 20.0 {
+                                        "available"
+                                    } else {
+                                        "uncertain"
+                                    }));
+                            }
+                        }
+                        assert_eq!(serde_json::to_value(&source).unwrap(), before);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deep_death_history_revival_keeps_branches_public_views_and_hashes_independent() {
+        let catalog = crate::catalog::embedded().unwrap();
+        let mut source = crate::runtime::create(8137, false, &catalog).unwrap();
+        source.phase = "play".into();
+        source.summon_slots = 0.0;
+        source.ply = 5.0;
+        source.turns.insert("1".into(), 3.0);
+        deploy_unit(
+            &mut source,
+            "u19",
+            1,
+            Point { x: 3.0, y: 4.0 },
+            None,
+            false,
+            &catalog,
+            &mut Resolution::default(),
+        );
+        let mage = source.units.last_mut().unwrap();
+        mage.born = 0.0;
+        mage.hp = 5.0;
+        mage.max_hp = 5.0;
+        let mage_id = mage.id.clone();
+        source.deaths = Rc::new(
+            (0..240)
+                .map(|i| {
+                    Rc::new(json!({"id":format!("recent-{i}"),"kind":1,"owner":1,"ply":4,"revived":false,"sourceNote":{"label":"原记录扩展"}}))
+                })
+                .collect(),
+        );
+        let sibling = source.fork();
+        let public = crate::runtime::public_view(&source, 2).unwrap();
+        let before = serde_json::to_value(&source).unwrap();
+        let command: Command = serde_json::from_value(
+            json!({"type":"skill","unitId":mage_id,"deathId":"recent-239","x":4,"y":4}),
+        )
+        .unwrap();
+        let invalid = Command {
+            x: Some(3.0),
+            ..command.clone()
+        };
+        assert!(crate::command::apply_runtime(&source, &invalid, &catalog).is_err());
+        let next = crate::command::apply_runtime(&source, &command, &catalog).unwrap();
+        assert_eq!(next.deaths.len(), 240);
+        assert_eq!(next.deaths[0]["id"], "recent-1");
+        assert_eq!(next.deaths[238]["revived"], true);
+        assert_eq!(
+            next.deaths[238]["sourceNote"],
+            before["deaths"][239]["sourceNote"]
+        );
+        assert_eq!(next.deaths[239]["kind"], "u19");
+        assert_eq!(next.deaths[239]["owner"], 1);
+        assert_eq!(next.deaths[239]["ply"], 5.0);
+        assert_eq!(next.extra["heads"], source.extra["heads"]);
+        assert_eq!(serde_json::to_value(&source).unwrap(), before);
+        assert_eq!(serde_json::to_value(&sibling).unwrap(), before);
+        assert_eq!(public.position().deaths[239]["revived"], false);
+        assert!(!public.position().extra.contains_key("rng"));
+        assert_eq!(
+            crate::runtime::observe(&next, 2).unwrap()["deaths"],
+            serde_json::to_value(&next.deaths).unwrap()
+        );
+        assert_eq!(
+            crate::canonical::hash(&next),
+            crate::records::hash(&serde_json::to_value(&next).unwrap())
+        );
+
+        // 继承跑得快后，只有付费死亡才触发随机；旧旗帜镜像也必须计入存活下界。
+        for (max_hp, banner_hp, expected) in [
+            (25.0, 0.0, "available"),
+            (20.0, 0.0, "uncertain"),
+            (5.0, 0.0, "uncertain"),
+            (25.0, 10.0, "uncertain"),
+        ] {
+            let mut changed = source.fork();
+            let mage = changed.unit_mut(&mage_id).unwrap();
+            mage.hp = max_hp;
+            mage.max_hp = max_hp;
+            mage.traits = Some(vec![crate::model::Kind::Number(20)]);
+            mage.extra.insert("bannerHp".into(), json!(banner_hp));
+            let view = crate::runtime::public_view(&changed, 1).unwrap();
+            assert_eq!(
+                crate::actions::inspect(
+                    view.position(),
+                    1,
+                    &command,
+                    &catalog,
+                    &mut crate::inspection::Queries::default(),
+                )
+                .unwrap(),
+                expected,
+            );
+        }
+        assert_eq!(serde_json::to_value(&source).unwrap(), before);
+    }
 }

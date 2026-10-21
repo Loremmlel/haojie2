@@ -2,6 +2,7 @@ use crate::geometry::{Target, adjacent, attack_path, cell_iter};
 use crate::model::{Catalog, Kind, State, Unit, extra_number};
 use crate::movement::{movement_stats, reserve};
 use serde::Serialize;
+use std::borrow::Cow;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,7 +13,7 @@ pub struct Stats {
     pub remaining: f64,
     #[serde(rename = "move")]
     pub movement: f64,
-    pub mode: String,
+    pub mode: Cow<'static, str>,
     pub operation_limit: f64,
     pub operations_left: f64,
     pub frozen: bool,
@@ -157,7 +158,14 @@ pub fn stats(s: &State, u: &Unit, catalog: &Catalog) -> Stats {
         actions: actions.max(0.0),
         remaining,
         movement,
-        mode: u.mode.clone(),
+        // 固定模式复用只读字面量；兼容输入的其他字符串仍拥有原内容。
+        mode: match u.mode.as_str() {
+            "none" => Cow::Borrowed("none"),
+            "move" => Cow::Borrowed("move"),
+            "attack" => Cow::Borrowed("attack"),
+            "skill" => Cow::Borrowed("skill"),
+            _ => Cow::Owned(u.mode.clone()),
+        },
         operation_limit: (if enabled && u.has("u27") && age == 1.0 {
             2.0
         } else {

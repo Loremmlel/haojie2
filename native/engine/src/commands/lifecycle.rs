@@ -156,7 +156,7 @@ pub fn begin(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<(
                     && t.footprint().into_iter().any(&hit)
             })
             .collect();
-        let prev=ctx.facts.replace(json!({"action":"storm","stage":"trigger","ability":"u9","actor":find_target(s,&format!("base-{owner}")).unwrap().actor(),"area":all_cells().filter(|p|hit(*p)).collect::<Vec<_>>()}));
+        let prev = ctx.replace_facts(|| json!({"action":"storm","stage":"trigger","ability":"u9","actor":find_target(s,&format!("base-{owner}")).unwrap().actor(),"area":all_cells().filter(|p|hit(*p)).collect::<Vec<_>>()}));
         ctx.emit(
             s,
             json!({"type":"skill","owner":owner,"text":"烈焰风暴 · 再临"}),
@@ -266,7 +266,7 @@ pub fn end(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<(),
         let to = find_target(s, link["toId"].as_str().unwrap());
         if let (Some(source), Some(from), Some(to)) = (source, from, to) {
             ctx.token += 1;
-            let prev=ctx.facts.replace(json!({"action":"siphon","stage":"trigger","actor":from.actor(),"subject":to.actor()}));
+            let prev = ctx.replace_facts(|| json!({"action":"siphon","stage":"trigger","actor":from.actor(),"subject":to.actor()}));
             let mut packet = Source::new(&source, "skill");
             packet.owner = number(&link["owner"]) as usize;
             damage(s, &from, 20.0, &packet, catalog, ctx)?;
@@ -331,8 +331,7 @@ pub fn end(s: &mut State, catalog: &Catalog, ctx: &mut Resolution) -> Result<(),
         }
         ctx.token += 1;
         let prev = ctx
-            .facts
-            .replace(json!({"action":"judgement","actor":lord.actor_event(),"area":area}));
+            .replace_facts(|| json!({"action":"judgement","actor":lord.actor_event(),"area":area}));
         ctx.emit(s,json!({"type":"attack","from":lord.actor_event(),"to":impact,"owner":lord.owner,"text":"末日审判","ultimate":true}),None);
         area_damage(
             s,

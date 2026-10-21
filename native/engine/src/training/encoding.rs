@@ -904,7 +904,7 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
             + snapshots
             + array(&v("hands")["1"]).len()
             + array(&v("hands")["2"]).len()
-            + array(v("deaths")).len())
+            + s.deaths.len())
         + 16;
     let mut e = Encoder {
         s,
@@ -932,7 +932,7 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
             e.reference(&c["id"])?;
         }
     }
-    for d in array(v("deaths")) {
+    for d in s.deaths.iter() {
         e.reference(&d["id"])?;
     }
     for (p, key) in sides.iter().zip(&sidekeys) {
@@ -993,7 +993,7 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
             e.card(c, &json!(p), "card", None, i)?;
         }
     }
-    for (i, d) in array(v("deaths")).iter().enumerate() {
+    for (i, d) in s.deaths.iter().enumerate() {
         known(d, &["id", "kind", "owner", "ply", "revived", "group"])?;
         let kind = crate::preparation::kind(&d["kind"]);
         let mut row = e.row(
@@ -1453,7 +1453,7 @@ fn encode_mode(
         row[55] = c.path.as_deref().unwrap_or(&[]).len() as f64 / 117.0;
         row[56] = e.reference_id(c.second_id.as_deref())? as f64 / 256.0;
         row[57] = e.reference_id(c.death_id.as_deref())? as f64 / 256.0;
-        row[58] = f64::from(choice.key == "commit-path");
+        row[58] = f64::from(choice.key.is_commit_path());
         row[59] = c
             .player
             .map_or(0.0, |p| if p == viewer { 1.0 } else { -1.0 });
@@ -1544,11 +1544,9 @@ mod buffer_tests {
                 input.candidate_mask[0] = false;
             }
             let mut invalid = (*root).clone();
-            invalid.prefix = Some(crate::model::Command {
-                kind: "attack".into(),
-                mode: Some("invalid".into()),
-                ..Default::default()
-            });
+            let mut invalid_command = crate::model::Command::new("attack");
+            invalid_command.mode = Some("invalid".into());
+            invalid.prefix = Some(invalid_command);
             assert!(encode_sampling(&tree, &invalid).is_err());
             assert_eq!(
                 serde_json::to_value(&*encode_sampling(&tree, &root).unwrap()).unwrap(),

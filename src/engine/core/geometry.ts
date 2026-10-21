@@ -251,10 +251,14 @@ function movementField(u: Unit, limit: number, straight: boolean, place: (p: Poi
       }
     }
   }
-  return (to: Point): Point[] | null => {
-    if (!inside(to) || equal(u, to)) return null;
+  const has = (to: Point): boolean => {
+    if (!inside(to) || equal(u, to)) return false;
+    const cell = (to.y - 1) * WIDTH + to.x - 1;
+    return parent[cell] !== -1 && (!straight || depth[cell] === 3);
+  };
+  const path = (to: Point): Point[] | null => {
+    if (!has(to)) return null;
     let cell = (to.y - 1) * WIDTH + to.x - 1;
-    if (parent[cell] === -1 || (straight && depth[cell] !== 3)) return null;
     const path: Point[] = [];
     while (cell !== source) {
       path.push(pointAt(cell));
@@ -264,6 +268,7 @@ function movementField(u: Unit, limit: number, straight: boolean, place: (p: Poi
     path.reverse();
     return path;
   };
+  return Object.assign(path, { has });
 }
 export function movementPath(
   s: GamePosition,
@@ -373,6 +378,120 @@ export function attackRoutes(
   return attackSearch(s, u, target, limit, pierce, true).routes;
 }
 
+/**
+ * 同一不可变局面的攻击路径查询；模式预算投影只改变操作字段时可共用原实体几何。
+ * 各方向共用一次广搜，自动选路仍按原正面优先和重叠起点规则独立求值一次。
+ * 非当前实体的几何投影走原查询；返回路径独立，调用者不能改写后续候选。
+ */
+export function createAttackQuery(s: GamePosition) {
+  type Paths = { routes?: AttackRoute[]; auto?: Point[] | null; source: AttackBlockers };
+  const cache = new Map<
+    Unit,
+    AttackBlockers & { targets: Map<Unit | string, Map<number, [Paths?, Paths?]>> }
+  >();
+  const copy = (path: Point[] | null) => path?.map((p) => ({ ...p })) ?? null;
+  const entry = (u: Unit, t: Target, limit: number, pierce: boolean): Paths | undefined => {
+    const original = pieceById(s, u.id);
+    if (
+      !original ||
+      original.owner !== u.owner ||
+      original.x !== u.x ||
+      original.y !== u.y ||
+      original.size !== u.size
+    )
+      return;
+    if (t.unit) {
+      if (pieceById(s, t.id) !== t.unit || t.owner !== t.unit.owner) return;
+    } else if (t.id !== `base-${t.owner}` || !equal(t, basePoint(t.owner)) || pieceById(s, t.id))
+      return;
+    let source = cache.get(original);
+    if (!source) cache.set(original, (source = { targets: new Map() }));
+    const target = t.unit ?? t.id;
+    let ranges = source.targets.get(target);
+    if (!ranges) source.targets.set(target, (ranges = new Map()));
+    let paths = ranges.get(limit);
+    if (!paths) ranges.set(limit, (paths = []));
+    return (paths[pierce ? 1 : 0] ??= { source });
+  };
+  const routes = (u: Unit, t: Target, limit: number, pierce: boolean, saved?: Paths) => {
+    const result = saved ?? entry(u, t, limit, pierce);
+    if (!result) return attackRoutes(s, u, t, limit, pierce);
+    return (result.routes ??= attackSearch(s, u, t, limit, pierce, true, result.source).routes);
+  };
+  return {
+    directions(u: Unit, t: Target, limit: number, pierce = false): AttackDirection[] {
+      return routes(u, t, limit, pierce).map((r) => r.direction);
+    },
+    routes(u: Unit, t: Target, limit: number, pierce = false): AttackRoute[] {
+      return routes(u, t, limit, pierce).map((r) => ({ ...r, path: copy(r.path)! }));
+    },
+    path(
+      u: Unit,
+      t: Target,
+      limit: number,
+      direction?: AttackDirection,
+      pierce = false,
+    ): Point[] | null {
+      const saved = entry(u, t, limit, pierce);
+      if (!saved) return attackPath(s, u, t, limit, direction, pierce);
+      if (direction !== undefined)
+        return copy(
+          routes(u, t, limit, pierce, saved).find((r) => r.direction === direction)?.path ?? null,
+        );
+      if (saved.auto === undefined)
+        saved.auto = attackSearch(s, u, t, limit, pierce, false, saved.source).best;
+      return copy(saved.auto);
+    },
+  };
+}
+export type AttackQuery = ReturnType<typeof createAttackQuery>;
+type AttackBlockers = { blocked?: Uint8Array };
+
+/**
+ * 同一施法者的纯落点射程共用一次广搜，不用于实体目标或方向选路。
+ * 敌方占位可作终点但不入队，敌方基地仍封锁；保留多格起点、原格和分数上界。
+ */
+export function createPointAttackQuery(s: GamePosition, u: Unit, limit: number) {
+  const index = (p: Point) => (p.y - 1) * WIDTH + p.x - 1;
+  const blocked = new Uint8Array(117),
+    reached = new Uint8Array(117),
+    depth = new Int16Array(117).fill(-1),
+    queue = new Uint8Array(117);
+  for (const v of allPieces(s))
+    if (v.id !== u.id && allegiance(s, v) !== u.owner)
+      for (const p of cells(v)) if (inside(p)) blocked[index(p)] = 1;
+  const enemyBase = index(basePoint(other(u.owner)));
+  blocked[enemyBase] = 1;
+  let tail = 0;
+  for (const p of cells(u)) {
+    const cell = index(p);
+    reached[cell] = 1;
+    depth[cell] = 0;
+    queue[tail++] = cell;
+  }
+  for (let head = 0; head < tail; head++) {
+    const cell = queue[head],
+      n = depth[cell];
+    if (n >= limit) continue;
+    for (let dir = 0; dir < 4; dir++) {
+      if (
+        (dir === 0 && cell >= 108) ||
+        (dir === 1 && cell < 9) ||
+        (dir === 2 && cell % 9 === 8) ||
+        (dir === 3 && cell % 9 === 0)
+      )
+        continue;
+      const next = cell + (dir === 0 ? 9 : dir === 1 ? -9 : dir === 2 ? 1 : -1);
+      if (next === enemyBase) continue;
+      reached[next] = 1;
+      if (blocked[next] || depth[next] !== -1) continue;
+      depth[next] = n + 1;
+      queue[tail++] = next;
+    }
+  }
+  return { has: (to: Point) => inside(to) && reached[index(to)] === 1 };
+}
+
 /** 用数字前驱替代每个 BFS 节点的拥有型路径；到达结果时才展开坐标，保留精确遍历顺序。 */
 function attackSearch(
   s: GamePosition,
@@ -381,6 +500,7 @@ function attackSearch(
   limit: number,
   pierce: boolean,
   allRoutes: boolean,
+  source?: AttackBlockers,
 ) {
   const result: { best: Point[] | null; routes: AttackRoute[] } = { best: null, routes: [] };
   const t = 'id' in target ? target : undefined,
@@ -397,12 +517,25 @@ function attackSearch(
     x: (cell % WIDTH) + 1,
     y: Math.floor(cell / WIDTH) + 1,
   });
-  const ends = new Uint8Array(117),
-    blocked = new Uint8Array(117);
+  const ends = new Uint8Array(117);
+  let blocked: Uint8Array;
   for (const p of endCells) if (inside(p)) ends[index(p)] = 1;
-  for (const v of allPieces(s))
-    if (!pierce && v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
-      for (const p of cells(v)) if (inside(p)) blocked[index(p)] = 1;
+  if (source && !pierce) {
+    // 只共享来源阻挡场；各目标清格和基地封锁仍在独立副本上处理。
+    if (!source.blocked) {
+      source.blocked = new Uint8Array(117);
+      for (const v of allPieces(s))
+        if (v.id !== u.id && allegiance(s, v) !== u.owner)
+          for (const p of cells(v)) if (inside(p)) source.blocked[index(p)] = 1;
+    }
+    blocked = source.blocked.slice();
+  } else {
+    blocked = new Uint8Array(117);
+    if (!source)
+      for (const v of allPieces(s))
+        if (!pierce && v.id !== u.id && v.id !== t?.id && allegiance(s, v) !== u.owner)
+          for (const p of cells(v)) if (inside(p)) blocked[index(p)] = 1;
+  }
   for (const p of endCells) if (inside(p)) blocked[index(p)] = 0;
   if (t?.id !== `base-${other(u.owner)}`) blocked[index(basePoint(other(u.owner)))] = 1;
   const parent = new Int16Array(117).fill(-1),

@@ -1,26 +1,66 @@
 //! 同 TS 惰性参数树；节点只缓存当前公开局面，不做评分或候选裁剪。
-use crate::actions::{self, Action, Step, array, text};
+use crate::actions::{self, Action, Step, text};
 use crate::geometry;
 use crate::model::{Catalog, Command, Point, State, Unit};
+use rustc_hash::FxHashMap as HashMap;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 #[derive(Clone)]
 pub struct Prefix {
     action: usize,
     pub command: Command,
-    steps: Vec<Step>,
+    offset: usize,
+}
+#[derive(Clone)]
+pub enum ChoiceKey {
+    Owned(String),
+    Root(usize),
+    Point(Point),
+    SharedId(Rc<str>),
+    Static(&'static str),
+}
+impl ChoiceKey {
+    pub fn is_commit_path(&self) -> bool {
+        match self {
+            Self::Static(value) => *value == "commit-path",
+            Self::Owned(value) => value == "commit-path",
+            Self::SharedId(value) => value.as_ref() == "commit-path",
+            Self::Root(_) | Self::Point(_) => false,
+        }
+    }
+}
+impl From<String> for ChoiceKey {
+    fn from(value: String) -> Self {
+        Self::Owned(value)
+    }
+}
+impl From<&'static str> for ChoiceKey {
+    fn from(value: &'static str) -> Self {
+        Self::Static(value)
+    }
+}
+impl Serialize for ChoiceKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Owned(value) => serializer.serialize_str(value),
+            Self::Root(index) => serializer.serialize_str(&index.to_string()),
+            Self::Point(at) => serializer.serialize_str(&format!("{},{}", at.x, at.y)),
+            Self::SharedId(value) => serializer.serialize_str(value),
+            Self::Static(value) => serializer.serialize_str(value),
+        }
+    }
 }
 #[derive(Clone)]
 pub struct Choice {
-    pub key: String,
+    pub key: ChoiceKey,
     pub command: Command,
     pub status: &'static str,
-    pub subject: Option<String>,
-    pub next: Option<Prefix>,
+    pub subject: Option<Rc<str>>,
+    pub next: Option<Rc<Prefix>>,
 }
 #[derive(Clone)]
 pub struct Node {
@@ -41,6 +81,8 @@ impl Node {
         value
     }
 }
+type RouteKey = (crate::entities::EntityHandle, Rc<str>);
+
 pub struct Tree<'a> {
     pub observation: Option<&'a Value>,
     pub state: Cow<'a, State>,
@@ -49,11 +91,8 @@ pub struct Tree<'a> {
     actions: Vec<Action>,
     nodes: HashMap<Vec<usize>, Rc<Node>>,
     queries: RefCell<crate::inspection::Queries>,
-    targets: Vec<geometry::Target>,
-    target_index: HashMap<String, usize>,
-    // 只读局面的实体数组在本树内不变；地址仅作身份键，不解引用，也不缓存临时能力投影。
-    stats: RefCell<HashMap<*const Unit, crate::stats::Stats>>,
-    routes: RefCell<HashMap<(crate::entities::EntityHandle, usize), Vec<String>>>,
+    targets: OnceCell<Vec<geometry::Target>>,
+    routes: RefCell<HashMap<RouteKey, Vec<&'static str>>>,
     pub encoding: OnceCell<Result<crate::encoding::BaseEncoding, String>>,
     pub encoding_workspace: RefCell<crate::encoding::Workspace>,
 }
@@ -82,12 +121,27 @@ impl<'a> Tree<'a> {
         catalog: &'a Catalog,
     ) -> Result<Self, String> {
         let mut queries = crate::inspection::Queries::default();
-        let mut stats = HashMap::new();
-        let actions = actions::actions(&state, actor, catalog, &mut queries, &mut stats)?;
-        let targets = geometry::targets(&state);
-        let mut target_index = HashMap::new();
-        for (i, t) in targets.iter().enumerate() {
-            target_index.entry(t.id.clone()).or_insert(i);
+        let mut actions = actions::actions(&state, actor, catalog, &mut queries)?;
+        // 同一动作的全部前缀共享固定步骤，分支只推进 offset；隐式参数在过滤后补齐。
+        for action in &mut actions {
+            let chosen = usize::from(!action.chosen.is_empty());
+            let direction =
+                usize::from(action.command.kind == "attack" && action.command.path.is_none());
+            if action.materials.is_empty() && chosen == 0 && direction == 0 {
+                continue;
+            }
+            let mut steps = Vec::with_capacity(3 + action.steps.len() + chosen + direction);
+            if !action.materials.is_empty() {
+                steps.extend(std::iter::repeat_n(Step::new("material"), 3));
+            }
+            steps.extend_from_slice(&action.steps);
+            if chosen != 0 {
+                steps.push(Step::new("chosen"));
+            }
+            if direction != 0 {
+                steps.push(Step::new("direction"));
+            }
+            action.steps = Cow::Owned(steps);
         }
         Ok(Self {
             observation,
@@ -95,66 +149,74 @@ impl<'a> Tree<'a> {
             actor,
             catalog,
             actions,
-            nodes: HashMap::new(),
+            nodes: HashMap::default(),
             queries: RefCell::new(queries),
-            targets,
-            target_index,
-            stats: RefCell::new(stats),
-            routes: RefCell::new(HashMap::new()),
+            targets: OnceCell::new(),
+            routes: RefCell::new(HashMap::default()),
             encoding: OnceCell::new(),
             encoding_workspace: RefCell::default(),
         })
     }
-    fn routes(&self, c: &Command) -> Vec<String> {
+    fn routes(&self, c: &Command) -> Vec<&'static str> {
         let s = &self.state;
         let Some(source) = c.unit_id.as_deref().and_then(|id| s.entities.handle(s, id)) else {
             return vec![];
         };
-        let Some(target) = c
-            .target_id
-            .as_deref()
-            .and_then(|id| self.target_index.get(id))
-            .copied()
-        else {
+        let Some(target) = &c.target_id else {
             return vec![];
         };
-        let key = (source, target);
+        let key = (source, Rc::clone(target));
         if let Some(routes) = self.routes.borrow().get(&key) {
             return routes.clone();
         }
         let Some(u) = s.entity(source) else {
             return vec![];
         };
-        let t = &self.targets[target];
-        // TS selectableAttackRoutes 有结果时仍来自同一 attackRoutes，否则回退到全方向查询。
-        let routes = geometry::attack_routes(s, u, t, self.range(u), u.piercing());
+        // 对应 TS：先按完整目标域的实体顺序找首项，休眠同名地标不遮住后续活跃实体。
+        let Some(t) = s
+            .pieces()
+            .find(|u| u.id.as_str() == target.as_ref())
+            .map(geometry::Target::from)
+            .or_else(|| geometry::find_target(s, target))
+        else {
+            return vec![];
+        };
+        // 与 TS 一样，方向候选和叶子攻击预检共享本决策内的精确路径。
+        let range = self.range(u);
+        let routes = self
+            .queries
+            .borrow_mut()
+            .attacks
+            .directions(s, u, &t, range, u.piercing());
         self.routes.borrow_mut().insert(key, routes.clone());
         routes
     }
     fn range(&self, u: &Unit) -> f64 {
-        self.stats
+        self.queries
             .borrow_mut()
-            .entry(u as *const Unit)
-            .or_insert_with(|| crate::stats::stats(&self.state, u, self.catalog))
+            .attributes(&self.state, u, self.catalog)
             .range
     }
     fn prepare(&self, mut p: Prefix) -> Prefix {
-        while p.steps.first().is_some_and(|s| s.kind == "direction")
+        while self.actions[p.action]
+            .steps
+            .get(p.offset)
+            .is_some_and(|s| s.kind == "direction")
             && self.routes(&p.command).is_empty()
         {
-            p.steps.remove(0);
+            p.offset += 1;
         }
         p
     }
     fn choice(
         &self,
-        key: String,
+        key: ChoiceKey,
         p: Prefix,
-        subject: Option<String>,
+        subject: Option<Rc<str>>,
         initial: bool,
     ) -> Result<Option<Choice>, String> {
         let p = self.prepare(p);
-        let status = if p.steps.is_empty() {
+        let status = if p.offset == self.actions[p.action].steps.len() {
             // 根动作命令没有经过参数扩展，复用同一只读局面已经完成的预检。
             match initial
                 .then_some(self.actions[p.action].initial_inspection)
@@ -176,10 +238,10 @@ impl<'a> Tree<'a> {
             return Ok(None);
         }
         // 叶子没有后续前缀，直接交付这份命令；参数节点仍保留自己的不可变前缀。
-        let (command, next) = if p.steps.is_empty() {
+        let (command, next) = if p.offset == self.actions[p.action].steps.len() {
             (p.command, None)
         } else {
-            (p.command.clone(), Some(p))
+            (p.command.clone(), Some(Rc::new(p)))
         };
         Ok(Some(Choice {
             key,
@@ -191,32 +253,21 @@ impl<'a> Tree<'a> {
     }
     fn start(&self, i: usize) -> Prefix {
         let a = &self.actions[i];
-        let mut steps = vec![];
-        if !a.materials.is_empty() {
-            steps.extend(std::iter::repeat_n(Step::new("material"), 3));
-        }
-        steps.extend(a.steps.iter().cloned());
-        if !a.chosen.is_empty() {
-            steps.push(Step::new("chosen"));
-        }
-        if a.command.kind == "attack" && a.command.path.is_none() {
-            steps.push(Step::new("direction"));
-        }
         Prefix {
             action: i,
             command: a.command.clone(),
-            steps,
+            offset: 0,
         }
     }
-    fn expand(&self, p: Prefix) -> Result<Vec<Choice>, String> {
+    fn expand(&self, p: &Prefix) -> Result<Vec<Choice>, String> {
         #[cfg(feature = "kernel-profile")]
         let _profile = crate::profile::scope(crate::profile::Phase::Candidates);
         let c = &p.command;
         let a = &self.actions[p.action];
-        let step = &p.steps[0];
+        let step = &a.steps[p.offset];
         let s = &self.state;
         if step.kind == "point"
-            && p.steps.len() == 1
+            && a.steps.len() - p.offset == 1
             && let Some(domain) = actions::points(
                 s,
                 self.actor,
@@ -228,7 +279,7 @@ impl<'a> Tree<'a> {
             return Ok(domain
                 .into_iter()
                 .map(|(at, status)| Choice {
-                    key: format!("{},{}", at.x, at.y),
+                    key: ChoiceKey::Point(at),
                     command: Command {
                         x: Some(at.x),
                         y: Some(at.y),
@@ -241,19 +292,15 @@ impl<'a> Tree<'a> {
                 .collect());
         }
         let mut result = vec![];
-        let mut add = |key: String,
+        let mut add = |key: ChoiceKey,
                        command: Command,
-                       subject: Option<String>,
+                       subject: Option<Rc<str>>,
                        repeat: bool|
          -> Result<(), String> {
             let next = Prefix {
                 action: p.action,
                 command,
-                steps: if repeat {
-                    p.steps.clone()
-                } else {
-                    p.steps[1..].to_vec()
-                },
+                offset: p.offset + usize::from(!repeat),
             };
             if let Some(c) = self.choice(key, next, subject, false)? {
                 result.push(c);
@@ -264,15 +311,17 @@ impl<'a> Tree<'a> {
             "material" => {
                 for id in &a.materials {
                     if !c.material_ids.as_deref().unwrap_or(&[]).contains(id) {
+                        let shared_id: Rc<str> = Rc::from(id.as_str());
                         let mut ids = c.material_ids.clone().unwrap_or_default();
                         ids.push(id.clone());
                         add(
-                            id.clone(),
-                            Command {
-                                material_ids: Some(ids),
-                                ..c.clone()
+                            ChoiceKey::SharedId(Rc::clone(&shared_id)),
+                            {
+                                let mut command = c.clone();
+                                command.material_ids = Some(ids);
+                                command
                             },
-                            Some(id.clone()),
+                            Some(shared_id),
                             false,
                         )?;
                     }
@@ -282,10 +331,11 @@ impl<'a> Tree<'a> {
                 add("random".into(), c.clone(), None, false)?;
                 for k in &a.chosen {
                     add(
-                        format!("kind:{}", k.key()),
-                        Command {
-                            chosen_kind: Some(k.clone()),
-                            ..c.clone()
+                        format!("kind:{}", k.key()).into(),
+                        {
+                            let mut command = c.clone();
+                            command.chosen_kind = Some(k.clone());
+                            command
                         },
                         None,
                         false,
@@ -293,7 +343,8 @@ impl<'a> Tree<'a> {
                 }
             }
             "target" => {
-                for t in &self.targets {
+                // 只有实际进入目标参数节点时才构造整表；保留全部重复项与原有顺序。
+                for t in self.targets.get_or_init(|| geometry::targets(s)) {
                     if step.unit_only && t.unit.is_none() {
                         continue;
                     }
@@ -308,6 +359,7 @@ impl<'a> Tree<'a> {
                     {
                         continue;
                     }
+                    let shared_id: Rc<str> = Rc::from(t.id.as_str());
                     let mut command = c.clone();
                     match step.field {
                         "sacrificeIds" => command
@@ -315,10 +367,15 @@ impl<'a> Tree<'a> {
                             .get_or_insert_with(Vec::new)
                             .push(t.id.clone()),
                         "secondId" => command.second_id = Some(t.id.clone()),
-                        "targetId" => command.target_id = Some(t.id.clone()),
+                        "targetId" => command.target_id = Some(Rc::clone(&shared_id)),
                         _ => return Err("unknown target field".into()),
                     }
-                    add(t.id.clone(), command, Some(t.id.clone()), false)?;
+                    add(
+                        ChoiceKey::SharedId(Rc::clone(&shared_id)),
+                        command,
+                        Some(shared_id),
+                        false,
+                    )?;
                 }
             }
             "point" => {
@@ -347,7 +404,7 @@ impl<'a> Tree<'a> {
                 };
                 for at in points {
                     add(
-                        format!("{},{}", at.x, at.y),
+                        ChoiceKey::Point(at),
                         Command {
                             x: Some(at.x),
                             y: Some(at.y),
@@ -359,15 +416,17 @@ impl<'a> Tree<'a> {
                 }
             }
             "death" => {
-                for d in array(&s.extra["deaths"]) {
+                for d in s.deaths.iter() {
                     let id = text(&d["id"]);
+                    let shared_id: Rc<str> = Rc::from(id);
                     add(
-                        id.into(),
-                        Command {
-                            death_id: Some(id.into()),
-                            ..c.clone()
+                        ChoiceKey::SharedId(Rc::clone(&shared_id)),
+                        {
+                            let mut command = c.clone();
+                            command.death_id = Some(id.into());
+                            command
                         },
-                        Some(id.into()),
+                        Some(shared_id),
                         false,
                     )?;
                 }
@@ -380,17 +439,18 @@ impl<'a> Tree<'a> {
                     } else {
                         command.column = Some(n as f64);
                     }
-                    add(n.to_string(), command, None, false)?;
+                    add(n.to_string().into(), command, None, false)?;
                 }
             }
             "direction" => {
                 add("auto".into(), c.clone(), None, false)?;
                 for d in self.routes(c) {
                     add(
-                        d.clone(),
-                        Command {
-                            direction: Some(d),
-                            ..c.clone()
+                        ChoiceKey::Static(d),
+                        {
+                            let mut command = c.clone();
+                            command.direction = Some(Cow::Borrowed(d));
+                            command
                         },
                         None,
                         false,
@@ -412,10 +472,11 @@ impl<'a> Tree<'a> {
                         extended.push(at);
                         if geometry::valid_attack_route(u, &extended, self.range(u)) {
                             add(
-                                format!("{},{}", at.x, at.y),
-                                Command {
-                                    path: Some(extended),
-                                    ..c.clone()
+                                ChoiceKey::Point(at),
+                                {
+                                    let mut command = c.clone();
+                                    command.path = Some(extended);
+                                    command
                                 },
                                 None,
                                 true,
@@ -440,7 +501,7 @@ impl<'a> Tree<'a> {
         let node = if cursor.is_empty() {
             let mut choices = vec![];
             for i in 0..self.actions.len() {
-                if let Some(c) = self.choice(i.to_string(), self.start(i), None, true)? {
+                if let Some(c) = self.choice(ChoiceKey::Root(i), self.start(i), None, true)? {
                     choices.push(c);
                 }
             }
@@ -455,13 +516,12 @@ impl<'a> Tree<'a> {
             let p = parent
                 .choices
                 .get(*cursor.last().unwrap())
-                .and_then(|c| c.next.clone())
+                .and_then(|c| c.next.as_ref())
                 .ok_or("invalid or terminal action cursor")?;
-            let p = self.prepare(p);
             Node {
                 cursor: cursor.to_vec(),
                 prefix: Some(p.command.clone()),
-                stage: p.steps[0].kind,
+                stage: self.actions[p.action].steps[p.offset].kind,
                 choices: self.expand(p)?,
             }
         };
@@ -469,5 +529,31 @@ impl<'a> Tree<'a> {
         let node = Rc::new(node);
         self.nodes.insert(cursor.to_vec(), node.clone());
         Ok(node)
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    #[test]
+    fn deferred_choice_keys_preserve_wire_and_path_commit_semantics() {
+        for (key, expected, commit) in [
+            (ChoiceKey::Owned("7".into()), "7", false),
+            (ChoiceKey::Root(7), "7", false),
+            (ChoiceKey::Point(Point { x: 9.0, y: 13.0 }), "9,13", false),
+            (ChoiceKey::SharedId(Rc::from("随从-1")), "随从-1", false),
+            (ChoiceKey::Static("auto"), "auto", false),
+            (ChoiceKey::Static("commit-path"), "commit-path", true),
+            (ChoiceKey::Owned("commit-path".into()), "commit-path", true),
+            (
+                ChoiceKey::SharedId(Rc::from("commit-path")),
+                "commit-path",
+                true,
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(&key).unwrap(), json!(expected));
+            assert_eq!(key.is_commit_path(), commit);
+        }
     }
 }

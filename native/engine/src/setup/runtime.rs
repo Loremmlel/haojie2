@@ -8,7 +8,6 @@ const PUBLIC_FIELDS: &[&str] = &[
     "heads",
     "hands",
     "bonus",
-    "deaths",
     "hazards",
     "iceMarks",
     "mode",
@@ -56,12 +55,13 @@ pub fn public_view(s: &State, viewer: usize) -> Result<PublicPosition, String> {
             .as_ref()
             .map(|a| a.iter().map(crate::model::Unit::fork).collect()),
         pending: s.pending.iter().map(crate::model::Reaction::fork).collect(),
+        deaths: std::rc::Rc::clone(&s.deaths),
         clock_frames: s.clock_frames.clone(),
         entities: s.entities.clone(),
         siphons: s.siphons.clone(),
         events: vec![],
         base_effects: s.base_effects.clone(),
-        deploy_rows: json!({"1":crate::geometry::deployment_rows(s,1),"2":crate::geometry::deployment_rows(s,2)}),
+        deploy_rows: json!({"1":crate::geometry::deployment_rows(s,1),"2":crate::geometry::deployment_rows(s,2)}).into(),
         extra,
     };
     Ok(PublicPosition { position, viewer })
@@ -143,7 +143,9 @@ pub fn observe(s: &State, viewer: usize) -> Result<Value, String> {
         "shrineSetupDone",
         "winner",
     ] {
-        if let Some(v) = s.extra.get(key) {
+        if key == "deaths" {
+            output[key] = json!(s.deaths);
+        } else if let Some(v) = s.extra.get(key) {
             output[key] = v.clone();
         }
     }

@@ -1,4 +1,4 @@
-import { own } from '../runtime/position';
+import { own, ownDeathRecord } from '../runtime/position';
 import { cloneRuleData } from '../core/clone';
 import { memoizePreparation } from './preparation';
 import {
@@ -13,7 +13,7 @@ import {
   refusesFriendlyAttackBuff,
   weaponHealth,
 } from '../core/traits';
-import { installEquipment } from '../setup/shrines';
+import { bannerCount, installEquipment } from '../setup/shrines';
 import { synthesize } from '../setup/synthesis';
 import { eventActor, withEventFacts, type EventAction } from '../core/event-facts';
 import { rerollCommands, summonPool } from '../setup/summoning';
@@ -34,9 +34,12 @@ import {
 import type { Resolution } from './combat';
 import {
   ALL_CELLS,
+  basePoint,
   attackPath,
   expansionAnchors,
   canPlace,
+  createPlacementQuery,
+  createPointAttackQuery,
   cells,
   equal,
   inSquare,
@@ -70,17 +73,22 @@ import {
   passive,
   point,
   random,
+  RuleError,
   template,
 } from '../core/state';
 import { advanceUnit } from './lifecycle';
 import type { Card, Command, GamePosition, Kind, Player, Point, Source, Unit } from '../types';
 export function chargeAction(s: GamePosition, c: Command) {
-  return withEventFacts(s, { action: 'charge', actor: eventActor(findUnit(s, c.unitId)) }, () => {
-    const u = findUnit(s, c.unitId),
-      kind = c.ability ?? u.kind;
-    ensure(hasTrait(u, kind), '该棋子没有选定的蓄力能力。');
-    return withAbilityCharge(u, kind, () => resolveCharge(s, c));
-  });
+  const u = findUnit(s, c.unitId);
+  return withEventFacts(
+    s,
+    () => ({ action: 'charge', actor: eventActor(u) }),
+    () => {
+      const kind = c.ability ?? u.kind;
+      ensure(hasTrait(u, kind), '该棋子没有选定的蓄力能力。');
+      return withAbilityCharge(u, kind, () => resolveCharge(s, c));
+    },
+  );
 }
 function prepareCharge(s: GamePosition, c: Command) {
   const u = actor(s, c.unitId),
@@ -118,7 +126,12 @@ function resolveCharge(s: GamePosition, c: Command) {
   u.charge++;
   u.lastCharge = now(s, u);
   finishOperation(u);
-  emit(s, { type: 'skill', to: u, owner: u.owner, text: `蓄力 ${u.charge}/${max}` });
+  emit(s, {
+    type: 'skill',
+    to: u,
+    owner: u.owner,
+    text: `蓄力 ${u.charge}/${max}`,
+  });
 }
 /** 只投影当前实体；蓄力的全部失败条件与正式执行共用，成功后只有确定性资源写入。 */
 export function prepareChargeInspection(s: GamePosition, c: Command) {
@@ -155,33 +168,37 @@ export function useSkill(s: GamePosition, c: Command, ctx: Resolution) {
   const u = findUnit(s, c.unitId),
     kind = c.ability ?? u.kind;
   ensure(hasTrait(u, kind), '该棋子没有选定的技能。');
-  const actions: Partial<Record<Kind, EventAction>> = {
-    5: 'quake',
-    7: 'pull',
-    21: 'rush',
-    u6: 'cross',
-    u14: 'siphon',
-    u23: 'pull',
-    u24: 'ice-mark',
-  };
-  const area =
-    kind === 5
-      ? ALL_CELLS.filter((p) => ring(u, p))
-      : kind === 'u6'
-        ? ALL_CELLS.filter((p) => inSquare(u, p) && (p.x === c.x || p.y === c.y))
-        : kind === 'u24'
-          ? [point(c.x, c.y)]
-          : undefined;
+  // 冰痕原先在展示区域计算时先验证坐标；预检也必须保留这个错误顺序。
+  const icePoint = kind === 'u24' ? point(c.x, c.y) : undefined;
   const linkIds = new Set(s.siphons.map((l) => l.id));
   const endpointA = c.targetId ? targetById(s, c.targetId) : undefined;
   const endpointB = c.secondId ? targetById(s, c.secondId) : undefined;
   return withEventFacts(
     s,
-    {
-      action: actions[kind] ?? 'buff',
-      ability: kind,
-      actor: eventActor(u),
-      ...(area ? { area } : {}),
+    () => {
+      const actions: Partial<Record<Kind, EventAction>> = {
+        5: 'quake',
+        7: 'pull',
+        21: 'rush',
+        u6: 'cross',
+        u14: 'siphon',
+        u23: 'pull',
+        u24: 'ice-mark',
+      };
+      const area =
+        kind === 5
+          ? ALL_CELLS.filter((p) => ring(u, p))
+          : kind === 'u6'
+            ? ALL_CELLS.filter((p) => inSquare(u, p) && (p.x === c.x || p.y === c.y))
+            : icePoint
+              ? [icePoint]
+              : undefined;
+      return {
+        action: actions[kind] ?? 'buff',
+        ability: kind,
+        actor: eventActor(u),
+        ...(area ? { area } : {}),
+      };
     },
     () => {
       const native = { once: u.onceUsed, free: u.freeUsed };
@@ -329,7 +346,13 @@ function prepareSacrifice(s: GamePosition, u: Unit, c: Command, range: number) {
   candidates.sort((a, b) => (u.owner === 1 ? a.y - b.y : b.y - a.y));
   const t = candidates[0];
   ensure(t || sameKind, '这一列没有射程内的敌方目标。');
-  return { victim, sameKind, summonOnly, t, amount: getStats(s, victim).attack };
+  return {
+    victim,
+    sameKind,
+    summonOnly,
+    t,
+    amount: getStats(s, victim).attack,
+  };
 }
 /**
  * 对大参数域技能仅复制施法者进行模式/继承资源投影。
@@ -341,18 +364,30 @@ export function prepareSkillInspection(s: GamePosition, c: Command) {
 }
 /** 公共施法资格、目标关系和亡者窗口按决策复用；保留原先到叶子才拒绝的候选和错误顺序。 */
 export function createSkillInspectionQuery(s: GamePosition) {
+  const key = (c: Command) => JSON.stringify([c.unitId, c.ability]);
   const prepare = memoizePreparation((key: string) => {
     const [unitId, ability] = JSON.parse(key);
     return skillInspection(
       s,
-      { type: 'skill', unitId: unitId ?? undefined, ability: ability ?? undefined },
+      {
+        type: 'skill',
+        unitId: unitId ?? undefined,
+        ability: ability ?? undefined,
+      },
       true,
     );
   });
-  return (c: Command) => {
+  const inspect = (c: Command) => {
     skillCoordinate(s, c);
-    prepare(JSON.stringify([c.unitId, c.ability]))?.(c);
+    return prepare(key(c))?.(c);
   };
+  return Object.assign(inspect, {
+    points(c: Command) {
+      const kind = c.ability ?? findUnit(s, c.unitId).kind;
+      if (kind !== 'u19' && kind !== 19 && kind !== 'u24') return;
+      return prepare(key(c))?.points?.(c);
+    },
+  });
 }
 // 原正式技能在公共资源准备前捕获冰痕落点；保留非法坐标的拒绝顺序。
 function skillCoordinate(s: GamePosition, c: Command) {
@@ -361,11 +396,54 @@ function skillCoordinate(s: GamePosition, c: Command) {
     point(c.x, c.y);
   }
 }
-function skillInspection(
-  s: GamePosition,
-  c: Command,
-  reuse = false,
-): ((c: Command) => void) | undefined {
+interface SkillInspection {
+  (c: Command): boolean;
+  points?(c: Command): { point: Point; complete: boolean }[];
+}
+/** 最后一个落点参数保持完整格序；公共前缀由调用方提前验证，逐格仍走原规则准备。 */
+function skillPoints(c: Command, inspect: (c: Command) => unknown, complete: boolean) {
+  const points: { point: Point; complete: boolean }[] = [];
+  for (const at of ALL_CELLS) {
+    try {
+      inspect({ ...c, ...at });
+      points.push({ point: at, complete });
+    } catch (error) {
+      if (!(error instanceof RuleError)) throw error;
+    }
+  }
+  return points;
+}
+function pureSkillPoints(
+  prepare: (c: Command) => unknown,
+  points?: SkillInspection['points'],
+): SkillInspection {
+  const inspect = (c: Command) => {
+    prepare(c);
+    return true;
+  };
+  return Object.assign(inspect, {
+    points: points ?? ((c: Command) => skillPoints(c, prepare, true)),
+  });
+}
+/** 同一来源的落点复用空间索引与射程场；每个点域只创建一次模板。 */
+function createSkillPointQuery(s: GamePosition, u: Unit, range: number) {
+  let placement: ReturnType<typeof createPlacementQuery> | undefined;
+  let attack: ReturnType<typeof createPointAttackQuery> | undefined;
+  return (kind: Kind, complete: boolean) => {
+    const ghost = template(kind, u.owner, s.turns[u.owner], { x: 1, y: 1 });
+    const landmark = isLandmark(ghost);
+    const occupied = (placement ??= createPlacementQuery(s));
+    const reachable = (attack ??= createPointAttackQuery(s, u, range));
+    return ALL_CELLS.flatMap((point) => {
+      // 地标 canPlace 的原格判定必须看到本次候选坐标，与逐点 template 保持一致。
+      const candidate = landmark ? { ...ghost, ...point } : ghost;
+      return occupied.canPlace(candidate, point) && reachable.has(point)
+        ? [{ point, complete }]
+        : [];
+    });
+  };
+}
+function skillInspection(s: GamePosition, c: Command, reuse = false): SkillInspection | undefined {
   const raw = findUnit(s, c.unitId),
     kind = c.ability ?? raw.kind;
   ensure(hasTrait(raw, kind), '该棋子没有选定的技能。');
@@ -376,27 +454,57 @@ function skillInspection(
   }
   return withAbilityCharge(u, kind, () => {
     const prepared = beginSkill(view, c);
-    if (kind !== 'u19' && kind !== 7 && kind !== 14) return () => {};
+    if (kind === 6) return () => true;
+    if (kind === 19) {
+      const points = createSkillPointQuery(view, prepared.u, prepared.range);
+      return pureSkillPoints(
+        (command) => prepareWall(view, prepared.u, command, prepared.range),
+        () => points('wall', true),
+      );
+    }
+    if (kind === 'u21')
+      return (command: Command) => {
+        skillFriend(view, prepared.u, command.targetId, prepared.range);
+        return true;
+      };
+    if (kind === 'u24') return pureSkillPoints((command) => prepareIceMark(prepared.u, command));
+    if (kind !== 'u19' && kind !== 7 && kind !== 14) return () => false;
     // 能力投影在 withAbilityCharge 返回后会恢复；独立保存查询视图，不能引用已恢复的施法者。
     const projected = cloneRuleData(prepared.u);
     const position = {
       ...view,
       units: view.units.map((v) => (v.id === projected.id ? projected : v)),
       ...(view.landmarks
-        ? { landmarks: view.landmarks.map((v) => (v.id === projected.id ? projected : v)) }
+        ? {
+            landmarks: view.landmarks.map((v) => (v.id === projected.id ? projected : v)),
+          }
         : {}),
     };
     const record = (id: string | undefined) => revivalRecord(position, projected, id);
     const target = (id: string | undefined) => skillEnemy(position, projected, id, prepared.range);
     const records = reuse ? memoizePreparation(record) : record;
     const targets = reuse ? memoizePreparation(target) : target;
-    return (command: Command) => {
+    // 入场只可能新增旗帜；按当前真实旗帜修正旧镜像后仍大于费用，施法者就不会死亡。
+    const survivesRevival =
+      kind === 'u19' &&
+      projected.maxHp + 10 * bannerCount(position, projected.owner) - (projected.bannerHp ?? 0) >
+        20;
+    const inspect: SkillInspection = (command: Command) => {
       if (kind === 'u19')
         revivalDestination(position, projected, command, prepared.range, records(command.deathId));
       else if (kind === 7)
         hookDestination(position, projected, command, prepared.range, targets(command.targetId));
       else if (kind === 14) prepareSacrifice(position, projected, command, prepared.range);
+      return survivesRevival;
     };
+    if (kind === 'u19') {
+      const points = createSkillPointQuery(position, projected, prepared.range);
+      inspect.points = (command) => {
+        const record = records(command.deathId);
+        return points(record.kind, survivesRevival);
+      };
+    }
+    return inspect;
   });
 }
 function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
@@ -425,7 +533,14 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
     case 7: {
       const { t, to } = prepareHook(s, u, c, range);
       if (!protectedEffect(s, t, source, ctx)) {
-        emit(s, { type: 'move', stage: 'trigger', from: t, to, unitId: t.id, owner: t.owner });
+        emit(s, {
+          type: 'move',
+          stage: 'trigger',
+          from: t,
+          to,
+          unitId: t.id,
+          owner: t.owner,
+        });
         Object.assign(t.unit!, to);
       }
       break;
@@ -439,16 +554,19 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
         s.summonSlots++;
         emit(
           s,
-          { type: 'skill', to: u, owner: u.owner, text: '献祭同类 · 本回合额外召唤+1' },
+          {
+            type: 'skill',
+            to: u,
+            owner: u.owner,
+            text: '献祭同类 · 本回合额外召唤+1',
+          },
           '献祭炮献祭同类，获得一次仅本回合可用的召唤机会（可付2人头升级）。',
         );
       }
       break;
     }
     case 19: {
-      const to = point(c.x, c.y),
-        ghost = template('wall', u.owner, s.turns[u.owner], to);
-      ensure(canPlace(s, ghost, to) && attackPath(s, u, to, range), '路障须放在射程内合法空格。');
+      const to = prepareWall(s, u, c, range);
       const v = addUnit(s, 'wall', u.owner, to);
       v.expiresAt = s.ply + 2;
       break;
@@ -495,7 +613,13 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
             (cell) => inSquare(u, cell) && (cell.x === p.x || cell.y === p.y),
           ),
       );
-      emit(s, { type: 'skill', to: p, owner: u.owner, text: '十字浩劫', ultimate: true });
+      emit(s, {
+        type: 'skill',
+        to: p,
+        owner: u.owner,
+        text: '十字浩劫',
+        ultimate: true,
+      });
       areaDamage(
         s,
         victims,
@@ -557,7 +681,6 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
     case 'u19': {
       // 最后一次复活可以耗尽施法者剩余生命上限（25 → 5 → 0）。
       // 先验证全部条件；lowerMax 将献祭归属记为己方。
-      own(s, 'deaths');
       const { record, to } = prepareRevival(s, u, c, range);
       addUnit(
         s,
@@ -566,7 +689,7 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
         to,
         record.kind === 'u25' ? `revived-group${s.serial++}` : undefined,
       );
-      record.revived = true;
+      ownDeathRecord(s, s.deaths.indexOf(record)).revived = true;
       lowerMax(s, u, 20, ctx);
       break;
     }
@@ -602,8 +725,7 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
       break;
     }
     case 'u24': {
-      const to = point(c.x, c.y);
-      ensure(inSquare(u, to), '标记须位于自身11×11区域。');
+      const to = prepareIceMark(u, c);
       own(s, 'iceMarks').push({
         id: `ice${s.serial++}`,
         sourceId: u.id,
@@ -632,27 +754,42 @@ function resolveSkill(s: GamePosition, c: Command, ctx: Resolution) {
   );
   pruneSiphons(s);
 }
+/** 冰痕的落点资格由只读预检和正式效果共同使用。 */
+function prepareIceMark(u: Unit, c: Command) {
+  const to = point(c.x, c.y);
+  ensure(inSquare(u, to), '标记须位于自身11×11区域。');
+  return to;
+}
+/** 制造路障没有随机后果；共享落点检查完成后，预检无需建立结算分支。 */
+function prepareWall(s: GamePosition, u: Unit, c: Command, range: number) {
+  const to = point(c.x, c.y),
+    ghost = template('wall', u.owner, s.turns[u.owner], to);
+  ensure(canPlace(s, ghost, to) && attackPath(s, u, to, range), '路障须放在射程内合法空格。');
+  return to;
+}
 export function cast(s: GamePosition, c: Command, ctx: Resolution) {
-  const kind = s.hands[s.active].find((v) => v.id === c.cardId)?.kind;
-  const actions: Partial<Record<Kind, EventAction>> = {
-    8: 'bomb',
-    17: 'ward',
-    18: 'execution',
-    22: 'conversion',
-    u9: 'storm',
-    u17: 'clock',
-    u26: 'inner-fire',
-  };
-  const hit = castArea(kind, c);
-  const area = hit ? ALL_CELLS.filter(hit) : undefined;
-  const target = c.targetId ? targetById(s, c.targetId) : undefined;
   return withEventFacts(
     s,
-    {
-      ...(kind !== undefined ? { action: actions[kind] ?? 'buff', ability: kind } : {}),
-      stage: 'apply',
-      subject: eventActor(target),
-      ...(area ? { area } : {}),
+    () => {
+      const kind = s.hands[s.active].find((v) => v.id === c.cardId)?.kind;
+      const actions: Partial<Record<Kind, EventAction>> = {
+        8: 'bomb',
+        17: 'ward',
+        18: 'execution',
+        22: 'conversion',
+        u9: 'storm',
+        u17: 'clock',
+        u26: 'inner-fire',
+      };
+      const hit = castArea(kind, c);
+      const area = hit ? ALL_CELLS.filter(hit) : undefined;
+      const target = c.targetId ? targetById(s, c.targetId) : undefined;
+      return {
+        ...(kind !== undefined ? { action: actions[kind] ?? 'buff', ability: kind } : {}),
+        stage: 'apply',
+        subject: eventActor(target),
+        ...(area ? { area } : {}),
+      };
     },
     () => resolveCast(s, c, ctx),
   );
@@ -707,12 +844,39 @@ function castVictims(s: GamePosition, owner: Player, hit: (p: Point) => boolean)
       (t.unit ? cells(t.unit) : [t]).some(hit),
   );
 }
-/** 空区域没有伤害后果；存在反制时，参数通过后的第一个随机边界已确定。 */
+/** 预检只问是否存在受击者，不构造整份目标包装和覆盖格数组。 */
+function hasCastVictim(s: GamePosition, owner: Player, hit: (p: Point) => boolean) {
+  const affected = (u: Unit) => {
+    if (allegiance(s, u) === owner) return false;
+    const size = u.size ?? definition(u.kind).size ?? 1;
+    for (let i = 0; i < Math.floor(size * size); i++)
+      if (hit({ x: u.x + (i % size), y: u.y + Math.floor(i / size) })) return true;
+    return false;
+  };
+  return (
+    s.units.some(affected) ||
+    !!s.landmarks?.some((u) => u.hp > 0 && u.dormantSince === undefined && affected(u)) ||
+    hit(basePoint(owner === 1 ? 2 : 1))
+  );
+}
+/** 共享完整选择校验；纯附魔无需模拟，随机抽牌与反制停在原来的第一个随机边界。 */
 export function prepareCastInspection(s: GamePosition, c: Command) {
   const { owner, card } = prepareCast(s, c);
   if (spellCounters(s, owner).length) return 'uncertain';
+  if (card.kind === 17 || card.kind === 18 || card.kind === 22) return 'available';
+  if (card.kind === 25 && c.mode !== 'double' && c.chosenKind === undefined) return 'uncertain';
   const hit = castArea(card.kind, c);
-  if (hit && !castVictims(s, owner, hit).length) return 'available';
+  if (hit && !hasCastVictim(s, owner, hit)) return 'available';
+}
+/** 爆弹最后落点域只准备一次手牌和反制；非空区域仍由完整预检裁定后果。 */
+export function prepareCastPoints(s: GamePosition, c: Command) {
+  if (s.hands[s.active].find((card) => card.id === c.cardId)?.kind !== 8) return;
+  const { owner } = prepareCast(s, { ...c, x: 1, y: 1 });
+  if (spellCounters(s, owner).length) return;
+  return ALL_CELLS.filter((point) => point.x <= 8 && point.y <= 12).map((point) => ({
+    point,
+    complete: !hasCastVictim(s, owner, castArea(8, { ...c, ...point })!),
+  }));
 }
 function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
   const { owner, card, target } = prepareCast(s, c);
@@ -742,7 +906,12 @@ function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
     case 8: {
       const hit = castArea(card.kind, c)!;
       const victims = castVictims(s, owner, hit);
-      emit(s, { type: 'skill', to: { x: c.x! + 0.5, y: c.y! + 0.5 }, owner, text: '爆弹' });
+      emit(s, {
+        type: 'skill',
+        to: { x: c.x! + 0.5, y: c.y! + 0.5 },
+        owner,
+        text: '爆弹',
+      });
       areaDamage(s, victims, (p) => (hit(p) ? 20 : 0), source, ctx);
       break;
     }
@@ -763,7 +932,12 @@ function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
         undefined,
         card.kind !== 17,
       );
-      emit(s, { type: 'shield', to: u, owner, text: definition(card.kind).name });
+      emit(s, {
+        type: 'shield',
+        to: u,
+        owner,
+        text: definition(card.kind).name,
+      });
       break;
     }
     case 25: {
@@ -777,7 +951,13 @@ function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
     case 'u9': {
       const axis = c.mode as 'row' | 'column',
         line = axis === 'row' ? c.row! : c.column!;
-      own(s, 'hazards').push({ id: `hazard${s.serial++}`, owner, axis, line, due: s.ply + 2 });
+      own(s, 'hazards').push({
+        id: `hazard${s.serial++}`,
+        owner,
+        axis,
+        line,
+        due: s.ply + 2,
+      });
       const hit = castArea(card.kind, c)!;
       const victims = castVictims(s, owner, hit);
       areaDamage(s, victims, (p) => (hit(p) ? 20 : 0), source, ctx);
@@ -817,11 +997,15 @@ function resolveCast(s: GamePosition, c: Command, ctx: Resolution) {
 export function equip(s: GamePosition, c: Command) {
   return withEventFacts(
     s,
-    { action: 'equip', ability: s.hands[s.active].find((v) => v.id === c.cardId)?.kind },
+    () => ({
+      action: 'equip',
+      ability: s.hands[s.active].find((v) => v.id === c.cardId)?.kind,
+    }),
     () => resolveEquip(s, c),
   );
 }
-function resolveEquip(s: GamePosition, c: Command) {
+/** 装备全部拒绝条件均先只读验证；后续替换属性和手牌没有随机边界。 */
+export function prepareEquip(s: GamePosition, c: Command) {
   const card = s.hands[s.active].find((v) => v.id === c.cardId);
   ensure(card && definition(card.kind).weapon !== undefined, '请选择武器牌。');
   const u = findUnit(s, c.targetId);
@@ -838,6 +1022,10 @@ function resolveEquip(s: GamePosition, c: Command) {
     u.equipment.reduce<number>((n, k) => n + weaponHealth(k), 0) +
     weaponHealth(card.kind);
   ensure(nextMax > 0, '更换这件武器会使生命上限归零，不能装备。');
+  return { card, u };
+}
+function resolveEquip(s: GamePosition, c: Command) {
+  const { card, u } = prepareEquip(s, c);
   installEquipment(u, card.kind, card.id);
   own(s, 'hands')[s.active] = s.hands[s.active].filter((v) => v.id !== card.id);
   emit(s, {
@@ -849,9 +1037,15 @@ function resolveEquip(s: GamePosition, c: Command) {
   });
 }
 export function craft(s: GamePosition, c: Command) {
-  synthesize(s, { ...c, type: 'synthesize', recipeId: 'firelord', materialIds: c.cardIds });
+  synthesize(s, {
+    ...c,
+    type: 'synthesize',
+    recipeId: 'firelord',
+    materialIds: c.cardIds,
+  });
 }
-export function reroll(s: GamePosition, c: Command) {
+/** 改判在移除手牌、占用来源和抽牌前共用完整只读资格。 */
+export function prepareReroll(s: GamePosition, c: Command) {
   const card = s.hands[s.active].find((v) => v.id === c.cardId);
   ensure(card && card.summonedPly === s.ply, '改判仅限本回合刚召唤的牌。');
   if (card.group)
@@ -864,11 +1058,15 @@ export function reroll(s: GamePosition, c: Command) {
     rerollCommands(s, card).some((option) => option.unitId === c.unitId),
     '需要一名本回合尚未改判的友方改判小法师，或前五回合刚抽到的自身。',
   );
+  return { card, pool: summonPool(card)! };
+}
+export function reroll(s: GamePosition, c: Command) {
+  const { card, pool } = prepareReroll(s, c);
   if (c.unitId) findUnit(s, c.unitId).rerollUsedPly = s.ply;
   own(s, 'hands')[s.active] = s.hands[s.active].filter((v) =>
     card.group ? v.group !== card.group : v.id !== card.id,
   );
-  const cards = draw(s, s.active, 1, summonPool(card) === 'ultimate', c.chosenKind);
+  const cards = draw(s, s.active, 1, pool === 'ultimate', c.chosenKind);
   for (const v of cards) v.rerolled = true;
   emit(
     s,

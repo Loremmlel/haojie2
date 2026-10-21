@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { add, fixture } from '../helpers';
+import { add, card, fixture } from '../helpers';
 import { TrainingEnvironment } from '../../src/match/training';
 import {
   applyCommand,
@@ -16,10 +16,74 @@ import {
   createSamplingEncoder,
 } from '../../src/ai/training/encoding/decision';
 import { TinyPolicy } from '../../scripts/training/sampling/policy';
-import { RuleError, ensure } from '../../src/engine/core/state';
+import {
+  RuleError,
+  ensure,
+  getStats,
+  piercing,
+  addEffect,
+  withoutRulePresentation,
+} from '../../src/engine/core/state';
 import { createTrainingCommandInspector, trainingActionSpace } from '../../src/ai/training/queries';
-import { ALL_CELLS } from '../../src/engine/core/geometry';
-import type { Command } from '../../src/engine/types';
+import { ALL_CELLS, attackRoutes, targets } from '../../src/engine/core/geometry';
+import type { Command, GameState } from '../../src/engine/types';
+
+test('训练省展示仍保留随机流、连锁和完整规则状态，异常后恢复正式事件', () => {
+  const cases: { state: GameState; command: Command }[] = [];
+  for (const variant of ['death', 'random', 'retaliation', 'heal-mark', 'passives', 'spell']) {
+    const state = fixture(),
+      source = add(state, variant === 'random' ? 1 : variant === 'heal-mark' ? 2 : 26, 1, 4, 4),
+      victim = add(
+        state,
+        variant === 'retaliation' ? 'u18' : variant === 'random' ? 20 : 2,
+        2,
+        4,
+        5,
+      );
+    let command: Command = { type: 'attack', unitId: source.id, targetId: victim.id };
+    if (variant === 'death' || variant === 'random') victim.hp = 1;
+    if (variant === 'retaliation') source.hp = 1;
+    if (variant === 'heal-mark') {
+      source.hp = source.maxHp - 1;
+      addEffect(state, source, 'mark', 2, 0, 4, undefined, victim.id);
+      command = { ...command, targetId: source.id, mode: 'heal' };
+    }
+    if (variant === 'passives') source.traits = ['s3', 's12'];
+    if (variant === 'spell') command = { type: 'cast', cardId: card(state, 8), x: 4, y: 5 };
+    cases.push({ state, command });
+  }
+  for (const { state, command } of cases) {
+    const before = structuredClone(state),
+      expected = applyRuntimeCommand(state, command),
+      actual = withoutRulePresentation(() => applyRuntimeCommand(state, command));
+    assert.equal(actual.log.length, 0);
+    assert.ok(actual.events.length > 0);
+    assert.equal(actual.events.length, expected.events.length);
+    assert.deepEqual(
+      actual.events.map((e) => e.id),
+      expected.events.map((e) => e.id),
+    );
+    expected.log = [];
+    expected.events = [];
+    actual.log = [];
+    actual.events = [];
+    assert.deepEqual(actual, expected);
+    assert.deepEqual(state, before);
+  }
+  const { state, command } = cases[0];
+  assert.throws(
+    () =>
+      withoutRulePresentation(() =>
+        withoutRulePresentation(() => {
+          throw new Error('退出展示范围');
+        }),
+      ),
+    /退出展示范围/,
+  );
+  const restored = applyRuntimeCommand(state, command);
+  assert.ok(restored.log.length > 0);
+  assert.ok(restored.events.some((e) => e.actor));
+});
 
 test('根动作沿用预检后仍保持随机边界、操作者权限和新局面隔离', () => {
   const play = fixture();
@@ -51,6 +115,82 @@ test('根动作沿用预检后仍保持随机边界、操作者权限和新局�
     }
   assert.ok(statuses.has('available'));
   assert.ok(statuses.has('uncertain'));
+});
+
+test('目标域与路线首次匹配保留重复ID、休眠地标和基地别名的原候选顺序', () => {
+  for (const variant of ['ordinary', 'base-unit', 'dormant-duplicate', 'base-landmark']) {
+    const s = fixture(),
+      source = add(s, 26, 1, 4, 4),
+      victim = add(s, 26, 2, 4, 5);
+    add(s, 2, 1, 3, 4);
+    if (variant === 'base-unit') victim.id = 'base-2';
+    if (variant === 'dormant-duplicate' || variant === 'base-landmark') {
+      const active = add(s, 's1', 2, 4, 6);
+      s.units.pop();
+      active.id = variant === 'base-landmark' ? 'base-2' : 'duplicate';
+      s.landmarks = [{ ...active, x: 8, dormantSince: s.ply }, active];
+    }
+    const observation = structuredClone(observe(s, 1)),
+      before = structuredClone(observation),
+      tree = new TrainingActionTree(observation, 1),
+      inspect = createTrainingCommandInspector(observation, 1),
+      root = tree.node(),
+      attack = root.choices.findIndex(
+        (choice) =>
+          choice.command.type === 'attack' &&
+          choice.command.unitId === source.id &&
+          choice.command.mode === undefined,
+      );
+    assert.ok(attack >= 0, variant);
+    const command = root.choices[attack].command,
+      domain = targets(tree.position),
+      choices = tree.node([attack]).choices;
+    const expected = domain.flatMap((candidate) => {
+      const target = domain.find((t) => t.id === candidate.id)!;
+      const routes = attackRoutes(
+        tree.position,
+        source,
+        target,
+        getStats(tree.position, source).range,
+        piercing(source),
+      );
+      const c = { ...command, targetId: candidate.id };
+      return routes.length || inspect(c).status !== 'invalid'
+        ? [{ id: candidate.id, next: routes.length > 0 }]
+        : [];
+    });
+    assert.deepEqual(
+      choices.map((choice) => ({ id: choice.command.targetId, next: !!choice.next })),
+      expected,
+      variant,
+    );
+    for (const [i, choice] of choices.entries()) {
+      if (!choice.next) continue;
+      const target = domain.find((t) => t.id === choice.command.targetId)!;
+      const routes = attackRoutes(
+        tree.position,
+        source,
+        target,
+        getStats(tree.position, source).range,
+        piercing(source),
+      );
+      const expectedKeys = [
+        { key: 'auto', command: choice.command },
+        ...routes.map((route) => ({
+          key: route.direction,
+          command: { ...choice.command, direction: route.direction },
+        })),
+      ]
+        .filter(({ command }) => inspect(command).status !== 'invalid')
+        .map(({ key }) => key);
+      assert.deepEqual(
+        tree.node([attack, i]).choices.map((choice) => choice.key),
+        expectedKeys,
+        variant,
+      );
+    }
+    assert.deepEqual(observation, before, variant);
+  }
 });
 
 test('公开根动作被改写后重新预检，根叶子命令保留独立副本', () => {

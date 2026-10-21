@@ -103,12 +103,19 @@ test('移动可达场保留所有落点的精确路径、顺序和分数距离�
         [0, true],
       ] as const) {
         const field = query.movementField(u, limit, straight);
-        for (const to of ALL_CELLS)
+        for (const to of [...ALL_CELLS, { x: 0, y: 1 }, { x: 1.5, y: 2 }]) {
+          const expected = movementPath(job.state, u, to, limit, straight);
+          assert.equal(
+            field.has(to),
+            expected !== null,
+            `${name}:${u.id}:${to.x},${to.y}:${limit}:${straight}:可达性`,
+          );
           assert.deepEqual(
             field(to),
-            movementPath(job.state, u, to, limit, straight),
+            expected,
             `${name}:${u.id}:${to.x},${to.y}:${limit}:${straight}`,
           );
+        }
       }
     }
   }

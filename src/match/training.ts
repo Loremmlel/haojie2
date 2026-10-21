@@ -1,7 +1,7 @@
 import { createGame, applyRuntimeCommand } from '../engine/commands/game';
 import { actorCommandError, parseCommand } from '../engine/online/authority';
 import { HAOJIE_RULESET } from '../engine/online/player-view';
-import { ensure } from '../engine/core/state';
+import { ensure, withoutRulePresentation } from '../engine/core/state';
 import type { Command, GameState, Player } from '../engine/types';
 import { decisionOwner, observe, publicPositionView } from '../ai/observation';
 import { importRuntimePosition } from '../engine/runtime/position';
@@ -130,11 +130,13 @@ export class TrainingEnvironment {
     ensure(!status.terminated && !status.truncated, '训练对局已终止或截断，请显式 reset。');
     const error = actorCommandError(this.#state, actor, command);
     ensure(!error, error ?? '操作者无权执行命令。');
-    const next = applyRuntimeCommand(
-      this.#state,
-      command.type === 'choose-shrine' ? { ...command, player: actor } : command,
+    const next = withoutRulePresentation(() =>
+      applyRuntimeCommand(
+        this.#state,
+        command.type === 'choose-shrine' ? { ...command, player: actor } : command,
+      ),
     );
-    // 事件在结算过程中仍完整生成，不能跳过依赖事件的事实关联或改变身份序号。
+    // 原始事件仍参与连锁查找，正式随机数与序号完整推进；训练记录继续清空表现字段。
     next.events = [];
     next.log = [];
     this.#state = next;

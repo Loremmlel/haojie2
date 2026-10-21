@@ -45,6 +45,7 @@ import {
   targets,
   targetById,
   topTarget,
+  type AttackQuery,
 } from '../core/geometry';
 import {
   activeEffect,
@@ -67,7 +68,17 @@ import {
   resetUnit,
   RuleError,
 } from '../core/state';
-import type { Effect, GamePosition, Player, Point, Source, Target, Unit } from '../types';
+import type {
+  Effect,
+  GamePosition,
+  Kind,
+  Player,
+  Point,
+  Source,
+  Stats,
+  Target,
+  Unit,
+} from '../types';
 export interface Resolution {
   retaliations: Set<string>;
   protection: Map<string, boolean>;
@@ -490,16 +501,15 @@ export function damage(
       const options = { reactive: true, forceHostile: true };
       // 自动反击仍遵守普通攻击的目标与路径资格；不可攻击的来源不能中断原伤害。
       // 只捕获无副作用的准备阶段，结算中的异常不能吞掉或留下半次反击。
-      let available = true;
+      let prepared: ReturnType<typeof prepareAttack> | undefined;
       try {
-        prepareAttack(s, u, origin, options);
+        prepared = prepareAttack(s, u, origin, options);
       } catch (error) {
         if (!(error instanceof RuleError)) throw error;
-        available = false;
       }
-      if (available) {
+      if (prepared) {
         ctx.retaliations.add(pair);
-        performAttack(s, u, origin, ctx, options);
+        performAttack(s, u, origin, ctx, options, prepared);
       }
     }
   }
@@ -611,6 +621,7 @@ interface AttackOptions {
   noPierce?: boolean;
   weaponFirst?: boolean;
 }
+type AttackAttributes = (s: GamePosition, u: Unit) => Pick<Stats, 'attack' | 'range'>;
 /** 结算命中但不消费模式资源；完整操作次数由命令层管理。 */
 export function performAttack(
   s: GamePosition,
@@ -625,11 +636,11 @@ export function performAttack(
   prepared.options.hits = hits;
   const result = withEventFacts(
     s,
-    {
+    () => ({
       action: prepared.options.mode === 'heal' ? 'mend' : 'attack',
       actor: eventActor(u),
       subject: eventActor(t),
-    },
+    }),
     () => resolveAttack(s, u, t, ctx, prepared),
   );
   // 每次完整攻击只清空一次蓄力，包括免疫、处决和穿透齐射。
@@ -645,7 +656,14 @@ export function performAttack(
   return result;
 }
 /** 只读验证一次攻击并计算路径；不消耗资源、随机数或修改事件，可供正式结算与预检共用。 */
-export function prepareAttack(s: GamePosition, u: Unit, t: Target, options: AttackOptions = {}) {
+export function prepareAttack(
+  s: GamePosition,
+  u: Unit,
+  t: Target,
+  options: AttackOptions = {},
+  query?: AttackQuery,
+  attributes: AttackAttributes = getStats,
+) {
   const ally = t.unit ? allegiance(s, t.unit) === u.owner : t.owner === u.owner;
   const healing =
     !options.forceHostile &&
@@ -663,7 +681,54 @@ export function prepareAttack(s: GamePosition, u: Unit, t: Target, options: Atta
     options.mode !== 'heal' || healingAttack(u) || definition(u.kind).attack < 0,
     '该棋子不能选择治疗。',
   );
-  return attackGeometry(s, u, t, { ...options, mode: healing ? 'heal' : 'damage' });
+  return attackGeometry(
+    s,
+    u,
+    t,
+    { ...options, mode: healing ? 'heal' : 'damage' },
+    query,
+    attributes,
+  );
+}
+const randomAttackKinds: readonly Kind[] = [1, 'u1', 'u8'];
+const randomConsequenceKinds: readonly Kind[] = ['s3', 's12', '17p', 20, 'u18'];
+const hasRandomConsequenceKind = (u: Unit) => anyTrait(u, randomConsequenceKinds);
+/** 沉默能力仍可能被击杀继承；检查全部后果来源，攻击者自身抽样另查。 */
+export function deterministicAttackPosition(s: GamePosition): boolean {
+  return !s.units.some(hasRandomConsequenceKind) && !s.landmarks?.some(hasRandomConsequenceKind);
+}
+/** 完整准备后先检查窄分支，再检查整局确定性；其余后果仍模拟。 */
+export function inspectPreparedAttack(
+  s: GamePosition,
+  u: Unit,
+  t: Target,
+  prepared: ReturnType<typeof prepareAttack>,
+  deterministic?: () => boolean,
+): 'available' | 'uncertain' | undefined {
+  const { ally, canPierce, options, stats } = prepared;
+  if (ally && options.mode === 'heal') {
+    if (
+      !targetEffects(s, t).some((e) => e.type === 'mark' && activeEffect(s, e, t.unit)) &&
+      (u.silenced || (!hasTrait(u, 's3') && !hasTrait(u, 's12')))
+    )
+      return 'available';
+  } else if (
+    !canPierce &&
+    options.mode === 'damage' &&
+    !u.silenced &&
+    !u.effects.some((e) => e.type === 'execute' && activeEffect(s, e, u)) &&
+    abilityKinds(u).some(
+      (kind) => attackProfile(kind, stats.attack, u.kills, u.silenced, !t.unit).cuts,
+    )
+  )
+    return 'uncertain';
+  // 无穿透与反击时只有当前来源执行攻击抽样；击杀强夺发生在本次抽样之后。
+  if (
+    !canPierce &&
+    (deterministic ? deterministic() : deterministicAttackPosition(s)) &&
+    !anyTrait(u, randomAttackKinds)
+  )
+    return 'available';
 }
 function applyAttackPassives(
   s: GamePosition,
@@ -709,7 +774,14 @@ function applyAttackPassives(
     emit(s, { type: 'skill', to: u, owner: u.owner, text: '先攻 · 额外完整操作+1' });
   }
 }
-function attackGeometry(s: GamePosition, u: Unit, t: Target, options: AttackOptions) {
+function attackGeometry(
+  s: GamePosition,
+  u: Unit,
+  t: Target,
+  options: AttackOptions,
+  query?: AttackQuery,
+  attributes: AttackAttributes = getStats,
+) {
   const ally = t.unit ? allegiance(s, t.unit) === u.owner : t.owner === u.owner;
   ensure(
     !ally ||
@@ -724,7 +796,7 @@ function attackGeometry(s: GamePosition, u: Unit, t: Target, options: AttackOpti
       (piercing(u) && t.unit && isLandmark(t.unit)),
     '非穿透攻击优先命中地标上的友方棋子或叠放栈顶。',
   );
-  const stats = getStats(s, u);
+  const stats = attributes(s, u);
   ensure(u.silenced || !hasTrait(u, 'firelord'), '炎魔之王不能普通攻击；沉默会移除此限制。');
   const charged = attackChargeKind(u);
   if (!options.reactive && !options.noPierce && charged !== undefined)
@@ -785,7 +857,10 @@ function attackGeometry(s: GamePosition, u: Unit, t: Target, options: AttackOpti
         if (equal(p, basePoint(other(u.owner)))) break;
       }
     }
-  } else path = attackPath(s, u, t, limit, options.direction, canPierce);
+  } else
+    path = query
+      ? query.path(u, t, limit, options.direction, canPierce)
+      : attackPath(s, u, t, limit, options.direction, canPierce);
   ensure(path, '目标不在射程内，或所选攻击路径被阻挡。');
   return { ally, stats, canPierce, path, options };
 }

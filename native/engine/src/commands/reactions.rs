@@ -89,14 +89,15 @@ pub fn move_runner(
         u.shots = 0.0;
     }
     u.moves = prepared.source.moves;
-    let mut s = previous.fork();
+    let mut s = previous.fork_command();
     normalize_guards(&mut s);
-    s.events.clear();
     let mut ctx = Resolution {
         preview,
-        facts: Some(json!({"actor":u.actor_event(),"action":"rush"})),
         ..Default::default()
     };
+    ctx.facts = ctx
+        .presentation_enabled()
+        .then(|| json!({"actor":u.actor_event(),"action":"rush"}));
     if starting {
         consume(&mut u, charged.as_ref().unwrap(), catalog);
     }

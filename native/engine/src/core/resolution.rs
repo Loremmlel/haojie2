@@ -2,7 +2,23 @@ use crate::geometry::{Target, attack_path};
 use crate::model::{Catalog, Failure, Point, State, Unit, number};
 use crate::stats::stats;
 use serde_json::{Value, json};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+
+thread_local! {
+    static PRESENTATION_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
+}
+struct PresentationScope(bool);
+impl Drop for PresentationScope {
+    fn drop(&mut self) {
+        PRESENTATION_SUPPRESSED.set(self.0);
+    }
+}
+/// 同步训练步只关闭展示，原始事件、正式随机与完整结算不变；嵌套和异常退出恢复旧范围。
+pub fn without_presentation<T>(run: impl FnOnce() -> T) -> T {
+    let _scope = PresentationScope(PRESENTATION_SUPPRESSED.replace(true));
+    run()
+}
 
 #[derive(Default)]
 /// 一条命令内的临时结算上下文；事实范围服务事件快照，反击集合阻止递归循环。
@@ -16,13 +32,24 @@ pub struct Resolution {
     pub attack_hits: Vec<(String, String, f64)>,
 }
 impl Resolution {
-    pub fn enter(&mut self, actor: Value, subject: Value, action: &str) -> Option<Value> {
+    pub fn presentation_enabled(&self) -> bool {
+        !self.preview && !PRESENTATION_SUPPRESSED.get()
+    }
+    /// 预检只保留原始事件，展示事实延迟到正式结算才构造；恢复范围仍由原调用点负责。
+    pub fn replace_facts(&mut self, make: impl FnOnce() -> Value) -> Option<Value> {
         let previous = self.facts.take();
-        let mut facts = json!({"actor":actor,"subject":subject,"action":action});
-        if let Some(id) = previous.as_ref().and_then(|v| v.get("causeId")) {
+        if self.presentation_enabled() {
+            self.facts = Some(make());
+        }
+        previous
+    }
+    pub fn enter(&mut self, make: impl FnOnce() -> Value) -> Option<Value> {
+        let previous = self.replace_facts(make);
+        if let Some(facts) = self.facts.as_mut()
+            && let Some(id) = previous.as_ref().and_then(|v| v.get("causeId"))
+        {
             facts["parentId"] = id.clone();
         }
-        self.facts = Some(facts);
         previous
     }
     /// 与 TS enrichEvent 共用字段契约；仅捕获坐标/身份事实，不增加额外 serial 或随机消耗。
@@ -32,8 +59,8 @@ impl Resolution {
         let id = format!("e{}", s.serial);
         s.serial += 1;
         event["id"] = json!(id);
-        // 与 TS 只读预检一致：保留规则查找所需的原始事件，省去不会导出的展示与日志。
-        if self.preview {
+        // 与 TS 展示范围一致：保留规则查找所需的原始事件，省去不会导出的展示与日志。
+        if !self.presentation_enabled() {
             s.events.push(event);
             return;
         }
@@ -167,6 +194,13 @@ pub fn add_effect(
     }
 }
 pub fn normalize_guards(s: &mut State) {
+    if !s
+        .units
+        .iter()
+        .any(|u| u.guard_used && !u.extra.contains_key("guardSourceIds"))
+    {
+        return;
+    }
     let guards: Vec<_> = s
         .units
         .iter()
@@ -358,4 +392,101 @@ pub fn terminal(s: &mut State, ctx: &mut Resolution) {
         format!("{}获胜", faction(winner.as_u64().unwrap() as usize))
     };
     ctx.emit(s, json!({"type":"turn","text":"对局结束"}), Some(message));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn training_presentation_scope_restores_nested_errors_and_unwind() {
+        let mut context = Resolution::default();
+        assert!(context.presentation_enabled());
+        let result = without_presentation(|| {
+            assert!(!context.presentation_enabled());
+            assert!(!context.preview);
+            context.replace_facts(|| panic!("训练步不得构造展示事实"));
+            let nested = without_presentation(|| Err::<(), _>("内层拒绝"));
+            assert_eq!(nested, Err("内层拒绝"));
+            assert!(!context.presentation_enabled());
+            Err::<(), _>("外层拒绝")
+        });
+        assert_eq!(result, Err("外层拒绝"));
+        assert!(context.presentation_enabled());
+        assert!(std::panic::catch_unwind(|| without_presentation(|| panic!("范围退出"))).is_err());
+        assert!(context.presentation_enabled());
+        context.replace_facts(|| json!({"action":"charge"}));
+        assert_eq!(context.facts.unwrap()["action"], "charge");
+    }
+
+    #[test]
+    fn guard_normalization_keeps_missing_and_present_fields_and_source_owners() {
+        let catalog = crate::catalog::embedded().unwrap();
+        let mut state = crate::runtime::create(73127, false, &catalog).unwrap();
+        state.units = vec![
+            template(&state, "26", 1, Point { x: 3.0, y: 5.0 }, "first", &catalog),
+            template(&state, "3", 1, Point { x: 4.0, y: 5.0 }, "spent", &catalog),
+            template(&state, "3", 2, Point { x: 5.0, y: 5.0 }, "enemy", &catalog),
+            template(
+                &state,
+                "26",
+                2,
+                Point { x: 6.0, y: 5.0 },
+                "second",
+                &catalog,
+            ),
+        ];
+        state.units[1].hp = 0.0;
+        state.units[1].silenced = true;
+        let unchanged = serde_json::to_value(&state).unwrap();
+        normalize_guards(&mut state);
+        assert_eq!(serde_json::to_value(&state).unwrap(), unchanged);
+
+        state.units[0].guard_used = true;
+        state.units[0]
+            .extra
+            .insert("guardSourceIds".into(), Value::Null);
+        normalize_guards(&mut state);
+        assert_eq!(state.units[0].extra["guardSourceIds"], Value::Null);
+
+        state.units[0].extra.remove("guardSourceIds");
+        state.units[3].guard_used = true;
+        normalize_guards(&mut state);
+        assert_eq!(state.units[0].extra["guardSourceIds"], json!(["spent"]));
+        assert_eq!(state.units[3].extra["guardSourceIds"], json!(["enemy"]));
+        let normalized = serde_json::to_value(&state).unwrap();
+        normalize_guards(&mut state);
+        assert_eq!(serde_json::to_value(&state).unwrap(), normalized);
+    }
+
+    #[test]
+    fn lazy_facts_preserve_formal_scope_and_preview_raw_events() {
+        let mut context = Resolution {
+            facts: Some(json!({"causeId":"parent","action":"buff"})),
+            ..Default::default()
+        };
+        let previous = context.replace_facts(|| json!({"action":"charge"}));
+        assert!(context.facts.as_ref().unwrap().get("parentId").is_none());
+        context.facts = previous;
+        let previous = context.enter(|| json!({"action":"attack","actor":{"id":"source"}}));
+        assert_eq!(context.facts.as_ref().unwrap()["parentId"], "parent");
+        context.facts = previous;
+
+        let catalog = crate::catalog::embedded().unwrap();
+        let mut state = crate::runtime::create(73127, false, &catalog).unwrap();
+        state.events.clear();
+        let serial = state.serial;
+        let log = state.extra["log"].clone();
+        context.preview = true;
+        let previous = context.enter(|| panic!("预检不得构造展示事实"));
+        assert!(context.facts.is_none());
+        assert_eq!(previous.as_ref().unwrap()["causeId"], "parent");
+        let mut raw = json!({"type":"skill","owner":1,"action":"mark","text":"原始事件"});
+        context.emit(&mut state, raw.clone(), Some("展示日志".into()));
+        raw["id"] = json!(format!("e{serial}"));
+        assert_eq!(state.events, vec![raw]);
+        assert_eq!(state.serial, serial + 1);
+        assert_eq!(state.extra["log"], log);
+        context.facts = previous;
+    }
 }

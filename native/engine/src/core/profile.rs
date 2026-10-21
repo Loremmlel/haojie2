@@ -1,7 +1,7 @@
 //! 独立诊断构建：分项独占时间与分配累计量，禁止用该构建报告正式倍率。
 use serde_json::{Value, json};
 use std::{
-    alloc::{GlobalAlloc, Layout, System},
+    alloc::{GlobalAlloc, Layout},
     cell::RefCell,
     sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
     time::Instant,
@@ -12,10 +12,11 @@ static COUNTS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
 struct Counting;
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
-// 只透传系统分配器；不改变对齐、布局、失败值或内存所有权。
+// 只透传当前后端；不改变对齐、布局、失败值或内存所有权。
+// alloc_zeroed 沿用原默认实现：经本包装 alloc 后清零，保持原探针路径与计数。
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let ptr = unsafe { System.alloc(layout) };
+        let ptr = unsafe { crate::allocation::RAW.alloc(layout) };
         if !ptr.is_null() && ACTIVE.load(Relaxed) {
             COUNTS[0].fetch_add(1, Relaxed);
             COUNTS[1].fetch_add(layout.size() as u64, Relaxed);
@@ -27,10 +28,10 @@ unsafe impl GlobalAlloc for Counting {
             COUNTS[2].fetch_add(1, Relaxed);
             COUNTS[3].fetch_add(layout.size() as u64, Relaxed);
         }
-        unsafe { System.dealloc(ptr, layout) };
+        unsafe { crate::allocation::RAW.dealloc(ptr, layout) };
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        let next = unsafe { System.realloc(ptr, layout, size) };
+        let next = unsafe { crate::allocation::RAW.realloc(ptr, layout, size) };
         if !next.is_null() && ACTIVE.load(Relaxed) {
             COUNTS[0].fetch_add(1, Relaxed);
             COUNTS[1].fetch_add(size as u64, Relaxed);

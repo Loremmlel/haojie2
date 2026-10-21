@@ -44,6 +44,7 @@ pub fn from_request(mut request: Value) -> Result<Catalog, String> {
         return Err("empty catalog".into());
     }
     let combat = request["combat"].take();
+    let mut rule_values = rustc_hash::FxHashMap::default();
     for path in [
         "/accumulator/attack",
         "/accumulator/range",
@@ -73,8 +74,13 @@ pub fn from_request(mut request: Value) -> Result<Catalog, String> {
         "/archmageCounterChance",
         "/archmageCounterHealth",
     ] {
-        if !combat.pointer(path).is_some_and(Value::is_number) {
+        let value = combat.pointer(path);
+        if !value.is_some_and(Value::is_number) {
             return Err(format!("missing combat rule: {path}"));
+        }
+        // 只缓存已校验的固定路径；扩展路径继续使用原 JSON Pointer 规则。
+        if let Some(value) = value.and_then(Value::as_f64) {
+            rule_values.insert(path, value);
         }
     }
     let pools: BTreeMap<String, Vec<model::Kind>> =
@@ -137,8 +143,53 @@ pub fn from_request(mut request: Value) -> Result<Catalog, String> {
             .collect(),
         entries,
         combat,
+        rule_values,
         pools,
         recipes,
         encoding,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn numeric_rule_cache_preserves_loaded_values_pointer_fallback_and_validation_order() {
+        let mut request: Value = serde_json::from_slice(RULES).unwrap();
+        request["combat"]["sageAuraAttack"] = json!(-0.0);
+        request["combat"]["charger"]["heavyChance"] = json!(0.125);
+        request["combat"]["extension"] = json!({"~2": -3.75, "a/b": [0.1]});
+        let combat = request["combat"].clone();
+        let catalog = from_request(request).unwrap();
+        assert_eq!(catalog.combat, combat);
+        assert!(catalog.rule_values.contains_key("/charger/heavyChance"));
+        assert!(!catalog.rule_values.contains_key("/extension/~2"));
+        for path in [
+            "/sageAuraAttack",
+            "/charger/heavyChance",
+            "/extension/~2",
+            "/extension/~02",
+            "/extension/a~1b/0",
+        ] {
+            assert_eq!(
+                catalog.rule(path).to_bits(),
+                combat
+                    .pointer(path)
+                    .and_then(Value::as_f64)
+                    .unwrap()
+                    .to_bits(),
+                "{path}"
+            );
+        }
+
+        let mut invalid: Value = serde_json::from_slice(RULES).unwrap();
+        invalid["combat"]["accumulator"]["attack"] = Value::Null;
+        invalid["combat"]["goldSpellChance"] = Value::Null;
+        assert_eq!(
+            from_request(invalid).err().as_deref(),
+            Some("missing combat rule: /accumulator/attack")
+        );
+    }
 }

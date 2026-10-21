@@ -13,37 +13,39 @@ pub fn cast(
     catalog: &Catalog,
     ctx: &mut Resolution,
 ) -> Result<(), Failure> {
-    let selected = card(s, c);
-    let mut facts = json!({"stage":"apply"});
-    if let Some(card) = selected.as_ref() {
-        let k = kind(&card["kind"]).key();
-        facts["ability"] = card["kind"].clone();
-        facts["action"] = json!(match k.as_str() {
-            "8" => "bomb",
-            "17" => "ward",
-            "18" => "execution",
-            "22" => "conversion",
-            "u9" => "storm",
-            "u17" => "clock",
-            "u26" => "inner-fire",
-            _ => "buff",
-        });
-        if k == "8" || k == "u9" {
-            facts["area"] = json!(
-                crate::lifecycle::all_cells()
-                    .filter(|p| hits(&k, c, *p))
-                    .collect::<Vec<_>>()
-            );
+    let previous = ctx.replace_facts(|| {
+        let selected = card(s, c);
+        let mut facts = json!({"stage":"apply"});
+        if let Some(card) = selected.as_ref() {
+            let k = kind(&card["kind"]).key();
+            facts["ability"] = card["kind"].clone();
+            facts["action"] = json!(match k.as_str() {
+                "8" => "bomb",
+                "17" => "ward",
+                "18" => "execution",
+                "22" => "conversion",
+                "u9" => "storm",
+                "u17" => "clock",
+                "u26" => "inner-fire",
+                _ => "buff",
+            });
+            if k == "8" || k == "u9" {
+                facts["area"] = json!(
+                    crate::lifecycle::all_cells()
+                        .filter(|p| hits(&k, c, *p))
+                        .collect::<Vec<_>>()
+                );
+            }
         }
-    }
-    if let Some(t) = c
-        .target_id
-        .as_deref()
-        .and_then(|id| crate::geometry::find_target(s, id))
-    {
-        facts["subject"] = t.actor();
-    }
-    let previous = ctx.facts.replace(facts);
+        if let Some(t) = c
+            .target_id
+            .as_deref()
+            .and_then(|id| crate::geometry::find_target(s, id))
+        {
+            facts["subject"] = t.actor();
+        }
+        facts
+    });
     resolve(s, c, catalog, ctx)?;
     ctx.facts = previous;
     Ok(())
@@ -160,14 +162,63 @@ fn victims(s: &State, owner: usize, k: &str, c: &Command) -> Vec<Target> {
         })
         .collect()
 }
-/// 对应 TS prepareCastInspection；没有区域目标时不复制局面，反制停在相同随机边界。
+/// 对应 TS hasCastVictim；只读存在性查询不构造拥有型目标和覆盖格数组。
+fn has_victim(s: &State, owner: usize, k: &str, c: &Command) -> bool {
+    s.pieces()
+        .any(|u| u.side() != owner && crate::geometry::cell_iter(u, u.at()).any(|p| hits(k, c, p)))
+        || hits(k, c, crate::geometry::base_point(3 - owner))
+}
+/// 对应 TS prepareCastInspection；纯附魔无需模拟，抽牌与反制停在原随机边界。
 pub fn prepare_inspection(s: &State, c: &Command, catalog: &Catalog) -> Result<bool, Failure> {
     let prepared = prepare(s, c, catalog)?;
     if !counters(s, prepared.owner).is_empty() {
         return Err(Failure::Uncertain);
     }
     let k = kind(&prepared.card["kind"]).key();
-    Ok((k == "8" || k == "u9") && victims(s, prepared.owner, &k, c).is_empty())
+    if ["17", "18", "22"].contains(&k.as_str()) {
+        return Ok(true);
+    }
+    if k == "25" && c.mode.as_deref() != Some("double") && c.chosen_kind.is_none() {
+        return Err(Failure::Uncertain);
+    }
+    Ok((k == "8" || k == "u9") && !has_victim(s, prepared.owner, &k, c))
+}
+/// 对应 TS prepareCastPoints：爆弹在无反制时共用卡牌与公共选择资格，受击落点仍完整预检。
+pub fn points(
+    s: &State,
+    c: &Command,
+    catalog: &Catalog,
+) -> Result<Option<Vec<(Point, bool)>>, Failure> {
+    let Some(card) = card(s, c).filter(|card| card["kind"] == 8) else {
+        return Ok(None);
+    };
+    // 坐标由点域提供；其余前缀条件仍走与正式施法相同的准备入口。
+    let prepared = prepare(
+        s,
+        &Command {
+            x: Some(1.0),
+            y: Some(1.0),
+            ..c.clone()
+        },
+        catalog,
+    )?;
+    if !counters(s, prepared.owner).is_empty() {
+        return Ok(None);
+    }
+    let k = kind(&card["kind"]).key();
+    Ok(Some(
+        crate::geometry::all_cells()
+            .filter(|at| at.x <= 8.0 && at.y <= 12.0)
+            .map(|at| {
+                let candidate = Command {
+                    x: Some(at.x),
+                    y: Some(at.y),
+                    ..c.clone()
+                };
+                (at, !has_victim(s, prepared.owner, &k, &candidate))
+            })
+            .collect(),
+    ))
 }
 fn resolve(
     s: &mut State,

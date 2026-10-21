@@ -5,6 +5,7 @@ use crate::model::{Catalog, Command, Failure, Kind, Point, State, ensure, extra_
 use crate::movement::{actor, finish, movement_stats, reserve, sync};
 use crate::resolution::{Resolution, deploy_unit, normalize_guards, template, terminal};
 use serde_json::{Value, json};
+use std::rc::Rc;
 
 pub fn hand(s: &State) -> &[Value] {
     s.extra["hands"][s.active.to_string()].as_array().unwrap()
@@ -338,7 +339,9 @@ fn charge(
     r.charge_type = crate::model::ChargeMode::parse(c.mode.as_deref().unwrap_or(""));
     r.charge = value + 1.0;
     r.last_charge = s.ply + u.offset;
-    ctx.facts = Some(json!({"action":"charge","actor":u.actor_event()}));
+    ctx.facts = ctx
+        .presentation_enabled()
+        .then(|| json!({"action":"charge","actor":u.actor_event()}));
     let u = s.unit_mut(c.unit_id.as_deref().unwrap()).unwrap();
     if k == u.kind {
         u.reserve = r;
@@ -363,12 +366,12 @@ pub fn weapon_health(k: &Kind) -> f64 {
         _ => 0.0,
     }
 }
-fn equip(
-    s: &mut State,
+/// 全部装备拒绝条件先只读验证；正式替换与预检共享顺序，后续没有随机边界。
+pub fn prepare_equip(
+    s: &State,
     c: &Command,
     catalog: &Catalog,
-    ctx: &mut Resolution,
-) -> Result<(), Failure> {
+) -> Result<(Value, Kind, f64), Failure> {
     let card = card(s, c)
         .filter(|v| catalog[&kind(&v["kind"]).key()].weapon.is_some())
         .ok_or(Failure::Invalid("请选择武器牌。"))?;
@@ -393,6 +396,15 @@ fn equip(
         without + weapon_health(&k) > 0.0,
         "更换这件武器会使生命上限归零，不能装备。",
     )?;
+    Ok((card, k, without))
+}
+fn equip(
+    s: &mut State,
+    c: &Command,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+) -> Result<(), Failure> {
+    let (card, k, without) = prepare_equip(s, c, catalog)?;
     let u = s.unit_mut(c.target_id.as_deref().unwrap()).unwrap();
     u.max_hp = without;
     u.hp = u.hp.min(without);
@@ -411,7 +423,9 @@ fn equip(
     u.extra.remove("overMaxFromBanner");
     let event = json!({"type":"shield","to":u.actor_event(),"owner":u.owner,"text":format!("装备 · {}",catalog.by_kind(&k).name),"ultimate":true});
     remove_card(s, &card);
-    ctx.facts = Some(json!({"action":"equip","ability":k}));
+    ctx.facts = ctx
+        .presentation_enabled()
+        .then(|| json!({"action":"equip","ability":k}));
     ctx.emit(s, event, None);
     ctx.facts = None;
     Ok(())
@@ -449,12 +463,74 @@ fn aura(
     ctx.emit(s,json!({"type":"skill","owner":s.active,"text":format!("永久光环 · {}",catalog.by_kind(&k).name)}),None);
     Ok(())
 }
-fn reroll(
-    s: &mut State,
-    c: &Command,
-    catalog: &Catalog,
-    ctx: &mut Resolution,
-) -> Result<(), Failure> {
+/// 对应 TS summonPool：新牌优先保存的来源池，旧牌按图鉴与派生种类回退。
+pub fn summon_pool<'a>(card: &'a Value, catalog: &Catalog) -> Option<&'a str> {
+    card["summonPool"].as_str().or_else(|| {
+        let k = kind(&card["kind"]);
+        if catalog.pools["normal"].contains(&k) || k.is("3p") || k.is("17p") {
+            Some("normal")
+        } else if catalog.pools["ultimate"].contains(&k) || k.is("u12p") {
+            Some("ultimate")
+        } else {
+            None
+        }
+    })
+}
+/// 对应 TS rerollCommands；候选与正式资格共用可用来源，不用错误文本过滤。
+pub fn reroll_commands(s: &State, card: &Value, catalog: &Catalog) -> Vec<Command> {
+    let group = card["group"].as_str();
+    if ["synthesis", "shrine-draft", "shrine-setup"].contains(&s.phase.as_str())
+        || s.extra.get("summonOffer").is_some_and(|v| !v.is_null())
+        || s.extra
+            .get("winner")
+            .is_some_and(|v| !v.is_null() && v != false && v != 0)
+        || !s.pending.is_empty()
+        || s.summon_slots != 0.0
+        || card["summonedPly"] != s.ply
+        || !hand(s).iter().any(|v| v["id"] == card["id"])
+        || summon_pool(card, catalog).is_none()
+        || (group.is_some()
+            && hand(s)
+                .iter()
+                .filter(|v| v["group"] == card["group"])
+                .count()
+                != 8)
+    {
+        return vec![];
+    }
+    let card_id: Rc<str> = Rc::from(card["id"].as_str().unwrap());
+    let base = || Command {
+        card_id: Some(Rc::clone(&card_id)),
+        ..Command::new("reroll")
+    };
+    let mut commands = vec![];
+    if card["kind"] == "u13" && s.turns[&s.active.to_string()] <= 5.0 && card["rerolled"] != true {
+        commands.push(base());
+    }
+    let mut mages: Vec<_> = s
+        .units
+        .iter()
+        .filter(|u| {
+            u.has("u13")
+                && u.owner == s.active
+                && !u.silenced
+                && u.extra
+                    .get("rerollUsedPly")
+                    .map(|v| number(v) != s.ply)
+                    .unwrap_or(extra_number(u, "freeUsed") != s.ply + u.offset)
+        })
+        .collect();
+    mages.sort_by(|a, b| extra_number(a, "deployedAt").total_cmp(&extra_number(b, "deployedAt")));
+    for mage in mages {
+        commands.push(Command {
+            unit_id: Some(Rc::from(mage.id.as_str())),
+            ..base()
+        });
+    }
+    commands
+}
+/// 改判移除手牌、占用来源与抽牌之前的完整只读准备。
+pub fn prepare_reroll(s: &State, c: &Command, catalog: &Catalog) -> Result<(Value, bool), Failure> {
     let card = card(s, c)
         .filter(|v| v["summonedPly"] == s.ply)
         .ok_or(Failure::Invalid("改判仅限本回合刚召唤的牌。"))?;
@@ -473,36 +549,24 @@ fn reroll(
         s.summon_slots == 0.0,
         "请先用完本回合的召唤次数，再选择改判。",
     )?;
-    let k = kind(&card["kind"]);
-    let pool = card["summonPool"].as_str().or_else(|| {
-        if catalog.pools["normal"].contains(&k) || k.is("3p") || k.is("17p") {
-            Some("normal")
-        } else if catalog.pools["ultimate"].contains(&k) || k.is("u12p") {
-            Some("ultimate")
-        } else {
-            None
-        }
-    });
-    let source = if let Some(id) = &c.unit_id {
-        s.units.iter().any(|u| {
-            u.id == *id
-                && u.has("u13")
-                && u.owner == s.active
-                && !u.silenced
-                && u.extra
-                    .get("rerollUsedPly")
-                    .map(|v| number(v) != s.ply)
-                    .unwrap_or(extra_number(u, "freeUsed") != s.ply + u.offset)
-        })
-    } else {
-        k.is("u13") && s.turns[&s.active.to_string()] <= 5.0 && card["rerolled"] != true
-    };
     ensure(
-        pool.is_some()
-            && source
-            && !["synthesis", "shrine-draft", "shrine-setup"].contains(&s.phase.as_str()),
+        reroll_commands(s, &card, catalog)
+            .iter()
+            .any(|option| option.unit_id == c.unit_id),
         "需要一名本回合尚未改判的友方改判小法师，或前五回合刚抽到的自身。",
     )?;
+    let ultimate = summon_pool(&card, catalog) == Some("ultimate");
+    Ok((card, ultimate))
+}
+fn reroll(
+    s: &mut State,
+    c: &Command,
+    catalog: &Catalog,
+    ctx: &mut Resolution,
+) -> Result<(), Failure> {
+    let (card, ultimate) = prepare_reroll(s, c, catalog)?;
+    let group = card["group"].as_str();
+    let k = kind(&card["kind"]);
     if let Some(id) = &c.unit_id {
         let ply = s.ply;
         s.unit_mut(id)
@@ -517,13 +581,7 @@ fn reroll(
             v["id"] != card["id"]
         }
     });
-    let cards = draw(
-        s,
-        pool == Some("ultimate"),
-        c.chosen_kind.as_ref(),
-        catalog,
-        ctx,
-    )?;
+    let cards = draw(s, ultimate, c.chosen_kind.as_ref(), catalog, ctx)?;
     for v in hand_mut(s) {
         if cards.iter().any(|c| c["id"] == v["id"]) {
             v["rerolled"] = json!(true);
@@ -573,9 +631,8 @@ pub fn apply(
     catalog: &Catalog,
     preview: bool,
 ) -> Result<State, Failure> {
-    let mut s = previous.fork();
+    let mut s = previous.fork_command();
     normalize_guards(&mut s);
-    s.events.clear();
     let mut ctx = Resolution {
         preview,
         ..Default::default()
@@ -648,4 +705,90 @@ pub fn apply(
         terminal(&mut s, &mut ctx);
     }
     Ok(s)
+}
+
+#[cfg(test)]
+mod reroll_tests {
+    use super::*;
+
+    #[test]
+    fn reroll_sources_and_previews_preserve_order_errors_randomness_and_input() {
+        let catalog = crate::catalog::embedded().unwrap();
+        let mut s = crate::runtime::create(73127, false, &catalog).unwrap();
+        s.phase = "play".into();
+        s.summon_slots = 0.0;
+        s.ply = 5.0;
+        s.turns.insert("1".into(), 3.0);
+        s.extra.get_mut("hands").unwrap()["1"] = json!([
+            {"id":"fresh","kind":"u13","drawnAt":3,"summonedPly":5,"summonPool":"ultimate"},
+            {"id":"old","kind":1,"drawnAt":2,"summonedPly":3,"summonPool":"normal"}
+        ]);
+        for (i, (id, deployed, silenced, used)) in [
+            ("late", 3.0, false, false),
+            ("early", 1.0, false, false),
+            ("tied", 1.0, false, false),
+            ("silenced", 0.0, true, false),
+            ("spent", 0.0, false, true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut u = template(
+                &s,
+                "u13",
+                1,
+                Point {
+                    x: 1.0 + i as f64,
+                    y: 4.0,
+                },
+                id,
+                &catalog,
+            );
+            u.deployed_at = deployed;
+            u.silenced = silenced;
+            if used {
+                u.extra.insert("rerollUsedPly".into(), json!(s.ply));
+            }
+            s.units.push(u);
+        }
+        let before = serde_json::to_value(&s).unwrap();
+        let commands = reroll_commands(&s, &hand(&s)[0], &catalog);
+        assert_eq!(
+            commands
+                .iter()
+                .map(|c| c.unit_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![None, Some("early"), Some("tied"), Some("late")]
+        );
+        assert!(reroll_commands(&s, &hand(&s)[1], &catalog).is_empty());
+        for phase in ["play", "summon"] {
+            s.phase = phase.into();
+            for card in ["fresh", "old", "missing"] {
+                for source in [
+                    None,
+                    Some("early"),
+                    Some("silenced"),
+                    Some("spent"),
+                    Some("missing"),
+                ] {
+                    for chosen in [None, Some("u1")] {
+                        let c: Command = serde_json::from_value(json!({
+                            "type":"reroll","cardId":card,"unitId":source,"chosenKind":chosen
+                        }))
+                        .unwrap();
+                        let actual =
+                            crate::inspection::Queries::default().inspect(&s, &c, &catalog);
+                        let expected = crate::command::execute(&s, &c, &catalog, true).map(|_| ());
+                        assert_eq!(
+                            format!("{actual:?}"),
+                            format!("{expected:?}"),
+                            "{phase}:{card}:{source:?}:{chosen:?}"
+                        );
+                    }
+                }
+            }
+        }
+        s.phase = "play".into();
+        assert_eq!(serde_json::to_value(&s).unwrap(), before);
+    }
 }

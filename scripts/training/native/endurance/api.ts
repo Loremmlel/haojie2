@@ -4,3 +4,7 @@ export { TrainingEnvironment } from '../../../../src/match/training';
 export { createGame } from '../../../../src/engine/commands/game';
 export { applyPlayerCommand } from '../../../../src/engine/online/authority';
 export { observe, decisionOwner } from '../../../../src/ai/observation';
+export { fixtures } from '../fixtures';
+export { combatFixtures } from '../combat-fixtures';
+export { preparationFixtures } from '../preparation-fixtures';
+export { completeFixtures } from '../complete-fixtures';

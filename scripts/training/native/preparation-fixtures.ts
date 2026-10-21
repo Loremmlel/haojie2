@@ -1,6 +1,7 @@
 import { CATALOG, SUMMON_POOL, ULTIMATE_POOL } from '../../../src/engine/catalog';
 import { ALL_CELLS } from '../../../src/engine/core/geometry';
 import { applyCommand } from '../../../src/engine/commands/game';
+import { validState } from '../../../src/engine/session/history';
 import { add, card, fixture, seedFor } from '../../../tests/helpers';
 import type { Command, GameState, Kind } from '../../../src/engine/types';
 import type { Job } from './fixtures';
@@ -235,6 +236,27 @@ export function preparationFixtures(): { name: string; job: Job }[] {
     }
   }
   if (variants.size !== 7) throw new Error('派生召唤专项缺少分支');
+  // 来源字段优先于旧档种类推断；冲突输入也通过 validState，单列既有双端候选域差异。
+  for (const [name, kind, pool] of [
+    ['explicit-normal', 1, 'normal'],
+    ['explicit-ultimate', 'u13', 'ultimate'],
+    ['legacy-normal', '17p', undefined],
+    ['legacy-ultimate', 'u12p', undefined],
+    ['conflicting-ultimate', 1, 'ultimate'],
+    ['conflicting-normal', 'u13', 'normal'],
+  ] as const) {
+    const s = fixture(),
+      cardId = card(s, kind),
+      mage = add(s, 'u13', 1, 4, 6);
+    if (pool) s.hands[1][0].summonPool = pool;
+    s.auras = { 1: [{ kind: 'laoqian' }], 2: [] };
+    if (!validState(s)) throw new Error(`改判来源池夹具不是合法局面：${name}`);
+    push(`reroll-pool-${name}`, s, [
+      { type: 'reroll', cardId, unitId: mage.id },
+      { type: 'reroll', cardId, unitId: mage.id, chosenKind: 1 },
+      { type: 'reroll', cardId, unitId: mage.id, chosenKind: 'u1' },
+    ]);
+  }
   for (const name of [
     'self',
     'repeat',

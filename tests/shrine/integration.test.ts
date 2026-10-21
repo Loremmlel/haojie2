@@ -59,9 +59,17 @@ test('3.0 hidden commitment and Jade parity do not alter opponent observation, f
 test('3.0 drafting persists and undo/redo restores secret commitment, reveal and PRNG exactly', () => {
   const s = createGame(90, 'shrine'),
     session = createSession(s);
-  const committed = dispatch(session, { type: 'choose-shrine', player: 1, shrineKind: 's8' });
+  const committed = dispatch(session, {
+    type: 'choose-shrine',
+    player: 1,
+    shrineKind: 's8',
+  });
   assert.deepEqual(parseSession(JSON.stringify(committed)), committed);
-  const revealed = dispatch(committed, { type: 'choose-shrine', player: 2, shrineKind: 's13' });
+  const revealed = dispatch(committed, {
+    type: 'choose-shrine',
+    player: 2,
+    shrineKind: 's13',
+  });
   assert.deepEqual(undo(revealed).present, committed.present);
   assert.deepEqual(redo(undo(revealed)).present, revealed.present);
   const broken = structuredClone(revealed);
@@ -98,19 +106,59 @@ test('3.0 inherited charge resources are independent from each other and native 
   assert.equal(chargeFor(unit(s, u.id), 'u2').charge, 1);
 });
 
+test('继承动作只扩展技能与蓄力，保持重复能力顺序且不查询完整投影属性', () => {
+  const s = fixture(),
+    u = add(s, 's5', 1, 3, 4);
+  u.traits = [3, 'u2', 6, 'u6', 6, 'sage', 'u7'];
+  const before = structuredClone(s);
+  const actions = unitActions(s, u, (position, piece) => {
+    assert.equal(piece, u);
+    return getStats(position, piece);
+  });
+  assert.deepEqual(
+    actions.filter((a) => a.command.ability !== undefined).map((a) => a.id),
+    [
+      'charge-move:3',
+      'charge-attack:u2',
+      'buff:6',
+      'charge-skill:u6',
+      'cross:u6',
+      'buff:6',
+      'charge-move:u7',
+      'giant:u7',
+    ],
+  );
+  assert.ok(
+    actions
+      .filter((a) => a.command.ability !== undefined)
+      .every((a) => a.command.unitId === u.id && ['skill', 'charge'].includes(a.command.type)),
+  );
+  assert.deepEqual(s, before);
+});
+
 test('3.0 Laoqian self-selection also covers rerolls and reforge without crossing pools', () => {
   let s = fixture();
   s.auras = { 1: [{ kind: 'laoqian' }], 2: [] };
   const mage = add(s, 'u13', 1, 3, 4),
     id = card(s, 25);
-  s = applyCommand(s, { type: 'cast', cardId: id, mode: 'single', chosenKind: 1 });
+  s = applyCommand(s, {
+    type: 'cast',
+    cardId: id,
+    mode: 'single',
+    chosenKind: 1,
+  });
   assert.equal(s.hands[1][0].kind, 1);
   assert.equal(s.auras![1][0].usedPly, s.ply);
   assert.equal(s.summonSlots, 0);
   s = round(s);
   const drawn = card(s, 'u1');
   s.hands[1].find((c) => c.id === drawn)!.summonPool = 'ultimate';
-  s = applyCommand(s, { type: 'reroll', cardId: drawn, unitId: mage.id, chosenKind: 'u21' });
+  s = applyCommand(s, {
+    type: 'reroll',
+    cardId: drawn,
+    unitId: mage.id,
+    chosenKind: 'u21',
+  });
   assert.equal(s.hands[1].at(-1)!.kind, 'u21');
   assert.ok(validState(s));
 });

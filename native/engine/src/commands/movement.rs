@@ -32,7 +32,7 @@ pub fn reserve(u: &Unit, kind: &Kind, catalog: &Catalog) -> crate::model::Charge
     } else {
         u.ability_charges
             .as_ref()
-            .and_then(|r| r.get(&kind.key()))
+            .and_then(|r| r.get(kind.key_ref().as_ref()))
             .copied()
             .unwrap_or_else(|| crate::model::Charge {
                 charge: 0.0,
@@ -246,6 +246,52 @@ pub fn move_source(s: &State, u: Unit, catalog: &Catalog) -> Result<MoveSource, 
         field: Default::default(),
     })
 }
+/// 对应 TS moveDestinations.contains；点域只验证可达性，实际执行仍按原入口展开路径。
+/// 返回是否可直接判为 available；冲撞保留后续完整规则模拟。
+pub fn move_contains(
+    s: &State,
+    source: &MoveSource,
+    to: Point,
+    catalog: &Catalog,
+    query: &crate::geometry::PlacementQuery,
+) -> Result<bool, Failure> {
+    let u = &source.unit;
+    if u.runner() {
+        ensure(
+            source.moves > 0.0
+                && distance(u.at(), to) == 1.0
+                && if u.size > 1.0 {
+                    can_place(s, u, to, catalog)
+                } else {
+                    crate::geometry::inside(to)
+                },
+            "每次沿四向移动一格，不能越界或使大体型重叠。",
+        )?;
+        return Ok(false);
+    }
+    if u.size > 1.0 {
+        ensure(
+            source.moves > 0.0 && distance(u.at(), to) == 1.0 && query.can_place(s, u, to, catalog),
+            "2×2每次整体向一个方向移动一小格，四格均须合法且不能重叠。",
+        )?;
+    } else {
+        ensure(
+            source
+                .field
+                .get_or_init(|| {
+                    crate::geometry::MovementField::new(
+                        u,
+                        source.limit,
+                        u.has("13") && !u.silenced,
+                        |at| query.can_place(s, u, at, catalog),
+                    )
+                })
+                .has(to),
+            "移动距离、路径、占位或独行侠禁区不合法。",
+        )?;
+    }
+    Ok(true)
+}
 pub fn move_destination(
     s: &State,
     source: &MoveSource,
@@ -358,7 +404,7 @@ pub fn sync(s: &mut State, catalog: &Catalog) {
     crate::resolution::normalize_guards(s);
     sync_banners(s, catalog);
     crate::stats::prune_siphons(s, catalog);
-    s.deploy_rows = json!({"1":deployment_rows(s,1),"2":deployment_rows(s,2)});
+    s.deploy_rows = json!({"1":deployment_rows(s,1),"2":deployment_rows(s,2)}).into();
 }
 pub fn sync_banners(s: &mut State, catalog: &Catalog) {
     let mut banners = [0.0; 3];
@@ -399,8 +445,7 @@ pub fn apply(previous: &State, c: &Command, catalog: &Catalog) -> Result<State, 
     } else {
         Some(prepare_move(previous, c, catalog)?)
     };
-    let mut s = previous.fork();
-    s.events.clear();
+    let mut s = previous.fork_command();
     if c.kind == "finish-mode" {
         let u = s.unit_mut(c.unit_id.as_deref().unwrap()).unwrap();
         let was_move = u.mode == "move";

@@ -1,16 +1,16 @@
 import {
   ALL_CELLS,
-  attackRoutes,
   cells,
   expansionAnchors,
   HEIGHT,
   neighbors,
-  selectableAttackRoutes,
+  targetById,
   targets,
   validAttackRoute,
   WIDTH,
 } from '../../engine/core/geometry';
-import { allegiance, ensure, getStats, piercing } from '../../engine/core/state';
+import { allegiance, asTarget, ensure, getStats, piercing } from '../../engine/core/state';
+import { allPieces } from '../../engine/core/traits';
 import {
   entityAt,
   entityHandle,
@@ -22,11 +22,11 @@ import { parseCommand } from '../../engine/online/authority';
 import { SYNTHESIS_RECIPES, synthesisDestinations } from '../../engine/setup/synthesis';
 import type { SelectionStep } from '../../engine/commands/options';
 import type { CommandInspection } from '../../engine/commands/game';
-import type { Command, Player, Unit, Target } from '../../engine/types';
+import type { AttackDirection, Command, Player, Unit, Target } from '../../engine/types';
 import type { Observation } from '../types';
 import {
   createTrainingCommandInspector,
-  trainingActionSpace,
+  trainingActions,
   trainingPosition,
   type TrainingAction,
 } from './queries';
@@ -107,21 +107,19 @@ export class TrainingActionTree {
     Command,
     { signature: string; result: CommandInspection }
   >();
-  readonly #targets: Target[];
-  readonly #targetIndex = new Map<string, number>();
+  #targets?: Target[];
   readonly #stats = new Map<Unit, ReturnType<typeof getStats>>();
-  readonly #routeCache = new Map<EntityHandle, Map<number, ReturnType<typeof attackRoutes>>>();
+  readonly #routeCache = new Map<EntityHandle, Map<string, AttackDirection[]>>();
   constructor(
     readonly observation: Observation,
     readonly actor: Player,
   ) {
     this.position = registerPublicPosition(trainingPosition(observation));
-    this.#targets = targets(this.position);
-    for (const [index, target] of this.#targets.entries())
-      if (!this.#targetIndex.has(target.id)) this.#targetIndex.set(target.id, index);
-    this.#inspect = createTrainingCommandInspector(observation, actor);
-    this.actions = trainingActionSpace(
-      observation,
+    this.#inspect = createTrainingCommandInspector(observation, actor, (_s, unit) =>
+      this.#attributes(unit),
+    );
+    this.actions = trainingActions(
+      trainingPosition(observation),
       actor,
       (command) => {
         const result = this.#inspect(command);
@@ -133,7 +131,11 @@ export class TrainingActionTree {
         return result;
       },
       (_s, unit) => this.#attributes(unit),
-    ).actions;
+    );
+  }
+
+  get #targetDomain() {
+    return (this.#targets ??= targets(this.position));
   }
 
   #prepare(prefix: Prefix): Prefix {
@@ -147,16 +149,16 @@ export class TrainingActionTree {
   #routes(command: Command) {
     const source =
       command.unitId === undefined ? undefined : entityHandle(this.position, command.unitId);
-    const target = this.#targetIndex.get(command.targetId!);
+    const target = command.targetId;
     if (source === undefined || target === undefined) return [];
     const cached = this.#routeCache.get(source)?.get(target);
     if (cached) return cached;
     const u = entityAt(this.position, source)!;
-    const t = this.#targets[target];
-    const selectable = selectableAttackRoutes(this.position, u, t);
-    const routes = selectable.length
-      ? selectable
-      : attackRoutes(this.position, u, t, this.#attributes(u).range, piercing(u));
+    // 保留有效实体的首次匹配，再回退基地；休眠的同 ID 地标不遮住后续活跃实体。
+    const unit = allPieces(this.position).find((v) => v.id === target);
+    const t = unit ? asTarget(unit) : targetById(this.position, target);
+    if (!t) return [];
+    const routes = this.#inspect.attacks.directions(u, t, this.#attributes(u).range, piercing(u));
     let records = this.#routeCache.get(source);
     if (!records) this.#routeCache.set(source, (records = new Map()));
     records.set(target, routes);
@@ -250,7 +252,7 @@ export class TrainingActionTree {
           add(`kind:${kind}`, { ...c, chosenKind: kind });
         break;
       case 'target':
-        for (const t of this.#targets) {
+        for (const t of this.#targetDomain) {
           if (step.unitOnly && !t.unit) continue;
           // 墓地保留来源 owner，但目标关系必须使用引擎派生的当前阵营。
           const owner = t.unit ? allegiance(this.position, t.unit) : t.owner;
@@ -294,8 +296,7 @@ export class TrainingActionTree {
         break;
       case 'direction':
         add('auto', c);
-        for (const route of this.#routes(c))
-          add(route.direction, { ...c, direction: route.direction });
+        for (const direction of this.#routes(c)) add(direction, { ...c, direction });
         break;
       case 'path': {
         const u = pieceById(this.position, c.unitId);

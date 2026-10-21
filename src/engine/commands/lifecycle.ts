@@ -108,13 +108,13 @@ export function beginTurn(s: GamePosition, ctx: Resolution) {
       );
       withEventFacts(
         s,
-        {
+        () => ({
           action: 'storm',
           stage: 'trigger',
           ability: 'u9',
           actor: eventActor(targetById(s, `base-${h.owner}`)),
           area: ALL_CELLS.filter((p) => (h.axis === 'row' ? p.y === h.line : p.x === h.line)),
-        },
+        }),
         () => {
           emit(s, { type: 'skill', owner: h.owner, text: '烈焰风暴 · 再临' });
           areaDamage(
@@ -194,7 +194,12 @@ export function endTurn(s: GamePosition, ctx: Resolution) {
     ctx.token++;
     withEventFacts(
       s,
-      { action: 'siphon', stage: 'trigger', actor: eventActor(from), subject: eventActor(to) },
+      () => ({
+        action: 'siphon',
+        stage: 'trigger',
+        actor: eventActor(from),
+        subject: eventActor(to),
+      }),
       () => {
         damage(s, from, 20, { owner: link.owner, unit: source, kind: 'skill' }, ctx);
         heal(s, to, 20, ctx);
@@ -206,31 +211,35 @@ export function endTurn(s: GamePosition, ctx: Resolution) {
     const strike = firelordStrike(s, lord);
     if (!strike) continue;
     ctx.token++;
-    withEventFacts(s, { action: 'judgement', actor: eventActor(lord), area: strike.area }, () => {
-      emit(s, {
-        type: 'attack',
-        from: lord,
-        to: strike.impact,
-        owner: lord.owner,
-        text: '末日审判',
-        ultimate: true,
-      });
-      const victims = [
-        ...new Map([...strike.primary, ...strike.splash].map((t) => [t.id, t])).values(),
-      ];
-      areaDamage(
-        s,
-        victims,
-        (p) =>
-          equal(p, strike.impact)
-            ? COMBAT_RULES.firelord.damage
-            : strike.area.some((q) => equal(p, q))
-              ? COMBAT_RULES.firelord.splash
-              : 0,
-        { owner: lord.owner, unit: lord, kind: 'skill' },
-        ctx,
-      );
-    });
+    withEventFacts(
+      s,
+      () => ({ action: 'judgement', actor: eventActor(lord), area: strike.area }),
+      () => {
+        emit(s, {
+          type: 'attack',
+          from: lord,
+          to: strike.impact,
+          owner: lord.owner,
+          text: '末日审判',
+          ultimate: true,
+        });
+        const victims = [
+          ...new Map([...strike.primary, ...strike.splash].map((t) => [t.id, t])).values(),
+        ];
+        areaDamage(
+          s,
+          victims,
+          (p) =>
+            equal(p, strike.impact)
+              ? COMBAT_RULES.firelord.damage
+              : strike.area.some((q) => equal(p, q))
+                ? COMBAT_RULES.firelord.splash
+                : 0,
+          { owner: lord.owner, unit: lord, kind: 'skill' },
+          ctx,
+        );
+      },
+    );
   }
   endShrines(s, ctx);
   // 回合末效果可能产生选择；反应队列清空后才实际切换玩家。

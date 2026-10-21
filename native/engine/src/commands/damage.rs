@@ -4,6 +4,7 @@ use crate::movement::sync_banners as sync;
 use crate::resolution::{Resolution, active_target, add_unit, faction, guardian};
 use crate::stats::stats;
 use serde_json::json;
+use std::rc::Rc;
 
 #[derive(Clone)]
 pub struct Source {
@@ -337,8 +338,8 @@ pub fn kill(
     if let Some(group) = u.extra.get("group") {
         dead["group"] = group.clone();
     }
-    let deaths = s.extra.get_mut("deaths").unwrap().as_array_mut().unwrap();
-    deaths.push(dead);
+    let deaths = Rc::make_mut(&mut s.deaths);
+    deaths.push(Rc::new(dead));
     if deaths.len() > 240 {
         deaths.remove(0);
     }

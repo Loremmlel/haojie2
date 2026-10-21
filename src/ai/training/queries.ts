@@ -13,7 +13,7 @@ import {
   expansionAnchors,
   selectableAttackRoutes,
 } from '../../engine/core/geometry';
-import { allPieces } from '../../engine/core/traits';
+import { allPieces, hasTrait } from '../../engine/core/traits';
 import { ensure, getStats } from '../../engine/core/state';
 import { definition } from '../../engine/catalog';
 import {
@@ -45,9 +45,13 @@ export function createTrainingInspector(observation: Observation, actor: Player)
   return (input: unknown) => inspect(parseCommand(input));
 }
 /** 动作树只提交自己构造的规范命令；不重复 JSON/字段解析，外部输入仍须经过上面的边界。 */
-export function createTrainingCommandInspector(observation: Observation, actor: Player) {
+export function createTrainingCommandInspector(
+  observation: Observation,
+  actor: Player,
+  attributes: typeof getStats = getStats,
+) {
   const s = trainingPosition(observation);
-  const inspect = createCommandInspector(s);
+  const inspect = createCommandInspector(s, attributes);
   const query = (command: Command) => {
     const error = actorCommandError(s, actor, command);
     return error
@@ -55,8 +59,15 @@ export function createTrainingCommandInspector(observation: Observation, actor: 
       : inspect(command.type === 'choose-shrine' ? { ...command, player: actor } : command);
   };
   return Object.assign(query, {
+    attacks: inspect.attacks,
     points(command: Command) {
-      if (command.type !== 'move' && command.type !== 'deploy') return;
+      if (
+        command.type !== 'move' &&
+        command.type !== 'deploy' &&
+        command.type !== 'skill' &&
+        command.type !== 'cast'
+      )
+        return;
       return actorCommandError(s, actor, command) ? [] : inspect.points(command);
     },
   });
@@ -83,6 +94,24 @@ export function trainingActionSpace(
   attributes: typeof getStats = getStats,
 ) {
   const s = trainingPosition(observation);
+  return {
+    representation: 'factorized-unpruned' as const,
+    validation: 'public-precheck' as const,
+    actions: trainingActions(s, actor, inspect, attributes),
+    targetIds: targets(s).map((t) => t.id),
+    points: ALL_CELLS.map((p) => ({ ...p })),
+    directions: ['up', 'down', 'left', 'right'] as const,
+    deathIds: s.deaths.map((d) => d.id),
+  };
+}
+
+/** 动作树只消费动作，不为未展开的参数预先构造完整公开域。 */
+export function trainingActions(
+  s: GamePosition,
+  actor: Player,
+  inspect: (command: Command) => CommandInspection,
+  attributes: typeof getStats = getStats,
+) {
   const actions: TrainingAction[] = [];
   const inspectError = (_s: GamePosition, command: Command) => {
     const result = inspect(command);
@@ -128,8 +157,19 @@ export function trainingActionSpace(
           simple({ type });
         for (const type of ['summon', 'extra-summon'] as const)
           for (const ultimate of [false, true]) simple({ type, ultimate });
-        for (const piece of allPieces(s))
-          if (piece.owner === actor) for (const a of unitActions(s, piece, attributes)) add(a);
+        for (const piece of allPieces(s)) {
+          if (piece.owner !== actor) continue;
+          const giant = hasTrait(piece, 'u7');
+          if (!giant && (actor !== s.active || s.phase !== 'play')) continue;
+          const stats = attributes(s, piece);
+          // 只有巨大化免操作预算；改判由手牌动作单独生成，连续操作仍保留结束入口。
+          if (!giant && piece.mode === 'none' && stats.operationsLeft <= 0 && stats.remaining <= 0)
+            continue;
+          for (const a of unitActions(s, piece, (position, unit) =>
+            unit === piece ? stats : attributes(position, unit),
+          ))
+            add(a);
+        }
         if (actor === s.active) {
           for (const card of s.hands[actor]) for (const a of cardActions(s, card)) add(a);
           add({
@@ -156,15 +196,7 @@ export function trainingActionSpace(
       }
     }
   }
-  return {
-    representation: 'factorized-unpruned' as const,
-    validation: 'public-precheck' as const,
-    actions,
-    targetIds: targets(s).map((t) => t.id),
-    points: ALL_CELLS.map((p) => ({ ...p })),
-    directions: ['up', 'down', 'left', 'right'] as const,
-    deathIds: s.deaths.map((d) => d.id),
-  };
+  return actions;
 }
 
 /** 多参数动作只查询共享几何，不在训练层复写占位、路径或合成规则。 */

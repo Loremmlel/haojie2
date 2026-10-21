@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
@@ -12,19 +13,23 @@ pub use crate::command::{COMMANDS, CommandKind};
 #[serde(untagged)]
 pub enum Kind {
     Number(i32),
-    Text(String),
+    Text(Rc<str>),
 }
 impl Kind {
     pub fn key(&self) -> String {
+        self.key_ref().into_owned()
+    }
+    /// 文本编号直接借用不可变内容；数值编号仍按原方式生成十进制键。
+    pub fn key_ref(&self) -> Cow<'_, str> {
         match self {
-            Self::Number(n) => n.to_string(),
-            Self::Text(s) => s.clone(),
+            Self::Number(n) => Cow::Owned(n.to_string()),
+            Self::Text(s) => Cow::Borrowed(s.as_ref()),
         }
     }
     pub fn is(&self, key: &str) -> bool {
         match self {
             Self::Number(n) => key.parse::<i32>() == Ok(*n),
-            Self::Text(s) => s == key,
+            Self::Text(s) => s.as_ref() == key,
         }
     }
 }
@@ -68,6 +73,7 @@ pub struct Catalog {
     pub kind_codes: std::collections::HashMap<Kind, usize>,
     pub vocab_codes: std::collections::HashMap<String, std::collections::HashMap<String, usize>>,
     pub combat: Value,
+    pub rule_values: rustc_hash::FxHashMap<&'static str, f64>,
     pub pools: BTreeMap<String, Vec<Kind>>,
     pub recipes: Vec<Value>,
     pub encoding: Value,
@@ -88,14 +94,15 @@ impl Catalog {
             Kind::Number(n) if *n >= 0 && (*n as usize) < self.numbers.len() => {
                 self.numbers[*n as usize].as_deref()
             }
-            Kind::Text(s) => self.entries.get(s).map(Rc::as_ref),
+            Kind::Text(s) => self.entries.get(s.as_ref()).map(Rc::as_ref),
             _ => self.entries.get(&k.key()).map(Rc::as_ref),
         }
     }
     pub fn rule(&self, path: &str) -> f64 {
-        self.combat
-            .pointer(path)
-            .and_then(Value::as_f64)
+        self.rule_values
+            .get(path)
+            .copied()
+            .or_else(|| self.combat.pointer(path).and_then(Value::as_f64))
             .expect("初始化已校验战斗数值")
     }
 }
@@ -383,12 +390,14 @@ pub struct State {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub landmarks: Option<Vec<Unit>>,
     pub pending: Vec<Reaction>,
+    /// 历史数组和条目分别写前分离；追加记录无需复制既有 JSON 条目。
+    pub deaths: Rc<Vec<Rc<Value>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clock_frames: Option<BTreeMap<String, ClockFrames>>,
     pub siphons: Vec<Value>,
     pub events: Vec<Value>,
-    pub deploy_rows: Value,
-    pub bases: Value,
+    pub deploy_rows: crate::shared::SharedValue,
+    pub bases: crate::shared::SharedValue,
     pub base_effects: BTreeMap<String, Vec<Effect>>,
     pub serial: u64,
     #[serde(flatten)]
@@ -398,6 +407,13 @@ impl State {
     /// 与 TS forkPosition 相同：实体和扩展字段按需复制，小型核心容器立即隔离。
     /// 预检/失败丢弃；内部成功直接保留，外部 transition 另行导出独立快照。
     pub fn fork(&self) -> Self {
+        self.fork_with_events(true)
+    }
+    /// 命令总会重置事件；对应 TS 浅分支后直接替换 events，不复制马上丢弃的旧事件。
+    pub fn fork_command(&self) -> Self {
+        self.fork_with_events(false)
+    }
+    fn fork_with_events(&self, copy_events: bool) -> Self {
         #[cfg(feature = "kernel-profile")]
         let _profile = crate::profile::scope(crate::profile::Phase::Branch);
         Self {
@@ -414,9 +430,14 @@ impl State {
                 .as_ref()
                 .map(|values| values.iter().map(Unit::fork).collect()),
             pending: self.pending.iter().map(Reaction::fork).collect(),
+            deaths: Rc::clone(&self.deaths),
             clock_frames: self.clock_frames.clone(),
             siphons: self.siphons.clone(),
-            events: self.events.clone(),
+            events: if copy_events {
+                self.events.clone()
+            } else {
+                vec![]
+            },
             deploy_rows: self.deploy_rows.clone(),
             bases: self.bases.clone(),
             base_effects: self.base_effects.clone(),
@@ -522,67 +543,390 @@ pub fn extra_number(u: &Unit, key: &str) -> f64 {
     u.extra.get(key).map(number).unwrap_or(0.0)
 }
 
-#[derive(Clone, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// 对应 TS 稀疏命令对象；候选扩展常用字段内联，较少变动的参数共享并在写入前分离。
+/// 序列化仍使用原平面字段与顺序，外部输入不接受内部 extra 字段作为规则参数。
+#[derive(Clone, Default)]
 pub struct Command {
-    #[serde(rename = "type")]
     pub kind: CommandKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unit_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit_id: Option<Rc<str>>,
     pub x: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub y: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub direction: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<Rc<str>>,
+    pub direction: Option<Cow<'static, str>>,
+    pub card_id: Option<Rc<str>>,
+    pub extra: Option<Rc<CommandExtras>>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExtras {
     pub mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<Vec<Point>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub card_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub ability: Option<Kind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub chosen_kind: Option<Kind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub ultimate: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub charge: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub offer_indices: Option<Vec<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub player: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub shrine_kind: Option<Kind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub parity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub material_ids: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub second_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub death_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub row: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub card_ids: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub sacrifice_ids: Option<Vec<String>>,
 }
 
+const EMPTY_COMMAND_EXTRAS: CommandExtras = CommandExtras {
+    mode: None,
+    path: None,
+    ability: None,
+    chosen_kind: None,
+    ultimate: None,
+    charge: None,
+    offer_indices: None,
+    player: None,
+    shrine_kind: None,
+    parity: None,
+    recipe_id: None,
+    material_ids: None,
+    second_id: None,
+    death_id: None,
+    column: None,
+    row: None,
+    card_ids: None,
+    sacrifice_ids: None,
+};
+impl std::ops::Deref for Command {
+    type Target = CommandExtras;
+    fn deref(&self) -> &Self::Target {
+        self.extra.as_deref().unwrap_or(&EMPTY_COMMAND_EXTRAS)
+    }
+}
+impl std::ops::DerefMut for Command {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Rc::make_mut(
+            self.extra
+                .get_or_insert_with(|| Rc::new(CommandExtras::default())),
+        )
+    }
+}
+
+impl Serialize for Command {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("type", &self.kind)?;
+        macro_rules! optional {
+            ($field:ident, $name:literal) => {
+                if let Some(value) = &self.$field {
+                    map.serialize_entry($name, value)?;
+                }
+            };
+        }
+        optional!(unit_id, "unitId");
+        optional!(x, "x");
+        optional!(y, "y");
+        optional!(target_id, "targetId");
+        optional!(direction, "direction");
+        optional!(mode, "mode");
+        optional!(path, "path");
+        optional!(card_id, "cardId");
+        optional!(ability, "ability");
+        optional!(chosen_kind, "chosenKind");
+        optional!(ultimate, "ultimate");
+        optional!(charge, "charge");
+        optional!(offer_indices, "offerIndices");
+        optional!(player, "player");
+        optional!(shrine_kind, "shrineKind");
+        optional!(parity, "parity");
+        optional!(recipe_id, "recipeId");
+        optional!(material_ids, "materialIds");
+        optional!(second_id, "secondId");
+        optional!(death_id, "deathId");
+        optional!(column, "column");
+        optional!(row, "row");
+        optional!(card_ids, "cardIds");
+        optional!(sacrifice_ids, "sacrificeIds");
+        map.end()
+    }
+}
+impl<'de> Deserialize<'de> for Command {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire {
+            #[serde(rename = "type")]
+            kind: CommandKind,
+            unit_id: Option<Rc<str>>,
+            x: Option<f64>,
+            y: Option<f64>,
+            target_id: Option<Rc<str>>,
+            direction: Option<String>,
+            card_id: Option<Rc<str>>,
+            #[serde(flatten)]
+            extra: CommandExtras,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let e = &wire.extra;
+        let empty = e.mode.is_none()
+            && e.path.is_none()
+            && e.ability.is_none()
+            && e.chosen_kind.is_none()
+            && e.ultimate.is_none()
+            && e.charge.is_none()
+            && e.offer_indices.is_none()
+            && e.player.is_none()
+            && e.shrine_kind.is_none()
+            && e.parity.is_none()
+            && e.recipe_id.is_none()
+            && e.material_ids.is_none()
+            && e.second_id.is_none()
+            && e.death_id.is_none()
+            && e.column.is_none()
+            && e.row.is_none()
+            && e.card_ids.is_none()
+            && e.sacrifice_ids.is_none();
+        Ok(Self {
+            kind: wire.kind,
+            unit_id: wire.unit_id,
+            x: wire.x,
+            y: wire.y,
+            target_id: wire.target_id,
+            direction: wire.direction.map(Self::shared_direction),
+            card_id: wire.card_id,
+            extra: (!empty).then(|| Rc::new(wire.extra)),
+        })
+    }
+}
+
 impl Command {
+    /// 方向候选与协议输入共用静态已知值；未知方向原样保留拥有型字符串。
+    pub fn shared_direction(value: String) -> Cow<'static, str> {
+        match value.as_str() {
+            "up" => Cow::Borrowed("up"),
+            "down" => Cow::Borrowed("down"),
+            "left" => Cow::Borrowed("left"),
+            "right" => Cow::Borrowed("right"),
+            _ => Cow::Owned(value),
+        }
+    }
     /// 内部构造不经过 JSON；可选参数保持缺失状态，外部边界仍独立校验。
     pub fn new(kind: &str) -> Self {
         Self {
             kind: kind.into(),
             ..Self::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    #[test]
+    fn command_fork_resets_events_and_preserves_snapshot_isolation_and_serial() {
+        let catalog = crate::catalog::embedded().unwrap();
+        let mut source = crate::runtime::create(73127, false, &catalog).unwrap();
+        source.units.push(crate::resolution::template(
+            &source,
+            "26",
+            1,
+            Point { x: 3.0, y: 5.0 },
+            "source",
+            &catalog,
+        ));
+        source.events = vec![json!({"id":"previous","nested":{"value":"旧事件"}})];
+        let frozen = serde_json::to_value(&source).unwrap();
+        let mut regular = source.fork();
+        assert_eq!(regular.events, source.events);
+        regular.events[0]["nested"]["value"] = json!("普通分支事件");
+
+        let mut expected = source.fork();
+        expected.events.clear();
+        let mut command = source.fork_command();
+        assert_eq!(
+            serde_json::to_value(&command).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+        let serial = source.serial;
+        crate::resolution::Resolution::default().emit(
+            &mut command,
+            json!({"type":"skill","text":"新命令事件"}),
+            None,
+        );
+        assert_eq!(command.events.len(), 1);
+        assert_eq!(command.events[0]["id"], format!("e{serial}"));
+        assert_eq!(command.serial, serial + 1);
+        command.units[0].hp -= 1.0;
+        command.extra.insert("log".into(), json!(["命令分支日志"]));
+        assert_eq!(serde_json::to_value(&source).unwrap(), frozen);
+    }
+
+    #[test]
+    fn kind_text_sharing_preserves_serde_keys_hashes_and_entity_cow() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        #[derive(Deserialize, Serialize, Hash)]
+        #[serde(untagged)]
+        enum PreviousKind {
+            Number(i32),
+            Text(String),
+        }
+        let hash = |value: &dyn Fn(&mut DefaultHasher)| {
+            let mut hasher = DefaultHasher::new();
+            value(&mut hasher);
+            hasher.finish()
+        };
+        for wire in ["1", "-4", r#""u13""#, r#""3p""#, r#""编号🦋""#, r#""12""#] {
+            let actual: Kind = serde_json::from_str(wire).unwrap();
+            let previous: PreviousKind = serde_json::from_str(wire).unwrap();
+            assert_eq!(
+                serde_json::to_string(&actual).unwrap(),
+                serde_json::to_string(&previous).unwrap()
+            );
+            assert_eq!(hash(&|h| actual.hash(h)), hash(&|h| previous.hash(h)));
+            assert_eq!(
+                crate::canonical::hash(&actual),
+                crate::canonical::hash(&serde_json::from_str::<Value>(wire).unwrap())
+            );
+            assert!(actual.is(actual.key_ref().as_ref()));
+            assert_eq!(actual.key(), actual.key_ref());
+            let sibling = actual.clone();
+            assert_eq!(sibling, actual);
+            if let Kind::Text(text) = &actual {
+                let Kind::Text(shared) = &sibling else {
+                    unreachable!()
+                };
+                assert!(Rc::ptr_eq(text, shared));
+                assert!(matches!(actual.key_ref(), Cow::Borrowed(_)));
+            } else {
+                assert!(matches!(actual.key_ref(), Cow::Owned(_)));
+            }
+        }
+        assert_ne!(Kind::Number(12), Kind::Text("12".into()));
+        let catalog = crate::catalog::embedded().unwrap();
+        let state = crate::runtime::create(73127, false, &catalog).unwrap();
+        let source = crate::resolution::template(
+            &state,
+            "u13",
+            1,
+            Point { x: 3.0, y: 4.0 },
+            "source",
+            &catalog,
+        );
+        let mut branch = source.fork();
+        branch.hp -= 1.0;
+        let (Kind::Text(original), Kind::Text(shared)) = (&source.kind, &branch.kind) else {
+            unreachable!()
+        };
+        assert!(Rc::ptr_eq(original, shared));
+        branch.kind = Kind::Text("u19".into());
+        assert!(source.kind.is("u13"));
+        assert!(branch.kind.is("u19"));
+        assert_ne!(branch.hp, source.hp);
+    }
+
+    #[test]
+    fn sparse_commands_preserve_wire_fields_and_shared_write_boundaries() {
+        let full = concat!(
+            r#"{"type":"move","unitId":"u1","x":2.0,"y":3.0,"targetId":"u2","direction":"down","mode":"damage","path":[{"x":1.0,"y":2.0}],"#,
+            r#""cardId":"c1","ability":"u7","chosenKind":25,"ultimate":false,"charge":false,"offerIndices":[0.0,1.0],"player":1,"#,
+            r#""shrineKind":"s9","parity":"odd","recipeId":"firelord","materialIds":["u3"],"secondId":"u4","deathId":"d1","column":2.0,"row":3.0,"cardIds":["c2"],"sacrificeIds":["u5","u6"]}"#,
+        );
+        let source: Command = serde_json::from_str(full).unwrap();
+        assert_eq!(serde_json::to_string(&source).unwrap(), full);
+        let mut sibling = source.clone();
+        assert!(Rc::ptr_eq(
+            source.unit_id.as_ref().unwrap(),
+            sibling.unit_id.as_ref().unwrap()
+        ));
+        assert!(Rc::ptr_eq(
+            source.target_id.as_ref().unwrap(),
+            sibling.target_id.as_ref().unwrap()
+        ));
+        assert!(Rc::ptr_eq(
+            source.card_id.as_ref().unwrap(),
+            sibling.card_id.as_ref().unwrap()
+        ));
+        sibling.x = Some(4.0);
+        assert!(Rc::ptr_eq(
+            source.extra.as_ref().unwrap(),
+            sibling.extra.as_ref().unwrap()
+        ));
+        sibling.direction = Some("left".into());
+        assert!(Rc::ptr_eq(
+            source.extra.as_ref().unwrap(),
+            sibling.extra.as_ref().unwrap()
+        ));
+        assert!(matches!(source.direction, Some(Cow::Borrowed("down"))));
+        assert!(matches!(sibling.direction, Some(Cow::Borrowed("left"))));
+        assert_eq!(source.direction.as_deref(), Some("down"));
+        assert_eq!(sibling.direction.as_deref(), Some("left"));
+        sibling.mode = Some("heal".into());
+        assert!(!Rc::ptr_eq(
+            source.extra.as_ref().unwrap(),
+            sibling.extra.as_ref().unwrap()
+        ));
+        assert_eq!(source.mode.as_deref(), Some("damage"));
+        sibling.target_id = Some(Rc::from("other-target"));
+        assert_eq!(source.target_id.as_deref(), Some("u2"));
+        assert_eq!(sibling.target_id.as_deref(), Some("other-target"));
+        assert_eq!(serde_json::to_string(&source).unwrap(), full);
+        for text in [
+            r#"{"type":"move","unitId":"u1","x":1,"y":2}"#,
+            r#"{"type":"move","unitId":"u1","x":1,"y":2,"direction":null,"path":null,"ability":null,"unknown":3}"#,
+        ] {
+            let command: Command = serde_json::from_str(text).unwrap();
+            assert!(command.extra.is_none());
+            assert_eq!(
+                serde_json::to_value(command).unwrap(),
+                json!({"type":"move","unitId":"u1","x":1.0,"y":2.0})
+            );
+        }
+        for direction in ["up", "down", "left", "right", "未知方向🌸"] {
+            let wire = json!({"type":"attack","direction":direction});
+            let command: Command = serde_json::from_value(wire.clone()).unwrap();
+            assert!(command.extra.is_none());
+            assert_eq!(command.direction.as_deref(), Some(direction));
+            assert_eq!(
+                matches!(command.direction, Some(Cow::Owned(_))),
+                direction == "未知方向🌸"
+            );
+            assert_eq!(serde_json::to_value(command).unwrap(), wire);
+        }
+        let mut hot_direction = Command::new("attack");
+        hot_direction.direction = Some("up".into());
+        assert!(hot_direction.extra.is_none());
+        hot_direction.direction = None;
+        assert_eq!(
+            serde_json::to_value(hot_direction).unwrap(),
+            json!({"type":"attack"})
+        );
+        let empty_arrays: Command =
+            serde_json::from_value(json!({"type":"attack","path":[],"charge":false})).unwrap();
+        assert_eq!(
+            serde_json::to_value(empty_arrays).unwrap(),
+            json!({"type":"attack","path":[],"charge":false})
+        );
+        let unknown: Command = serde_json::from_str(r#"{"type":"unknown-command"}"#).unwrap();
+        assert_eq!(unknown.kind.as_str(), "unknown-command");
+        assert_eq!(
+            serde_json::to_value(unknown).unwrap(),
+            json!({"type":"unknown-command"})
+        );
+        for value in [
+            json!({}),
+            json!({"type":"move","x":"1"}),
+            json!({"type":"move","path":1}),
+            json!({"type":"attack","direction":1}),
+            json!({"type":"cast","ultimate":1}),
+        ] {
+            assert!(serde_json::from_value::<Command>(value).is_err());
         }
     }
 }

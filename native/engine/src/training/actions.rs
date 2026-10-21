@@ -3,11 +3,12 @@ use crate::inspection::Queries;
 use crate::model::{Catalog, Command, Failure, Point, State, Unit, extra_number};
 use crate::movement::{charge_kind, reserve};
 use crate::preparation::kind;
-use crate::stats::{Stats, attack_charge, stats};
+use crate::stats::Stats;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::rc::Rc;
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Step {
     pub kind: &'static str,
     pub field: &'static str,
@@ -15,7 +16,7 @@ pub struct Step {
     pub unit_only: bool,
 }
 impl Step {
-    pub fn new(kind: &'static str) -> Self {
+    pub const fn new(kind: &'static str) -> Self {
         Self {
             kind,
             field: "targetId",
@@ -23,7 +24,7 @@ impl Step {
             unit_only: false,
         }
     }
-    fn target(relation: &'static str, field: &'static str, unit_only: bool) -> Self {
+    const fn target(relation: &'static str, field: &'static str, unit_only: bool) -> Self {
         Self {
             kind: "target",
             field,
@@ -34,19 +35,19 @@ impl Step {
 }
 #[derive(Clone)]
 pub struct Action {
-    pub id: String,
+    pub id: Cow<'static, str>,
     pub command: Command,
-    pub steps: Vec<Step>,
+    pub steps: Cow<'static, [Step]>,
     pub free: bool,
     pub materials: Vec<String>,
     pub chosen: Vec<crate::model::Kind>,
     pub initial_inspection: Option<&'static str>,
 }
-fn action(id: &str, c: Command, steps: Vec<Step>) -> Action {
+fn action(id: impl Into<Cow<'static, str>>, c: Command, steps: &'static [Step]) -> Action {
     Action {
         id: id.into(),
         command: c,
-        steps,
+        steps: Cow::Borrowed(steps),
         free: false,
         materials: vec![],
         chosen: vec![],
@@ -125,7 +126,7 @@ pub fn points(
     catalog: &Catalog,
     queries: &mut Queries,
 ) -> Result<Option<Vec<(Point, &'static str)>>, String> {
-    if c.kind != "move" && c.kind != "deploy" {
+    if c.kind != "move" && c.kind != "deploy" && c.kind != "skill" && c.kind != "cast" {
         return Ok(None);
     }
     if !permitted_command(s, actor, c) {
@@ -164,7 +165,6 @@ fn allowed(
     a: &mut Action,
     catalog: &Catalog,
     queries: &mut Queries,
-    attributes: &mut HashMap<*const Unit, Stats>,
 ) -> Result<bool, String> {
     if !permitted_command(s, actor, &a.command) {
         return Ok(false);
@@ -198,13 +198,14 @@ fn allowed(
     let Some(u) = c.unit_id.as_deref().and_then(|id| s.unit(id)) else {
         return Ok(true);
     };
-    let stats = attributes
-        .entry(u as *const Unit)
-        .or_insert_with(|| stats(s, u, catalog));
+    let stats = queries.attributes(s, u, catalog);
     let ability = c.ability.clone().unwrap_or(u.kind.clone());
     let r = reserve(u, &ability, catalog);
     let borrowed = ability != u.kind;
-    let usage = u.ability_usage.as_ref().and_then(|m| m.get(&ability.key()));
+    let usage = u
+        .ability_usage
+        .as_ref()
+        .and_then(|m| m.get(ability.key_ref().as_ref()));
     let once = if borrowed {
         usage.is_some_and(|v| v.once)
     } else {
@@ -271,64 +272,75 @@ fn unit_actions(s: &State, u: &Unit, catalog: &Catalog, st: &Stats) -> Vec<Actio
         return vec![];
     }
     let mut result = vec![];
-    let point = || Step::new("point");
-    let target = |r, only| Step::target(r, "targetId", only);
+    let unit_id: Rc<str> = Rc::from(u.id.as_str());
     let base = |t| Command {
-        unit_id: Some(u.id.clone()),
+        unit_id: Some(Rc::clone(&unit_id)),
         ..Command::new(t)
     };
     if st.movement > 0.0 {
-        result.push(action("move", base("move"), vec![point()]));
+        result.push(action(
+            "move",
+            base("move"),
+            const { &[Step::new("point")] },
+        ));
     }
     if st.actions > 0.0 && (u.silenced || !u.has("firelord")) {
         let c = base("attack");
         if u.signed() {
             result.push(action(
                 "attack",
-                Command {
-                    mode: Some("damage".into()),
-                    ..c.clone()
+                {
+                    let mut command = c.clone();
+                    command.mode = Some("damage".into());
+                    command
                 },
-                vec![target("any", false)],
+                const { &[Step::target("any", "targetId", false)] },
             ));
             result.push(action(
                 "heal",
-                Command {
-                    mode: Some("heal".into()),
-                    ..c.clone()
+                {
+                    let mut command = c.clone();
+                    command.mode = Some("heal".into());
+                    command
                 },
-                vec![target("any", true)],
+                const { &[Step::target("any", "targetId", true)] },
             ));
         } else {
-            result.push(action("attack", c.clone(), vec![target("any", false)]));
+            result.push(action(
+                "attack",
+                c.clone(),
+                const { &[Step::target("any", "targetId", false)] },
+            ));
         }
         if crate::combat::healing_attack(u, catalog) {
             result.push(action(
                 "self-heal",
-                Command {
-                    target_id: Some(u.id.clone()),
-                    mode: Some("heal".into()),
-                    ..c.clone()
+                {
+                    let mut command = c.clone();
+                    command.target_id = Some(Rc::clone(&unit_id));
+                    command.mode = Some("heal".into());
+                    command
                 },
-                vec![],
+                &[],
             ));
         }
         if u.weapon("u28") {
             result.push(action(
                 "attack-path",
-                Command {
-                    mode: Some("damage".into()),
-                    path: Some(vec![]),
-                    ..c.clone()
+                {
+                    let mut command = c.clone();
+                    command.mode = Some("damage".into());
+                    command.path = Some(vec![]);
+                    command
                 },
-                vec![Step::new("path")],
+                const { &[Step::new("path")] },
             ));
         }
     }
     let d = catalog.by_kind(&u.kind);
     let ordinal = u
         .kind
-        .key()
+        .key_ref()
         .trim_start_matches(['u', 's'])
         .trim_end_matches('p')
         .parse::<u32>()
@@ -349,30 +361,55 @@ fn unit_actions(s: &State, u: &Unit, catalog: &Catalog, st: &Stats) -> Vec<Actio
         result.push(action(
             "shatter",
             base("shatter"),
-            vec![target("enemy", false)],
+            const { &[Step::target("enemy", "targetId", false)] },
         ));
     }
     if ["move", "attack"].contains(&u.mode.as_str()) {
-        result.push(action("finish", base("finish-mode"), vec![]));
+        result.push(action("finish", base("finish-mode"), &[]));
     }
+    ability_actions(&mut result, u, &u.kind, &unit_id, catalog);
+    if !u.silenced {
+        for k in u.traits.iter().flatten() {
+            let start = result.len();
+            // 继承只追加技能与蓄力，不构造随后丢弃的通用动作和完整实体投影。
+            ability_actions(&mut result, u, k, &unit_id, catalog);
+            for a in &mut result[start..] {
+                a.id = format!("{}:{}", a.id, k.key()).into();
+                a.command.ability = Some(k.clone());
+            }
+        }
+    }
+    result
+}
+fn ability_actions(
+    result: &mut Vec<Action>,
+    u: &Unit,
+    kind: &crate::model::Kind,
+    unit_id: &Rc<str>,
+    catalog: &Catalog,
+) {
+    let d = catalog.by_kind(kind);
+    if d.landmark.is_some() && u.hp <= 0.0 {
+        return;
+    }
+    let base = |t| Command {
+        unit_id: Some(Rc::clone(unit_id)),
+        ..Command::new(t)
+    };
     for (yes, id, mode) in [
         (
-            charge_kind(u, catalog).as_ref() == Some(&u.kind),
+            d.movement > 0.0 && d.movement.fract() != 0.0,
             "charge-move",
             "move",
         ),
+        (d.actions == 0.5, "charge-attack", "attack"),
         (
-            attack_charge(u, catalog).as_ref() == Some(&u.kind),
+            !u.silenced && ["4", "15", "u2"].iter().any(|k| kind.is(k)),
             "charge-attack",
             "attack",
         ),
         (
-            !u.silenced && ["4", "15", "u2"].iter().any(|k| u.kind.is(k)),
-            "charge-attack",
-            "attack",
-        ),
-        (
-            !u.silenced && ["21", "u6"].iter().any(|k| u.kind.is(k)),
+            !u.silenced && ["21", "u6"].iter().any(|k| kind.is(k)),
             "charge-skill",
             "skill",
         ),
@@ -380,162 +417,191 @@ fn unit_actions(s: &State, u: &Unit, catalog: &Catalog, st: &Stats) -> Vec<Actio
         if yes {
             result.push(action(
                 id,
-                Command {
-                    mode: Some(mode.into()),
-                    ..base("charge")
+                {
+                    let mut command = base("charge");
+                    command.mode = Some(mode.into());
+                    command
                 },
-                vec![],
+                &[],
             ));
         }
     }
     if !u.silenced {
         let c = base("skill");
-        let mut add = |id, c, steps| result.push(action(id, c, steps));
-        match u.kind.key().as_str() {
-            "5" => add("stomp", c, vec![]),
-            "6" => add("buff", c, vec![]),
-            "7" => add("hook", c, vec![target("enemy", true), point()]),
+        let mut add =
+            |id: &'static str, c, steps: &'static [Step]| result.push(action(id, c, steps));
+        match kind.key_ref().as_ref() {
+            "5" => add("stomp", c, &[]),
+            "6" => add("buff", c, &[]),
+            "7" => add(
+                "hook",
+                c,
+                const { &[Step::target("enemy", "targetId", true), Step::new("point")] },
+            ),
             "14" => {
                 add(
                     "sacrifice-summon",
-                    Command {
-                        mode: Some("summon".into()),
-                        ..c.clone()
+                    {
+                        let mut command = c.clone();
+                        command.mode = Some("summon".into());
+                        command
                     },
-                    vec![target("friend", true)],
+                    const { &[Step::target("friend", "targetId", true)] },
                 );
                 add(
                     "sacrifice",
                     c,
-                    vec![target("friend", true), Step::new("column")],
+                    const {
+                        &[
+                            Step::target("friend", "targetId", true),
+                            Step::new("column"),
+                        ]
+                    },
                 );
             }
-            "19" => add("wall", c, vec![point()]),
-            "21" => add("dash", c, vec![point(), target("enemy", false)]),
-            "u6" => add("cross", c, vec![point()]),
+            "19" => add("wall", c, const { &[Step::new("point")] }),
+            "21" => add(
+                "dash",
+                c,
+                const { &[Step::new("point"), Step::target("enemy", "targetId", false)] },
+            ),
+            "u6" => add("cross", c, const { &[Step::new("point")] }),
             "u7" => {
-                let mut a = action("giant", c, vec![target("any", true), point()]);
+                let mut a = action(
+                    "giant",
+                    c,
+                    const { &[Step::target("any", "targetId", true), Step::new("point")] },
+                );
                 a.free = true;
                 result.push(a);
             }
             "u14" => add(
                 "siphon",
                 c,
-                vec![target("any", false), Step::target("any", "secondId", false)],
+                const {
+                    &[
+                        Step::target("any", "targetId", false),
+                        Step::target("any", "secondId", false),
+                    ]
+                },
             ),
-            "u19" => add("revive", c, vec![Step::new("death"), point()]),
-            "u21" => add("single-buff", c, vec![target("friend", true)]),
-            "u23" => add("superhook", c, vec![target("enemy", true)]),
-            "u24" => add("ice-mark", c, vec![point()]),
+            "u19" => add(
+                "revive",
+                c,
+                const { &[Step::new("death"), Step::new("point")] },
+            ),
+            "u21" => add(
+                "single-buff",
+                c,
+                const { &[Step::target("friend", "targetId", true)] },
+            ),
+            "u23" => add(
+                "superhook",
+                c,
+                const { &[Step::target("enemy", "targetId", true)] },
+            ),
+            "u24" => add("ice-mark", c, const { &[Step::new("point")] }),
             _ => {}
         }
-        for k in u.traits.iter().flatten() {
-            let mut borrowed = u.clone();
-            borrowed.traits = None;
-            borrowed.reserve = reserve(u, k, catalog);
-            borrowed.kind = k.clone();
-            let usage = u.ability_usage.as_ref().and_then(|m| m.get(&k.key()));
-            borrowed.once_used = usage.is_some_and(|v| v.once);
-            borrowed.free_used = usage.map(|v| v.free).unwrap_or(-1.0);
-            // 借用能力投影改变种类及使用次数，不能按原实体句柄命中属性缓存。
-            for mut a in unit_actions(s, &borrowed, catalog, &stats(s, &borrowed, catalog)) {
-                if ["skill", "charge"].contains(&a.command.kind.as_str()) {
-                    a.id = format!("{}:{}", a.id, k.key());
-                    a.command.ability = Some(k.clone());
-                    result.push(a);
-                }
-            }
-        }
     }
-    result
 }
 fn card_actions(s: &State, card: &Value, catalog: &Catalog) -> Vec<Action> {
     let k = kind(&card["kind"]);
     let d = catalog.by_kind(&k);
+    let card_id: Rc<str> = Rc::from(text(&card["id"]));
     let base = |t| Command {
-        card_id: Some(text(&card["id"]).into()),
+        card_id: Some(Rc::clone(&card_id)),
         ..Command::new(t)
     };
-    let point = || Step::new("point");
-    let target = |r| Step::target(r, "targetId", true);
     let mut result = vec![];
     if d.spell.is_none() && d.weapon.is_none() && !d.aura {
         result.push(action(
             "deploy",
-            Command {
-                charge: Some(false),
-                ..base("deploy")
+            {
+                let mut command = base("deploy");
+                command.charge = Some(false);
+                command
             },
-            vec![point()],
+            const { &[Step::new("point")] },
         ));
         if k.is("1") {
             result.push(action(
                 "deploy-charge",
-                Command {
-                    charge: Some(true),
-                    ..base("deploy")
+                {
+                    let mut command = base("deploy");
+                    command.charge = Some(true);
+                    command
                 },
-                vec![point()],
+                const { &[Step::new("point")] },
             ));
         }
     } else if d.aura {
-        result.push(action("activate-aura", base("activate-aura"), vec![]));
+        result.push(action("activate-aura", base("activate-aura"), &[]));
     } else if d.weapon.is_some() {
-        result.push(action("equip", base("equip"), vec![target("friend")]));
+        result.push(action(
+            "equip",
+            base("equip"),
+            const { &[Step::target("friend", "targetId", true)] },
+        ));
     } else if k.is("8") {
-        result.push(action("blast", base("cast"), vec![point()]));
+        result.push(action(
+            "blast",
+            base("cast"),
+            const { &[Step::new("point")] },
+        ));
     } else if k.is("25") {
         result.push(action(
             "reforge-one",
-            Command {
-                mode: Some("single".into()),
-                ..base("cast")
+            {
+                let mut command = base("cast");
+                command.mode = Some("single".into());
+                command
             },
-            vec![],
+            &[],
         ));
         result.push(action(
             "reforge-two",
-            Command {
-                mode: Some("double".into()),
-                ..base("cast")
+            {
+                let mut command = base("cast");
+                command.mode = Some("double".into());
+                command
             },
-            vec![Step::target("friend", "sacrificeIds", true); 2],
+            const { &[Step::target("friend", "sacrificeIds", true); 2] },
         ));
     } else if k.is("u9") {
         for (id, mode) in [("storm-row", "row"), ("storm-col", "column")] {
             result.push(action(
                 id,
-                Command {
-                    mode: Some(mode.into()),
-                    ..base("cast")
+                {
+                    let mut command = base("cast");
+                    command.mode = Some(mode.into());
+                    command
                 },
-                vec![Step::new(mode)],
+                if mode == "row" {
+                    const { &[Step::new("row")] }
+                } else {
+                    const { &[Step::new("column")] }
+                },
             ));
         }
     } else {
         result.push(action(
             "cast",
             base("cast"),
-            vec![target(if k.is("u26") { "any" } else { "friend" })],
+            if k.is("u26") {
+                const { &[Step::target("any", "targetId", true)] }
+            } else {
+                const { &[Step::target("friend", "targetId", true)] }
+            },
         ));
     }
-    // 完整无参数命令统一走公开预检；按实际部署时刻稳定排序，保留 TS 改判顺序。
-    result.push(action("self-reroll", base("reroll"), vec![]));
-    let mut mages: Vec<_> = s
-        .units
-        .iter()
-        .filter(|u| u.has("u13") && u.owner == s.active)
-        .collect();
-    mages.sort_by(|a, b| extra_number(a, "deployedAt").total_cmp(&extra_number(b, "deployedAt")));
-    for u in mages {
-        result.push(action(
-            &format!("reroll-{}", u.id),
-            Command {
-                unit_id: Some(u.id.clone()),
-                ..base("reroll")
-            },
-            vec![],
-        ));
+    for command in crate::preparation::reroll_commands(s, card, catalog) {
+        let id: Cow<'static, str> = command
+            .unit_id
+            .as_deref()
+            .map(|id| Cow::Owned(format!("reroll-{id}")))
+            .unwrap_or_else(|| "self-reroll".into());
+        result.push(action(id, command, &[]));
     }
     result
 }
@@ -563,23 +629,15 @@ fn pool<'a>(s: &State, c: &Command, catalog: &'a Catalog) -> Option<&'a str> {
                 "normal"
             })
         }
-        "reroll" => card.and_then(|v| {
-            let k = kind(&v["kind"]);
-            if v["summonPool"] == "normal"
-                || catalog.pools["normal"].contains(&k)
-                || k.is("3p")
-                || k.is("17p")
-            {
-                Some("normal")
-            } else if v["summonPool"] == "ultimate"
-                || catalog.pools["ultimate"].contains(&k)
-                || k.is("u12p")
-            {
-                Some("ultimate")
-            } else {
-                None
-            }
-        }),
+        "reroll" => card
+            .and_then(|v| crate::preparation::summon_pool(v, catalog))
+            .map(|pool| {
+                if pool == "ultimate" {
+                    "ultimate"
+                } else {
+                    "normal"
+                }
+            }),
         _ => None,
     }
 }
@@ -588,78 +646,80 @@ pub fn actions(
     actor: usize,
     catalog: &Catalog,
     queries: &mut Queries,
-    attributes: &mut HashMap<*const Unit, Stats>,
 ) -> Result<Vec<Action>, String> {
+    #[cfg(feature = "kernel-profile")]
+    let _profile = crate::profile::scope(crate::profile::Phase::Candidates);
     let mut candidates = vec![];
-    let simple = |c: Command| action(&c.kind, c.clone(), vec![]);
+    let simple = |id: &'static str, c: Command| action(id, c, &[]);
     if s.extra.contains_key("winner") {
         return Ok(vec![]);
     }
     if let Some(r) = s.pending.first() {
         let k = r.kind.as_str();
         candidates.push(action(
-            k,
+            k.to_owned(),
             if k == "hit-pull" {
-                Command {
-                    mode: Some("pull".into()),
-                    ..Command::new("react")
-                }
+                let mut command = Command::new("react");
+                command.mode = Some("pull".into());
+                command
             } else {
                 Command::new("react")
             },
             match k {
-                "hit-pull" => vec![],
-                "bounce" | "hut-spawn" => vec![Step::new("point")],
-                _ => vec![Step::target("any", "targetId", false)],
+                "hit-pull" => &[],
+                "bounce" | "hut-spawn" => const { &[Step::new("point")] },
+                _ => const { &[Step::target("any", "targetId", false)] },
             },
         ));
-        candidates.push(simple(Command::new("react")));
+        candidates.push(simple("react", Command::new("react")));
     } else if s.phase == "shrine-draft" {
         for k in
             array(&s.extra.get("shrineDraft").unwrap_or(&Value::Null)["offers"][actor.to_string()])
         {
-            let c = Command {
-                player: Some(actor),
-                shrine_kind: Some(kind(k)),
-                ..Command::new("choose-shrine")
-            };
+            let mut c = Command::new("choose-shrine");
+            c.player = Some(actor);
+            c.shrine_kind = Some(kind(k));
             if k == "s9" {
                 for p in ["odd", "even"] {
-                    candidates.push(simple(Command {
-                        parity: Some(p.into()),
-                        ..c.clone()
-                    }));
+                    let mut command = c.clone();
+                    command.parity = Some(p.into());
+                    candidates.push(simple("choose-shrine", command));
                 }
             } else {
-                candidates.push(simple(c));
+                candidates.push(simple("choose-shrine", c));
             }
         }
     } else if let Some(offer) = s.extra.get("summonOffer") {
         for i in 0..array(&offer["groups"]).len() {
             for j in i + 1..array(&offer["groups"]).len() {
-                candidates.push(simple(Command {
-                    offer_indices: Some(vec![i as f64, j as f64]),
-                    ..Command::new("choose-summons")
-                }));
+                let mut command = Command::new("choose-summons");
+                command.offer_indices = Some(vec![i as f64, j as f64]);
+                candidates.push(simple("choose-summons", command));
             }
         }
     } else {
         for t in ["begin", "end", "skip-synthesis", "finish-shrine-setup"] {
-            candidates.push(simple(Command::new(t)));
+            candidates.push(simple(t, Command::new(t)));
         }
         for t in ["summon", "extra-summon"] {
             for ultimate in [false, true] {
-                candidates.push(simple(Command {
-                    ultimate: Some(ultimate),
-                    ..Command::new(t)
-                }));
+                let mut command = Command::new(t);
+                command.ultimate = Some(ultimate);
+                candidates.push(simple(t, command));
             }
         }
         for u in s.pieces().filter(|u| u.owner == actor) {
-            let stats = attributes
-                .entry(u as *const Unit)
-                .or_insert_with(|| stats(s, u, catalog));
-            candidates.extend(unit_actions(s, u, catalog, stats));
+            let giant = u.has("u7");
+            if !giant && (actor != s.active || s.phase != "play") {
+                continue;
+            }
+            let stats = queries.attributes(s, u, catalog);
+            // 巨大化免操作预算；手牌改判独立生成，连续操作仍保留结束入口。
+            if !giant && u.mode == "none" && stats.operations_left <= 0.0 && stats.remaining <= 0.0
+            {
+                continue;
+            }
+            candidates.extend(unit_actions(s, u, catalog, &stats));
         }
         if actor == s.active {
             for c in array(&s.extra["hands"][actor.to_string()]) {
@@ -668,7 +728,7 @@ pub fn actions(
             candidates.push(action(
                 "clock",
                 Command::new("clock"),
-                vec![Step::target("any", "targetId", true)],
+                const { &[Step::target("any", "targetId", true)] },
             ));
             if s.phase == "synthesis" {
                 for r in &catalog.recipes {
@@ -677,15 +737,16 @@ pub fn actions(
                         continue;
                     }
                     let mut a = action(
-                        &format!("synthesize:{}", text(&r["id"])),
-                        Command {
-                            recipe_id: Some(text(&r["id"]).into()),
-                            ..Command::new("synthesize")
+                        format!("synthesize:{}", text(&r["id"])),
+                        {
+                            let mut command = Command::new("synthesize");
+                            command.recipe_id = Some(text(&r["id"]).into());
+                            command
                         },
                         if catalog[&kind(&r["result"]).key()].aura {
-                            vec![]
+                            &[]
                         } else {
-                            vec![Step::new("point")]
+                            const { &[Step::new("point")] }
                         },
                     );
                     a.materials = ids;
@@ -699,7 +760,7 @@ pub fn actions(
         .any(|a| a["kind"] == "laoqian" && a["usedPly"] != s.ply);
     let mut result = vec![];
     for mut a in candidates {
-        if allowed(s, actor, &mut a, catalog, queries, attributes)? {
+        if allowed(s, actor, &mut a, catalog, queries)? {
             if can_choose && let Some(p) = pool(s, &a.command, catalog) {
                 a.chosen = catalog.pools[p].clone();
             }

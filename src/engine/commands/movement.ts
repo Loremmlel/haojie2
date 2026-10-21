@@ -73,7 +73,7 @@ export function moveUnit(s: GamePosition, c: Command, ctx: Resolution) {
   const prepared = prepareMove(s, c);
   return withEventFacts(
     s,
-    { actor: eventActor(u), ...(isRunner(u) ? { action: 'rush' as const } : {}) },
+    () => ({ actor: eventActor(u), ...(isRunner(u) ? { action: 'rush' as const } : {}) }),
     () => resolveMove(s, c, ctx, prepared),
   );
 }
@@ -101,10 +101,9 @@ export function createMoveQuery(s: GamePosition) {
   return Object.assign(inspect, {
     points(c: Command) {
       const destination = destinations(c.unitId);
-      return ALL_CELLS.flatMap((to) => {
-        const prepared = destination.at(to);
-        return prepared ? [{ point: to, complete: prepared.path !== undefined }] : [];
-      });
+      return ALL_CELLS.flatMap((to) =>
+        destination.contains(to) ? [{ point: to, complete: destination.complete }] : [],
+      );
     },
   });
 }
@@ -131,12 +130,13 @@ function moveDestinations(
       );
       u.moves = 5;
     }
+    const contains = (to: Point) => u.moves > 0 && distance(u, to) === 1 && canEnter(s, u, to);
     return {
       error: '每次沿四向移动一格，不能越界或使大体型重叠。',
+      contains,
+      complete: false,
       at: (to: Point) =>
-        u.moves > 0 && distance(u, to) === 1 && canEnter(s, u, to)
-          ? { to, starting, charged, moves: u.moves, path: undefined }
-          : null,
+        contains(to) ? { to, starting, charged, moves: u.moves, path: undefined } : null,
     };
   }
   let limit = getStats(s, u).move;
@@ -151,10 +151,14 @@ function moveDestinations(
       }
       u.moves = Math.floor(limit);
     }
+    const contains = (to: Point) =>
+      u.moves > 0 && distance(u, to) === 1 && (query ? query.canPlace(u, to) : canPlace(s, u, to));
     return {
       error: '2×2每次整体向一个方向移动一小格，四格均须合法且不能重叠。',
+      contains,
+      complete: true,
       at: (to: Point) =>
-        u.moves > 0 && distance(u, to) === 1 && (query ? query.canPlace(u, to) : canPlace(s, u, to))
+        contains(to)
           ? { to, starting, charged, moves: u.moves, path: [{ x: u.x, y: u.y }, to] }
           : null,
     };
@@ -166,14 +170,17 @@ function moveDestinations(
     );
     if (limit % 1) limit *= 2;
   }
-  let field: ((to: Point) => Point[] | null) | undefined;
+  let field: ReturnType<ReturnType<typeof createPlacementQuery>['movementField']> | undefined;
+  const straight = hasTrait(u, 13) && !u.silenced;
+  const preparedField = () => (field ??= query!.movementField(u, limit, straight));
   return {
     error: '移动距离、路径、占位或独行侠禁区不合法。',
+    // 点域只消费可达性；前驱路径留到实际预检或正式命令需要时再展开。
+    contains: (to: Point) =>
+      query ? preparedField().has(to) : movementPath(s, u, to, limit, straight) !== null,
+    complete: true,
     at: (to: Point) => {
-      const straight = hasTrait(u, 13) && !u.silenced;
-      const path = query
-        ? (field ??= query.movementField(u, limit, straight))(to)
-        : movementPath(s, u, to, limit, straight);
+      const path = query ? preparedField()(to) : movementPath(s, u, to, limit, straight);
       return path ? { to, starting, charged, moves: u.moves, path } : null;
     },
   };

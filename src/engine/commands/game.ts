@@ -3,6 +3,7 @@ import { emptyFor } from './movement';
 import {
   ALL_CELLS,
   attackPath,
+  createAttackQuery,
   createPlacementQuery,
   piercingTargets,
   validAttackRoute,
@@ -34,16 +35,27 @@ import {
   chargeAction,
   craft,
   equip,
+  prepareEquip,
   reroll,
+  prepareReroll,
   useSkill,
   cast,
   prepareCastInspection,
+  prepareCastPoints,
   prepareSkillInspection,
   createSkillInspectionQuery,
   prepareChargeInspection,
   createChargeInspectionQuery,
 } from './abilities';
-import { findTarget, performAttack, prepareAttack, pruneSiphons, resolution } from './combat';
+import {
+  findTarget,
+  performAttack,
+  prepareAttack,
+  inspectPreparedAttack,
+  deterministicAttackPosition,
+  pruneSiphons,
+  resolution,
+} from './combat';
 import { canPlace, refreshDeployment, cells, equal } from '../core/geometry';
 import { beginTurn, endTurn, prepareEndTurn, switchTurn } from './lifecycle';
 import {
@@ -83,20 +95,29 @@ import type {
   Unit,
   Point,
   Reaction,
+  Stats,
 } from '../types';
 type InspectionQueries = ReturnType<typeof inspectionQueries>;
-function projectedAttacker(s: GamePosition, unitId?: string) {
-  const u = { ...actor(s, unitId) };
-  chooseMode(s, u, 'attack');
-  return u;
+function projectedAttacker(
+  s: GamePosition,
+  unitId?: string,
+  attributes: typeof getStats = getStats,
+) {
+  let stats!: Stats;
+  const u = { ...actor(s, unitId, (position, unit) => (stats = attributes(position, unit))) };
+  chooseMode(s, u, 'attack', stats);
+  return { u, stats };
 }
 function transitUnit(s: GamePosition) {
   return s.units.find(
     (u) => (hasTrait(u, 'u12p') || hasTrait(u, 'u12')) && u.mode === 'move' && !emptyFor(s, u),
   );
 }
-function inspectionQueries(s: GamePosition) {
+function inspectionQueries(s: GamePosition, attributes: typeof getStats = getStats) {
+  let deterministicAttack: boolean | undefined;
   return {
+    attacks: createAttackQuery(s),
+    deterministicAttack: () => (deterministicAttack ??= deterministicAttackPosition(s)),
     hutSpawns: new Map<Reaction, Point[]>(),
     move: createMoveQuery(s),
     skill: createSkillInspectionQuery(s),
@@ -106,7 +127,7 @@ function inspectionQueries(s: GamePosition) {
       return template(card.kind, s.active, s.turns[s.active], { x: 1, y: 1 });
     }),
     placement: memoizePreparation(() => createPlacementQuery(s)),
-    attacker: memoizePreparation((id: string | undefined) => projectedAttacker(s, id)),
+    attacker: memoizePreparation((id: string | undefined) => projectedAttacker(s, id, attributes)),
     transit: memoizePreparation(() => transitUnit(s)),
     fork: createPositionFork(s),
   };
@@ -124,10 +145,10 @@ function deployCard(s: GamePosition, cardId: string | undefined) {
   ensure(card && canDeployKind(card.kind), '请选择待部署随从。');
   return card;
 }
-function attackTarget(s: GamePosition, c: Command, u: Unit) {
+function attackTarget(s: GamePosition, c: Command, u: Unit, range?: number) {
   if (c.path)
     ensure(
-      hasWeapon(u, 'u28') && validAttackRoute(s, u, c.path, getStats(s, u).range),
+      hasWeapon(u, 'u28') && validAttackRoute(s, u, c.path, range ?? getStats(s, u).range),
       '所选穿透路径不合法。',
     );
   return findTarget(
@@ -147,6 +168,9 @@ function preparePhase(s: GamePosition, type: Command['type']) {
  */
 function prepareInspection(s: GamePosition, c: Command, queries?: InspectionQueries) {
   switch (c.type) {
+    case 'equip':
+      prepareEquip(s, c);
+      return true;
     case 'charge':
       if (queries) queries.charge(c);
       else prepareChargeInspection(s, c);
@@ -156,14 +180,23 @@ function prepareInspection(s: GamePosition, c: Command, queries?: InspectionQuer
       return true;
     case 'begin':
     case 'skip-synthesis':
+      preparePhase(s, c.type);
+      return true;
     case 'finish-shrine-setup':
       preparePhase(s, c.type);
       break;
     case 'summon':
       prepareSummon(s, c);
+      // 未自选的召唤在任何后续规则检查前必先抽取随机数。
+      if (c.chosenKind === undefined) throw unresolvedRandom;
       break;
     case 'extra-summon':
       prepareExtraSummon(s, c);
+      if (c.chosenKind === undefined) throw unresolvedRandom;
+      break;
+    case 'reroll':
+      prepareReroll(s, c);
+      if (c.chosenKind === undefined) throw unresolvedRandom;
       break;
     case 'end':
       prepareEndTurn(s);
@@ -181,9 +214,7 @@ function prepareInspection(s: GamePosition, c: Command, queries?: InspectionQuer
       break;
     }
     case 'skill':
-      if (queries) queries.skill(c);
-      else prepareSkillInspection(s, c);
-      break;
+      return (queries ? queries.skill(c) : prepareSkillInspection(s, c)) === true;
     case 'cast': {
       const result = prepareCastInspection(s, c);
       if (result === 'uncertain') throw unresolvedRandom;
@@ -198,13 +229,25 @@ function prepareInspection(s: GamePosition, c: Command, queries?: InspectionQuer
       prepareClockRestore(s, c);
       break;
     case 'attack': {
-      const u = queries ? queries.attacker(c.unitId) : projectedAttacker(s, c.unitId);
-      const attack = prepareAttack(s, u, attackTarget(s, c, u), {
-        direction: c.direction,
-        mode: c.mode,
-        path: c.path,
-      });
-      return { attack };
+      const { u, stats } = queries ? queries.attacker(c.unitId) : projectedAttacker(s, c.unitId);
+      const target = attackTarget(s, c, u, stats.range);
+      const attack = prepareAttack(
+        s,
+        u,
+        target,
+        {
+          direction: c.direction,
+          mode: c.mode,
+          path: c.path,
+        },
+        queries?.attacks,
+        // 模式投影不改变攻击力和射程；攻击准备仅通过受限接口读取这两个字段。
+        () => stats,
+      );
+      const result = inspectPreparedAttack(s, u, target, attack, queries?.deterministicAttack);
+      if (result === 'available') return true;
+      if (result === 'uncertain') throw unresolvedRandom;
+      return { attack, sourceStats: stats };
     }
   }
   return false;
@@ -227,7 +270,10 @@ export function createGame(seed = 20260907, mode: 'classic' | 'shrine' = 'classi
     heads: { 1: 0, 2: 0 },
     hands: { 1: [], 2: [] },
     bonus: { 1: 0, 2: 0 },
-    deployRows: { 1: [1, 2, 3, 4, 5, 6, 7, 8], 2: [6, 7, 8, 9, 10, 11, 12, 13] },
+    deployRows: {
+      1: [1, 2, 3, 4, 5, 6, 7, 8],
+      2: [6, 7, 8, 9, 10, 11, 12, 13],
+    },
     units: [],
     pending: [],
     deaths: [],
@@ -386,10 +432,10 @@ function transition<S extends GamePosition>(
         break;
       case 'attack': {
         const u = actor(s, c.unitId);
-        chooseMode(s, u, 'attack');
-        const t = attackTarget(s, c, u);
+        chooseMode(s, u, 'attack', prepared ? prepared.sourceStats : undefined);
+        const t = attackTarget(s, c, u, prepared ? prepared.sourceStats.range : undefined);
         const hitIds =
-          piercing(u) && c.mode !== 'heal'
+          !preview && piercing(u) && c.mode !== 'heal'
             ? piercingTargets(
                 s,
                 u,
@@ -404,9 +450,12 @@ function transition<S extends GamePosition>(
           { direction: c.direction, mode: c.mode, path: c.path },
           prepared && prepared.attack,
         );
-        u.attacked.push(...new Set([t.id, ...hitIds]));
-        u.shots++;
-        if (u.shots >= getStats(s, u).actions) finishOperation(u);
+        // 预检只消费完整攻击后果；计数收尾没有随机、事件或后续资格检查。
+        if (!preview) {
+          u.attacked.push(...new Set([t.id, ...hitIds]));
+          u.shots++;
+          if (u.shots >= getStats(s, u).actions) finishOperation(u);
+        }
         break;
       }
       case 'charge':
@@ -492,26 +541,33 @@ export function inspectCommand(s: GamePosition, c: Command): CommandInspection {
  * 同步只读批次的预检器；调用期间不得修改局面及其子对象，新局面须创建新实例。
  * 只复用派生查询，不缓存实际结算或正式随机数；单次 inspectCommand 保持无缓存入口。
  */
-export function createCommandInspector(s: GamePosition) {
-  const queries = inspectionQueries(s);
+export function createCommandInspector(s: GamePosition, attributes: typeof getStats = getStats) {
+  const queries = inspectionQueries(s, attributes);
   const query = (c: Command) => inspect(s, c, queries);
   return Object.assign(query, {
+    attacks: queries.attacks,
     /** 完整落点域只准备一次公共资格；冲撞仍逐落点执行原有完整预检。 */
     points(c: Command): { point: Point; inspection: CommandInspection }[] | undefined {
-      if (c.type !== 'move' && c.type !== 'deploy') return;
+      if (c.type !== 'move' && c.type !== 'deploy' && c.type !== 'skill' && c.type !== 'cast')
+        return;
       try {
         return withRuleInspection(() => {
           prepareTransition(s, c, queries);
           const domain =
-            c.type === 'move'
-              ? queries.move.points(c)
-              : (() => {
-                  const ghost = queries.deployment(c.cardId);
-                  const placement = queries.placement(undefined);
-                  return ALL_CELLS.filter((to) => placement.canPlace(ghost, to, true)).map(
-                    (point) => ({ point, complete: true }),
-                  );
-                })();
+            c.type === 'cast'
+              ? prepareCastPoints(s, c)
+              : c.type === 'skill'
+                ? queries.skill.points(c)
+                : c.type === 'move'
+                  ? queries.move.points(c)
+                  : (() => {
+                      const ghost = queries.deployment(c.cardId);
+                      const placement = queries.placement(undefined);
+                      return ALL_CELLS.filter((to) => placement.canPlace(ghost, to, true)).map(
+                        (point) => ({ point, complete: true }),
+                      );
+                    })();
+          if (!domain) return;
           return domain.flatMap(({ point, complete }) => {
             const inspection = complete
               ? ({ status: 'available' } as const)

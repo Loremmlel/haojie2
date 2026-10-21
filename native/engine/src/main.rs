@@ -2,6 +2,8 @@
 mod abilities;
 #[path = "training/actions.rs"]
 mod actions;
+#[path = "core/allocation.rs"]
+mod allocation;
 #[path = "training/boundary.rs"]
 mod boundary;
 #[path = "training/canonical.rs"]

@@ -18,7 +18,7 @@ import {
   syncBanners,
 } from '../setup/shrines';
 import { adjacent, attackPath } from './geometry';
-import { enrichEvent } from './event-facts';
+import { enrichEvent, withoutEventFacts } from './event-facts';
 import { simulationRandom } from './random';
 import { COMBAT_RULES, definition, isStored, SUMMON_POOL, ULTIMATE_POOL } from '../catalog';
 import type {
@@ -42,11 +42,21 @@ export class RuleError extends Error {
   }
 }
 let inspectionDepth = 0;
+let presentationDepth = 0;
+/** 同步训练步保留原始规则事件与序号，只省略稍后会被清空的展示事实和日志。 */
+export function withoutRulePresentation<T>(fn: () => T): T {
+  presentationDepth++;
+  try {
+    return withoutEventFacts(fn);
+  } finally {
+    presentationDepth--;
+  }
+}
 /** 同步只读预检省去调用栈与展示快照；异常退出也恢复正式错误及事件语义。 */
 export function withRuleInspection<T>(fn: () => T): T {
   inspectionDepth++;
   try {
-    return fn();
+    return withoutRulePresentation(fn);
   } finally {
     inspectionDepth--;
   }
@@ -79,8 +89,8 @@ export const age = (s: GamePosition, u: Unit) => s.turns[u.owner] + u.offset / 2
 export const isRunner = (u: Unit) => !u.silenced && anyTrait(u, ['u12', 'u12p']);
 export function emit(s: GamePosition, event: Omit<GameEvent, 'id'>, message?: string) {
   const raw = { ...event, id: `e${s.serial++}` };
-  // 只读预检只返回资格，不导出局面；保留规则会查找的原始事件和序号，省去展示快照与日志。
-  if (inspectionDepth) {
+  // 预检和训练省去展示快照与日志；保留连锁会查找的原始事件和同一序号。
+  if (presentationDepth) {
     s.events.push(raw);
     return;
   }
@@ -349,9 +359,9 @@ export const asTarget = (u: Unit): Target => ({
   y: u.y,
   unit: u,
 });
-export function actor(s: GamePosition, id?: string) {
+export function actor(s: GamePosition, id?: string, attributes: typeof getStats = getStats) {
   const u = findUnit(s, id),
-    stats = getStats(s, u);
+    stats = attributes(s, u);
   ensure(s.phase === 'play', '请先完成回合开始阶段。');
   ensure(allegiance(s, u) === s.active, '不是该随从的回合。');
   ensure(
@@ -360,8 +370,7 @@ export function actor(s: GamePosition, id?: string) {
   );
   return u;
 }
-export function chooseMode(s: GamePosition, u: Unit, mode: Mode) {
-  const stats = getStats(s, u);
+export function chooseMode(s: GamePosition, u: Unit, mode: Mode, stats: Stats = getStats(s, u)) {
   ensure(
     u.mode === 'none' || u.mode === mode,
     '本回合已选择另一操作模式，剩余攻击不能换成移动或技能。',
@@ -375,7 +384,9 @@ export function chooseMode(s: GamePosition, u: Unit, mode: Mode) {
     u.shots = 0;
     u.moves = 0;
   }
-  if (mode === 'attack') ensure(getStats(s, u).remaining > 0, '本次攻击操作次数已用完。');
+  // 初次攻击只重置模式/次数；原剩余攻击是否为正与重置后的判定相同。
+  if (mode === 'attack') ensure(stats.remaining > 0, '本次攻击操作次数已用完。');
+  return stats;
 }
 export function finishOperation(u: Unit) {
   if (!u.bonusSequence) u.operations++;

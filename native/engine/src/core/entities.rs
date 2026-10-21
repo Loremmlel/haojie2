@@ -1,7 +1,7 @@
 //! 有序数组保存规则顺序；数字槽定位当前实体，布局在分支间共享，历史快照不占槽。
 use crate::model::{State, Unit};
+use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
