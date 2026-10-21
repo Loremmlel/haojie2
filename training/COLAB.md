@@ -4,11 +4,11 @@
 
 ## 第一次使用
 
-选择 GPU 运行时，依次执行 Notebook 单元格。只需确认 Drive 备份目录和需要导入的旧训练位置。安装脚本使用独立 Python 3.12，读取 `training/pyproject.toml` 中固定的依赖，通过 uv 的 `--torch-backend auto` 选择驱动适配的 PyTorch 分发；显式 CUDA 会执行矩阵计算检查，失败时停止。Rust 使用与 CI 一致的 1.98.1 和 Cargo.lock 构建 release。Notebook 内核原有 Torch 不被替换。
+选择运行时，依次执行 Notebook 单元格；集中训练建议选择 GPU。只需确认 Drive 备份目录和需要导入的旧训练位置。Notebook、安装脚本及训练服务的设备默认均为 `auto`。安装脚本使用独立 Python 3.12，读取 `training/pyproject.toml` 中固定的依赖，通过 uv 的 `--torch-backend auto` 选择驱动适配的 PyTorch 分发；识别到 CUDA 后执行矩阵计算检查，失败时停止。Rust 使用与 CI 一致的 1.98.1 和 Cargo.lock 构建 release。Notebook 内核原有 Torch 不被替换。
 
 源码、解释器、引擎、归档临时文件和活跃训练根分别位于 `/content` 下。所有普通采样、更新和本地恢复点写入都走本地磁盘，Drive 只作为版本化归档存储。安装完成后先以暂停状态启动，面板显示真实硬件、恢复更新数和配置，再点“开始”。无需公网隧道、SSH 或 iframe；Notebook 内的 Python 客户端访问回环 API，原有 Host/Origin/会话校验保持启用。
 
-CPU-only 功能调试可将 `DEVICE=cpu`；默认模型保持原结构，Notebook 不默认使用验收用 tiny 模型。
+没有可用加速器时 `auto` 选择 CPU；也可显式设置 `DEVICE=cpu` 或 `DEVICE=cuda`。显式 CUDA 不可用时报告错误。默认模型保持原结构，Notebook 不默认使用验收用 tiny 模型。
 
 普通 Linux 或 WSL 可将全部工具安装到独立目录。安装脚本尊重 `CARGO_HOME`、`RUSTUP_HOME` 和 `UV_CACHE_DIR`；未指定时 Cargo 仍使用 `~/.cargo`。新装 Rust 使用 `--no-modify-path`，脚本仅为构建子进程设置 PATH，不修改 shell 启动文件。主机 Python 需要可用的 pip；示例从仓库根执行：
 
@@ -18,7 +18,7 @@ env CARGO_HOME=/var/tmp/haojie-tools/cargo \
   UV_CACHE_DIR=/var/tmp/haojie-tools/uv-cache \
   python3 scripts/colab/bootstrap.py \
   --venv /var/tmp/haojie-tools/venv \
-  --target /var/tmp/haojie-tools/native-target --device cuda
+  --target /var/tmp/haojie-tools/native-target
 ```
 
 选择本地磁盘上不会随短任务退出而清空的目录；WSL 的工具和构建输出优先放在 Linux 文件系统。需要先安装 CUDA 依赖、稍后再验收设备时，可用 `--backend cu130 --device cpu`：该组合仍安装指定 CUDA 分发，仅跳过安装末尾的 GPU 矩阵检查。
@@ -89,9 +89,11 @@ fi
 | `pool_mib`             | 16–131072，RAM 样本池预算；模型、进程和缓冲另占内存。                 |
 | `--torch-threads`      | Torch CPU 算子线程数，默认 0 自动选择；不限制 Rust 子进程使用其他核。 |
 
-新实验的服务器初值根据 CPU affinity、可见 cgroup 各层 CPU 时间配额、RAM 限额与可回收缓存生成，自动环境数最多 32，可手动调到 128。恢复实验不会自动改变已有学习节奏。当前仍是一轮采样之后更新，不引入异步旧策略训练或修改对局随机流。
+GUI、cloud 和 Notebook 的新实验共用 `defaults(device)`，根据 CPU affinity、可见 cgroup 各层 CPU 时间配额、RAM 限额与可回收缓存生成初值。CPU 取有效核数，CUDA/XPU 取其两倍，向上取整且最多 128 环境。可用 RAM 先分配四分之一给样本池（64 MiB 至 32 GiB），再扣除 512 MiB 的模型等起步空间，剩余预算按每环境 256 MiB 限制并发。每轮局数为环境数的两倍，推理批量为 `min(32, 环境数)`，训练 batch 保持 8。设置中的显式值最后覆盖自动结果。
 
-Torch 线程数独立于自动环境配置：控制台、cloud CLI 和 Notebook 默认均为 0（自动），CPU 使用 `min(4, max(1, floor(有效核配额)))` 个算子线程，CUDA/XPU 使用 1 个；算子间线程数固定为 1。Notebook 的 `TORCH_THREADS` 和 CLI 的 `--torch-threads` 可指定正整数覆盖。该值在服务启动时确定，不写入设置 JSON 或恢复点；重新启动时仍按本次启动参数选择，恢复点中的模型、优化器和学习参数保持原值。多个引擎进程和模型算子共同使用 CPU。
+初值在创建实验时确定；恢复实验保留保存的学习设置、模型和优化器。当前仍是一轮采样之后更新，运行中通过监控查看实际吞吐与资源占用。
+
+Torch 线程数独立于自动环境配置：控制台、cloud CLI 和 Notebook 默认均为 0（自动），CPU 使用 `min(4, max(1, floor(有效核配额)))` 个算子线程，CUDA/XPU 使用 1 个；算子间线程数固定为 1。Notebook 的 `TORCH_THREADS` 和 CLI 的 `--torch-threads` 可指定正整数覆盖。GUI 新实验选择其他设备时自动重新选择线程数，显式正整数仍保持。线程策略不写入设置 JSON 或恢复点；嵌入调用与性能基准继续使用调用者指定的线程数。多个引擎进程和模型算子共同使用 CPU。
 
 固定同一个检查点、每轮任务数、模型、训练批次和种子，分别测 4/8/16/32 环境。面板报告累计/最近一轮采样墙钟、请求数、真实终局、有效保留样本和平均实际推理批量，另报告互斥的采样/更新/评测/保存阶段时间。CPU 统计来自本服务进程树并按有效配额归一化，包含已回收子进程耗时；无权限读取时显示未知。GPU 报告利用率、分配与保留显存。
 
@@ -102,12 +104,12 @@ Torch 线程数独立于自动环境配置：控制台、cloud CLI 和 Notebook 
 ```sh
 python -m haojie_training.cloud \
   --engine artifacts/native-target/release/haojie-engine \
-  --root /path/to/local-training --device cuda \
+  --root /path/to/local-training \
   --backup-dir /path/to/persistent-backups --backup-seconds 600 --backup-keep 3 \
-  --settings server-settings.json --connection-file connection.json --paused
+  --connection-file connection.json
 ```
 
-`server-settings.json` 只填写需要覆盖的设置，例如：
+以上命令自动选择计算配置并开始训练；添加 `--paused` 可先查看配置。需要覆盖时再添加 `--settings server-settings.json`，文件只填写要调整的字段，例如：
 
 ```json
 {

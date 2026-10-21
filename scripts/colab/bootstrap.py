@@ -22,7 +22,7 @@ def main():
     parser.add_argument(
         "--backend", default="auto", choices=("auto", "cpu", "cu126", "cu128", "cu130")
     )
-    parser.add_argument("--device", default="cuda", choices=("cuda", "cpu"))
+    parser.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"))
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
     if sys.platform != "linux":
@@ -35,7 +35,18 @@ def main():
         parser.error("虚拟环境目标是非空用户目录，请指定新的目录")
     # uv 只装入临时引导目录，不更换 Notebook 内核的 Torch/Python。
     with tempfile.TemporaryDirectory(prefix="haojie-bootstrap-") as temporary:
-        run([sys.executable, "-m", "pip", "install", "--quiet", "--target", temporary, "uv"])
+        run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--quiet",
+                "--target",
+                temporary,
+                "uv",
+            ]
+        )
         uv = [sys.executable, "-m", "uv"]
         env = {**os.environ, "PYTHONPATH": temporary}
         if not python.exists():
@@ -62,15 +73,16 @@ def main():
         run([*uv, "pip", "check", "--python", python], env=env)
     probe = """import haojie_training
 import json, torch
-from haojie_training.console.config.resources import hardware, server_defaults
-print(json.dumps({"torch": torch.__version__, "hardware": hardware(),
-                  "initial_settings": server_defaults(DEVICE)}, indent=2, ensure_ascii=False))
-if DEVICE == "cuda":
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA 未就绪：请选择 GPU 运行时和兼容后端，不会退回 CPU 继续训练")
-    x = torch.ones((64, 64), device="cuda")
+from haojie_training.console.config import defaults
+from haojie_training.console.config.resources import hardware
+from haojie_training.runtime import resolve_device
+device = resolve_device(DEVICE)
+print(json.dumps({"torch": torch.__version__, "device": str(device), "hardware": hardware(),
+                  "initial_settings": defaults(device)}, indent=2, ensure_ascii=False))
+if device.type == "cuda":
+    x = torch.ones((64, 64), device=device)
     y = x @ x
-    torch.cuda.synchronize()
+    torch.cuda.synchronize(device)
     assert y[0, 0].item() == 64
 """
     run([python, "-c", probe.replace("DEVICE", repr(args.device))])
@@ -92,7 +104,17 @@ if DEVICE == "cuda":
                 ]
             )
     env = {**os.environ, "PATH": f"{cargo_bin}{os.pathsep}{os.environ.get('PATH', '')}"}
-    run([cargo_bin / "rustup", "toolchain", "install", "1.98.1", "--profile", "minimal"], env=env)
+    run(
+        [
+            cargo_bin / "rustup",
+            "toolchain",
+            "install",
+            "1.98.1",
+            "--profile",
+            "minimal",
+        ],
+        env=env,
+    )
     run(
         [
             cargo_bin / "cargo",
@@ -109,7 +131,10 @@ if DEVICE == "cuda":
     )
     print(
         json.dumps(
-            {"python": str(python), "engine": str(args.target.resolve() / "release/haojie-engine")},
+            {
+                "python": str(python),
+                "engine": str(args.target.resolve() / "release/haojie-engine"),
+            },
             indent=2,
         )
     )

@@ -52,6 +52,7 @@ def main():
             engine,
             args.root,
             device=args.device,
+            threads=args.torch_threads,
             settings=settings,
             backup_dir=args.backup_dir,
             backup_seconds=args.backup_seconds,

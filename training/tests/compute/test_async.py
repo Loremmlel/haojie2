@@ -253,9 +253,11 @@ class PoolAsyncTests(unittest.TestCase):
         event = threading.Event()
         self.pool.events.advance = event.set
         self.add(0, self.request(0))
+        self.add(1, self.request(1, "b"))
         self.pool.run(self.jobs, cancel_event=event, keep_open=True)
         self.assertTrue(event.is_set())
-        self.assertFalse(self.sent or self.committed or self.runner.active)
+        self.assertFalse(self.sent or self.committed)
+        self.assertFalse(any(runner.active for runner in self.jobs.inferences.values()))
         self.assertEqual(self.unfinished, [10, 11])
         self.assertIn(("pool-close",), self.log)
 
@@ -304,34 +306,60 @@ class PoolAsyncTests(unittest.TestCase):
 
     def test_inflight_resource_error_discards_only_failed_slot(self):
         self.pool.max_batch_size = 2
-        self.runner.on_submit = lambda: self.add(0, MemoryError("超出帧上限"))
+        self.pool.read_seconds, self.pool.decode_seconds, self.pool.tensor_bytes = 1, 2, 3
+        self.pool.restarts = 4
+        self.pool.clients[0].read_seconds = 10
+        self.pool.clients[0].decode_seconds = 20
+        self.pool.clients[0].tensor_bytes = 30
+
+        def fail_slot():
+            self.add(0, MemoryError("超出帧上限"))
+            self.add(0, RuntimeError("原生进程已退出"))
+
+        self.runner.on_submit = fail_slot
         for slot in range(2):
             self.add(slot, self.request(slot))
         self.pool.run(self.jobs, keep_open=True)
         self.assertEqual(self.errors, ["超出帧上限"])
         self.assertEqual(self.pool.generations, [1, 0])
+        self.assertEqual(
+            (self.pool.read_seconds, self.pool.decode_seconds, self.pool.tensor_bytes),
+            (11, 22, 33),
+        )
+        self.assertEqual(self.pool.restarts, 5)
         self.assertEqual([(slot, generation) for slot, generation, _ in self.sent], [(1, 0)])
         self.assertEqual(self.committed, [11])
         self.assertEqual(self.unfinished, [10])
         self.assertFalse(self.runner.active)
 
-    def test_model_switch_drains_and_mixed_model_group_is_synchronous(self):
-        for maximum in (1, 2):
+    def test_model_groups_fill_batches_and_alternate_without_draining(self):
+        for maximum in (1, 2, 8):
             with self.subTest(maximum=maximum):
-                if maximum == 2:
+                if maximum != 1:
                     self.setUp()
                 self.pool.max_batch_size = maximum
-                self.add(0, self.request(0))
-                self.add(1, self.request(1, "b"))
-                expected = self.jobs.infer([self.request(0), self.request(1, "b")])
+                self.pool.generations = [0] * 6
+                self.pool.last_ids = [0] * 6
+                self.pool.clients = [self.client(i) for i in range(6)]
+                self.pool.slots = {
+                    i: {"id": 10 + i, "models": ["a", "b"], "requests": 0} for i in range(6)
+                }
+                requests = [self.request(i, "b" if i % 2 else "a") for i in range(6)]
+                for slot, request in enumerate(requests):
+                    self.add(slot, request)
+                expected = self.jobs.infer(requests)
                 self.pool.run(self.jobs, keep_open=True)
-                if maximum == 1:
-                    self.assertEqual(
-                        [item[0] for item in self.log[:4]], ["submit", "finish", "drain", "submit"]
-                    )
-                else:
-                    self.assertFalse(any(item[0] == "submit" for item in self.log))
-                self.assertEqual(self.committed, [10, 11])
+                submitted = [item[1] for item in self.log if item[0] == "submit"]
+                expected_groups = {
+                    1: [((i, 0),) for i in range(6)],
+                    2: [((0, 0), (2, 0)), ((1, 0), (3, 0)), ((4, 0),), ((5, 0),)],
+                    8: [((0, 0), (2, 0), (4, 0)), ((1, 0), (3, 0), (5, 0))],
+                }
+                self.assertEqual(submitted, expected_groups[maximum])
+                self.assertEqual([item[0] for item in self.log[:2]], ["submit", "submit"])
+                self.assertEqual(sorted(self.committed), list(range(10, 16)))
+                self.assertFalse(self.unfinished)
+                self.assertFalse(any(runner.active for runner in self.jobs.inferences.values()))
                 for slot, _, response in self.sent:
                     self.assertEqual(response["logits"], expected[slot, :1].tolist())
 
@@ -354,19 +382,18 @@ class PoolAsyncTests(unittest.TestCase):
 
     def test_failed_submission_drains_pending_before_closing_pool(self):
         self.add(0, self.request(0))
-        self.add(1, self.request(1))
-        original = self.runner.submit
+        self.add(1, self.request(1, "b"))
+        historical = self.jobs.inferences["b"]
+        original = historical.submit
 
         def submit(*args, **kwargs):
-            ticket = original(*args, **kwargs)
-            if len(self.runner.active) == 2:
-                raise ValueError("模拟提交失败")
-            return ticket
+            original(*args, **kwargs)
+            raise ValueError("模拟提交失败")
 
-        self.runner.submit = submit
+        historical.submit = submit
         with self.assertRaisesRegex(ValueError, "模拟提交失败"):
             self.pool.run(self.jobs, keep_open=True)
-        self.assertFalse(self.runner.active)
+        self.assertFalse(any(runner.active for runner in self.jobs.inferences.values()))
         self.assertEqual(self.committed, [])
         self.assertEqual(self.unfinished, [10, 11])
         self.assertEqual(self.log[-1], ("pool-close",))
@@ -400,6 +427,7 @@ class AsyncOwnershipTests(unittest.TestCase):
         first = InferenceTicket(0, ((0, 0),), event, torch.tensor([[2.0]]), (object(),))
         second = InferenceTicket(1, ((1, 0),), event, torch.tensor([[7.0]]), (object(),))
         runner._tickets, runner._slots = [first, second], {(0, 0), (1, 0)}
+        runner.stats.inflight = 2
         with self.assertRaisesRegex(ValueError, "在途"):
             runner.submit([{}], slots=[(0, 0)])
         with self.assertRaisesRegex(RuntimeError, "两组"):
@@ -413,6 +441,7 @@ class AsyncOwnershipTests(unittest.TestCase):
         self.assertEqual(output.item(), 2)
         self.assertFalse(first.owners or second.owners or runner._slots)
         self.assertEqual(runner.stats.async_discarded, 1)
+        self.assertEqual(runner.stats.inflight, 0)
 
     def test_failed_device_submission_synchronizes_before_reuse(self):
         runner = PolicyInference(PolicyValueNet(ModelConfig.tiny()), "cpu")
@@ -426,6 +455,7 @@ class AsyncOwnershipTests(unittest.TestCase):
             (object(),),
         )
         runner._tickets, runner._slots = [first, None], {(0, 0)}
+        runner.stats.inflight = 1
         stream = SimpleNamespace(synchronize=lambda: synchronized.append("failed"))
         with (
             patch.object(runner, "_prepare", return_value=({}, None, None)),
@@ -457,6 +487,7 @@ class AsyncOwnershipTests(unittest.TestCase):
         ]
         first, second = tickets
         runner._tickets, runner._slots = tickets, {(0, 0), (1, 0)}
+        runner.stats.inflight = 2
         with self.assertRaisesRegex(ValueError, "非有限"):
             runner.finish(first)
         self.assertEqual(synchronized, [0])
@@ -529,6 +560,14 @@ class AsyncOwnershipTests(unittest.TestCase):
         restored = runner.finish(runner.submit(groups[0], slots=[(0, 2)]))
         torch.testing.assert_close(restored, expected[0], atol=0, rtol=0)
         torch.testing.assert_close(restored, reference(groups[0]), atol=0, rtol=0)
+        historical = PolicyInference(model, "cuda", precision, stats=stats)
+        overlaps = stats.async_overlaps
+        first = runner.submit(groups[0], slots=[(0, 3)])
+        second = historical.submit(groups[1], slots=[(1, 3)])
+        self.assertEqual(stats.async_overlaps, overlaps + 1)
+        torch.testing.assert_close(historical.finish(second), reference(groups[1]), atol=0, rtol=0)
+        runner.finish(first)
+        self.assertEqual(stats.inflight, 0)
 
 
 if __name__ == "__main__":

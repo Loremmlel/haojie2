@@ -157,7 +157,12 @@ def main():
         lease.close()
         parser.error("已有恢复点；导入原件不会覆盖持续学习状态")
     controller = Controller(
-        engine, store, device=args.device, tiny=args.tiny, imported=args.import_weights
+        engine,
+        store,
+        device=args.device,
+        tiny=args.tiny,
+        imported=args.import_weights,
+        threads=args.torch_threads,
     )
     # 代码/运行库不是训练产物；已知旧训练位置分别报告，不宣称它们也小于20GB。
     paths = args.legacy or (

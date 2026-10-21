@@ -185,6 +185,7 @@ def main():
             environments=args.environments,
             games_per_round=args.games,
             updates_per_round=args.updates,
+            update_limit=max(256, args.updates),
             batch_size=args.batch_size,
             inference_batch_size=args.inference_batch_size,
             batch_wait_ms=args.batch_wait_ms,
@@ -238,6 +239,7 @@ def main():
             finished.append(
                 {
                     "task": task["id"],
+                    "matchup": task["context"]["matchup"],
                     "outcome": message["outcome"],
                     "final_hash": message.get("finalHash"),
                     "requests": task["requests"],

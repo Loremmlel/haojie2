@@ -2,11 +2,12 @@
 
 import math
 
-from .resources import available_memory
+from ...runtime import resolve_device
+from .resources import available_memory, cpu_capacity
 
 METHOD = "decomposed-mc-q-v2"
 
-# 每项依次为默认值、最小值、最大值；样本池默认容量再按启动时可用 RAM 调整。
+# 每项依次为默认值、最小值、最大值；资源相关初值由 defaults 统一按设备调整。
 _INTEGERS = {
     "environments": (4, 1, 128),
     "games_per_round": (4, 1, 4096),
@@ -32,9 +33,24 @@ _INTEGERS = {
 }
 
 
-def defaults():
+def defaults(device="auto"):
+    """GUI、cloud 与新建实验共用硬件初配；调用方最后合并用户显式设置。"""
+    device = resolve_device(str(device))
+    memory = available_memory()
+    pool_mib = min(32768, max(64, memory // (4 * 2**20)))
+    # 样本池与进程共享余量；另外留出模型、优化器和临时张量所需的起步空间。
+    worker_memory = max(0, memory - pool_mib * 2**20 - 512 * 2**20)
+    workers = min(128, max(1, math.ceil(cpu_capacity() * (1 if device.type == "cpu" else 2))))
+    workers = min(workers, max(1, worker_memory // (256 * 2**20)))
     config = {key: default for key, (default, _, _) in _INTEGERS.items()}
-    config["pool_mib"] = min(4096, max(64, available_memory() // (4 * 2**20)))
+    config.update(
+        environments=workers,
+        games_per_round=workers * 2,
+        inference_batch_size=min(32, workers),
+        pool_mib=pool_mib,
+        update_limit=max(256, workers * 64),
+        eval_games=max(64, workers * 4),
+    )
     return {
         **config,
         "method": METHOD,

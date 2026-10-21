@@ -61,10 +61,6 @@ class MemoryJobs:
                 model.eval(), controller.device, inference.precision, stats=inference.stats
             )
 
-    @property
-    def supports_packed_batches(self):
-        return all(runner.supports_packed_batches for runner in self.inferences.values())
-
     def claim(self):
         if self.assigned >= self.target:
             return None
