@@ -439,7 +439,12 @@ fn sample<R: BufRead, W: Write>(
         current_hash = records::state_hash(&state)?;
     }
     wire.model = request.model;
-    let result = json!({"type":"done","outcome":outcome,"ply":state.ply,"error":error,"elapsedMs":start.elapsed().as_secs_f64()*1000.0,"finalHash":current_hash,"model":wire.model,"metrics":metrics});
+    let mut result = json!({"type":"done","outcome":outcome,"ply":state.ply,"error":error,"elapsedMs":start.elapsed().as_secs_f64()*1000.0,"finalHash":current_hash,"model":wire.model,"metrics":metrics});
+    if reason == "error" {
+        // 仅失败结案携带可信诊断快照；不进入模型输入，也不在正常采样保留全局面。
+        result["debug"] = json!({"start":request.start,"state":state,"actor":wire.actor,
+            "commands":count,"samplerState":random.0});
+    }
     #[cfg(feature = "kernel-profile")]
     {
         drop(kernel);

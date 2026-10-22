@@ -114,6 +114,13 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(done["outcome"]["reason"], "error")
             self.assertIn("stale", done["error"])
             self.assertEqual(done["outcome"]["commands"], prefix_commands)
+            self.assertEqual(
+                done["debug"]["start"],
+                {"prelude": [], **request["start"]},
+            )
+            self.assertEqual(done["debug"]["commands"], prefix_commands)
+            self.assertIn("state", done["debug"])
+            self.assertNotIn("debug", infer)
 
     def test_checkpoint_rules_and_weights(self):
         with tempfile.TemporaryDirectory() as folder:
