@@ -118,7 +118,8 @@ def evaluation_tables(status):
         )
         if details:
             content += (
-                "<details><summary>按经典 / 神龛与先后手细分</summary>"
+                f'<details data-key="rules-{identity}-{heading}">'
+                "<summary>按经典 / 神龛与先后手细分</summary>"
                 '<div class="table-scroll" tabindex="0" role="region" aria-label="规则与座位细分">'
                 '<table><caption>规则与座位细分</caption><thead><tr><th scope="col">对战组合</th>'
                 '<th scope="col">胜率</th><th scope="col">胜 / 负 / 平</th>'
@@ -131,7 +132,7 @@ def evaluation_tables(status):
     interval = number(config.get("eval_games"))
     remaining = number(status.get("next_eval_games"))
     info = (
-        '<section class="evaluation"><h2>手工 AI 对战评测</h2>'
+        '<section class="evaluation" data-key="evaluation"><h2>手工 AI 对战评测</h2>'
         f"<p>自动间隔：{interval} 个有效训练终局，并需有新更新；距下次还需 {remaining} 局。"
         "训练中每次最多评测四局，再继续训练一轮；整批使用同一份冻结权重。</p>"
     )
@@ -151,7 +152,11 @@ def evaluation_tables(status):
     reports = status.get("evaluations", [])
     if reports:
         recent = table(reports[-1], "最近完成批次")
-        info += f"<details><summary>最近完成批次</summary>{recent}</details>" if job else recent
+        info += (
+            f'<details data-key="recent"><summary>最近完成批次</summary>{recent}</details>'
+            if job
+            else recent
+        )
     elif not job:
         info += "<p>尚无评测结果；达到自动间隔后执行，也可点击“立即评测”。</p>"
     return info + (
@@ -289,9 +294,10 @@ class Dashboard:
 .hj-colab section {{min-width:0;background:var(--panel);border:1px solid var(--line);padding:12px}}
 .hj-colab strong {{display:block;font-size:20px}} .hj-colab svg {{width:100%;display:block}}
 .hj-colab text {{fill:var(--ink);font-size:15px}}
-.hj-colab .empty {{height:190px;display:grid;place-items:center}}
+.hj-colab .empty {{aspect-ratio:500/190;display:grid;place-items:center}}
 .hj-colab [role=alert] {{color:var(--ember);min-height:24px}}
-.hj-colab pre {{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}}
+.hj-colab pre {{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;
+  max-height:420px;overflow:auto}}
 .hj-colab details {{margin-top:10px}}
 .hj-colab .evaluation {{margin:14px 0}} .hj-colab progress {{width:100%;accent-color:var(--teal)}}
 .hj-colab .table-scroll {{overflow:auto;scrollbar-color:var(--teal) var(--paper)}}
@@ -308,7 +314,9 @@ class Dashboard:
 {phase_names.get(performance.get("phase"), "等待阶段")} ·
 {html.escape(str(status.get("device", "")))} ·
 备份：{html.escape(backup.get("state") or "未配置")}</p>
-{error_html}<div class="metrics">{metrics}</div><div class="curves">{curves}</div>
+{error_html}<div class="metrics" data-key="metrics">{metrics}</div>
+<div class="curves" data-key="curves">{curves}</div>
 {evaluation_tables(status)}
 <p>损失来自服务记录；吞吐与利用率保留最近 180 次刷新。无可用读数时留白。</p>
-<details><summary>详细状态与排错信息</summary><pre>{details}</pre></details></div>"""
+<details data-key="raw"><summary>详细状态与排错信息</summary>
+<p>展开期间固定此快照，收起后自动更新。</p><pre data-snapshot>{details}</pre></details></div>"""

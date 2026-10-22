@@ -1,8 +1,6 @@
 """纯标准库验证 Notebook 刷新、中断隔离与图表口径；Linux 无需 Torch。"""
 
 import ast
-import asyncio
-import html
 import json
 import os
 import subprocess
@@ -10,9 +8,10 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from haojie_training.cloud.notebook import Dashboard
+from haojie_training.cloud.panel import Panel
 from haojie_training.console.opponents import summarize
 
 REPO = Path(__file__).resolve().parents[3]
@@ -32,50 +31,54 @@ class NotebookTests(unittest.TestCase):
             self.assertEqual(cell["outputs"], [])
         ast.parse((REPO / "scripts/colab/bootstrap.py").read_text(encoding="utf-8"))
 
-    def test_monitor_refresh_failure_and_cancel_never_send_commands(self):
-        for fail in (False, True):
-            view = Mock()
-            api = (
-                Mock(side_effect=OSError("连接失败"))
-                if fail
-                else Mock(return_value={"resources": {"cpu_percent": 25}})
-            )
+    def test_panel_cell_returns_and_callbacks_confirm_or_invalidate(self):
+        status = {
+            "config": {"environments": 2, "eval_games": 64, "eval_pairs": 1, "eval_seconds": 180},
+            "resources": {"cpu_percent": 25},
+        }
 
-            async def stop_display(_):
-                raise asyncio.CancelledError
+        def api(action=None, values=None):
+            if action == "concurrency":
+                status["config"].update(values)
+            return status
 
-            scope = {
-                "display": lambda *args, **kwargs: view,
-                "print": Mock(),
-                "HTML": str,
-                "html": html,
-                "Dashboard": Dashboard,
-                "asyncio": SimpleNamespace(
-                    sleep=stop_display, CancelledError=asyncio.CancelledError
-                ),
-                "api": api,
-            }
-            panel = ast.parse("".join(cells()[-2]["source"]))
-            start = next(
-                i
-                for i, node in enumerate(panel.body)
-                if isinstance(node, ast.Assign)
-                and any(isinstance(t, ast.Name) and t.id == "dashboard" for t in node.targets)
-            )
-            monitor = compile(
-                ast.Module(body=panel.body[start:], type_ignores=[]),
-                "monitor-cell",
-                "exec",
-                ast.PyCF_ALLOW_TOP_LEVEL_AWAIT,
-            )
-            asyncio.run(eval(monitor, scope))
+        api = Mock(side_effect=api)
+        callbacks = {}
+        output = SimpleNamespace(register_callback=lambda name, fn: callbacks.update({name: fn}))
+        display = Mock()
+        source = ast.parse("".join(cells()[-2]["source"]))
+        self.assertFalse(any(isinstance(n, (ast.While, ast.Await)) for n in ast.walk(source)))
+        scope = {"api": api}
+        with patch.dict(
+            sys.modules,
+            {
+                "google.colab": SimpleNamespace(output=output),
+                "IPython.display": SimpleNamespace(HTML=str, JSON=lambda v: v, display=display),
+            },
+        ):
+            exec(compile(source, "panel-cell", "exec"), scope)
+            first = scope["haojie_panel"]
             api.assert_called_once_with()
-            view.update.assert_called_once()
-            if fail:
-                self.assertIn("状态未知", view.update.call_args.args[0])
-            else:
-                self.assertEqual(scope["dashboard"].history[-1][2], 25)
-            scope["print"].assert_called_once()
+            reply = callbacks["haojie.panel"](first.identity, "concurrency", {"environments": 3})
+            self.assertEqual(reply["config"]["environments"], 3)
+            self.assertIn("服务已确认", reply["message"])
+            exec(compile(source, "panel-cell", "exec"), scope)
+            api.reset_mock()
+            self.assertEqual(callbacks["haojie.panel"](first.identity, "start"), {"closed": True})
+            api.assert_not_called()
+            self.assertEqual(display.call_count, 2)
+
+    def test_callback_does_not_acknowledge_unconfirmed_target_or_failed_request(self):
+        api = Mock(return_value={"config": {"environments": 2}})
+        panel = Panel(api)
+        reply = panel.call(panel.identity, "concurrency", {"environments": 3})
+        self.assertIn("服务目标仍为 2", reply["error"])
+        api.side_effect = OSError("connection refused")
+        self.assertIn("connection refused", panel.call(panel.identity)["error"])
+        panel.close()
+        api.reset_mock()
+        self.assertEqual(panel.call(panel.identity, "pause"), {"closed": True})
+        api.assert_not_called()
 
     def test_evaluation_breakdown_keeps_unknown_and_seat_denominators(self):
         games = [

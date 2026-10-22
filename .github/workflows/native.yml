@@ -109,6 +109,7 @@ jobs:
         run: |
           node tests/browser/console/run.mjs
           node tests/browser/console/colab.mjs
+          node tests/browser/console/notebook.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -123,6 +124,8 @@ jobs:
             artifacts/console-browser-*/*.json
             artifacts/console-browser-*/*.png
             artifacts/colab-browser/*.png
+            artifacts/notebook-browser-*/*.png
+            artifacts/notebook-browser-*/*.json
   installed:
     runs-on: ubuntu-latest
     timeout-minutes: 25
