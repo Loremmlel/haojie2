@@ -147,12 +147,24 @@ class Controller:
     def status(self):
         with self.lock:
             updates = self.trainer.updates if self.trainer else self.saved_step
+            pool = self.pool
+            actual_environments = len(pool.clients) if pool and not pool.closed else 0
+            target_environments = self.config["environments"]
+            if not (self.continuous_selfplay and self.config["method"] == METHOD):
+                target_environments = min(target_environments, self.config["games_per_round"])
             return copy.deepcopy(
                 {
                     "state": self.state,
                     "error": self.error,
                     "device": str(self.device),
                     "config": self.config,
+                    "concurrency": {
+                        "requested": self.config["environments"],
+                        "actual": actual_environments,
+                        "pending": bool(
+                            actual_environments and actual_environments != target_environments
+                        ),
+                    },
                     "counts": self.counts,
                     "version": self.version,
                     "experiment": self.experiment,
@@ -401,6 +413,15 @@ class Controller:
                     for name in self.store.names(category)[:-1]:
                         self.root_store.remove(name)
                 self.log("已回收可替换的旧历史/导出权重；恢复点和评测基准保留")
+            elif action == "concurrency":
+                if self.state in ("starting", "pausing"):
+                    raise ValueError("请等待启动或暂停完成，再调整并发")
+                if not isinstance(values, dict) or set(values) != {"environments"}:
+                    raise ValueError("并发设置只接受 environments 字段")
+                config = {**self.config, **values}
+                validate(config)
+                self.config = config
+                self.log(f"并发目标已设为 {config['environments']}，下一采样窗口生效")
             elif action == "settings":
                 if self.state not in ("idle", "paused", "error"):
                     raise ValueError("请先暂停再修改设置")
@@ -660,11 +681,15 @@ class Controller:
     def _sample(self):
         self.state = "sampling"
         continuous = self.continuous_selfplay and self.config["method"] == METHOD
+        # 仅训练线程在窗口边界重建；已完成样本和学习状态保留，未终局按原取消协议记账。
+        count = self.config["environments"]
+        count = count if continuous else min(count, self.config["games_per_round"])
+        if self.pool and len(self.pool.clients) != count:
+            discarded = len(self.pool.slots)
+            self._close_pool()
+            self.log(f"并发切换为 {count}；取消 {discarded} 个在途局，已完成样本保留")
         if self.pool is None:
-            count = self.config["environments"]
-            self.pool = self._new_pool(
-                count if continuous else min(count, self.config["games_per_round"])
-            )
+            self.pool = self._new_pool(count)
         self.pool.model_hash = self.version
         jobs = self.sampling_jobs if continuous else None
         historical = self._historical(jobs)

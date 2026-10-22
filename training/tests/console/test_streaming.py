@@ -197,6 +197,67 @@ class StreamingTests(unittest.TestCase):
             c._close_pool()
             self.assertEqual(c.counts["discarded"], len(task_objects))
 
+    def test_runtime_concurrency_rebuilds_only_at_window_boundary(self):
+        with self.controller() as c:
+            c._sample()
+            old_pool, trainer, optimizer = c.pool, c.trainer, c.trainer.optimizer
+            carried = len(old_pool.slots)
+            discarded = c.counts["discarded"]
+            updates = trainer.updates
+            retained = c.counts["retained_samples"]
+            self.assertGreater(retained, 0)
+            self.assertGreater(carried, 0)
+            c.command("concurrency", {"environments": 3})
+            self.assertIs(c.pool, old_pool)
+            self.assertEqual(
+                c.status()["concurrency"],
+                {
+                    "requested": 3,
+                    "actual": 2,
+                    "pending": True,
+                },
+            )
+            for invalid in (0, 129, True, 1.5):
+                with self.assertRaises(ValueError):
+                    c.command("concurrency", {"environments": invalid})
+            with self.assertRaises(ValueError):
+                c.command("concurrency", {"environments": 3, "batch_size": 1})
+            for state in ("starting", "pausing"):
+                c.state = state
+                with self.assertRaisesRegex(ValueError, "请等待"):
+                    c.command("concurrency", {"environments": 4})
+            c.state = "sampling"
+            with self.assertRaisesRegex(ValueError, "先暂停"):
+                c.command("settings", {"batch_size": 1})
+            c._sample()
+            self.assertTrue(old_pool.closed)
+            self.assertIs(c.trainer, trainer)
+            self.assertIs(c.trainer.optimizer, optimizer)
+            self.assertEqual(trainer.updates, updates)
+            self.assertEqual(c.counts["discarded"], discarded + carried)
+            self.assertGreaterEqual(c.counts["retained_samples"], retained)
+            self.assertEqual(
+                c.status()["concurrency"],
+                {
+                    "requested": 3,
+                    "actual": 3,
+                    "pending": False,
+                },
+            )
+            c._update()
+            self.assertGreater(trainer.updates, updates)
+            c.command("concurrency", {"environments": 1})
+            c._sample()
+            self.assertEqual(len(c.pool.clients), 1)
+            self.assertTrue(c.want_run)
+            self.assertEqual(c.config["games_per_round"], 2)
+            c._save()
+            recovery = torch.load(
+                c.store.root / c.store.names("recovery")[-1],
+                weights_only=True,
+            )
+            self.assertEqual(recovery["config"]["environments"], 1)
+
     def test_fixed_weights_complete_identical_finite_task_set(self):
         summaries = []
         for continuous in (False, True):

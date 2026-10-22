@@ -232,6 +232,40 @@ class CloudTests(unittest.TestCase):
                             break
                         time.sleep(0.1)
                     self.assertTrue(Path(status["backup"]["last"]["manifest"]).is_file())
+                    api(
+                        "/api/command",
+                        {
+                            "action": "settings",
+                            "values": {
+                                "environments": 2,
+                                "games_per_round": 2,
+                                "max_commands": 1,
+                            },
+                        },
+                    )
+
+                    def wait_status(predicate):
+                        while time.monotonic() < deadline:
+                            current = api("/api/status")
+                            self.assertNotEqual(current["state"], "error", current["error"])
+                            if predicate(current):
+                                return current
+                            time.sleep(0.05)
+                        self.fail("回环控制请求未在期限内完成")
+
+                    api("/api/command", {"action": "start"})
+                    wait_status(
+                        lambda s: s["state"] == "sampling" and s["concurrency"]["actual"] == 2
+                    )
+                    api("/api/command", {"action": "concurrency", "values": {"environments": 3}})
+                    resized = wait_status(lambda s: s["concurrency"]["actual"] == 3)
+                    self.assertEqual(resized["config"]["games_per_round"], 2)
+                    api("/api/command", {"action": "pause"})
+                    wait_status(lambda s: s["state"] == "paused")
+                    api("/api/command", {"action": "start"})
+                    wait_status(lambda s: s["concurrency"]["actual"] == 3)
+                    api("/api/command", {"action": "pause"})
+                    wait_status(lambda s: s["state"] == "paused")
                     api("/api/command", {"action": "shutdown"})
                     self.assertEqual(process.wait(timeout=60), 0)
                     self.assertTrue(Backups(root / "drive").restore(root / "restored"))

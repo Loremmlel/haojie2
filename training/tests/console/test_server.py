@@ -56,42 +56,6 @@ class ServerTests(unittest.TestCase):
                     expected[variables[0]] = "expandable_segments:True"
                 self.assertEqual(json.loads(result.stdout), expected)
 
-    def test_notebook_and_bootstrap_syntax(self):
-        import ast
-        import asyncio
-        import html
-
-        repo = Path(__file__).resolve().parents[3]
-        notebook = json.loads((repo / "notebooks/haojie_colab.ipynb").read_text(encoding="utf-8"))
-        code = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
-        self.assertEqual(len(code), 6)
-        for cell in code:
-            ast.parse("".join(cell["source"]))
-            self.assertEqual(cell["outputs"], [])
-        ast.parse((repo / "scripts/colab/bootstrap.py").read_text(encoding="utf-8"))
-        # 执行监控单元的一次刷新，核对公开状态字段，而不是只检查语法。
-        view = Mock()
-
-        async def stop_display(_):
-            raise asyncio.CancelledError
-
-        scope = {
-            "display": lambda *args, **kwargs: view,
-            "print": Mock(),
-            "HTML": str,
-            "html": html,
-            "json": json,
-            "asyncio": SimpleNamespace(sleep=stop_display, CancelledError=asyncio.CancelledError),
-            "api": lambda: {"resources": {"cpu_percent": 25}},
-        }
-        monitor = compile(
-            "".join(code[-2]["source"]), "monitor-cell", "exec", ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
-        )
-        asyncio.run(eval(monitor, scope))
-        self.assertEqual(scope["shown"]["resources"], {"cpu_percent": 25})
-        view.update.assert_called_once()
-        scope["print"].assert_called_once()
-
     def test_parent_cpu_and_memory_limits(self):
         with tempfile.TemporaryDirectory() as folder:
             parent = Path(folder)

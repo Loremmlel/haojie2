@@ -91,10 +91,14 @@ class DeliveryTests(unittest.TestCase):
         job.config, job.created = defaults(), time.time()
         job.plan = [{**schedule(1, 1)[0], "difficulty": "baseline", "result": "pending"}]
         job.index, job.confirmation, job.series, job.conditions = 0, False, "resource-test", {}
+        pending = job.summary()["results"]["baseline"]
+        self.assertEqual(pending["by_side"]["1"]["unfinished"], 1)
+        self.assertIsNone(pending["by_matchup"]["classic/1"]["win_rate"])
         with patch("haojie_training.console.evaluation.Pool") as pool:
             pool.return_value.run.side_effect = lambda jobs, **_: jobs.resource_error("帧内存不足")
             report = job.slice()
         result = report["results"]["baseline"]
+        self.assertNotIn("by_side", result)
         self.assertEqual(result["errors"], 1)
         self.assertEqual((result["timeouts"], result["losses"], result["n"]), (0, 0, 0))
         self.assertEqual(report["games"][0]["reason"], "resource-budget")

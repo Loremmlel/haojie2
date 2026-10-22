@@ -96,30 +96,46 @@ def schedule(pairs, round_number):
     ]
 
 
-def summarize(games):
+def _results(rows):
+    wins = sum(g.get("result") == "win" for g in rows)
+    losses = sum(g.get("result") == "loss" for g in rows)
+    draws = sum(g.get("result") == "draw" for g in rows)
+    completed = wins + losses + draws
+    return {
+        "wins": wins,
+        "losses": losses,
+        "draws": draws,
+        "unfinished": sum(g.get("result") in ("unfinished", "pending") for g in rows),
+        "errors": sum(g.get("result") == "error" for g in rows),
+        "timeouts": sum(g.get("reason") in ("time-budget", "teacher-time-budget") for g in rows),
+        "truncated": sum(g.get("reason") in ("commands", "plies", "decode-budget") for g in rows),
+        "total": len(rows),
+        "n": completed,
+        "completion": completed / len(rows) if rows else 0,
+        "win_rate": wins / completed if completed else None,
+        "score_rate": (wins + draws / 2) / completed if completed else None,
+    }
+
+
+def summarize(games, *, breakdown=False):
+    """胜率仅以真实终局为分母；实时细分按模型先后手与规则统计，不扩大持久化摘要。"""
     result = {}
     for difficulty in ("easy", "medium", "hard", "baseline"):
         rows = [g for g in games if g["difficulty"] == difficulty]
-        wins = sum(g.get("result") == "win" for g in rows)
-        losses = sum(g.get("result") == "loss" for g in rows)
-        draws = sum(g.get("result") == "draw" for g in rows)
-        completed = wins + losses + draws
-        result[difficulty] = {
-            "wins": wins,
-            "losses": losses,
-            "draws": draws,
-            "unfinished": sum(g.get("result") in ("unfinished", "pending") for g in rows),
-            "errors": sum(g.get("result") == "error" for g in rows),
-            "timeouts": sum(
-                g.get("reason") in ("time-budget", "teacher-time-budget") for g in rows
-            ),
-            "truncated": sum(
-                g.get("reason") in ("commands", "plies", "decode-budget") for g in rows
-            ),
-            "total": len(rows),
-            "n": completed,
-            "completion": completed / len(rows) if rows else 0,
-            "win_rate": wins / completed if completed else None,
-            "score_rate": (wins + draws / 2) / completed if completed else None,
-        }
+        result[difficulty] = _results(rows)
+        if breakdown:
+            result[difficulty]["by_side"] = {
+                str(side): _results([g for g in rows if g.get("side") == side]) for side in (1, 2)
+            }
+            result[difficulty]["by_matchup"] = {
+                f"{rules}/{side}": _results(
+                    [
+                        g
+                        for g in rows
+                        if g.get("side") == side and g.get("start", {}).get("rules") == rules
+                    ]
+                )
+                for rules in ("classic", "shrine")
+                for side in (1, 2)
+            }
     return result

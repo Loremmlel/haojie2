@@ -69,7 +69,7 @@ class Evaluation:
             "planned": len(self.plan),
             "confirmation": self.confirmation,
             "created": self.created,
-            "results": summarize(self.plan),
+            "results": summarize(self.plan, breakdown=True),
             "expires": self.created + 86400,
             "seconds_per_game": self.config["eval_seconds"],
         }
