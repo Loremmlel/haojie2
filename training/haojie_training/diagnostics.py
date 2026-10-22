@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import torch
 
-from .console.config.resources import _processes, hardware, monitor
+from .console.config.resources import _cpu_total, _processes, hardware, monitor
 from .console.controller import Controller
 from .console.sampling import MemoryJobs
 from .console.storage import Store
@@ -29,10 +29,48 @@ from .native.transport import ReadLoop
 from .runtime import autocast
 
 
+class MeasuredJobs(MemoryJobs):
+    """仅在诊断入口记录结案分账，原采样、收益和蓄水处理仍由父类完成。"""
+
+    def record(self, task, status, retained=0, returns=None):
+        self.c.closed_tasks.append(
+            {
+                "task": task["id"],
+                "rules": task["context"]["rules"],
+                "status": status,
+                "requests": task["requests"],
+                "elapsed_seconds": time.perf_counter() - task["began"],
+                "retained_samples": retained,
+                "returns": returns,
+            }
+        )
+
+    def finish(self, task, message):
+        before = self.c.counts["retained_samples"]
+        result = super().finish(task, message)
+        terminal = message["outcome"]["terminated"]
+        self.record(
+            task,
+            "terminal" if terminal else "truncated",
+            self.c.counts["retained_samples"] - before,
+            message["outcome"]["returns"] if terminal else None,
+        )
+        return result
+
+    def unfinished(self, task):
+        result = super().unfinished(task)
+        self.record(task, "unknown")
+        return result
+
+
 class MeasuredController(Controller):
     def _loop(self):
         # 诊断线程直接调用正式阶段；HTTP 后台循环不重复拥有同一模型。
         pass
+
+    def _sample(self):
+        with patch.object(sys.modules[Controller.__module__], "MemoryJobs", MeasuredJobs):
+            return super()._sample()
 
     def _update(self):
         if getattr(self, "fixed_work", False):
@@ -197,6 +235,7 @@ def main():
     controller.thread.join()
     controller.continuous_selfplay = not args.finite
     controller.fixed_work, controller.completed_rows = args.finite, []
+    controller.closed_tasks = []
     controller.config.update(
         environments=args.environments,
         inference_batch_size=args.inference_batch_size,
@@ -259,10 +298,6 @@ def main():
 
         process = psutil.Process()
         before = _processes(process)
-        before_times = process.cpu_times()
-        waited_before = sum(
-            getattr(before_times, key, 0) for key in ("children_user", "children_system")
-        )
         began, cpu = time.perf_counter(), time.process_time()
         controller.measurement_start, controller.measurements = began, []
         monitoring = threading.Thread(target=monitor, args=(controller,), daemon=True)
@@ -302,9 +337,6 @@ def main():
         saved_seconds = time.perf_counter() - saving
         after = _processes(process)
         after_times = process.cpu_times()
-        waited_after = sum(
-            getattr(after_times, key, 0) for key in ("children_user", "children_system")
-        )
         report.update(
             complete=bool(
                 (args.seconds is not None and limit_reached.is_set())
@@ -318,11 +350,7 @@ def main():
             seconds=elapsed,
             parent_cpu_seconds=time.process_time() - cpu,
             python_switch_ms_after=sys.getswitchinterval() * 1000,
-            cpu_tree_seconds=max(0, waited_after - waited_before)
-            + sum(
-                max(0, value["cpu"] - before.get(key, {"cpu": 0})["cpu"])
-                for key, value in after.items()
-            ),
+            cpu_tree_seconds=max(0, _cpu_total(after) - _cpu_total(before)),
             cpu_tree_includes_reaped=hasattr(after_times, "children_user"),
             windows=windows,
             measurements=controller.measurements,
@@ -355,6 +383,21 @@ def main():
         controller._close_pool()
         report["counts_after_close"] = dict(controller.counts)
         controller.close()
+        report["closed_tasks"] = controller.closed_tasks
+        report["work_by_outcome"] = {
+            status: {
+                "tasks": sum(row["status"] == status for row in controller.closed_tasks),
+                "requests": sum(
+                    row["requests"] for row in controller.closed_tasks if row["status"] == status
+                ),
+                "retained_samples": sum(
+                    row["retained_samples"]
+                    for row in controller.closed_tasks
+                    if row["status"] == status
+                ),
+            }
+            for status in ("terminal", "truncated", "unknown")
+        }
         if monitoring:
             monitoring.join(timeout=3)
         profile_scope.close()

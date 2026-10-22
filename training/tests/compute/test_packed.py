@@ -305,6 +305,14 @@ class PackedTests(unittest.TestCase):
     def test_aten_encoder_shares_live_parameters_and_variable_shapes(self):
         torch.manual_seed(991)
         model = PolicyValueNet().cuda().eval()
+        with torch.no_grad():
+            for index, layer in enumerate(
+                layer for layer in model.modules() if isinstance(layer, torch.nn.LayerNorm)
+            ):
+                # 各层使用不同仿射参数和 epsilon，检查原生路径没有错用归一化参数。
+                layer.weight.mul_(1 + index * 0.02)
+                layer.bias.fill_(index * 0.003)
+                layer.eps *= index + 1
         keys = list(model.state_dict())
         rows = examples(model.config)
         modes = [("fp32", False, False), ("bf16", False, False), ("bf16", False, True)]

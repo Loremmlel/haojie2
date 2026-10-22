@@ -131,6 +131,10 @@ def _processes(process):
     return result
 
 
+def _cpu_total(members):
+    return sum(row["cpu"] + row["reaped_cpu"] for row in members.values())
+
+
 def monitor(controller):
     """CPU 按进程树时间差除以配额；系统均值单列，不调用训练器或复制张量。"""
     try:
@@ -165,10 +169,10 @@ def monitor(controller):
                     }
                 )
             # Linux 父进程累积已回收子进程时间；合计求差，避免短局退出丢账或重复记账。
-            total = sum(row["cpu"] + row["reaped_cpu"] for row in current.values())
-            prior = sum(row["cpu"] + row["reaped_cpu"] for row in previous.values())
             cores = (
-                max(0, total - prior) / elapsed if current and previous and elapsed > 0 else None
+                max(0, _cpu_total(current) - _cpu_total(previous)) / elapsed
+                if current and previous and elapsed > 0
+                else None
             )
             capacity = cpu_capacity()
             device = controller.device

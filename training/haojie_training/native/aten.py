@@ -29,7 +29,7 @@ def build():
         name="haojie_aten",
         sources=[str(source)],
         build_directory=str(path.parent),
-        extra_cflags=["/O2"] if os.name == "nt" else ["-O2"],
+        extra_cflags=["/O2", "/utf-8"] if os.name == "nt" else ["-O2"],
         with_cuda=False,
         is_python_module=False,
     )
