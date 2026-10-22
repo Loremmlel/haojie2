@@ -47,7 +47,7 @@ cargo fmt --manifest-path native/engine/Cargo.toml --check
 
 ## 日常验收与交付
 
-[原生 CI](../../.github/workflows/native.yml) 在原生、规则、编码、训练宿主及测试变动时运行锁定构建、fmt/test/Clippy、release 身份、代表性双端规则/动作树/公开信息/编码/规范哈希差分，以及交付包独立安装后的控制台／云端真实更新、服务重启和备份恢复。原有 TS 与离线浏览器 CI 保留。手动 workflow 的 endurance 开启多种子自然终局双端验收，不把长基准或毫秒阈值塞进每个 PR。
+[原生 CI](../../.github/workflows/native.yml) 在原生、规则、编码、训练宿主及测试变动时运行锁定构建、fmt/test/Clippy、release 身份、代表性双端规则/动作树/公开信息/编码/规范哈希差分，以及交付包独立安装后的控制台／云端真实更新、服务重启和备份恢复。原有 TS 与离线浏览器 CI 保留。历史多种子耐久实验和性能脚本已清理，复现时使用[固定版本 7fc8e85](https://github.com/Loremmlel/haojie2/tree/7fc8e85/scripts/training/native/endurance)。
 
 ```sh
 python scripts/training/native/pipeline/package.py --output artifacts/delivery/source.tar.gz

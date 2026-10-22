@@ -87,7 +87,7 @@ def encoded_rows(path: Path, node: str, search_policy: bool = False):
         str(
             ROOT
             / (
-                "scripts/training/search/bootstrap/encoding.ts"
+                "scripts/training/records/search-encoding.ts"
                 if search_policy
                 else "scripts/training/encode.ts"
             )

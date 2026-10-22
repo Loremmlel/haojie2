@@ -7,7 +7,19 @@ import re
 import shutil
 from pathlib import Path
 
-FORBIDDEN = {"node", "nodejs", "npm", "npx", "bun", "bunx", "tsx", "ts-node", "deno", "qjs", "d8"}
+FORBIDDEN = {
+    "node",
+    "nodejs",
+    "npm",
+    "npx",
+    "bun",
+    "bunx",
+    "tsx",
+    "ts-node",
+    "deno",
+    "qjs",
+    "d8",
+}
 
 
 def main():
@@ -26,14 +38,29 @@ def main():
         unexpected = [p for p in calls if Path(p).name not in allowed]
         if unexpected:
             raise RuntimeError(f"非 Python/Rust 执行或回退尝试: {unexpected}")
-        print(json.dumps({"execve": calls, "installation": args.installation, "allowed_executables": sorted(allowed)}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "execve": calls,
+                    "installation": args.installation,
+                    "allowed_executables": sorted(allowed),
+                },
+                indent=2,
+            )
+        )
         return
     if Path("/init").exists():
         raise RuntimeError("隔离根不应可见宿主互操作入口")
     found = [name for name in FORBIDDEN if shutil.which(name)]
     for root, dirs, files in os.walk("/", followlinks=False):
-        dirs[:] = [d for d in dirs if str(Path(root) / d) not in {"/proc", "/sys", "/dev"}]
-        found.extend(str(Path(root) / f) for f in files if f.lower() in FORBIDDEN and os.access(Path(root) / f, os.X_OK))
+        dirs[:] = [
+            d for d in dirs if str(Path(root) / d) not in {"/proc", "/sys", "/dev"}
+        ]
+        found.extend(
+            str(Path(root) / f)
+            for f in files
+            if f.lower() in FORBIDDEN and os.access(Path(root) / f, os.X_OK)
+        )
     if found:
         raise RuntimeError(f"隔离根存在 JS 执行入口: {found}")
     print(json.dumps({"filesystem_scan": "no JavaScript runtime", "root": "/"}))

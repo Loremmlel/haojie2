@@ -8,7 +8,6 @@ import torch
 from haojie_training.data import INPUT_KEYS, collate_inputs, synthetic_batch
 from haojie_training.model import ModelConfig, PolicyValueNet, active_tokens
 from haojie_training.native.execution import PolicyInference
-from haojie_training.research.spatial import SpatialPolicyNet
 
 
 def history_input(batch):
@@ -147,8 +146,11 @@ class ReadoutTests(unittest.TestCase):
             expected = model.score_policy(plain, model.norm(x))
             torch.testing.assert_close(model.policy_logits(plain), expected, atol=0, rtol=0)
 
-    def test_research_model_keeps_full_context_path(self):
-        model = SpatialPolicyNet(ModelConfig.tiny()).eval()
+    def test_extended_model_keeps_full_context_path(self):
+        class ExtendedPolicy(PolicyValueNet):
+            pass
+
+        model = ExtendedPolicy(ModelConfig.tiny()).eval()
         batch = synthetic_batch(model.config, 2, 7, 4)
         selected = batch["policy"].argmax(-1)
         with torch.inference_mode():

@@ -68,6 +68,8 @@ npm run play:cli -- --replay artifacts/my-match.jsonl
 
 ## 与冻结旧版本比较
 
+本节及后续“生产预算审计”保留历史复现说明；相关基准脚本与 npm 命令已清理，执行前请切换到[固定版本 7fc8e85](https://github.com/Loremmlel/haojie2/tree/7fc8e85)。交互 CLI、保存及回放入口继续维护。
+
 把可信旧源码中的`src/ai/index.ts`用esbuild打包成Node ESM，显式提供该文件；不要导入不可信的JavaScript。
 
 ```bash

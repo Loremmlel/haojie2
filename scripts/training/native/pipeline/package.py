@@ -17,7 +17,9 @@ def main():
     root = Path(__file__).resolve().parents[4]
     starts = args.starts or root / "tests/fixtures/native/late-starts.json.gz"
     starts_bytes = (
-        gzip.decompress(starts.read_bytes()) if starts.suffix == ".gz" else starts.read_bytes()
+        gzip.decompress(starts.read_bytes())
+        if starts.suffix == ".gz"
+        else starts.read_bytes()
     )
     json.loads(starts_bytes)
     files = [
@@ -31,15 +33,13 @@ def main():
         root / "training/PERFORMANCE.md",
         root / "notebooks/haojie_colab.ipynb",
         root / "scripts/colab/bootstrap.py",
-        *root.glob("scripts/training/benchmarks/*.py"),
         *root.glob("native/engine/src/**/*.rs"),
         *root.glob("native/engine/data/*"),
         root / "native/engine/Cargo.toml",
         root / "native/engine/Cargo.lock",
         root / "native/engine/build.rs",
         root / "native/engine/README.md",
-        # 现行功能回归全部随包；旧研究模型依赖仓库实验脚本，留在开发环境验证。
-        *(p for p in root.glob("training/tests/**/*.py") if p.name != "test_improvement.py"),
+        *root.glob("training/tests/**/*.py"),
         *root.glob("scripts/training/native/ci/*.py"),
     ]
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -56,7 +56,8 @@ def main():
         "format": "haojie-native-source-v1",
         "sha256": hashlib.sha256(args.output.read_bytes()).hexdigest(),
         "files": {
-            str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files
+            str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in files
         },
         "starts_sha256": hashlib.sha256(starts_bytes).hexdigest(),
     }

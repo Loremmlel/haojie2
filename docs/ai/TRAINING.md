@@ -14,7 +14,6 @@
 | `src/ai/training/teacher.ts`    | 只接收Observation的手工教师，复用预算和plan-cache         |
 | `scripts/training/serve.ts`     | 支持多环境/batch的常驻JSONL标准输入输出进程               |
 | `scripts/training/self-play.ts` | 热启动教师对弈及可选流式公开样本记录                      |
-| `scripts/training/benchmark.ts` | 规则、复制、编码、预检、动作描述、对弈和多进程基准        |
 
 环境用 `applyRuntimeCommand` 接续拥有型工作局面，与公开 `applyCommand` 共用原子规则内核；成功后清理 events/log，正式随机数、serial 和规则状态保持一致。它不保留 Session 的撤销历史。`observation` 导出独立快照，内部 `view` 提供同一决策中的公开只读视图。
 
@@ -68,7 +67,7 @@ actions提供`factorized-unpruned`表示，包括共享unitActions/cardActions�
 
 geometry复用共享查询：`{type:"attack",unitId,targetId}`返回可选方向路径；`{type:"skill",targetId}`返回巨大化落点；`{type:"synthesize",recipeId,materialIds}`返回指定三材料移除后的落点。方向路径查询不能代替手绘路径的完整空间，手绘path仍由step中的validAttackRoute校验。
 
-当前教师仍使用原有启发式候选，不会探索全部路径/组合，也不会自动新增回合外响应窗口。这是热启动基线的策略限制，不是引擎权限限制。共享公开状态编码与分步动作树已实现，覆盖及参数/完整命令的区别见[编码说明](../../training/ENCODING.md)。模型 CLI 可显式选择有限候选的 beam / MCTS / Gumbel 解码；控制台使用独立的 MC-Q 分解采样。两者的预算、样本和评测结果分别记录。
+当前教师仍使用原有启发式候选，不会探索全部路径/组合，也不会自动新增回合外响应窗口。这是热启动基线的策略限制，不是引擎权限限制。共享公开状态编码与分步动作树已实现，覆盖及参数/完整命令的区别见[编码说明](../../training/ENCODING.md)。模型 CLI 使用贪心排序及空分支回溯；控制台使用独立的 MC-Q 分解采样。两者的预算、样本和评测结果分别记录。
 
 纯网络CLI对战已由`npm run train:match`提供，复用分步动作树的贪心排序/空分支回溯；Node负责引擎，常驻Python只接收公开编码张量。网络预算耗尽和推理异常明确暂停，单候选免推理，最终命令仍交给引擎原子裁定。用法见[Python 训练包](../../training/README.md)，既往运行结果见[历史索引](HISTORY.md)。
 
@@ -89,16 +88,6 @@ SIGINT在命令边界取消，同步教师搜索尚不能在调用内部抢占�
 
 ## 性能评估与验收
 
-```sh
-npm run bench:training -- --output artifacts/training-benchmark.json
-# 快速重测纯环境，不含教师对弈
-npm run bench:training -- --skip-selfplay --iterations 500 --repeats 30 --rounds 3 --workers 4
-# 延长教师测试，仍明确保留未决结果
-npm run bench:training -- --games 2 --plies 100 --commands 3000 --nodes 100
-```
-
-报告包含CPU/内存/Node版本、基准参数、当前提交、相关源码SHA256、固定语料SHA256与最终指纹。源码hash覆盖未提交文件内容，可区分同提交上不同工作副本。微基准预热后取多轮中位数，多进程基准在子进程预热完成后计时。
-
-区分clone、observe、JSON编码、applyCommand、独立随机转移并输出观察、公开预检、动作空间查询，以及相同79条实录的引擎/训练/Session序列化/协议编码开销。Session测试不含磁盘IO和教师trace，协议编码测试不含OS管道传输，均明确标记。演示局是压力样例，不是自然对局分布。教师测试另测经典/神龛实际对弈，报告完成、截断、命令数与模拟数，不计算对作者胜率。
+一次性 TS/Python/浏览器基准与已结束的搜索、空间模型试验已移除，历史命令请在[清理前固定版本](https://github.com/Loremmlel/haojie2/tree/7fc8e85)执行。既有完整周期的配置与原始结果索引见[性能记录](../../training/PERFORMANCE.md)。
 
 TS 行为测试位于 `tests/training`，随 `npm test` 运行；Python 测试见训练包说明。当前原生差分验证位于 `scripts/training/native/`，核对规则、候选、编码、哈希和 MC-Q 选择。历史性能实验、阶段报告和原始测量见[历史索引](HISTORY.md)。

@@ -4,14 +4,14 @@ import { readFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Observation } from '../../../../src/ai/types';
-import type { Command, Player } from '../../../../src/engine/types';
-import { TrainingActionTree } from '../../../../src/ai/training/action-tree';
-import { encodeDecision } from '../../../../src/ai/training/encoding/decision';
-import { ENCODING_SCHEMA } from '../../../../src/ai/training/encoding/schema';
-import { HAOJIE_RULESET } from '../../../../src/engine/online/player-view';
-import { encodingSourceHash } from '../../encode';
-import { readTrainingRecords } from '../../records/replay';
+import type { Observation } from '../../../src/ai/types';
+import type { Command, Player } from '../../../src/engine/types';
+import { TrainingActionTree } from '../../../src/ai/training/action-tree';
+import { encodeDecision } from '../../../src/ai/training/encoding/decision';
+import { ENCODING_SCHEMA } from '../../../src/ai/training/encoding/schema';
+import { HAOJIE_RULESET } from '../../../src/engine/online/player-view';
+import { encodingSourceHash } from '../encode';
+import { readTrainingRecords } from './replay';
 
 interface Visit {
   command: Command;

@@ -20,8 +20,11 @@ def main():
     assert identity["encoding"] == "haojie-entities-factorized-v1"
     assert "record-audit" in identity["capabilities"]
     response = subprocess.run(
-        [engine, "--training"], input=b'{"op":"close"}\n',
-        capture_output=True, check=True, timeout=30,
+        [engine, "--training"],
+        input=b'{"op":"close"}\n',
+        capture_output=True,
+        check=True,
+        timeout=30,
     )
     ready = json.loads(response.stdout)
     assert ready["engine"] == identity

@@ -11,7 +11,6 @@ from haojie_training.data import INPUT_KEYS, collate_inputs, synthetic_batch, va
 from haojie_training.model import ModelConfig, PolicyValueNet
 from haojie_training.native.execution import InferenceStats, PolicyInference
 from haojie_training.native.packed import supports_packed
-from haojie_training.research.spatial import SpatialPolicyNet
 from haojie_training.runtime import autocast
 
 
@@ -146,7 +145,11 @@ class PackedTests(unittest.TestCase):
         self.assertFalse(supports_packed(model, torch.device("xpu"), "bf16"))
         self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
         self.assertFalse(supports_packed(model, torch.device("cuda"), "bf16"))
-        research = SpatialPolicyNet(model.config).eval()
+
+        class ExtendedPolicy(PolicyValueNet):
+            pass
+
+        research = ExtendedPolicy(model.config).eval()
         self.assertFalse(supports_packed(research, torch.device("cuda"), "fp32"))
         # 使用小配置代替正式配置检查版本和后端门槛，无须建立 CUDA 上下文。
         with (

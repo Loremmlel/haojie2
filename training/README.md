@@ -12,7 +12,7 @@ Colab / 多核服务器入口见 [COLAB.md](COLAB.md)，包含硬件初始配置
 | 云端自动训练、备份与恢复       | `python -m haojie_training.cloud` / `haojie-cloud`     | [云端入口](COLAB.md)     |
 | 教师轨迹转张量                 | `python -m haojie_training.prepare`                    | 下文；需要仓库 Node 依赖 |
 | 张量训练、续训、评估           | `haojie_training.train` / `haojie_training.evaluate`   | 下文                     |
-| ONNX 导出、设备基准            | `haojie_training.export` / `haojie_training.benchmark` | 独立开发工具，按需运行   |
+| ONNX 导出                      | `python -m haojie_training.export`                     | 安装 `training[export]`  |
 
 现行模型和功能状态见[状态入口](../docs/ai/STATUS.md)，公开输入与动作分解见[编码协议](ENCODING.md)，TS/Rust 对应见[运行结构](../docs/ai/RUNTIME.md)。旧阶段实验、固定硬件成绩和交付报告从[历史索引](../docs/ai/HISTORY.md)查看。
 
@@ -116,10 +116,10 @@ python -m haojie_training.train --synthetic --tiny --device cpu --steps 2 --chec
 
 ## 保留的开发工具
 
-- `python -m haojie_training.benchmark`：按设备、精度、批量和线程测试实际网络，输出环境及输入指纹。
-- `python -m haojie_training.export`：安装 `training[export]` 后导出 ONNX；`npm run bench:training:browser -- --data 导出目录` 启动本机推理检查页。
-- `npm run train:match -- --checkpoint 模型 --output 新目录 --python Python路径`：Node 权威环境与常驻 Python 模型对战。保留 `greedy`、`beam`、`mcts`、`gumbel` 及带校准证书的 `value-*` 解码入口。
-- 显式研究模型加载器和旧搜索轨迹编码器继续读取既有产物；已结束的夜间实验、一次性测量及采样驱动从[固定历史版本](https://github.com/Loremmlel/haojie2/tree/d920e181dccb425c0a77d57b473fb98f45163b69/scripts/training)重现。
+- `python -m haojie_training.export`：安装 `training[export]` 后导出 ONNX。
+- `npm run train:match -- --checkpoint 模型 --output 新目录 --python Python路径`：Node 权威环境与常驻 Python 模型对战，使用贪心排序及空分支回溯。
+- 旧搜索轨迹的访问分布编码器位于 `scripts/training/records/search-encoding.ts`，由 `prepare --search-policy` 调用。
+- 历史研究模型、搜索试验、浏览器与设备基准、性能对照脚本从[清理前固定版本](https://github.com/Loremmlel/haojie2/tree/7fc8e85)重现；本地原始测量、轨迹、模型和冻结源码继续保留。
 
 ## 维护验证
 
@@ -134,4 +134,4 @@ python -m ruff format --check training/haojie_training training/tests
 
 引擎及教师资源检查、TS/Rust 规则和编码差分、安装包验证及浏览器流程随仓库 CI 维护，入口见 [CONSOLE.md](CONSOLE.md) 与[工程说明](../docs/ARCHITECTURE.md)。
 
-完整采样—更新—保存的性能测量见 [PERFORMANCE.md](PERFORMANCE.md)。
+完整采样—更新—保存的历史性能记录见 [PERFORMANCE.md](PERFORMANCE.md)。

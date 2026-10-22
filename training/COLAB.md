@@ -1,6 +1,6 @@
 # Colab 与服务器持续训练
 
-入口是 [notebooks/haojie_colab.ipynb](../notebooks/haojie_colab.ipynb)。在 Colab 的“文件 → 打开笔记本 → GitHub”中选择本仓库的 `main` 分支并打开它；合并后也可选择 main。Notebook 的 `REPO_REF` 决定下载的代码版本，首次安装会打印实际提交 SHA。
+入口是 [notebooks/haojie_colab.ipynb](../notebooks/haojie_colab.ipynb)。在 Colab 的“文件 → 打开笔记本 → GitHub”中选择本仓库的 `main` 分支并打开它。Notebook 的 `REPO_REF` 决定下载的代码版本，首次安装会打印实际提交 SHA。
 
 ## 第一次使用
 
@@ -23,24 +23,18 @@ env CARGO_HOME=/var/tmp/haojie-tools/cargo \
 
 选择本地磁盘上不会随短任务退出而清空的目录；WSL 的工具和构建输出优先放在 Linux 文件系统。需要先安装 CUDA 依赖、稍后再验收设备时，可用 `--backend cu130 --device cpu`：该组合仍安装指定 CUDA 分发，仅跳过安装末尾的 GPU 矩阵检查。
 
-尚未推送的工作区也可复跑：在本地执行 `python scripts/training/native/pipeline/package.py --output artifacts/cloud-source.tar.gz`，将归档上传到服务器的新目录后解压，并在解压目录运行上述安装命令。归档包含当前 Python/Rust 源码、规则数据、已构建教师与完整周期测量入口；同名 manifest 记录每个文件及归档的 SHA256，不包含本地模型、轨迹或缓存。
+尚未推送的工作区也可复跑：在本地执行 `python scripts/training/native/pipeline/package.py --output artifacts/cloud-source.tar.gz`，将归档上传到服务器的新目录后解压，并在解压目录运行上述安装命令。归档包含当前 Python/Rust 源码、规则数据、已构建教师与功能验收入口；同名 manifest 记录每个文件及归档的 SHA256，不包含本地模型、轨迹或缓存。
 
-安装完成后可按第二轮固定配置验收正式模型的 64 进程采样、更新与保存：
+安装完成后可运行随包功能验收，覆盖采样、真实更新、暂停、保存和恢复：
 
 ```sh
-/var/tmp/haojie-tools/venv/bin/python scripts/training/benchmarks/cycle.py \
-  --engine /var/tmp/haojie-tools/native-target/release/haojie-engine \
-  --starts fixtures/late-starts.json \
-  --environments 64 --games 64 --updates 16 --pool-mib 4096 \
-  --threads 1 --batch-size 8 --inference-batch-size 32 --batch-wait-ms 0 \
-  --start-indices 0 2 --seed 20261004 --history-percent 0 \
-  --device cuda --sampling-precision fp32 --ordered-updates \
-  --output artifacts/cloud-cycle.json
+HAOJIE_NATIVE=/var/tmp/haojie-tools/native-target/release/haojie-engine \
+  /var/tmp/haojie-tools/venv/bin/python -m unittest discover -s training/tests
 ```
 
-`fixtures/late-starts.json` 是源码归档中的真实晚盘起点；直接使用 Git 检出时改为 `tests/fixtures/native/late-starts.json.gz`。上例使用经典和神龛的索引 0/2；4 GiB 是主机 RAM 样本池预算。复跑首轮全部四份起点的功能验收时，移除 `--start-indices`，并将环境数与局数设为 32。去掉 `--starts` 即从新局开始，CPU 服务器将设备改为 `cpu` 并显式指定测量线程数。结果记录实际终局、截断、样本哈希、模型/引擎身份及各阶段时间；配对方法见 [PERFORMANCE.md](PERFORMANCE.md)。
+历史性能配置和逐轮结果见 [PERFORMANCE.md](PERFORMANCE.md)，其中的实验脚本在清理前固定版本中保留。当前训练直接通过 Notebook 或云端控制台启动。
 
-CUDA FP32 / BF16 正式模型在固定 Torch 2.14.0 下共用紧凑实体布局和双缓冲推理，计算沿用所选精度。GUI、Colab、历史对手和评测共用该执行器。采样仍在同一版权重下完成整轮，之后才做参数更新；暂停、保存和换模型前排空在途请求。统计中的 `packed_forwards`、`async_forwards`、`async_overlaps` 可核对实际采用的路径。CPU、XPU 和研究模型沿用普通推理，同时共享引擎、编码、训练及保存优化。
+CUDA FP32 / BF16 正式模型在固定 Torch 2.14.0 下共用紧凑实体布局和双缓冲推理，计算沿用所选精度。GUI、Colab、历史对手和评测共用该执行器。采样窗口的安全点排空在途推理后更新参数，长局保留并继续；暂停、保存和换模型前也先排空。统计中的 `packed_forwards`、`async_forwards`、`async_overlaps` 可核对实际采用的路径。CPU、XPU 和扩展模型沿用普通推理，同时共享引擎、编码、训练及保存优化。
 
 64 环境的动态批量会产生不同尺寸的临时张量。训练包在导入 Torch 前默认设置 `PYTORCH_ALLOC_CONF=expandable_segments:True`，降低 CUDA 缓存预留；已有任一分配器配置都会原样保留。如果嵌入宿主已先导入 Torch，应在启动宿主进程前设置环境，例如：
 
