@@ -32,6 +32,7 @@ class Pool:
         inference,
         max_batch_size=None,
         frame_limit=256 * 1024 * 1024,
+        host_workers=None,
     ):
         if not 1 <= environments <= 128 or not 0 <= batch_wait_ms <= 10:
             raise ValueError("环境数须为1至128，组批等待须为0至10毫秒")
@@ -40,6 +41,10 @@ class Pool:
         ):
             raise ValueError("推理批量上限必须为1至256的整数")
         self.max_batch_size = max_batch_size or environments
+        if host_workers is not None and (
+            type(host_workers) is not int or not 0 <= host_workers <= min(16, environments)
+        ):
+            raise ValueError("CPU 输入进程数必须为 0 至 min(16, 环境数) 的整数")
         self.started = time.perf_counter()
         self.frame_limit = frame_limit
         self.events = queue.Queue(maxsize=2 * environments)
@@ -58,7 +63,15 @@ class Pool:
         self.paused_at = self.running_since = None
         self.sampling_seconds = self.yield_count = 0
         self.closed = False
+        self.input_processes = None
         try:
+            from .transport import InputProcesses, worker_count
+
+            workers = worker_count(environments) if host_workers is None else host_workers
+            if workers:
+                self.input_processes = InputProcesses(
+                    executable, environments, workers, self.events, frame_limit
+                )
             for i in range(environments):
                 self.clients.append(self.new_client(i))
             self.ready = self.clients[0].ready
@@ -72,6 +85,8 @@ class Pool:
             raise
 
     def new_client(self, i):
+        if self.input_processes is not None:
+            return self.input_processes.client(i, self.generations[i])
         return Client(
             self.executable,
             events=self.events,
@@ -86,8 +101,11 @@ class Pool:
             if inference is not None and hasattr(inference, "close"):
                 inference.close()
         finally:
-            for client in self.clients:
-                client.close()
+            if self.input_processes is not None:
+                self.input_processes.close()
+            else:
+                for client in self.clients:
+                    client.close()
             self.closed = True
             self.slots.clear()
             self.parked.clear()
@@ -104,6 +122,11 @@ class Pool:
             "device": str(self.device),
             "precision": self.precision,
             "environments": len(self.clients),
+            "host_workers": len(self.input_processes.workers) if self.input_processes else 0,
+            "host_worker_pids": [p.pid for p in self.input_processes.workers]
+            if self.input_processes
+            else [],
+            "host_prepare_seconds": sum(getattr(c, "prepare_seconds", 0) for c in self.clients),
             "batch_wait_ms": self.wait * 1000,
             **self.inference.stats.snapshot(),
             "max_batch_size": self.max_batch_size,
@@ -207,6 +230,7 @@ class Pool:
             cancelled()
             # 每批只构造一次 NumPy 视图；原生客户端协商二进制回传，旧执行器沿用列表。
             scores = logits.numpy() if logits is not None else None
+            responses = []
             for row, (i, task_id, message) in enumerate(group):
                 if leases is not None:
                     if leases[row] in discarded_slots:
@@ -215,16 +239,23 @@ class Pool:
                         raise ValueError("响应进程代次已改变")
                 if self.slots.get(i, {}).get("id") != task_id:
                     raise ValueError("响应归属已改变")
-                sent = time.perf_counter()
                 response = {"id": message["id"], "model": message["model"]}
                 response.update(
                     {"cancel": True} if cancel else {"logits": scores[row, : message["candidates"]]}
                 )
-                try:
-                    self.clients[i].send(response)
-                except BrokenPipeError as error:
-                    raise RuntimeError("内存任务工作进程退出；丢弃未完成局") from error
-                self.send_seconds += time.perf_counter() - sent
+                responses.append((i, response, message))
+            sent = time.perf_counter()
+            try:
+                if self.input_processes is not None:
+                    self.input_processes.respond(responses)
+                else:
+                    for i, response, message in responses:
+                        self.clients[i].send(response)
+                        self.clients[i].release(message)
+            except BrokenPipeError as error:
+                raise RuntimeError("内存任务工作进程退出；丢弃未完成局") from error
+            self.send_seconds += time.perf_counter() - sent
+            for _, _, message in responses:
                 self.responses.append(time.perf_counter() - message["received_at"])
 
         def receive():
@@ -413,13 +444,16 @@ class Pool:
                         jobs.finish(task, message)
                         if message.get("error") and message["outcome"]["reason"] != "cancelled":
                             raise RuntimeError(message["error"])
+                        self.clients[i].release(message)
                     elif message["type"] == "example":
                         jobs.example(task, message)
+                        self.clients[i].release(message)
                     elif message["type"] == "teacher":
                         task["commands"] = message.get("commandIndex", task.get("commands"))
                         task["ply"] = message.get("ply", task.get("ply"))
                         command = jobs.teacher_next(message)
                         self.clients[i].send({"id": message["id"], "command": command})
+                        self.clients[i].release(message)
                     elif message["type"] == "infer" and message.get("model") in task["models"]:
                         if type(message.get("id")) is not int or message["id"] <= self.last_ids[i]:
                             raise ValueError("过期或重复的模型请求")

@@ -71,9 +71,7 @@ def main():
                     )
                     client.send(response)
         args.requests.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {"format": "haojie-host-requests-v1", "requests": rows}, args.requests
-        )
+        torch.save({"format": "haojie-host-requests-v1", "requests": rows}, args.requests)
         print(json.dumps({"requests": len(rows), "path": str(args.requests)}))
         return
     if not args.output or min(args.repeats, args.batch_size) < 1:
@@ -93,9 +91,7 @@ def main():
         "candidate_mask",
     )
     frames = [b"".join(row[key].numpy().tobytes() for key in keys) for row in rows]
-    groups = [
-        rows[i : i + args.batch_size] for i in range(0, len(rows), args.batch_size)
-    ]
+    groups = [rows[i : i + args.batch_size] for i in range(0, len(rows), args.batch_size)]
     arrays = "_arrays" in inspect.signature(protocol.decode).parameters
     if arrays:
         groups = [

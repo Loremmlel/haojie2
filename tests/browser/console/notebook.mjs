@@ -92,7 +92,7 @@ function rpc(args) {
     child.stdin.write(JSON.stringify({ id, args }) + '\n');
   });
 }
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({ executablePath: process.env.BROWSER_PATH, headless: true });
 try {
   const initial = await ready;
   const page = await browser.newPage({ viewport: { width: 1200, height: 850 } });

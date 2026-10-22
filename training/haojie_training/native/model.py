@@ -39,11 +39,15 @@ def example(inputs, selected=0):
     count = len(inputs["candidate_mask"])
     policy = torch.zeros(count)
     policy[selected] = 1
+    tensors = {
+        key: value if isinstance(value, torch.Tensor) else torch.from_numpy(value)
+        for key, value in inputs.items()
+    }
+    # 蓄水抽中的样本独立持有内存；共享输入槽随后会被下一条请求覆盖。
+    if getattr(inputs, "shared", False):
+        tensors = {key: value.clone() for key, value in tensors.items()}
     return {
-        **{
-            key: value if isinstance(value, torch.Tensor) else torch.from_numpy(value)
-            for key, value in inputs.items()
-        },
+        **tensors,
         "policy": policy,
         "value": torch.tensor(0.0),
         "value_mask": torch.tensor(False),

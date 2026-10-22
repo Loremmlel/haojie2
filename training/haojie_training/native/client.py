@@ -27,11 +27,13 @@ class Client:
         identity=None,
         frame_limit=256 * 1024 * 1024,
         arrays=False,
+        buffer_factory=None,
     ):
         self.timeout = timeout
         self.frame_limit = frame_limit
         self.events, self.identity = events, identity
         self.arrays = arrays
+        self.buffer_factory = buffer_factory
         self._handshake = True
         self._input_refs = False
         self._closed = threading.Event()
@@ -106,7 +108,8 @@ class Client:
                         raise MemoryError(
                             f"合法张量需要{size}字节，超过本槽位{self.frame_limit}字节内存预算"
                         )
-                    data = bytearray(size)
+                    factory = getattr(self, "buffer_factory", None)
+                    data = factory(size) if factory else bytearray(size)
                     started = time.perf_counter()
                     view = memoryview(data)
                     offset = 0
@@ -176,6 +179,8 @@ class Client:
         if isinstance(logits, np.ndarray):
             if logits.ndim != 1 or logits.dtype != np.float32:
                 raise ValueError("模型评分需要一维 CPU FP32 数组")
+            if not np.isfinite(logits).all():
+                raise ValueError("模型输出非有限")
             if LOGITS_CAPABILITY in self.ready.get("capabilities", []):
                 payload = logits.astype("<f4", copy=False).tobytes()
                 value = {**value, "logitsBytes": len(payload)}
@@ -202,6 +207,9 @@ class Client:
             self.close()
             raise TimeoutError("原生请求超过保护时间") from None
         return self.checked(value)
+
+    def release(self, message):
+        """普通客户端的帧独占内存，无需归还共享槽位。"""
 
     def checked(self, value):
         if isinstance(value, MemoryError):
@@ -234,14 +242,8 @@ class Client:
         self.close()
 
 
-def decode(data, entities, candidates, *, _owned=False, _arrays=False):
-    if any(type(n) is not int or n < 1 for n in (entities, candidates)):
-        raise ValueError("张量维度无效")
-    if len(data) != entities * 265 + candidates * 273 + 128:
-        raise ValueError("张量字节长度不匹配")
-    # 可变调用者缓冲不能借用；读取线程交付独占 bytearray 后不再写入。
-    if not _owned:
-        data = bytearray(data)
+def array_views(data, entities, candidates):
+    """仅重建已在输入进程校验的布局；调用者负责持有帧至消费者归还。"""
     offset = 0
     inputs = {}
     for key, shape, dtype in (
@@ -255,11 +257,21 @@ def decode(data, entities, candidates, *, _owned=False, _arrays=False):
         ("candidate_mask", (candidates,), "?"),
     ):
         count = math.prod(shape)
-        array = np.frombuffer(data, dtype=dtype, count=count, offset=offset).reshape(shape)
+        array = np.ndarray(shape, dtype=dtype, buffer=data, offset=offset)
         inputs[key] = array
         offset += count * np.dtype(dtype).itemsize
     if offset != len(data):
         raise ValueError("张量字节长度不匹配")
+    return inputs
+
+
+def decode(data, entities, candidates, *, _owned=False, _arrays=False):
+    if any(type(n) is not int or n < 1 for n in (entities, candidates)):
+        raise ValueError("张量维度无效")
+    if len(data) != entities * 265 + candidates * 273 + 128:
+        raise ValueError("张量字节长度不匹配")
+    # 可变调用者缓冲不能借用；读取线程交付独占 bytearray 后不再写入。
+    inputs = array_views(data if _owned else bytearray(data), entities, candidates)
     # 帧布局已限定白名单、dtype与形状；直接在零拷贝视图校验，避免读取线程
     # 为几十个小型CPU算子反复进出PyTorch/GIL。与validate_inputs保持同一数值边界。
     if any(not np.isfinite(inputs[k]).all() for k in ("entities", "globals", "candidates")):

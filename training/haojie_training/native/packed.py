@@ -54,6 +54,34 @@ def _attention(q, k, v, batch, layout, query):
     )[0].squeeze(0)
 
 
+def prepare_row(row):
+    """在 CPU 输入进程准备索引；返回值不持有原帧，不改变实体或候选顺序。"""
+    if row["entity_mask"].all():
+        valid = None
+        length = len(row["entities"])
+        source, target = row["sources"] + 1, row["targets"] + 1
+    else:
+        valid = np.flatnonzero(row["entity_mask"])
+        length = len(valid)
+        remap = np.zeros(len(row["entities"]) + 1, dtype=np.int64)
+        remap[valid + 1] = np.arange(1, length + 1)
+        source, target = remap[row["sources"] + 1], remap[row["targets"] + 1]
+    positions, inverse = np.unique(
+        np.concatenate((np.zeros(1, dtype=np.int64), source, target)), return_inverse=True
+    )
+    # 与 model.active_tokens 同一集合；有效近期日志、非历史实体及有效候选引用。
+    journal = row["kinds"] == 250
+    older = np.cumsum((journal & row["entity_mask"])[::-1])[::-1] > RECENT_JOURNAL
+    history = (journal & older) | (~journal & (row["entities"][:, 0] == 5 / 32))
+    active = np.concatenate((np.ones(1, dtype=bool), row["entity_mask"] & ~history))
+    for key in ("sources", "targets"):
+        active[np.where(row["candidate_mask"], row[key] + 1, 0)] = True
+    active[1:] &= row["entity_mask"]
+    if valid is not None:
+        active = np.concatenate((active[:1], active[valid + 1]))
+    return valid, positions, inverse, np.flatnonzero(active), length
+
+
 class PackedPolicy:
     """只持有原模块和主机容量；每次前向直接读取最新参数，不缓存实体表示。"""
 
@@ -76,37 +104,13 @@ class PackedPolicy:
 
         records, lengths, queries, active_lengths = [], [], [], []
         for row in examples:
+            prepared = getattr(row, "packing", None)
             # 主机准备统一走 NumPy 原生数组运算，避免每条请求反复进入小型 Torch 算子。
             row = {
                 key: value if isinstance(value, np.ndarray) else value.numpy()
                 for key, value in row.items()
             }
-            # 原生请求通常没有填充，直接复制切片，省去索引表及一次实体复制。
-            if row["entity_mask"].all():
-                valid = None
-                length = len(row["entities"])
-                source, target = row["sources"] + 1, row["targets"] + 1
-            else:
-                valid = np.flatnonzero(row["entity_mask"])
-                length = len(valid)
-                remap = np.zeros(len(row["entities"]) + 1, dtype=np.int64)
-                remap[valid + 1] = np.arange(1, length + 1)
-                # 已校验的有效候选不引用遮罩实体；无效候选的指针可映射到全局占位。
-                source, target = remap[row["sources"] + 1], remap[row["targets"] + 1]
-            positions, inverse = np.unique(
-                np.concatenate((np.zeros(1, dtype=np.int64), source, target)), return_inverse=True
-            )
-            # 与 model.active_tokens 同一集合：有效近期日志、非历史实体及有效候选引用。
-            journal = row["kinds"] == 250
-            older = np.cumsum((journal & row["entity_mask"])[::-1])[::-1] > RECENT_JOURNAL
-            history = (journal & older) | (~journal & (row["entities"][:, 0] == 5 / 32))
-            active = np.concatenate((np.ones(1, dtype=bool), row["entity_mask"] & ~history))
-            for key in ("sources", "targets"):
-                active[np.where(row["candidate_mask"], row[key] + 1, 0)] = True
-            active[1:] &= row["entity_mask"]
-            if valid is not None:
-                active = np.concatenate((active[:1], active[valid + 1]))
-            active = np.flatnonzero(active)
+            valid, positions, inverse, active, length = prepared or prepare_row(row)
             records.append((row, valid, positions, inverse, active))
             lengths.append(length + 1)
             queries.append(len(positions))

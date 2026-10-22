@@ -903,7 +903,11 @@ class Controller:
                         self._evaluate()
                 if self.want_run and not self.cancel.is_set():
                     # 暂停后剩余或上次受更新上限保留的终局样本，先消费再继续采样。
-                    if not self.samples.rows:
+                    if not (
+                        self.continuous_selfplay
+                        and self.config["method"] == METHOD
+                        and self.samples.rows
+                    ):
                         with self._phase("sampling"):
                             self._sample()
                     if not self.cancel.is_set():

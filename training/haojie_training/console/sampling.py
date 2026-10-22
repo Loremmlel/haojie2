@@ -181,6 +181,18 @@ class MemoryJobs:
         if completed is not None and (len(identities) != 1 or completed.shape[0] != len(messages)):
             raise ValueError("已完成推理必须对应同一模型和完整请求组")
         width = max(m["candidates"] for m in messages)
+        if len(identities) == 1:
+            output = (
+                completed
+                if completed is not None
+                else self.inferences[messages[0]["model"]]([m["input"] for m in messages])
+            )
+            output = (
+                output.tanh() / self.temperature
+                if self.c.config["method"].startswith("decomposed-mc-q-")
+                else output
+            )
+            return output.float()
         result = torch.zeros((len(messages), width))
         for identity in identities:
             indices = [i for i, m in enumerate(messages) if m["model"] == identity]

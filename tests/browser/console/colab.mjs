@@ -58,7 +58,7 @@ for (const [index, view] of views.entries()) {
   );
   files.push(pathToFileURL(path).href);
 }
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({ executablePath: process.env.BROWSER_PATH, headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 850 } });
   const requests = [],

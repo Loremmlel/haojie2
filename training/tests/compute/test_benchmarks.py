@@ -121,6 +121,11 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(set(samples[0]), {"entities", "value"})
         row["value"].zero_()
         self.assertEqual(samples[0]["value"].item(), 0.5)
+        arrays = {key: row[key].numpy() for key in ("entities", "candidates")}
+        numpy_capture = RequestCapture({"entities", "candidates"})
+        numpy_capture.add([{"input": arrays}])
+        arrays["candidates"].fill(0)
+        self.assertEqual(numpy_capture.rows[0]["candidates"].sum().item(), 8)
 
     def test_cpu_thread_tuning_requires_explicit_comparison_and_keeps_work_checks(self):
         before, after = report(), report()

@@ -55,10 +55,17 @@ class RequestCapture:
         self.bytes = self.skipped = 0
 
     def add(self, messages):
+        import torch
+
         for message in messages:
             row = message["input"]
             bucket = tuple((len(row[key]) - 1).bit_length() for key in ("entities", "candidates"))
-            size = sum(row[key].numel() * row[key].element_size() for key in self.keys)
+            size = sum(
+                row[key].numel() * row[key].element_size()
+                if isinstance(row[key], torch.Tensor)
+                else row[key].nbytes
+                for key in self.keys
+            )
             if (
                 len(self.rows) >= self.limit
                 or self.buckets[bucket] >= 4
@@ -66,7 +73,16 @@ class RequestCapture:
             ):
                 self.skipped += 1
                 continue
-            self.rows.append({key: row[key].clone() for key in sorted(self.keys)})
+            self.rows.append(
+                {
+                    key: (
+                        row[key]
+                        if isinstance(row[key], torch.Tensor)
+                        else torch.from_numpy(row[key])
+                    ).clone()
+                    for key in sorted(self.keys)
+                }
+            )
             self.buckets[bucket] += 1
             self.bytes += size
 

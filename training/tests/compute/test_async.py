@@ -125,6 +125,7 @@ class PoolAsyncTests(unittest.TestCase):
         self.log, self.sent, self.committed, self.unfinished, self.errors = [], [], [], [], []
         self.runner = FakeInference(self.log)
         self.pool = Pool.__new__(Pool)
+        self.pool.input_processes = None
         self.pool.started = time.perf_counter()
         self.pool.active_seconds = self.pool.refills = self.pool.refill_seconds = 0
         self.pool.finished = self.pool.queue_seconds = self.pool.peak_queue = 0
@@ -169,6 +170,7 @@ class PoolAsyncTests(unittest.TestCase):
         return SimpleNamespace(
             send=send,
             checked=lambda raw: raw,
+            release=lambda message: None,
             close=lambda: None,
             ready={},
             read_seconds=0,

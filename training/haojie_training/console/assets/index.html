@@ -209,8 +209,8 @@
             <details>
               <summary>高级设置（默认可直接开始）</summary>
               <p id="sampling-help">
-                累计完成设定局数后更新模型；长局保留到下一轮，空位继续开新局。
-                预算截断也计入完成数，仅真实终局产生训练样本。
+                MC-Q 有可消费的终局样本后即学习；长局保留到下一轮，空位继续开新局。
+                无样本时按窗口完成上限返回；预算截断计入完成数，仅真实终局产生训练样本。
               </p>
               <div class="form-grid">
                 <label
@@ -263,7 +263,7 @@
                     required
                 /></label>
                 <label
-                  >每轮完成局数<input
+                  >采样窗口完成上限<input
                     name="games_per_round"
                     type="number"
                     min="1"

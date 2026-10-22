@@ -139,7 +139,7 @@ class StreamingTests(unittest.TestCase):
     def test_long_game_crosses_real_update_and_keeps_behavior_labels(self):
         with self.controller() as c, limited_tasks(3):
             c._sample()
-            self.assertEqual(c.counts["games"], 2)
+            self.assertEqual(c.counts["games"], 1)
             carried = {task["id"] for task in c.pool.slots.values()}
             self.assertTrue(carried)
             self.assertTrue(
@@ -149,7 +149,10 @@ class StreamingTests(unittest.TestCase):
             c._update()
             self.assertEqual(c.trainer.updates, 1)
             self.assertNotEqual(c.version, old_version)
-            c._sample()
+            for _ in range(3):
+                if c.counts["games"] == 3:
+                    break
+                c._sample()
             self.assertIs(c.pool, pool)
             self.assertEqual(c.counts["games"], 3)
             self.assertEqual(c.counts["truncated"], 0)
@@ -196,6 +199,44 @@ class StreamingTests(unittest.TestCase):
             self.assertEqual(c.counts["discarded"], len(task_objects))
             c._close_pool()
             self.assertEqual(c.counts["discarded"], len(task_objects))
+
+    def test_shared_inputs_keep_long_game_across_updates(self):
+        with patch.dict(os.environ, {"HAOJIE_HOST_WORKERS": "2"}):
+            self.test_long_game_crosses_real_update_and_keeps_behavior_labels()
+
+    def test_empty_truncated_window_returns_without_learning(self):
+        with self.controller() as c:
+            c.config.update(max_commands=1)
+            c._sample()
+            self.assertGreaterEqual(c.counts["truncated"], 2)
+            self.assertEqual(c.counts["games"], 0)
+            self.assertFalse(c.samples.rows)
+            c._update()
+            self.assertEqual(c.trainer.updates, 0)
+
+    def test_resume_consumes_retained_samples_before_sampling(self):
+        with self.controller() as c:
+            c._sample()
+            c._close_pool()
+            self.assertTrue(c.samples.rows)
+            update = c._update
+
+            def stop_after_update():
+                update()
+                c.shutdown.set()
+
+            def unexpected_sample():
+                c.shutdown.set()
+                raise AssertionError("不应先等待采样")
+
+            with (
+                patch.object(c, "_sample", side_effect=unexpected_sample) as sample,
+                patch.object(c, "_update", side_effect=stop_after_update),
+            ):
+                Controller._loop(c)
+            sample.assert_not_called()
+            self.assertIsNone(c.error)
+            self.assertEqual(c.trainer.updates, 1)
 
     def test_runtime_concurrency_rebuilds_only_at_window_boundary(self):
         with self.controller() as c:

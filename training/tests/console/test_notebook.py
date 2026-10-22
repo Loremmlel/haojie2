@@ -179,14 +179,16 @@ launch = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.Call)
               and isinstance(n.func, ast.Attribute) and n.func.attr == "Popen")
 signal.signal(signal.SIGINT, lambda *_: None)
 with tempfile.TemporaryFile() as log:
-    command = [sys.executable, "-u", "-c", "import time; print('ready'); time.sleep(60)"]
+    command = [sys.executable, "-u", "-c", "import os,time; "
+               "print('ready:' + os.environ['HAOJIE_HOST_WORKERS']); time.sleep(60)"]
     REPO = repo
+    HOST_WORKERS = 2
     process = eval(compile(ast.Expression(launch), "launch", "eval"))
     try:
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             log.seek(0)
-            if b"ready" in log.read():
+            if b"ready:2" in log.read():
                 break
             assert process.poll() is None
             time.sleep(0.05)
