@@ -11,7 +11,7 @@ import torch
 from haojie_training.data import FORMAT, load_dataset, synthetic_batch, validate_batch
 from haojie_training.evaluate import value_baselines, value_diagnostics, value_quality
 from haojie_training.model import ModelConfig, PolicyValueNet, policy_value_loss
-from haojie_training.runtime import Trainer
+from haojie_training.runtime import Trainer, autocast
 from haojie_training.train import initialize_weights
 
 
@@ -179,6 +179,66 @@ class TrainingTests(unittest.TestCase):
         for entities in (1, 3, 17):
             batch = synthetic_batch(self.config, 2, entities, 5)
             self.assertEqual(tuple(model(batch)[0].shape), (2, 5))
+
+    @unittest.skipUnless(
+        torch.cuda.is_available() and torch.cuda.is_bf16_supported(), "需要 CUDA BF16"
+    )
+    def test_bf16_head_learns_adjacent_coordinates_and_resumes(self):
+        device = torch.device("cuda")
+        model = PolicyValueNet(self.config)
+        trainer = Trainer(model, device, precision="bf16", lr=0.002, objective="decomposed-mc-q-v2")
+        batch = synthetic_batch(self.config, 2, 4, 1)
+        # 两行公开上下文完全相同，监督仅依赖相邻格坐标；防止评分头重新隐藏 FP32 矩阵。
+        batch = {
+            key: value[:1].expand(2, *value.shape[1:]).clone().to(device)
+            for key, value in batch.items()
+        }
+        batch["candidates"].zero_()
+        batch["candidates"][:, 0, 10] = torch.tensor([5 / 12, 6 / 12], device=device)
+        batch["candidate_mask"].fill_(True)
+        batch["policy"].fill_(1)
+        batch["value_mask"].fill_(True)
+        batch["value"] = torch.tensor([-0.8, 0.8], device=device)
+        dtypes = []
+        handle = model.policy[0].register_forward_hook(
+            lambda _module, _inputs, output: dtypes.append(output.dtype)
+        )
+        try:
+            initial = float(trainer.step(batch))
+        finally:
+            handle.remove()
+        self.assertEqual(dtypes, [torch.bfloat16])
+        for _ in range(199):
+            final = float(trainer.step(batch))
+        self.assertLess(final, initial * 0.6)
+        with torch.inference_mode(), autocast(device, "bf16"):
+            scores = model.policy_logits(batch).squeeze(1).tanh()
+        self.assertLess(float(scores[0]), -0.5)
+        self.assertGreater(float(scores[1]), 0.5)
+        self.assertTrue(
+            all(
+                trainer.health()[key]
+                for key in ("finite_parameters", "finite_gradients", "finite_optimizer")
+            )
+        )
+        restored = Trainer(
+            PolicyValueNet(self.config),
+            device,
+            precision="bf16",
+            lr=0.002,
+            objective="decomposed-mc-q-v2",
+        )
+        restored.restore_payload(trainer.checkpoint({}), {})
+        self.assertEqual(restored.updates, trainer.updates)
+        for expected, actual in zip(model.parameters(), restored.model.parameters()):
+            torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+        expected_states = trainer.optimizer.state_dict()["state"]
+        for key, state in restored.optimizer.state_dict()["state"].items():
+            for field, actual in state.items():
+                torch.testing.assert_close(actual, expected_states[key][field], atol=0, rtol=0)
+        torch.testing.assert_close(trainer.step(batch), restored.step(batch), atol=0, rtol=0)
+        self.assertEqual(restored.updates, trainer.updates)
+        self.assertTrue(restored.health()["finite_optimizer"])
 
     def test_value_ablation_and_checkpoint_objective_boundary(self):
         model = PolicyValueNet(self.config)

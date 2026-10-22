@@ -20,7 +20,7 @@ from ..model import NETWORK_VERSION, ModelConfig, PolicyValueNet
 from ..native.client import Client
 from ..native.model import metadata, model_from
 from ..native.pool import Pool
-from ..runtime import Trainer, cpu_state, resolve_device
+from ..runtime import Trainer, cpu_state, default_precision, resolve_device
 from .config import METHOD as METHOD
 from .config import defaults, validate
 from .config.resources import available_memory, torch_threads
@@ -467,11 +467,7 @@ class Controller:
             torch.manual_seed(self.config["seed"])
             model = PolicyValueNet(ModelConfig.tiny() if self.tiny else ModelConfig())
         if payload is None:
-            precision = "fp32"
-            if self.device.type == "cuda":
-                with torch.cuda.device(self.device):
-                    if torch.cuda.is_bf16_supported():
-                        precision = "bf16"
+            precision = default_precision(self.device)
             trainer = Trainer(
                 model,
                 self.device,

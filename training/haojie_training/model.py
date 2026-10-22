@@ -167,14 +167,10 @@ class PolicyValueNet(nn.Module):
         sources = x.gather(1, (batch["sources"] + 1).unsqueeze(-1).expand(-1, -1, x.shape[-1]))
         targets = x.gather(1, (batch["targets"] + 1).unsqueeze(-1).expand(-1, -1, x.shape[-1]))
         targets = self.target_context(batch, x, targets)
-        # 候选先独立提取非线性特征，避免坐标差异被共享上下文淹没；评分保持FP32，
-        # 防止BF16在较大logit附近把相邻落点量化成相同分数。实体主干仍使用所选AMP。
-        with torch.autocast(x.device.type, enabled=False):
-            actions = self.action_projection(batch["candidates"].float())
-            action_context = torch.cat(
-                (context.float(), sources.float(), targets.float(), actions), dim=-1
-            )
-            logits = self.policy(action_context).squeeze(-1)
+        # 候选投影与评分矩阵共用所选 AMP；仅标量输出、遮罩和收益回归保留 FP32。
+        actions = self.action_projection(batch["candidates"])
+        action_context = torch.cat((context, sources, targets, actions), dim=-1)
+        logits = self.policy(action_context).squeeze(-1).float()
         logits = logits.masked_fill(~batch["candidate_mask"], -1e9)
         return logits
 

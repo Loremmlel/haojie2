@@ -176,7 +176,7 @@ class PolicyInference:
         )
 
     def _forward(self, batch, layout, readout, packed, events):
-        with torch.inference_mode(), autocast(self.device, self.precision):
+        with torch.no_grad(), autocast(self.device, self.precision):
             if events:
                 events[0].record(torch.cuda.current_stream(self.device))
             batch = {k: v.to(self.device, non_blocking=self.pinned) for k, v in batch.items()}

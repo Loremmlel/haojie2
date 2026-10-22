@@ -79,6 +79,8 @@ class ServerTests(unittest.TestCase):
                     return_value=SimpleNamespace(total=64 * 2**30, available=48 * 2**30),
                 ),
                 patch.object(torch.cuda, "is_available", return_value=True),
+                patch.object(torch.cuda, "device"),
+                patch.object(torch.cuda, "is_bf16_supported", return_value=True),
             ):
                 self.assertEqual(resources.cpu_capacity(), 2)
                 self.assertEqual(resources.torch_threads("cpu"), 2)
@@ -88,12 +90,15 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(profile["environments"], 1)
                 self.assertEqual(profile["games_per_round"], 2)
                 self.assertEqual(profile["pool_mib"], 256)
+                self.assertEqual(profile["sampling_precision"], "bf16")
 
     def test_shared_defaults_scale_and_new_experiments_keep_explicit_settings(self):
         with (
             patch.object(config, "cpu_capacity", return_value=40),
             patch.object(config, "available_memory", return_value=64 * 2**30),
             patch.object(torch.cuda, "is_available", return_value=True),
+            patch.object(torch.cuda, "device"),
+            patch.object(torch.cuda, "is_bf16_supported", return_value=True),
             patch.object(torch.xpu, "is_available", return_value=False),
             patch.object(Controller, "_loop"),
             tempfile.TemporaryDirectory() as folder,
@@ -148,7 +153,8 @@ class ServerTests(unittest.TestCase):
         c.engine, c.store, c.config = "unused", Mock(), defaults("cpu")
         c.store.names.return_value = []
 
-        def bf16_supported():
+        def bf16_supported(**kwargs):
+            self.assertEqual(kwargs, {"including_emulation": False})
             selected.assert_called_once_with(torch.device("cuda:1"))
             selected.return_value.__enter__.assert_called_once()
             return True
@@ -212,7 +218,7 @@ class ServerTests(unittest.TestCase):
                     self.assertEqual(resources.available_memory(), 256 * 2**20)
 
     def test_old_recovery_options_and_server_ranges(self):
-        original = {**defaults(), "inference_batch_size": 32}
+        original = {**defaults(), "inference_batch_size": 32, "sampling_precision": "fp32"}
         legacy = {
             k: v
             for k, v in original.items()

@@ -125,6 +125,7 @@ class PoolAsyncTests(unittest.TestCase):
         self.log, self.sent, self.committed, self.unfinished, self.errors = [], [], [], [], []
         self.runner = FakeInference(self.log)
         self.pool = Pool.__new__(Pool)
+        self.pool.device = torch.device("cpu")
         self.pool.input_processes = None
         self.pool.started = time.perf_counter()
         self.pool.active_seconds = self.pool.refills = self.pool.refill_seconds = 0

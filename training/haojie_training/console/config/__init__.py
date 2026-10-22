@@ -2,7 +2,7 @@
 
 import math
 
-from ...runtime import resolve_device
+from ...runtime import default_precision, resolve_device
 from .resources import available_memory, cpu_capacity
 
 METHOD = "decomposed-mc-q-v2"
@@ -56,7 +56,7 @@ def defaults(device="auto"):
         "method": METHOD,
         "temperature": 0.25,
         "batch_wait_ms": 0.0,
-        "sampling_precision": "fp32",
+        "sampling_precision": default_precision(device),
     }
 
 

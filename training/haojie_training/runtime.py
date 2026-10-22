@@ -69,6 +69,15 @@ def autocast(device: torch.device, precision: str):
     )
 
 
+def default_precision(device: torch.device) -> str:
+    """新实验的采样与更新共用精度选择；恢复点仍沿用其显式设置。"""
+    if device.type == "cuda":
+        with torch.cuda.device(device):
+            if torch.cuda.is_bf16_supported(including_emulation=False):
+                return "bf16"
+    return "fp32"
+
+
 def _finite(tensors):
     """每个设备只取回一次检查结果；CPU 步数不与 GPU 状态混叠。"""
     checks = defaultdict(list)

@@ -100,12 +100,33 @@ class InputTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "可训练候选"):
                 decode(frame, len(row["entities"]), len(row["sources"]), _arrays=arrays)
 
-    def test_workers_default_to_threads_and_respect_explicit_override(self):
+    def test_workers_use_actual_resources_and_respect_explicit_override(self):
         with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(worker_count(30, "cuda"), 0)
+        with (
+            patch.dict(os.environ, {"HAOJIE_HOST_WORKERS": "auto"}, clear=True),
+            patch(
+                "haojie_training.console.config.resources.cpu_capacity", return_value=12
+            ) as cores,
+            patch(
+                "haojie_training.console.config.resources.available_memory", return_value=16 * 2**30
+            ) as memory,
+        ):
             self.assertEqual(worker_count(30), 0)
+            self.assertEqual(worker_count(30, "cuda"), 4)
+            self.assertEqual(worker_count(3, "cuda"), 0)
+            cores.return_value = 44
+            self.assertEqual(worker_count(88, "cuda"), 14)
+            cores.return_value = 1.5
+            self.assertEqual(worker_count(30, "cuda"), 0)
+            cores.return_value = 12
+            memory.return_value = 2 * 2**30
+            self.assertEqual(worker_count(30, "cuda"), 0)
         with patch.dict(os.environ, {"HAOJIE_HOST_WORKERS": "2"}):
             self.assertEqual(worker_count(30), 2)
             self.assertEqual(worker_count(1), 1)
+        with patch.dict(os.environ, {"HAOJIE_HOST_WORKERS": "0"}):
+            self.assertEqual(worker_count(30, "cuda"), 0)
         with patch.dict(os.environ, {"HAOJIE_HOST_WORKERS": "17"}):
             with self.assertRaises(ValueError):
                 worker_count(30)

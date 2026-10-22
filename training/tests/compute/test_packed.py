@@ -191,6 +191,30 @@ class PackedTests(unittest.TestCase):
     def test_cuda_bf16_packed_logits_update_and_timing(self):
         self._cuda_packed_logits_update_and_timing("bf16", 3e-3, 3e-3)
 
+    @unittest.skipUnless(
+        torch.cuda.is_available() and torch.cuda.is_bf16_supported(), "需要 CUDA BF16"
+    )
+    def test_bf16_window_reuses_casts_and_refreshes_after_update(self):
+        model = PolicyValueNet(ModelConfig.tiny()).cuda().eval()
+        rows = examples(model.config)
+        runner = PolicyInference(model, "cuda", "bf16")
+        runner(rows)
+        counts, outputs = [], []
+        for scope in (torch.no_grad(), torch.autocast("cuda", enabled=False)):
+            with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as trace:
+                with scope:
+                    runner(rows)
+                    outputs.append(runner(rows))
+            counts.append(sum(e.count for e in trace.key_averages() if e.key == "aten::_to_copy"))
+        self.assertLess(counts[1], counts[0])
+        torch.testing.assert_close(*outputs, atol=0, rtol=0)
+        with torch.no_grad():
+            model.policy[-1].weight.mul_(0.5)
+        with torch.autocast("cuda", enabled=False):
+            refreshed = runner(rows)
+        self.assertFalse(torch.equal(refreshed, outputs[0]))
+        self.assertFalse(torch.is_autocast_enabled("cuda"))
+
     def _cuda_packed_logits_update_and_timing(self, precision, atol, rtol):
         torch.manual_seed(73)
         model = PolicyValueNet().cuda().eval()
@@ -205,11 +229,16 @@ class PackedTests(unittest.TestCase):
         handle = model.blocks[0].qkv.register_forward_hook(
             lambda _module, _inputs, output: dtypes.append(output.dtype)
         )
+        head_handle = model.policy[0].register_forward_hook(
+            lambda _module, _inputs, output: dtypes.append(output.dtype)
+        )
         try:
             actual = runner(rows)
         finally:
             handle.remove()
-        self.assertEqual(dtypes, [torch.bfloat16 if precision == "bf16" else torch.float32])
+            head_handle.remove()
+        self.assertEqual(dtypes, [torch.bfloat16 if precision == "bf16" else torch.float32] * 2)
+        self.assertEqual(actual.dtype, torch.float32)
         torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
         self.assertTrue(
             torch.equal(actual.argsort(dim=-1, stable=True), expected.argsort(dim=-1, stable=True))

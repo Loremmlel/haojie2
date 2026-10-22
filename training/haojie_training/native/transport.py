@@ -1,5 +1,6 @@
 """CPU 输入进程分摊协议与索引准备；共享槽在显式归还前不可覆盖，GPU 仍由主进程独占。"""
 
+import math
 import multiprocessing as mp
 import os
 import queue
@@ -14,11 +15,20 @@ from .client import Client, array_views
 from .packed import prepare_row
 
 
-def worker_count(environments):
-    """执行参数不进入检查点；默认线程路径，目标机器实测后显式选择输入进程数。"""
-    count = int(os.environ.get("HAOJIE_HOST_WORKERS", "0"))
+def worker_count(environments, device="cpu"):
+    """显式 auto 按 CPU/RAM 配额分摊输入；默认沿用本机实测较快的线程路径。"""
+    requested = os.environ.get("HAOJIE_HOST_WORKERS", "0")
+    if requested == "auto":
+        if torch.device(device).type != "cuda":
+            return 0
+        from ..console.config.resources import available_memory, cpu_capacity
+
+        cores = math.floor(cpu_capacity())
+        memory = max(0, available_memory() - 2 * 2**30) // (512 * 2**20)
+        return min(16, environments // 4, cores // 3 if cores >= 4 else 0, memory)
+    count = int(requested)
     if not 0 <= count <= 16:
-        raise ValueError("HAOJIE_HOST_WORKERS 必须为 0 至 16")
+        raise ValueError("HAOJIE_HOST_WORKERS 必须为 auto 或 0 至 16")
     return min(environments, count)
 
 

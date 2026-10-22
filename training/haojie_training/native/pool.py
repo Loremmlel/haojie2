@@ -5,6 +5,8 @@ import time
 from collections import deque
 from contextlib import ExitStack
 
+import torch
+
 from ..runtime import resolve_device
 from .client import Client
 
@@ -67,7 +69,9 @@ class Pool:
         try:
             from .transport import InputProcesses, worker_count
 
-            workers = worker_count(environments) if host_workers is None else host_workers
+            workers = (
+                worker_count(environments, self.device) if host_workers is None else host_workers
+            )
             if workers:
                 self.input_processes = InputProcesses(
                     executable, environments, workers, self.events, frame_limit
@@ -340,6 +344,10 @@ class Pool:
                 logits = None if cancelled() else jobs.infer([m for _, _, m in group])
                 respond(group, logits)
 
+        # 仅延长 AMP 权重缓存寿命，不在调度器开启低精度；各模型仍独立选择精度。
+        # 窗口退出前先排空推理，再清空缓存，下一次更新后的权重不会读到旧转换值。
+        inference_cleanup.enter_context(torch.autocast(self.device.type, enabled=False))
+        inference_cleanup.callback(torch.clear_autocast_cache)
         try:
             if self.parked and not cancelled() and not check_yield():
                 pending = list(self.parked.values())
