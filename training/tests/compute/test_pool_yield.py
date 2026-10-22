@@ -1,5 +1,6 @@
 """采样窗口保留长局：真实调度器跨根暂停、恢复、取消与任务身份回归。"""
 
+import queue
 import threading
 import unittest
 
@@ -70,6 +71,14 @@ class PoolYieldTests(unittest.TestCase):
         self.assertEqual(f.unfinished, [11])
         self.assertFalse(f.pool.slots or f.pool.parked or f.sent)
         self.assertIn(("pool-close",), f.log)
+
+    def test_async_replies_drain_before_long_game_uses_updated_weights(self):
+        self.f.pool.async_replies = True
+        self.f.pool.events = queue.Queue()
+        self.f.runner.on_submit = lambda: [
+            ticket.event.synchronize() for ticket in self.f.runner.active
+        ]
+        self.test_long_game_resumes_after_old_root_finishes_with_new_weights()
 
     def test_yield_requires_resident_pool_and_preserves_first_unserved_root(self):
         f = self.f

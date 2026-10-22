@@ -4,6 +4,7 @@ import queue
 import sys
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 
 import torch
@@ -56,6 +57,7 @@ class Pool:
         self.generations = [0] * environments
         self.last_ids = [0] * environments
         self.device = resolve_device(str(device))
+        self.async_replies = self.device.type == "cuda"
         self.wait = batch_wait_ms / 1000
         self.responses = deque(maxlen=4096)
         self.queue_seconds = self.send_seconds = self.active_seconds = 0.0
@@ -135,6 +137,7 @@ class Pool:
                     break
 
     def metrics(self):
+        responses = tuple(self.responses)
         return {
             "model": self.model_hash,
             "device": str(self.device),
@@ -144,6 +147,7 @@ class Pool:
             else "python",
             "input_layout": "raw-frames" if self.defer_validation else "numpy",
             "python_switch_ms": self.python_switch_ms,
+            "response_workers": int(self.async_replies),
             "policy_layout": "compact-candidates" if self.defer_validation else "padded-candidates",
             "environments": len(self.clients),
             "host_workers": len(self.input_processes.workers) if self.input_processes else 0,
@@ -167,10 +171,10 @@ class Pool:
             "decode_validate_seconds": self.decode_seconds
             + sum(c.decode_seconds for c in self.clients),
             "tensor_bytes": self.tensor_bytes + sum(c.tensor_bytes for c in self.clients),
-            "response_p95_seconds": sorted(self.responses)[int((len(self.responses) - 1) * 0.95)]
-            if self.responses
+            "response_p95_seconds": sorted(responses)[int((len(responses) - 1) * 0.95)]
+            if responses
             else 0,
-            "response_window": len(self.responses),
+            "response_window": len(responses),
             "response_window_capacity": 4096,
             "queue_capacity": self.events.maxsize,
             "peak_queue": self.peak_queue,
@@ -243,8 +247,37 @@ class Pool:
         ready = []
         active_inferences = set()
         inference_cleanup = ExitStack()
+        sending = deque()
+        sender = (
+            inference_cleanup.enter_context(
+                ThreadPoolExecutor(1, thread_name_prefix="haojie-reply")
+            )
+            if getattr(self, "async_replies", False)
+            else None
+        )
         discarded_slots = set()
         failed = True
+
+        def flush_responses():
+            while sending:
+                sending.popleft().result()
+
+        def send(responses, clients):
+            sent = time.perf_counter()
+            try:
+                if self.input_processes is not None:
+                    self.input_processes.respond(responses)
+                else:
+                    client_module.send_many(
+                        [(client, response) for client, (_, response, _) in zip(clients, responses)]
+                    )
+                    for client, (_, _, message) in zip(clients, responses):
+                        client.release(message)
+            except BrokenPipeError as error:
+                raise RuntimeError("内存任务工作进程退出；丢弃未完成局") from error
+            self.send_seconds += time.perf_counter() - sent
+            for _, _, message in responses:
+                self.responses.append(time.perf_counter() - message["received_at"])
 
         def check_yield():
             nonlocal yielding, stopping
@@ -275,21 +308,14 @@ class Pool:
                     {"cancel": True} if cancel else {"logits": scores[row, : message["candidates"]]}
                 )
                 responses.append((i, response, message))
-            sent = time.perf_counter()
-            try:
-                if self.input_processes is not None:
-                    self.input_processes.respond(responses)
-                else:
-                    client_module.send_many(
-                        [(self.clients[i], response) for i, response, _ in responses]
-                    )
-                    for i, response, message in responses:
-                        self.clients[i].release(message)
-            except BrokenPipeError as error:
-                raise RuntimeError("内存任务工作进程退出；丢弃未完成局") from error
-            self.send_seconds += time.perf_counter() - sent
-            for _, _, message in responses:
-                self.responses.append(time.perf_counter() - message["received_at"])
+            clients = [self.clients[i] for i, _, _ in responses]
+            if sender is None:
+                send(responses, clients)
+            else:
+                # 每批持有评分和原帧，最多排队两批；回传不占用 GPU 发射线程。
+                while len(sending) >= 2:
+                    sending.popleft().result()
+                sending.append(sender.submit(send, responses, clients))
 
         def receive():
             group, inference, ticket = waiting.popleft()
@@ -303,6 +329,7 @@ class Pool:
         def drain():
             while waiting:
                 receive()
+            flush_responses()
 
         def assign(i):
             task = jobs.claim()
@@ -398,6 +425,8 @@ class Pool:
                 ready = dispatch(pending)
                 del pending
             while True:
+                while sending and sending[0].done():
+                    sending.popleft().result()
                 if cancel_event and cancel_event.is_set():
                     cancel = True
                     break
@@ -465,6 +494,7 @@ class Pool:
                     if i not in self.slots:
                         raise ValueError("空闲槽位收到旧局响应")
                     if isinstance(raw, MemoryError):
+                        flush_responses()
                         discarded_slots.add((i, generation))
                         pending = [item for item in pending if item[0] != i]
                         self.parked.pop(i, None)
@@ -546,7 +576,10 @@ class Pool:
             failed = False
         finally:
             try:
-                inference_cleanup.close()
+                try:
+                    flush_responses()
+                finally:
+                    inference_cleanup.close()
             except BaseException:
                 failed = True
                 raise

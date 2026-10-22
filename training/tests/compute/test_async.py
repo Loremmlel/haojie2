@@ -414,6 +414,55 @@ class PoolAsyncTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.jobs.infer([self.request(0)], completed=torch.zeros(2, 2))
 
+    def test_reply_thread_allows_next_gpu_batch_and_releases_owned_results(self):
+        self.pool.async_replies = True
+        self.pool.events = queue.Queue()
+        self.pool.generations.append(0)
+        self.pool.last_ids.append(0)
+        self.pool.clients.append(self.client(2))
+        self.pool.slots[2] = {"id": 12, "models": ["a"], "requests": 0}
+        third_submitted = threading.Event()
+        send_threads = []
+        original = self.pool.clients[0].send
+
+        def submit():
+            for ticket in self.runner.active:
+                ticket.event.synchronize()
+            if sum(row[0] == "submit" for row in self.log) == 3:
+                third_submitted.set()
+
+        def send(response):
+            send_threads.append(threading.current_thread())
+            if not third_submitted.wait(3):
+                raise AssertionError("回传阻塞了下一批 GPU 提交")
+            self.assertTrue(torch.isfinite(torch.from_numpy(response["logits"])).all())
+            original(response)
+
+        self.runner.on_submit = submit
+        self.pool.clients[0].send = send
+        for slot in range(3):
+            self.add(slot, self.request(slot))
+        self.pool.run(self.jobs, keep_open=True)
+        self.assertEqual(sorted(self.committed), [10, 11, 12])
+        self.assertEqual(len(self.sent), 3)
+        self.assertTrue(send_threads)
+        self.assertTrue(all(not thread.is_alive() for thread in send_threads))
+        self.assertFalse(self.unfinished or self.runner.active)
+
+    def test_reply_thread_failure_propagates_before_pool_can_resume(self):
+        self.pool.async_replies = True
+        self.pool.events = queue.Queue()
+        self.runner.on_submit = lambda: [
+            ticket.event.synchronize() for ticket in self.runner.active
+        ]
+        self.pool.clients[0].send = lambda _: (_ for _ in ()).throw(BrokenPipeError())
+        self.add(0, self.request(0))
+        with self.assertRaisesRegex(RuntimeError, "工作进程退出"):
+            self.pool.run(self.jobs, keep_open=True)
+        self.assertFalse(self.runner.active or self.committed)
+        self.assertEqual(self.unfinished, [10, 11])
+        self.assertEqual(self.log[-1], ("pool-close",))
+
 
 class AsyncOwnershipTests(unittest.TestCase):
     @classmethod
