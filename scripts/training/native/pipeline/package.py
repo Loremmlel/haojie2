@@ -24,6 +24,7 @@ def main():
     json.loads(starts_bytes)
     files = [
         *root.glob("training/haojie_training/**/*.py"),
+        *root.glob("training/haojie_training/native/*.cpp"),
         *root.glob("training/haojie_training/console/assets/*"),
         root / "training/pyproject.toml",
         root / "training/README.md",

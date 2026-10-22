@@ -15,10 +15,12 @@ haojie-console = "haojie_training.console.server:main"
 
 [tool.setuptools.package-data]
 "haojie_training.console" = ["assets/*"]
+"haojie_training.native" = ["*.cpp"]
 
 [project.optional-dependencies]
 dev = ["ruff==0.15.6"]
 export = ["onnx==1.23.0", "onnxscript==0.7.2", "onnxruntime==1.30.0"]
+native = ["ninja==1.13.0"]
 
 [tool.setuptools.packages.find]
 where = ["."]

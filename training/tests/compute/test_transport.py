@@ -8,11 +8,13 @@ import queue
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
 import torch
 
+from haojie_training.native import client as client_module
 from haojie_training.native.client import Client, decode
 from haojie_training.native.model import example
 from haojie_training.native.packed import PackedPolicy, prepare_row
@@ -22,6 +24,118 @@ from .test_packed import examples
 
 
 class InputTests(unittest.TestCase):
+    def test_shared_ring_retires_growth_instead_of_accumulating_descriptors(self):
+        frames = FrameBuffer()
+        try:
+            for power in range(4, 18):
+                view = frames.acquire(2**power)
+                _, lease = frames.retain()
+                frames.release(lease)
+                view.release()
+                self.assertLessEqual(len(frames.segments), 2)
+            self.assertEqual(len(frames.retired), 12)
+        finally:
+            frames.close()
+
+    def test_native_validation_keeps_numpy_boundaries(self):
+        if client_module.native_io() is None:
+            self.skipTest("需要已构建 C++ 输入校验")
+        from haojie_training.model import ModelConfig
+
+        keys = (
+            "entities",
+            "globals",
+            "candidates",
+            "kinds",
+            "sources",
+            "targets",
+            "entity_mask",
+            "candidate_mask",
+        )
+        source = examples(ModelConfig())[0]
+        for key, index, value in (
+            (None, None, None),
+            ("entities", (0, 1), float("nan")),
+            ("globals", 0, float("inf")),
+            ("candidates", (0, 0), -float("inf")),
+            ("kinds", 0, -1),
+            ("kinds", 0, 256),
+            ("candidate_mask", slice(None), False),
+            ("sources", 0, -2),
+            ("sources", 0, 31),
+            ("sources", 0, 17),
+            ("targets", 0, 31),
+            ("targets", 0, 17),
+        ):
+            row = {k: v.clone() for k, v in source.items()}
+            if key is not None:
+                row[key][index] = value
+            frame = b"".join(row[k].numpy().tobytes() for k in keys)
+            result = []
+            for native in (client_module.native_io, lambda: None):
+                with patch.object(client_module, "native_io", native):
+                    try:
+                        actual = decode(
+                            frame, len(row["entities"]), len(row["sources"]), _arrays=True
+                        )
+                        result.append(None)
+                        for field in keys:
+                            np.testing.assert_array_equal(actual[field], row[field].numpy())
+                    except ValueError as error:
+                        result.append(str(error))
+            self.assertEqual(result[0], result[1], (key, index, value))
+
+    def test_native_bulk_reply_releases_gil_and_preserves_bytes(self):
+        if client_module.native_io() is None:
+            self.skipTest("需要已构建 C++ 批量回传")
+        reader, writer = os.pipe()
+        stream = os.fdopen(writer, "wb", buffering=0)
+        client = SimpleNamespace(
+            ready={"capabilities": ["logits-f32-v1"]},
+            process=SimpleNamespace(stdin=stream),
+        )
+        scores = np.linspace(-4, 4, 100000, dtype=np.float32)
+        response = {"id": 7, "model": '带引号"的版本', "logits": scores}
+        received = bytearray()
+
+        def receive():
+            while chunk := os.read(reader, 65536):
+                received.extend(chunk)
+
+        thread = threading.Thread(target=receive)
+        thread.start()
+        try:
+            client_module.send_many([(client, response)])
+        finally:
+            stream.close()
+            thread.join(timeout=5)
+            os.close(reader)
+        self.assertFalse(thread.is_alive())
+        header, payload = received.split(b"\n", 1)
+        self.assertEqual(
+            json.loads(header), {"id": 7, "model": response["model"], "logitsBytes": scores.nbytes}
+        )
+        self.assertEqual(payload, scores.tobytes())
+
+    def test_native_bulk_reply_rejects_nonfinite_before_writing(self):
+        if client_module.native_io() is None:
+            self.skipTest("需要已构建 C++ 批量回传")
+        reader, writer = os.pipe()
+        with os.fdopen(writer, "wb", buffering=0) as stream:
+            client = SimpleNamespace(
+                ready={"capabilities": ["logits-f32-v1"]},
+                process=SimpleNamespace(stdin=stream),
+            )
+            with self.assertRaisesRegex(ValueError, "模型输出非有限"):
+                client_module.send_many(
+                    [
+                        (client, {"id": 1, "logits": np.zeros(1, dtype=np.float32)}),
+                        (client, {"id": 2, "logits": np.array([np.nan], dtype=np.float32)}),
+                    ]
+                )
+        self.assertEqual(os.read(reader, 1), b"")
+        os.close(reader)
+
     def test_two_frame_ring_waits_for_all_references_before_overwrite(self):
         frames = FrameBuffer()
         first = frames.acquire(8)
@@ -93,9 +207,17 @@ class InputTests(unittest.TestCase):
         )
         frame = bytearray(b"".join(row[key].numpy().tobytes() for key in keys))
         output = decode(frame, len(row["entities"]), len(row["sources"]), _arrays=True)
+        deferred = decode(
+            frame, len(row["entities"]), len(row["sources"]), _arrays=True, _defer=True
+        )
+        self.assertIsNone(deferred._values)
+        self.assertFalse(deferred.validated)
+        deferred.ensure_validated()
+        self.assertTrue(deferred.validated)
         frame[:] = bytes(len(frame))
         for key in keys:
             np.testing.assert_array_equal(output[key], row[key].numpy())
+            np.testing.assert_array_equal(deferred[key], row[key].numpy())
         for arrays in (False, True):
             with self.assertRaisesRegex(ValueError, "可训练候选"):
                 decode(frame, len(row["entities"]), len(row["sources"]), _arrays=arrays)
@@ -158,7 +280,7 @@ class ProcessTests(unittest.TestCase):
             "inputRefs": True,
         }
 
-    def run_protocol(self, client, receive, *, binary):
+    def run_protocol(self, client, receive, *, binary, native_batch=False):
         client.send(self.request())
         digest, count = hashlib.sha256(), 0
         retained, snapshot = None, None
@@ -172,14 +294,23 @@ class ProcessTests(unittest.TestCase):
                 digest.update(key.encode())
                 digest.update(value.tobytes())
             if message["type"] == "infer":
+                if isinstance(message["input"], SharedInput):
+                    if client.owner.prepare_inputs:
+                        expected = prepare_row(message["input"])
+                        for actual, reference in zip(message["input"].packing, expected):
+                            np.testing.assert_array_equal(actual, reference)
+                    else:
+                        self.assertIsNone(message["input"].packing)
                 scores = np.linspace(-3, 3, message["candidates"], dtype=np.float32)
-                client.send(
-                    {
-                        "id": message["id"],
-                        "model": message["model"],
-                        "logits": scores if binary else scores.tolist(),
-                    }
-                )
+                response = {
+                    "id": message["id"],
+                    "model": message["model"],
+                    "logits": scores if binary else scores.tolist(),
+                }
+                if native_batch:
+                    client_module.send_many([(client, response)])
+                else:
+                    client.send(response)
                 count += 1
             else:
                 digest.update(str(message["selected"]).encode())
@@ -193,23 +324,31 @@ class ProcessTests(unittest.TestCase):
     def test_shared_workers_match_json_trajectory_and_release_buffers(self):
         with Client(self.engine, arrays=True) as client:
             expected = self.run_protocol(client, client.receive, binary=False)
+        with Client(self.engine, arrays=True) as client:
+            self.assertEqual(
+                self.run_protocol(client, client.receive, binary=True, native_batch=True), expected
+            )
         events = queue.Queue(maxsize=4)
-        owner = InputProcesses(self.engine, 2, 2, events, 4 * 2**20)
-        try:
-            clients = [owner.client(slot, 0) for slot in range(2)]
-            for slot, client in enumerate(clients):
+        for prepare_inputs in (False, True):
+            owner = InputProcesses(
+                self.engine, 2, 2, events, 4 * 2**20, prepare_inputs=prepare_inputs
+            )
+            try:
+                clients = [owner.client(slot, 0) for slot in range(2)]
+                for slot, client in enumerate(clients):
 
-                def receive():
-                    identity, raw = events.get(timeout=30)
-                    self.assertEqual(identity, (slot, 0))
-                    return client.checked(raw)
+                    def receive():
+                        identity, raw = events.get(timeout=30)
+                        self.assertEqual(identity, (slot, 0))
+                        return client.checked(raw)
 
-                self.assertEqual(self.run_protocol(client, receive, binary=True), expected)
-            self.assertGreater(len(owner.segments), 0)
-        finally:
-            owner.close()
-        self.assertFalse(owner.segments)
-        self.assertTrue(all(not process.is_alive() for process in owner.workers))
+                    self.assertEqual(self.run_protocol(client, receive, binary=True), expected)
+                self.assertGreater(len(owner.segments), 0)
+                self.assertLessEqual(len(owner.segments), 4)
+            finally:
+                owner.close()
+            self.assertFalse(owner.segments)
+            self.assertTrue(all(not process.is_alive() for process in owner.workers))
 
     def test_inflight_cancel_and_resource_restart(self):
         events = queue.Queue(maxsize=2)

@@ -146,6 +146,10 @@ class PolicyInference:
 
     def _prepare(self, examples, packed):
         before = time.perf_counter()
+        if packed is None or getattr(packed, "operator", None) is None:
+            for row in examples:
+                if hasattr(row, "ensure_validated"):
+                    row.ensure_validated()
         if packed is not None:
             batch, layout = packed.batch(examples)
             readout = None

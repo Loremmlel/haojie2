@@ -16,6 +16,23 @@ Windows 程序为 `artifacts/native-target/release/haojie-engine.exe`，Linux �
 
 现行恢复由控制台的恢复点和云端备份完成，保存模型、AdamW、AMP、累计更新及随机源；RAM 样本和半局采样栈不进入恢复点。完整流程见[控制台生命周期](CONSOLE.md)和[云端备份](COLAB.md)。旧 resident 的 `tasks.sqlite` 属于旧任务账本，不作为现行恢复点导入。
 
+## CUDA 的 C++ 输入拼装与算子调度
+
+正式模型的紧凑推理将输入拼装、主干及候选评分的 ATen 调用放到 C++，复用同一组权重、AMP 和 CUDA 算子。读取线程只交付公开帧和所有权，C++ 在批量拼装时统一检查数值、词表和指针边界，再写入复用的 pinned 缓冲。数组视图等到 Python 实际需要时才创建。候选评分只计算各局原本存在的候选行，随后还原原输出布局和遮罩，省去跨局补齐行的矩阵计算。双缓冲忙时继续收集就绪请求，再统一组批。模型结构、特征、MC-Q 目标和优化器保持原定义。
+
+Colab 安装脚本在 CUDA 检查后自动编译。已有 Linux/WSL CUDA 环境在仓库根执行一次（需要系统 C++ 编译器，无须 nvcc）：
+
+```sh
+python -m pip install -e 'training[native]'
+python -m haojie_training.native.aten
+```
+
+随后照常启动控制台或云端服务。默认只加载与 C++ 源码、Torch 分发版本匹配的缓存库，未构建时继续使用 Python 路径；正常启动不调用编译器。`TORCH_EXTENSIONS_DIR` 可指定本地缓存位置，构建与服务须使用同一个值。`HAOJIE_ATEN=0` 可作 Python 对照，`HAOJIE_ATEN=1` 则要求使用扩展，缺少匹配库时现场构建并明确报告失败。状态中的 `runtime.dispatch_backend` 为 `aten-cpp` 或 `python`。CPU、XPU 和非正式网络配置沿用原执行器。
+
+整批二进制评分在一次 C++ 调用中写回 Rust，避免 Python 逐条写管道的 GIL 切换；JSON 控制头、身份和 FP32 评分字节保持协议定义。32 个及以上环境的 C++ 采样窗口将 Python 线程切换间隔收紧到至多 0.5 毫秒，排空推理后恢复宿主原值，更新和保存不沿用该调整。
+
+当前默认仍为线程输入；独立输入进程接收、解析并共享原帧，C++ 路径不再在输入进程重复准备索引。每槽两块缓冲在扩容且旧租约归还后立即释放旧映射，并通知父进程关闭旧句柄；映射数量不随扩容次数累积。状态另列 `input_layout`、`policy_layout`、`python_switch_ms` 和共享映射当前/峰值数量。进程数量按目标机器实际终局吞吐选择，见 [Colab 配置](COLAB.md#服务器配置与测量)。
+
 ## 原生协议与旧记录
 
 Rust 的 `--training` 协议继续保留 `sample` 和 `audit`，供协议验证、差分与已有记录审核。移除的是 Python 独立采样／账本／分片 CLI；引擎记录格式和历史哈希保持原样。

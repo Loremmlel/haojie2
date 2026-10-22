@@ -1,5 +1,6 @@
 """紧凑推理的序列边界、指针映射、参数更新与回退行为。"""
 
+import os
 import unittest
 from contextlib import nullcontext
 from unittest.mock import patch
@@ -193,6 +194,98 @@ class PackedTests(unittest.TestCase):
     )
     def test_cuda_bf16_packed_logits_update_and_timing(self):
         self._cuda_packed_logits_update_and_timing("bf16", 3e-3, 3e-3)
+
+    @unittest.skipUnless(
+        torch.cuda.is_available() and os.environ.get("HAOJIE_ATEN") == "1",
+        "需要已构建 ATen C++ 执行器",
+    )
+    def test_aten_encoder_shares_live_parameters_and_variable_shapes(self):
+        torch.manual_seed(991)
+        model = PolicyValueNet().cuda().eval()
+        keys = list(model.state_dict())
+        rows = examples(model.config)
+        for precision in ("fp32", "bf16"):
+            atol, rtol = (2e-6, 2e-5) if precision == "fp32" else (3e-3, 3e-3)
+            runner = PolicyInference(model, "cuda", precision)
+            self.assertIsNotNone(runner.packed.operator)
+            for group in (rows, rows[:1], rows[1:]):
+                batch = {k: v.cuda() for k, v in collate_inputs(group, model.config).items()}
+                with torch.no_grad(), autocast(torch.device("cuda"), precision):
+                    expected = model.policy_logits(batch).cpu()
+                torch.testing.assert_close(runner(group), expected, atol=atol, rtol=rtol)
+            self.assertEqual(
+                runner.packed.weights[7].data_ptr(), model.blocks[0].qkv.weight.data_ptr()
+            )
+            with torch.no_grad():
+                model.blocks[0].qkv.weight.mul_(0.75)
+            batch = {k: v.cuda() for k, v in collate_inputs(rows, model.config).items()}
+            with torch.no_grad(), autocast(torch.device("cuda"), precision):
+                expected = model.policy_logits(batch).cpu()
+            torch.testing.assert_close(runner(rows), expected, atol=atol, rtol=rtol)
+        self.assertEqual(list(model.state_dict()), keys)
+
+    @unittest.skipUnless(
+        torch.cuda.is_available() and os.environ.get("HAOJIE_ATEN") == "1",
+        "需要已构建 ATen C++ 执行器",
+    )
+    def test_aten_collation_matches_reference_and_owns_copied_frames(self):
+        from haojie_training.native.client import decode
+
+        model = PolicyValueNet().cuda().eval()
+        runner = PolicyInference(model, "cuda", "bf16")
+        keys = (
+            "entities",
+            "globals",
+            "candidates",
+            "kinds",
+            "sources",
+            "targets",
+            "entity_mask",
+            "candidate_mask",
+        )
+        rows = examples(model.config)
+        for group in (rows, rows[:1], rows[1:]):
+            frames = [
+                bytearray(b"".join(row[key].numpy().tobytes() for key in keys)) for row in group
+            ]
+            arrays = [
+                decode(
+                    frame,
+                    len(row["entities"]),
+                    len(row["sources"]),
+                    _owned=True,
+                    _arrays=True,
+                    _defer=True,
+                )
+                for frame, row in zip(frames, group)
+            ]
+            self.assertTrue(all(not row.validated for row in arrays))
+            self.assertTrue(all(row._values is None for row in arrays))
+            expected, layout = runner.packed.batch(group)
+            expected = {key: value.clone() for key, value in expected.items()}
+            actual, actual_layout = runner.packed.batch(arrays)
+            self.assertTrue(all(row.validated for row in arrays))
+            self.assertTrue(all(row._values is None for row in arrays))
+            self.assertEqual(actual_layout, layout)
+            for key in expected:
+                torch.testing.assert_close(actual[key], expected[key], atol=0, rtol=0)
+            snapshot = actual["entities"].clone()
+            for frame in frames:
+                frame[:] = bytes(len(frame))
+            torch.testing.assert_close(actual["entities"], snapshot, atol=0, rtol=0)
+        frame = bytearray(b"".join(rows[0][key].numpy().tobytes() for key in keys))
+        malformed = decode(
+            frame,
+            len(rows[0]["entities"]),
+            len(rows[0]["sources"]),
+            _owned=True,
+            _arrays=True,
+            _defer=True,
+        )
+        malformed["sources"][0] = len(rows[0]["entities"])
+        with self.assertRaisesRegex(RuntimeError, "invalid packed frame values"):
+            runner.packed.batch([malformed])
+        self.assertFalse(malformed.validated)
 
     @unittest.skipUnless(
         torch.cuda.is_available() and torch.cuda.is_bf16_supported(), "需要 CUDA BF16"

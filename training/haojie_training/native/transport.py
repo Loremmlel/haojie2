@@ -9,9 +9,10 @@ import time
 from multiprocessing.shared_memory import SharedMemory
 from types import SimpleNamespace
 
+import numpy as np
 import torch
 
-from .client import Client, array_views
+from .client import ArrayInput, Client, array_views, send_many
 from .packed import prepare_row
 
 
@@ -38,6 +39,7 @@ class FrameBuffer:
     def __init__(self):
         self.current = None
         self.segments = []
+        self.retired = []
         self.ring = [None, None]
         self.index, self.serial = 0, 0
         self.references, self.leases = {}, {}
@@ -53,13 +55,38 @@ class FrameBuffer:
                     raise RuntimeError("CPU 输入槽已关闭")
             if self.stopped:
                 raise RuntimeError("CPU 输入槽已关闭")
-            if segment is None or segment.size < size:
-                segment = SharedMemory(create=True, size=1 << (size - 1).bit_length())
+            # 原始帧后预留索引区：四组 int64 索引的最坏长度小于帧长的 1/8。
+            reserved = size + (size + 7) // 8 + 64
+            if segment is None or segment.size < reserved:
+                if segment is not None:
+                    # 本环槽的所有租约已归还；扩容立即回收旧容量和文件句柄。
+                    self.retired.append(segment.name)
+                    self.references.pop(segment.name, None)
+                    self.segments.remove(segment)
+                    segment.close()
+                    segment.unlink()
+                segment = SharedMemory(create=True, size=1 << (reserved - 1).bit_length())
                 self.segments.append(segment)
                 self.ring[self.index] = segment
             self.current = segment
             self.index = 1 - self.index
             return segment.buf[:size]
+
+    def packing(self, prepared, size):
+        """索引随原帧共享同一租约，跨进程仅发送偏移和长度。"""
+        offset = (size + 7) & ~7
+        descriptors = []
+        for values in prepared[:-1]:
+            if values is None:
+                descriptors.append(None)
+                continue
+            target = np.ndarray(
+                values.shape, dtype=np.int64, buffer=self.current.buf, offset=offset
+            )
+            target[:] = values
+            descriptors.append((offset, len(values)))
+            offset += values.nbytes
+        return descriptors, prepared[-1]
 
     def retain(self):
         with self.condition:
@@ -83,11 +110,14 @@ class FrameBuffer:
     def close(self):
         for segment in self.segments:
             segment.close()
-            segment.unlink()
+            try:
+                segment.unlink()
+            except FileNotFoundError:
+                pass  # 中断退出时父进程可能已接管并释放名称。
         self.segments.clear()
 
 
-def _worker(executable, slots, commands, events, frame_limit):
+def _worker(executable, slots, commands, events, frame_limit, prepare_inputs, defer_validation):
     """spawn 不继承 CUDA 上下文；每个引擎仍有独立读线程，阻塞 I/O 不占其他槽。"""
     torch.set_num_threads(1)
     clients, buffers, closed = {}, {}, {}
@@ -100,8 +130,12 @@ def _worker(executable, slots, commands, events, frame_limit):
             if isinstance(message, dict) and "input" in message:
                 message = dict(message)
                 inputs = message.pop("input")
-                if message["type"] == "infer":
-                    message["_packing"] = prepare_row(inputs)
+                message["_validated"] = inputs.validated
+                message["_retired"], buffers[slot].retired = buffers[slot].retired, []
+                if message["type"] == "infer" and prepare_inputs:
+                    message["_packing"] = buffers[slot].packing(
+                        prepare_row(inputs), message["bytes"]
+                    )
                 message["_buffer"], message["_lease"] = buffers[slot].retain()
             client = clients[slot]
             metrics = (client.read_seconds, client.decode_seconds, client.tensor_bytes)
@@ -130,6 +164,7 @@ def _worker(executable, slots, commands, events, frame_limit):
             arrays=True,
             frame_limit=frame_limit,
             buffer_factory=buffers[slot].acquire,
+            defer_validation=defer_validation,
         )
         clients[slot] = client
         events.put(("ready", slot, client.ready, client.process.pid))
@@ -144,8 +179,8 @@ def _worker(executable, slots, commands, events, frame_limit):
             if operation == "send":
                 clients[slot].send(value)
             elif operation == "responses":
+                send_many([(clients[target], response) for target, response, _ in value])
                 for target, response, lease in value:
-                    clients[target].send(response)
                     buffers[target].release(lease)
             elif operation == "release":
                 buffers[slot].release(value)
@@ -163,7 +198,7 @@ def _worker(executable, slots, commands, events, frame_limit):
         events.cancel_join_thread()
 
 
-class SharedInput(dict):
+class SharedInput(ArrayInput):
     shared = True
 
     def __init__(self, values, packing):
@@ -198,15 +233,36 @@ class ProcessClient:
 
     def checked(self, value):
         value = Client.checked(self, value)
+        for name in value.pop("_retired", ()):
+            retired = self.owner.segments.pop(name, None)
+            if retired is not None:
+                retired.close()
         if "_buffer" in value:
             name = value.pop("_buffer")
             if name not in self.owner.segments:
                 self.owner.segments[name] = SharedMemory(name=name)
+                self.owner.peak_segments = max(self.owner.peak_segments, len(self.owner.segments))
             segment = self.owner.segments[name]
-            values = array_views(
-                segment.buf[: value["bytes"]], value["entities"], value["candidates"]
-            )
-            value["input"] = SharedInput(values, value.pop("_packing", None))
+            values = array_views(segment.buf, value["entities"], value["candidates"], lazy=True)
+            values.validated = value.pop("_validated", False)
+            packing = value.pop("_packing", None)
+            if packing is not None:
+                descriptors, length = packing
+                packing = (
+                    *(
+                        None
+                        if descriptor is None
+                        else np.ndarray(
+                            (descriptor[1],),
+                            dtype=np.int64,
+                            buffer=segment.buf,
+                            offset=descriptor[0],
+                        )
+                        for descriptor in descriptors
+                    ),
+                    length,
+                )
+            value["input"] = SharedInput(values, packing)
         return value
 
     def release(self, message):
@@ -225,11 +281,24 @@ class ProcessClient:
 
 
 class InputProcesses:
-    def __init__(self, executable, environments, workers, events, frame_limit):
+    def __init__(
+        self,
+        executable,
+        environments,
+        workers,
+        events,
+        frame_limit,
+        *,
+        prepare_inputs=True,
+        defer_validation=False,
+    ):
         self.events, self.segments = events, {}
         self.closed = threading.Event()
         self.clients = [ProcessClient(self, slot) for slot in range(environments)]
         self.workers, self.commands, self.locks, self.routes = [], [], [], {}
+        self.prepare_inputs = prepare_inputs
+        self.defer_validation = defer_validation
+        self.peak_segments = 0
         context = mp.get_context("spawn")
         self.incoming = context.Queue(maxsize=2 * environments)
         self.reader = threading.Thread(target=self._read, daemon=True)
@@ -246,7 +315,15 @@ class InputProcesses:
             receiver, sender = context.Pipe(duplex=False)
             process = context.Process(
                 target=_worker,
-                args=(str(executable), slots, receiver, self.incoming, frame_limit),
+                args=(
+                    str(executable),
+                    slots,
+                    receiver,
+                    self.incoming,
+                    frame_limit,
+                    self.prepare_inputs,
+                    self.defer_validation,
+                ),
                 name=f"haojie-input-{index}",
             )
             try:

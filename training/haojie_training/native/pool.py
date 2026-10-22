@@ -1,6 +1,7 @@
 """共享就绪调度器：模型/进程驻留，任务与槽位分离，每槽最多一个在途请求。"""
 
 import queue
+import sys
 import time
 from collections import deque
 from contextlib import ExitStack
@@ -8,6 +9,7 @@ from contextlib import ExitStack
 import torch
 
 from ..runtime import resolve_device
+from . import client as client_module
 from .client import Client
 
 
@@ -66,6 +68,10 @@ class Pool:
         self.sampling_seconds = self.yield_count = 0
         self.closed = False
         self.input_processes = None
+        self.defer_validation = (
+            getattr(getattr(inference[0], "packed", None), "operator", None) is not None
+        )
+        self.python_switch_ms = sys.getswitchinterval() * 1000
         try:
             from .transport import InputProcesses, worker_count
 
@@ -74,7 +80,14 @@ class Pool:
             )
             if workers:
                 self.input_processes = InputProcesses(
-                    executable, environments, workers, self.events, frame_limit
+                    executable,
+                    environments,
+                    workers,
+                    self.events,
+                    frame_limit,
+                    prepare_inputs=getattr(getattr(inference[0], "packed", None), "operator", None)
+                    is None,
+                    defer_validation=self.defer_validation,
                 )
             for i in range(environments):
                 self.clients.append(self.new_client(i))
@@ -97,6 +110,7 @@ class Pool:
             identity=(i, self.generations[i]),
             frame_limit=self.frame_limit,
             arrays=True,
+            defer_validation=self.defer_validation,
         )
 
     def close(self):
@@ -125,11 +139,23 @@ class Pool:
             "model": self.model_hash,
             "device": str(self.device),
             "precision": self.precision,
+            "dispatch_backend": "aten-cpp"
+            if getattr(getattr(self.inference, "packed", None), "operator", None)
+            else "python",
+            "input_layout": "raw-frames" if self.defer_validation else "numpy",
+            "python_switch_ms": self.python_switch_ms,
+            "policy_layout": "compact-candidates" if self.defer_validation else "padded-candidates",
             "environments": len(self.clients),
             "host_workers": len(self.input_processes.workers) if self.input_processes else 0,
             "host_worker_pids": [p.pid for p in self.input_processes.workers]
             if self.input_processes
             else [],
+            "shared_input_segments": len(self.input_processes.segments)
+            if self.input_processes
+            else 0,
+            "peak_shared_input_segments": self.input_processes.peak_segments
+            if self.input_processes
+            else 0,
             "host_prepare_seconds": sum(getattr(c, "prepare_seconds", 0) for c in self.clients),
             "batch_wait_ms": self.wait * 1000,
             **self.inference.stats.snapshot(),
@@ -214,6 +240,7 @@ class Pool:
         stopping = yielding = yielded = False
         cancel = False
         waiting = deque()
+        ready = []
         active_inferences = set()
         inference_cleanup = ExitStack()
         discarded_slots = set()
@@ -253,8 +280,10 @@ class Pool:
                 if self.input_processes is not None:
                     self.input_processes.respond(responses)
                 else:
+                    client_module.send_many(
+                        [(self.clients[i], response) for i, response, _ in responses]
+                    )
                     for i, response, message in responses:
-                        self.clients[i].send(response)
                         self.clients[i].release(message)
             except BrokenPipeError as error:
                 raise RuntimeError("内存任务工作进程退出；丢弃未完成局") from error
@@ -311,27 +340,33 @@ class Pool:
             by_model = {}
             for item in pending:
                 i, _, message = item
-                if yield_when is not None:
-                    self.slots[i]["last_root"] = (message["commandIndex"], message["actor"])
                 by_model.setdefault(message["model"], []).append(item)
             groups = deque(by_model.values())
             for pending in groups:
                 pending.sort(key=lambda item: item[2]["entities"])
             while groups:
+                # 两组都在途时继续收集就绪请求；槽释放后跨消息轮次合批，
+                # 不先冻结一个小批次再同步等待旧票据。
+                if len(waiting) == 2:
+                    return [item for group in groups for item in group]
                 pending = groups.popleft()
                 inference = jobs.inferences[pending[0][2]["model"]]
                 count = _group_size(
                     pending, self.max_batch_size, packed=inference.supports_packed_batches
                 )
                 group = pending[:count]
+                if yield_when is not None:
+                    for i, _, message in group:
+                        self.slots[i]["last_root"] = (
+                            message["commandIndex"],
+                            message["actor"],
+                        )
                 if count < len(pending):
                     groups.append(pending[count:])
                 if not cancelled() and getattr(inference, "supports_async", False):
                     if inference not in active_inferences:
                         active_inferences.add(inference)
                         inference_cleanup.callback(inference.close)
-                    if len(waiting) == 2:
-                        receive()
                     if not cancelled():
                         ticket = inference.submit(
                             [m["input"] for _, _, m in group],
@@ -343,17 +378,24 @@ class Pool:
                 drain()
                 logits = None if cancelled() else jobs.infer([m for _, _, m in group])
                 respond(group, logits)
+            return []
 
         # 仅延长 AMP 权重缓存寿命，不在调度器开启低精度；各模型仍独立选择精度。
         # 窗口退出前先排空推理，再清空缓存，下一次更新后的权重不会读到旧转换值。
         inference_cleanup.enter_context(torch.autocast(self.device.type, enabled=False))
         inference_cleanup.callback(torch.clear_autocast_cache)
+        if getattr(self, "defer_validation", False) and len(self.clients) >= 32:
+            # 高频管道线程会拖延 GPU 发射线程重新取得 GIL；仅在采样窗口收紧间隔。
+            previous_interval = sys.getswitchinterval()
+            self.python_switch_ms = min(previous_interval, 0.0005) * 1000
+            sys.setswitchinterval(self.python_switch_ms / 1000)
+            inference_cleanup.callback(sys.setswitchinterval, previous_interval)
         try:
             if self.parked and not cancelled() and not check_yield():
                 pending = list(self.parked.values())
                 self.parked.clear()
                 previous_active = len(self.slots)
-                dispatch(pending)
+                ready = dispatch(pending)
                 del pending
             while True:
                 if cancel_event and cancel_event.is_set():
@@ -392,14 +434,17 @@ class Pool:
                 try:
                     messages = [self.events.get(timeout=0.001 if waiting else 0.25)]
                 except queue.Empty:
-                    self.queue_seconds += time.perf_counter() - before
                     if any(
                         now - t["last_activity"] > 900
                         for i, t in self.slots.items()
                         if i not in self.parked and "last_activity" in t
                     ):
                         raise TimeoutError("原生请求超过保护时间")
-                    continue
+                    if not ready:
+                        self.queue_seconds += time.perf_counter() - before
+                        continue
+                    # 已就绪请求也能单独推进，不能依赖下一帧唤醒才发射。
+                    messages = []
                 until = time.perf_counter() + self.wait
                 self.peak_queue = max(self.peak_queue, 1 + self.events.qsize())
                 # MC 每槽通常先发 example 再发 infer；控制消息不能占掉推理批量名额。
@@ -413,7 +458,7 @@ class Pool:
                         break
                 self.queue_seconds += time.perf_counter() - before
                 pending = []
-                message = None
+                raw = message = None
                 for (i, generation), raw in messages:
                     if generation != self.generations[i]:
                         continue  # 已关闭管道的 EOF；不能发送到新进程。
@@ -480,7 +525,10 @@ class Pool:
                         pending.append((i, task["id"], message))
                     else:
                         raise ValueError("未知或过期模型请求")
-                # 同一批的 done 可使窗口达标；统一判断后才决定新根是否执行。
+                # 累积尚未发射的输入，同一批的 done 可使窗口达标。
+                pending = ready + pending
+                ready = []
+                # 统一判断后才决定新根是否执行。
                 if check_yield():
                     continuing = []
                     for item in pending:
@@ -493,7 +541,7 @@ class Pool:
                         else:
                             self.parked[i] = item
                     pending = continuing
-                dispatch(pending)
+                ready = dispatch(pending)
                 del messages, pending, raw, message
             failed = False
         finally:
@@ -504,6 +552,7 @@ class Pool:
                 raise
             finally:
                 waiting.clear()
+                ready.clear()
                 ended = time.perf_counter()
                 self.sampling_seconds += ended - self.running_since
                 self.running_since = None

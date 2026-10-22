@@ -87,9 +87,79 @@ class PackedPolicy:
 
     def __init__(self, model, buffers, pinned):
         self.model, self.buffers, self.pinned = model, buffers, pinned
+        from .aten import operator, parameters
+
+        self.operator = operator() if pinned else None
+        self.weights, self.epsilon = parameters(model) if self.operator else (None, None)
+        self.policy_weights = (
+            [
+                parameter
+                for layer in (
+                    model.action_projection[0],
+                    model.action_projection[2],
+                    model.policy[0],
+                    model.policy[2],
+                    model.policy[4],
+                )
+                for parameter in (layer.weight, layer.bias)
+            ]
+            if self.operator
+            else None
+        )
+        self.cpp_buffers = []
 
     def batch(self, examples):
         """压紧有效实体并重映射末层指针；原始特征、候选顺序和输入帧保持不变。"""
+        if self.operator is not None and all(hasattr(row, "address") for row in examples):
+            self.cpp_buffers, tensors, values = torch.ops.haojie.pack(
+                [row.address for row in examples],
+                [row.entity_count for row in examples],
+                [row.candidate_count for row in examples],
+                self.cpp_buffers,
+                self.pinned,
+                RECENT_JOURNAL,
+            )
+            for row in examples:
+                row.validated = True
+            return dict(
+                zip(
+                    (
+                        "entities",
+                        "kinds",
+                        "globals",
+                        "global_indices",
+                        "cu_k",
+                        "cu_q",
+                        "cu_active",
+                        "readout",
+                        "active",
+                        "head_indices",
+                        "sources",
+                        "targets",
+                        "candidates",
+                        "candidate_mask",
+                        "candidate_positions",
+                    ),
+                    tensors,
+                )
+            ), dict(
+                zip(
+                    (
+                        "max_k",
+                        "max_q",
+                        "max_active",
+                        "size",
+                        "entities",
+                        "candidates",
+                        "candidate_slots",
+                    ),
+                    values,
+                )
+            )
+
+        for row in examples:
+            if hasattr(row, "ensure_validated"):
+                row.ensure_validated()
 
         def empty(key, shape, dtype):
             key = "packed_" + key
@@ -138,6 +208,10 @@ class PackedPolicy:
             ),
             "candidate_mask": empty("candidate_mask", (size, actions), torch.bool),
         }
+        if self.operator is not None:
+            batch["candidate_positions"] = empty(
+                "candidate_positions", (sum(len(r["sources"]) for r in examples),), torch.long
+            )
         # NumPy 视图直接填充原页锁定容量；交付后的 CUDA 票据继续独占这组缓冲。
         arrays = {key: value.numpy() for key, value in batch.items()}
         arrays["sources"].fill(-1)
@@ -148,6 +222,7 @@ class PackedPolicy:
         arrays["cu_q"][:] = read_starts
         arrays["cu_active"][:] = active_starts
         arrays["global_indices"][:] = starts[:-1]
+        candidate_start = 0
         for i, (row, valid, positions, inverse, active) in enumerate(records):
             start, end = starts[i : i + 2]
             qstart, qend = read_starts[i : i + 2]
@@ -166,6 +241,11 @@ class PackedPolicy:
             arrays["targets"][i, :count] = inverse[1 + count :] - 1
             arrays["candidates"][i, :count] = row["candidates"]
             arrays["candidate_mask"][i, :count] = row["candidate_mask"]
+            if self.operator is not None:
+                arrays["candidate_positions"][candidate_start : candidate_start + count] = (
+                    np.arange(count) + i * actions
+                )
+            candidate_start += count
         return batch, {
             "max_k": max(lengths),
             "max_q": max(queries),
@@ -179,6 +259,46 @@ class PackedPolicy:
     def forward(self, batch, layout):
         """浅层全量交互，中层只更新活跃查询，末层读出；每层保留全部 K/V。"""
         model = self.model
+        if self.operator is not None and not any(
+            m._forward_hooks or m._forward_pre_hooks for m in model.modules()
+        ):
+            x = self.operator(
+                [
+                    batch[key]
+                    for key in (
+                        "entities",
+                        "kinds",
+                        "globals",
+                        "global_indices",
+                        "cu_k",
+                        "cu_q",
+                        "cu_active",
+                        "readout",
+                        "active",
+                    )
+                ],
+                self.weights,
+                model.config.heads,
+                HISTORY_LAYERS,
+                [layout["max_k"], layout["max_q"], layout["max_active"]],
+                self.epsilon,
+            )
+            return torch.ops.haojie.packed_score(
+                x,
+                [
+                    batch[key]
+                    for key in (
+                        "head_indices",
+                        "sources",
+                        "targets",
+                        "candidates",
+                        "candidate_mask",
+                        "candidate_positions",
+                    )
+                ],
+                self.policy_weights,
+                model.action_projection[2].eps,
+            )
         x = model.entity_projection(batch["entities"]) + model.kind_embedding(batch["kinds"])
         # 与普通encode的cat类型提升一致：AMP全局投影并入FP32残差流。
         global_tokens = model.global_projection(batch["globals"]).to(dtype=x.dtype)

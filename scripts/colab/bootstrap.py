@@ -52,7 +52,9 @@ def main():
         if not python.exists():
             run([*uv, "venv", "--python", "3.12", "--seed", args.venv], env=env)
         run([python, "-c", "import sys; assert sys.version_info[:2] == (3, 12)"])
-        backend = "cpu" if args.device == "cpu" and args.backend == "auto" else args.backend
+        backend = (
+            "cpu" if args.device == "cpu" and args.backend == "auto" else args.backend
+        )
         # uv 官方的自动后端选择依据驱动；版本仍受仓库精确 pin 约束。
         run(
             [
@@ -66,7 +68,7 @@ def main():
                 "--reinstall-package",
                 "torch",
                 "-e",
-                repo / "training",
+                f"{repo / 'training'}[native]",
             ],
             env=env,
         )
@@ -84,6 +86,8 @@ if device.type == "cuda":
     y = x @ x
     torch.cuda.synchronize(device)
     assert y[0, 0].item() == 64
+    from haojie_training.native.aten import build
+    print("ATen C++:", build())
 """
     run([python, "-c", probe.replace("DEVICE", repr(args.device))])
     cargo_bin = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin"
