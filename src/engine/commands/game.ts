@@ -110,7 +110,11 @@ function projectedAttacker(
 }
 function transitUnit(s: GamePosition) {
   return s.units.find(
-    (u) => (hasTrait(u, 'u12p') || hasTrait(u, 'u12')) && u.mode === 'move' && !emptyFor(s, u),
+    (u) =>
+      u.owner === s.active &&
+      (hasTrait(u, 'u12p') || hasTrait(u, 'u12')) &&
+      u.mode === 'move' &&
+      !emptyFor(s, u),
   );
 }
 function inspectionQueries(s: GamePosition, attributes: typeof getStats = getStats) {

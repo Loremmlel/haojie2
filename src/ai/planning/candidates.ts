@@ -688,7 +688,12 @@ export function* iterateCandidateGroups(
     return;
   }
   const transit = allPieces(s).find(
-    (u) => hasTrait(u, 'u12p') && !hasTrait(u, 'u12') && u.mode === 'move' && !canPlace(s, u, u),
+    (u) =>
+      u.owner === s.active &&
+      hasTrait(u, 'u12p') &&
+      !hasTrait(u, 'u12') &&
+      u.mode === 'move' &&
+      !canPlace(s, u, u),
   );
   if (transit) {
     for (const a of unitActions(s, transit)) if (a.id === 'move') yield* emit(a);

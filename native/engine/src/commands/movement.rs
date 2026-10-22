@@ -86,7 +86,12 @@ pub fn stage(s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
 pub fn transit<'a>(s: &'a State, catalog: &Catalog) -> Option<&'a str> {
     s.units
         .iter()
-        .find(|u| (u.has("u12") || u.has("u12p")) && u.mode == "move" && !empty_for(s, u, catalog))
+        .find(|u| {
+            u.owner == s.active
+                && (u.has("u12") || u.has("u12p"))
+                && u.mode == "move"
+                && !empty_for(s, u, catalog)
+        })
         .map(|u| u.id.as_str())
 }
 pub fn stage_with_transit(
@@ -490,4 +495,54 @@ pub fn apply(previous: &State, c: &Command, catalog: &Catalog) -> Result<State, 
     sync(&mut s, catalog);
     crate::resolution::terminal(&mut s, &mut crate::resolution::Resolution::default());
     Ok(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inactive_movement_mode_cannot_capture_the_current_runners_transit() {
+        let catalog = crate::catalog::embedded().unwrap();
+        for active in [1, 2] {
+            let mut state = crate::runtime::create(731280053, false, &catalog).unwrap();
+            state.active = active;
+            state.phase = "play".into();
+            state.summon_slots = 0.0;
+            state.ply = 5.0;
+            state.turns.insert("1".into(), 3.0);
+            state.turns.insert("2".into(), 2.0);
+            let mut stationary = crate::resolution::template(
+                &state,
+                "u12p",
+                3 - active,
+                Point { x: 4.0, y: 6.0 },
+                "stationary",
+                &catalog,
+            );
+            let mut mover = crate::resolution::template(
+                &state,
+                "u12p",
+                active,
+                Point { x: 4.0, y: 6.0 },
+                "mover",
+                &catalog,
+            );
+            for unit in [&mut stationary, &mut mover] {
+                unit.mode = "move".into();
+                unit.moves = 1.0;
+                unit.born = 0.0;
+            }
+            state.units = vec![stationary, mover];
+            assert_eq!(transit(&state, &catalog), Some("mover"));
+            let mut command = Command::new("move");
+            command.unit_id = Some("mover".into());
+            command.x = Some(5.0);
+            command.y = Some(6.0);
+            let next = crate::command::apply_runtime(&state, &command, &catalog).unwrap();
+            assert_eq!(state.unit("mover").unwrap().x, 4.0);
+            assert_eq!(next.unit("mover").unwrap().x, 5.0);
+            assert!(crate::lifecycle::prepare_end(&next, &catalog).is_ok());
+        }
+    }
 }

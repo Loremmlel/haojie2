@@ -21,6 +21,7 @@ import {
   type GameState,
 } from '../../src/engine';
 import { addEffect, addUnit } from '../../src/engine/core/state';
+import { candidateGroups } from '../../src/ai/planning/candidates';
 import { installEquipment } from '../../src/engine/setup/shrines';
 import {
   startIntent,
@@ -276,6 +277,35 @@ test('feedback3 Little BW: crosses both bases but cannot stop there or consume l
   rejected(s, { type: 'move', unitId: r.id, x: 7, y: 5 });
   assert.equal(unit(s, blocker.id).hp, 50);
 });
+
+for (const active of [1, 2] as const)
+  test(`feedback3 BW: inactive move mode cannot capture player ${active} transit`, () => {
+    const s = fixture();
+    s.active = active;
+    const other = active === 1 ? 2 : 1;
+    const stationary = add(s, 'u12p', other, 4, 6);
+    stationary.mode = 'move';
+    stationary.moves = 1;
+    stationary.hp = stationary.maxHp = 1000;
+    const mover = add(s, 'u12p', active, 3, 6);
+    mover.charge = mover.readyCharge = 1;
+    mover.chargeType = 'move';
+    const entered = applyCommand(s, { type: 'move', unitId: mover.id, x: 4, y: 6 });
+    assert.equal(unit(entered, stationary.id).mode, 'move');
+    assert.equal(unit(entered, mover.id).mode, 'move');
+    rejected(entered, { type: 'end' });
+    rejected(entered, { type: 'finish-mode', unitId: mover.id });
+    rejected(entered, { type: 'move', unitId: stationary.id, x: 5, y: 6 });
+    const escape: Command = { type: 'move', unitId: mover.id, x: 5, y: 6 };
+    assert.equal(commandError(entered, escape), null);
+    const commands = candidateGroups(entered, 'hard').flatMap((group) => group.commands);
+    assert.ok(commands.some((command) => command.type === 'move' && command.unitId === mover.id));
+    assert.ok(commands.every((command) => command.unitId !== stationary.id));
+    const escaped = applyCommand(entered, escape);
+    assert.ok(validState(escaped));
+    assert.equal(commandError(escaped, { type: 'end' }), null);
+    assert.equal(applyCommand(escaped, { type: 'end' }).active, other);
+  });
 
 test('feedback3 soul mage: 40HP, self/base endpoints, operation-consuming once per actual turn, persists while frozen', () => {
   const s = fixture(),

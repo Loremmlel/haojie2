@@ -1,7 +1,7 @@
 {
   "format": "haojie-teacher-bundle-v1",
-  "commit": "6b3156328366ec052be4661a51417aecb8d065be",
-  "sha256": "6e86864817295d1f144f861ff4f1a7c0d0a5a691ebccd97f99aa25d1f1c0f329",
+  "commit": "6544f79d68fc36b1ff3766c952d90b72269e3ddb",
+  "sha256": "4d4736518bff7f5b6e683c76663b06421c4f2a3c66339719969f46c615293ebb",
   "sources": {
     "scripts/training/native/teacher/index.ts": "3d7827bb7a6101782823f9f35c2c713aa424f29e73d3188817cdf4c403d1a3c9",
     "src/ai/budget.ts": "5ba5d44720b00954e4d032b57b70769fba607e7d921ba17b9e692ac40190ade5",
@@ -10,7 +10,7 @@
     "src/ai/evaluation/spatial.ts": "3715cc8c9c0191fd8a41bd1599902c414f3fe75b5e7e78d16d92cf72ca00b206",
     "src/ai/evaluation/threats.ts": "f6ac4bac16c298793fde5a245eb31c213e5b5c754ffdf81b25e618dfffaee02e",
     "src/ai/observation.ts": "8adc250225b9c9f0a078dcc4e52b656e605839919d838044b665a62adadbba1b",
-    "src/ai/planning/candidates.ts": "73547e3f8fffcf0f4037d7f83f7b274ac87254b841efa4b90e50ce3bac6e3d61",
+    "src/ai/planning/candidates.ts": "a50fd0bdb5e79d757dbaca40110e68c16c9c83ab697f9ea1c51166e575f8ad3b",
     "src/ai/planning/plan-cache.ts": "a70ba5c8ab3e38c32e3d7a15616661421b35b723f983013e11ab38bb0dc6e6d3",
     "src/ai/planning/search.ts": "17016bea0381ecb73b162a8b9b63338319ad2917168bec34891dfee403ee82f9",
     "src/ai/planning/shrines.ts": "a990cc9b1f6351ab26f6b177cb77022b3f94e19232ba9b9a3828779aa8a83b50",
@@ -22,7 +22,7 @@
     "src/engine/commands/abilities.ts": "f8fae4b1438a0675a86d62d4387aabe0286964186399db85210235fe56656a57",
     "src/engine/commands/combat.ts": "37554d59b7c9ed43e1bb66dab0457d377a42e1a26276249ee6bdcb770d62a3a0",
     "src/engine/commands/firelord.ts": "d9575ab357cf87ef0c80e0c680933e4569fe4b770300f0a742585a451b36bffc",
-    "src/engine/commands/game.ts": "708dc78434edd088f7c624b0da0be4c80c397da00817cf8339be6351892fdb88",
+    "src/engine/commands/game.ts": "30ec244e63ee13e57dc66a02cf6c2116bc77615c9a9ce986493c6ef6ce30623a",
     "src/engine/commands/lifecycle.ts": "6cd37cd828d46a13cb18234e2a11d9730d46caeb4adc042b9413b0d51002329e",
     "src/engine/commands/movement.ts": "1a02b3d69132ac06104f6d82baa0f661a4dcff034adc1b6c737a162ff8a2b03d",
     "src/engine/commands/options.ts": "72cbe462103fe780c150117b828b9fbb3eeebd86909ab2828131e65f837bb9b7",

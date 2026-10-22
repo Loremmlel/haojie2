@@ -247,5 +247,23 @@ export function completeFixtures(): { name: string; job: Job }[] {
       { type: 'attack', unitId: u.id, targetId: victim.id },
     ]);
   }
+  for (const active of [1, 2] as const) {
+    const s = fixture();
+    s.active = active;
+    const stationary = add(s, 'u12p', active === 1 ? 2 : 1, 4, 6);
+    stationary.mode = 'move';
+    stationary.moves = 1;
+    stationary.hp = stationary.maxHp = 1000;
+    const mover = add(s, 'u12p', active, 3, 6);
+    mover.charge = mover.readyCharge = 1;
+    mover.chargeType = 'move';
+    const entered = applyCommand(s, { type: 'move', unitId: mover.id, x: 4, y: 6 });
+    push(`transit-opponent-mode-${active}`, entered, [
+      { type: 'move', unitId: mover.id, x: 5, y: 6 },
+      { type: 'move', unitId: stationary.id, x: 5, y: 6 },
+      { type: 'finish-mode', unitId: mover.id },
+      { type: 'end' },
+    ]);
+  }
   return cases;
 }
