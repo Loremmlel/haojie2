@@ -1,6 +1,7 @@
 """有界二进制协议。每帧独占接收内存，张量视图持有该帧至最后消费者释放。"""
 
 import json
+import math
 import os
 import queue
 import subprocess
@@ -13,14 +14,24 @@ import torch
 
 from ..model import ModelConfig
 
+LOGITS_CAPABILITY = "logits-f32-v1"
+
 
 class Client:
     def __init__(
-        self, executable, timeout=900, *, events=None, identity=None, frame_limit=256 * 1024 * 1024
+        self,
+        executable,
+        timeout=900,
+        *,
+        events=None,
+        identity=None,
+        frame_limit=256 * 1024 * 1024,
+        arrays=False,
     ):
         self.timeout = timeout
         self.frame_limit = frame_limit
         self.events, self.identity = events, identity
+        self.arrays = arrays
         self._handshake = True
         self._input_refs = False
         self._closed = threading.Event()
@@ -107,7 +118,13 @@ class Client:
                     self.read_seconds += time.perf_counter() - started
                     self.tensor_bytes += size
                     started = time.perf_counter()
-                    meta["input"] = decode(data, meta["entities"], meta["candidates"], _owned=True)
+                    meta["input"] = decode(
+                        data,
+                        meta["entities"],
+                        meta["candidates"],
+                        _owned=True,
+                        _arrays=getattr(self, "arrays", False),
+                    )
                     self.decode_seconds += time.perf_counter() - started
                     del data, view
                     if meta.get("type") == "infer" and self._input_refs:
@@ -154,9 +171,20 @@ class Client:
             if enabled and "mc-input-ref-v1" not in self.ready.get("capabilities", []):
                 raise ValueError("原生引擎未协商推理输入引用能力")
             self._input_refs = enabled
+        payload = b""
+        logits = value.get("logits")
+        if isinstance(logits, np.ndarray):
+            if logits.ndim != 1 or logits.dtype != np.float32:
+                raise ValueError("模型评分需要一维 CPU FP32 数组")
+            if LOGITS_CAPABILITY in self.ready.get("capabilities", []):
+                payload = logits.astype("<f4", copy=False).tobytes()
+                value = {**value, "logitsBytes": len(payload)}
+                del value["logits"]
+            else:
+                value = {**value, "logits": logits.tolist()}
         try:
             self.process.stdin.write(
-                json.dumps(value, allow_nan=False, separators=(",", ":")).encode() + b"\n"
+                json.dumps(value, allow_nan=False, separators=(",", ":")).encode() + b"\n" + payload
             )
             self.process.stdin.flush()
         except OSError as error:
@@ -206,7 +234,7 @@ class Client:
         self.close()
 
 
-def decode(data, entities, candidates, *, _owned=False):
+def decode(data, entities, candidates, *, _owned=False, _arrays=False):
     if any(type(n) is not int or n < 1 for n in (entities, candidates)):
         raise ValueError("张量维度无效")
     if len(data) != entities * 265 + candidates * 273 + 128:
@@ -226,7 +254,7 @@ def decode(data, entities, candidates, *, _owned=False):
         ("entity_mask", (entities,), "?"),
         ("candidate_mask", (candidates,), "?"),
     ):
-        count = int(np.prod(shape))
+        count = math.prod(shape)
         array = np.frombuffer(data, dtype=dtype, count=count, offset=offset).reshape(shape)
         inputs[key] = array
         offset += count * np.dtype(dtype).itemsize
@@ -249,4 +277,5 @@ def decode(data, entities, candidates, *, _owned=False):
         selected = indices[mask & (indices >= 0)]
         if not inputs["entity_mask"][selected].all():
             raise ValueError(f"{key}指向填充实体")
-    return {key: torch.from_numpy(value) for key, value in inputs.items()}
+    # 常驻池在原生数组上组批；只有入选的终局候选或普通推理回退才建立 Torch 视图。
+    return inputs if _arrays else {key: torch.from_numpy(value) for key, value in inputs.items()}

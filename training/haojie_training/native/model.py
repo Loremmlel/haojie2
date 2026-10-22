@@ -40,7 +40,10 @@ def example(inputs, selected=0):
     policy = torch.zeros(count)
     policy[selected] = 1
     return {
-        **inputs,
+        **{
+            key: value if isinstance(value, torch.Tensor) else torch.from_numpy(value)
+            for key, value in inputs.items()
+        },
         "policy": policy,
         "value": torch.tensor(0.0),
         "value_mask": torch.tensor(False),

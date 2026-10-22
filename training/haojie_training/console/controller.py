@@ -708,7 +708,16 @@ class Controller:
                 cancel_event=self.cancel,
                 keep_open=True,
                 snapshot=self._progress,
-                yield_when=(lambda: jobs.finished >= jobs.target) if continuous else None,
+                # 已有真实终局样本即可学习；其他局仍在下一决策根停驻并跨更新保留。
+                # 完成数上限只负责让无样本的截断窗口也能归还控制，不再作为学习门槛。
+                yield_when=(
+                    lambda: (
+                        (jobs.finished > finished and bool(self.samples.rows))
+                        or jobs.finished >= jobs.target
+                    )
+                )
+                if continuous
+                else None,
             )
         finally:
             after = self.pool.metrics()
@@ -893,8 +902,10 @@ class Controller:
                     with self._phase("evaluating"):
                         self._evaluate()
                 if self.want_run and not self.cancel.is_set():
-                    with self._phase("sampling"):
-                        self._sample()
+                    # 暂停后剩余或上次受更新上限保留的终局样本，先消费再继续采样。
+                    if not self.samples.rows:
+                        with self._phase("sampling"):
+                            self._sample()
                     if not self.cancel.is_set():
                         with self._phase("updating"):
                             self._update()

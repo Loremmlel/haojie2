@@ -3,10 +3,10 @@
 from itertools import accumulate
 from math import prod
 
+import numpy as np
 import torch
 
-from ..data import _collate
-from ..model import HISTORY_LAYERS, ModelConfig, PolicyValueNet, active_tokens
+from ..model import HISTORY_LAYERS, RECENT_JOURNAL, ModelConfig, PolicyValueNet
 
 
 def supports_packed(model, device, precision):
@@ -76,28 +76,38 @@ class PackedPolicy:
 
         records, lengths, queries, active_lengths = [], [], [], []
         for row in examples:
+            # 主机准备统一走 NumPy 原生数组运算，避免每条请求反复进入小型 Torch 算子。
+            row = {
+                key: value if isinstance(value, np.ndarray) else value.numpy()
+                for key, value in row.items()
+            }
             # 原生请求通常没有填充，直接复制切片，省去索引表及一次实体复制。
             if row["entity_mask"].all():
                 valid = None
                 length = len(row["entities"])
                 source, target = row["sources"] + 1, row["targets"] + 1
             else:
-                valid = row["entity_mask"].nonzero().flatten()
+                valid = np.flatnonzero(row["entity_mask"])
                 length = len(valid)
-                remap = torch.zeros(len(row["entities"]) + 1, dtype=torch.long)
-                remap[valid + 1] = torch.arange(1, length + 1)
+                remap = np.zeros(len(row["entities"]) + 1, dtype=np.int64)
+                remap[valid + 1] = np.arange(1, length + 1)
                 # 已校验的有效候选不引用遮罩实体；无效候选的指针可映射到全局占位。
                 source, target = remap[row["sources"] + 1], remap[row["targets"] + 1]
-            positions, inverse = torch.unique(
-                torch.cat((torch.zeros(1, dtype=torch.long), source, target)),
-                sorted=True,
-                return_inverse=True,
+            positions, inverse = np.unique(
+                np.concatenate((np.zeros(1, dtype=np.int64), source, target)), return_inverse=True
             )
-            active = active_tokens({key: value.unsqueeze(0) for key, value in row.items()})[0]
+            # 与 model.active_tokens 同一集合：有效近期日志、非历史实体及有效候选引用。
+            journal = row["kinds"] == 250
+            older = np.cumsum((journal & row["entity_mask"])[::-1])[::-1] > RECENT_JOURNAL
+            history = (journal & older) | (~journal & (row["entities"][:, 0] == 5 / 32))
+            active = np.concatenate((np.ones(1, dtype=bool), row["entity_mask"] & ~history))
+            for key in ("sources", "targets"):
+                active[np.where(row["candidate_mask"], row[key] + 1, 0)] = True
+            active[1:] &= row["entity_mask"]
             if valid is not None:
-                active = torch.cat((active[:1], active[1:].index_select(0, valid)))
-            active = active.nonzero().flatten()
-            records.append((valid, positions, inverse, active))
+                active = np.concatenate((active[:1], active[valid + 1]))
+            active = np.flatnonzero(active)
+            records.append((row, valid, positions, inverse, active))
             lengths.append(length + 1)
             queries.append(len(positions))
             active_lengths.append(len(active))
@@ -119,38 +129,39 @@ class PackedPolicy:
             "head_indices": empty("head_indices", (size, reads), torch.long),
             "sources": empty("sources", (size, actions), torch.long),
             "targets": empty("targets", (size, actions), torch.long),
+            "candidates": empty(
+                "candidates", (size, actions, config.action_features), torch.float32
+            ),
+            "candidate_mask": empty("candidate_mask", (size, actions), torch.bool),
         }
-        batch["sources"].fill_(-1)
-        batch["targets"].fill_(-1)
-        batch["cu_k"].copy_(torch.tensor(starts, dtype=torch.int32))
-        batch["cu_q"].copy_(torch.tensor(read_starts, dtype=torch.int32))
-        batch["cu_active"].copy_(torch.tensor(active_starts, dtype=torch.int32))
-        batch["global_indices"].copy_(torch.tensor(starts[:-1], dtype=torch.long))
-        for i, (row, (valid, positions, inverse, active)) in enumerate(zip(examples, records)):
+        # NumPy 视图直接填充原页锁定容量；交付后的 CUDA 票据继续独占这组缓冲。
+        arrays = {key: value.numpy() for key, value in batch.items()}
+        arrays["sources"].fill(-1)
+        arrays["targets"].fill(-1)
+        arrays["candidates"].fill(0)
+        arrays["candidate_mask"].fill(False)
+        arrays["cu_k"][:] = starts
+        arrays["cu_q"][:] = read_starts
+        arrays["cu_active"][:] = active_starts
+        arrays["global_indices"][:] = starts[:-1]
+        for i, (row, valid, positions, inverse, active) in enumerate(records):
             start, end = starts[i : i + 2]
             qstart, qend = read_starts[i : i + 2]
             astart, aend = active_starts[i : i + 2]
             count = len(row["sources"])
-            batch["entities"][start].zero_()
-            batch["kinds"][start] = 0
+            arrays["entities"][start].fill(0)
+            arrays["kinds"][start] = 0
             for key in ("entities", "kinds"):
-                values = row[key] if valid is None else row[key].index_select(0, valid)
-                batch[key][start + 1 : end].copy_(values)
-            batch["globals"][i].copy_(row["globals"])
-            batch["readout"][qstart:qend].copy_(positions + start)
-            batch["active"][astart:aend].copy_(active + start)
-            batch["head_indices"][i].fill_(qstart)
-            batch["head_indices"][i, : len(positions)].copy_(torch.arange(qstart, qend))
-            batch["sources"][i, :count].copy_(inverse[1 : 1 + count] - 1)
-            batch["targets"][i, :count].copy_(inverse[1 + count :] - 1)
-        batch.update(
-            _collate(
-                examples,
-                {"candidates", "candidate_mask"},
-                buffers=self.buffers,
-                pin_memory=self.pinned,
-            )
-        )
+                arrays[key][start + 1 : end] = row[key] if valid is None else row[key][valid]
+            arrays["globals"][i] = row["globals"]
+            arrays["readout"][qstart:qend] = positions + start
+            arrays["active"][astart:aend] = active + start
+            arrays["head_indices"][i].fill(qstart)
+            arrays["head_indices"][i, : len(positions)] = np.arange(qstart, qend)
+            arrays["sources"][i, :count] = inverse[1 : 1 + count] - 1
+            arrays["targets"][i, :count] = inverse[1 + count :] - 1
+            arrays["candidates"][i, :count] = row["candidates"]
+            arrays["candidate_mask"][i, :count] = row["candidate_mask"]
         return batch, {
             "max_k": max(lengths),
             "max_q": max(queries),

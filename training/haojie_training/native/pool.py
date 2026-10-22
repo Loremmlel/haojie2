@@ -77,6 +77,7 @@ class Pool:
             events=self.events,
             identity=(i, self.generations[i]),
             frame_limit=self.frame_limit,
+            arrays=True,
         )
 
     def close(self):
@@ -204,6 +205,8 @@ class Pool:
 
         def respond(group, logits, leases=None):
             cancelled()
+            # 每批只构造一次 NumPy 视图；原生客户端协商二进制回传，旧执行器沿用列表。
+            scores = logits.numpy() if logits is not None else None
             for row, (i, task_id, message) in enumerate(group):
                 if leases is not None:
                     if leases[row] in discarded_slots:
@@ -215,9 +218,7 @@ class Pool:
                 sent = time.perf_counter()
                 response = {"id": message["id"], "model": message["model"]}
                 response.update(
-                    {"cancel": True}
-                    if cancel
-                    else {"logits": logits[row, : message["candidates"]].tolist()}
+                    {"cancel": True} if cancel else {"logits": scores[row, : message["candidates"]]}
                 )
                 try:
                     self.clients[i].send(response)

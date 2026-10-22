@@ -154,6 +154,13 @@ class PolicyInference:
             self.stats.candidates += layout["candidates"]
             self.stats.candidate_slots += layout["candidate_slots"]
         else:
+            examples = [
+                {
+                    key: value if isinstance(value, torch.Tensor) else torch.from_numpy(value)
+                    for key, value in row.items()
+                }
+                for row in examples
+            ]
             layout = None
             batch = self.batch(examples)
             readout = self.readout(examples, batch)
