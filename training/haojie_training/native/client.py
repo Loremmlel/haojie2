@@ -1,5 +1,6 @@
 """有界二进制协议。每帧独占接收内存，张量视图持有该帧至最后消费者释放。"""
 
+import asyncio
 import ctypes
 import json
 import math
@@ -32,14 +33,18 @@ class Client:
         frame_limit=256 * 1024 * 1024,
         arrays=False,
         buffer_factory=None,
+        buffer_factory_async=None,
         defer_validation=False,
+        read_loop=None,
     ):
         self.timeout = timeout
         self.frame_limit = frame_limit
         self.events, self.identity = events, identity
         self.arrays = arrays
         self.buffer_factory = buffer_factory
+        self.buffer_factory_async = buffer_factory_async
         self.defer_validation = defer_validation
+        self.read_loop = read_loop
         self._handshake = True
         self._input_refs = False
         self._closed = threading.Event()
@@ -54,9 +59,12 @@ class Client:
         )
         self.messages = queue.Queue(maxsize=2)
         self.errors = bytearray()
-        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader = None if read_loop else threading.Thread(target=self._read, daemon=True)
         self.stderr_reader = threading.Thread(target=self._stderr, daemon=True)
-        self.reader.start()
+        if read_loop:
+            read_loop.add(self)
+        else:
+            self.reader.start()
         self.stderr_reader.start()
         try:
             self.ready = self.receive()
@@ -72,9 +80,124 @@ class Client:
             del self.errors[:-8192]
 
     def _read(self):
+        frames = self._frames()
+        try:
+            stream = self.process.stdout
+            operation = next(frames)
+            while True:
+                kind, value = operation
+                try:
+                    result = (
+                        stream.readline(value)
+                        if kind == "line"
+                        else stream.readinto(value)
+                        if kind == "read"
+                        else self._allocate(value)
+                        if kind == "buffer"
+                        else self._publish(value)
+                    )
+                except Exception as error:
+                    operation = frames.throw(error)
+                else:
+                    operation = frames.send(result)
+        except StopIteration:
+            pass
+        except Exception as error:
+            self._publish(error)
+        finally:
+            frames.close()
+
+    async def _read_async(self):
+        frames = self._frames()
+        loop, descriptor = asyncio.get_running_loop(), self.process.stdout.fileno()
+        pending, read_budget = bytearray(), 0
+
+        async def readable():
+            future = loop.create_future()
+
+            def ready():
+                loop.remove_reader(descriptor)
+                if not future.done():
+                    future.set_result(None)
+
+            loop.add_reader(descriptor, ready)
+            try:
+                await future
+            finally:
+                loop.remove_reader(descriptor)
+
+        async def header(limit):
+            # 最多预读一个小控制块；跨到正文的字节留给同一个帧生成器。
+            while True:
+                end = pending.find(b"\n", 0, limit)
+                if end >= 0 or len(pending) >= limit:
+                    end = end + 1 if end >= 0 else limit
+                    value = bytes(pending[:end])
+                    del pending[:end]
+                    return value
+                try:
+                    chunk = os.read(descriptor, min(4096, limit - len(pending)))
+                except BlockingIOError:
+                    await readable()
+                    continue
+                if not chunk:
+                    value = bytes(pending)
+                    pending.clear()
+                    return value
+                pending.extend(chunk)
+
+        try:
+            os.set_blocking(descriptor, False)
+            operation = next(frames)
+            while True:
+                kind, value = operation
+                try:
+                    if kind == "line":
+                        result = await header(value)
+                    elif kind == "read":
+                        if pending:
+                            result = min(len(value), len(pending))
+                            value[:result] = pending[:result]
+                            del pending[:result]
+                        else:
+                            while True:
+                                try:
+                                    # 直接读入独占帧或共享槽，省去 StreamReader 正文缓冲及复制。
+                                    result = os.readv(descriptor, (value,))
+                                    break
+                                except BlockingIOError:
+                                    await readable()
+                        read_budget += result
+                        if read_budget >= 1024 * 1024:
+                            read_budget = 0
+                            await asyncio.sleep(0)
+                    elif kind == "buffer":
+                        read_budget = 0
+                        result = (
+                            await self.buffer_factory_async(value)
+                            if self.buffer_factory_async
+                            else self._allocate(value)
+                        )
+                    else:
+                        result = await self._publish_async(value)
+                        # 完整帧后让出给其他已就绪管道，不额外等待墙钟组批。
+                        await asyncio.sleep(0)
+                except Exception as error:
+                    operation = frames.throw(error)
+                else:
+                    operation = frames.send(result)
+        except StopIteration:
+            pass
+        except Exception as error:
+            await self._publish_async(error)
+        finally:
+            frames.close()
+
+    def _frames(self):
+        """两个读取后端共用长度、引用和所有权检查；只把阻塞读换成可让出的操作。"""
         last_input = None
         try:
-            while line := self.process.stdout.readline(16 * 1024 * 1024 + 1):
+            while line := (yield "line", 16 * 1024 * 1024 + 1):
                 if len(line) > 16 * 1024 * 1024:
                     raise ValueError("控制消息过长")
                 if not line.endswith(b"\n"):
@@ -114,13 +237,12 @@ class Client:
                         raise MemoryError(
                             f"合法张量需要{size}字节，超过本槽位{self.frame_limit}字节内存预算"
                         )
-                    factory = getattr(self, "buffer_factory", None)
-                    data = factory(size) if factory else bytearray(size)
+                    data = yield "buffer", size
                     started = time.perf_counter()
                     view = memoryview(data)
                     offset = 0
                     while offset < size:
-                        count = self.process.stdout.readinto(view[offset:])
+                        count = yield "read", view[offset:]
                         if not count:
                             raise RuntimeError("原生进程已退出")
                         offset += count
@@ -153,14 +275,18 @@ class Client:
                         )
                 if meta.get("type") in ("example", "done", "error", "teacher"):
                     last_input = None
-                self._publish(meta)
+                yield "publish", meta
                 del meta
             raise RuntimeError("原生进程已退出")
         except Exception as error:
             last_input = None
-            self._publish(error)
+            yield "publish", error
 
-    def _publish(self, message):
+    def _allocate(self, size):
+        factory = getattr(self, "buffer_factory", None)
+        return factory(size) if factory else bytearray(size)
+
+    def _destination(self, message):
         if isinstance(message, dict) and message.get("type") == "infer":
             message["received_at"] = time.perf_counter()
         if self._handshake or self.events is None:
@@ -168,6 +294,22 @@ class Client:
             destination, value = self.messages, message
         else:
             destination, value = self.events, (self.identity, message)
+        return destination, value
+
+    async def _publish_async(self, message):
+        destination, value = self._destination(message)
+        if hasattr(destination, "put_async"):
+            await destination.put_async(value)
+        else:
+            while not self._closed.is_set():
+                try:
+                    destination.put_nowait(value)
+                    return
+                except queue.Full:
+                    await asyncio.sleep(0.001)
+
+    def _publish(self, message):
+        destination, value = self._destination(message)
         # 背压只保留当前帧；关闭时必须能解除阻塞并释放张量。
         while not self._closed.is_set():
             try:
@@ -229,11 +371,16 @@ class Client:
         return value
 
     def close(self):
+        if self._closed.is_set():
+            return
         self._closed.set()
         if self.process.poll() is None:
             self.process.terminate()
             self.process.wait(timeout=10)
-        self.reader.join(timeout=2)
+        if self.read_loop is None:
+            self.reader.join(timeout=2)
+        else:
+            self.read_loop.remove(self)
         self.stderr_reader.join(timeout=2)
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             try:

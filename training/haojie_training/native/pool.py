@@ -1,5 +1,6 @@
 """共享就绪调度器：模型/进程驻留，任务与槽位分离，每槽最多一个在途请求。"""
 
+import os
 import queue
 import sys
 import time
@@ -68,14 +69,25 @@ class Pool:
         self.parked = {}
         self.paused_at = self.running_since = None
         self.sampling_seconds = self.yield_count = 0
+        self.root_drain_seconds = 0.0
         self.closed = False
         self.input_processes = None
+        self.read_loop = None
+        self.launcher = None
         self.defer_validation = (
             getattr(getattr(inference[0], "packed", None), "operator", None) is not None
         )
+        self.launch_workers = (
+            int(os.environ.get("HAOJIE_LAUNCH_WORKERS", "0"))
+            if self.device.type == "cuda" and self.defer_validation
+            else 0
+        )
+        if self.launch_workers not in (0, 1, 2):
+            raise ValueError("HAOJIE_LAUNCH_WORKERS 必须为 0 至 2")
+        self.background_launch = bool(self.launch_workers)
         self.python_switch_ms = sys.getswitchinterval() * 1000
         try:
-            from .transport import InputProcesses, worker_count
+            from .transport import InputProcesses, ReadLoop, worker_count
 
             workers = (
                 worker_count(environments, self.device) if host_workers is None else host_workers
@@ -91,6 +103,8 @@ class Pool:
                     is None,
                     defer_validation=self.defer_validation,
                 )
+            elif os.name != "nt":
+                self.read_loop = ReadLoop()
             for i in range(environments):
                 self.clients.append(self.new_client(i))
             self.ready = self.clients[0].ready
@@ -98,6 +112,10 @@ class Pool:
                 raise ValueError("工作进程版本不一致")
             self.inference, self.model_hash = inference
             self.precision = self.inference.precision
+            if self.background_launch:
+                from .execution import ForwardWorkers
+
+                self.launcher = ForwardWorkers(self.device, self.launch_workers)
             self.startup_seconds = time.perf_counter() - self.started
         except BaseException:
             self.close()
@@ -113,6 +131,7 @@ class Pool:
             frame_limit=self.frame_limit,
             arrays=True,
             defer_validation=self.defer_validation,
+            read_loop=self.read_loop,
         )
 
     def close(self):
@@ -121,11 +140,15 @@ class Pool:
             if inference is not None and hasattr(inference, "close"):
                 inference.close()
         finally:
+            if self.launcher is not None:
+                self.launcher.close()
             if self.input_processes is not None:
                 self.input_processes.close()
             else:
                 for client in self.clients:
                     client.close()
+            if self.read_loop is not None:
+                self.read_loop.close()
             self.closed = True
             self.slots.clear()
             self.parked.clear()
@@ -145,9 +168,26 @@ class Pool:
             "dispatch_backend": "aten-cpp"
             if getattr(getattr(self.inference, "packed", None), "operator", None)
             else "python",
+            "attention_backend": "flash"
+            if self.precision == "bf16"
+            and getattr(getattr(self.inference, "packed", None), "native_dispatch", False)
+            and getattr(getattr(self.inference, "packed", None), "flash", False)
+            else "efficient-or-default",
+            "normalization_backend": "cuda-fused-add-ln"
+            if getattr(getattr(self.inference, "packed", None), "native_dispatch", False)
+            and getattr(getattr(self.inference, "packed", None), "fused", False)
+            and getattr(getattr(self.inference, "packed", None), "residual_norm", None)
+            else "aten",
+            "normalization_compile_error": getattr(
+                getattr(self.inference, "packed", None), "norm_error", None
+            ),
             "input_layout": "raw-frames" if self.defer_validation else "numpy",
+            "read_backend": "asyncio-readv"
+            if self.read_loop is not None or (self.input_processes is not None and os.name != "nt")
+            else "python",
             "python_switch_ms": self.python_switch_ms,
             "response_workers": int(self.async_replies),
+            "launch_workers": self.launch_workers,
             "policy_layout": "compact-candidates" if self.defer_validation else "padded-candidates",
             "environments": len(self.clients),
             "host_workers": len(self.input_processes.workers) if self.input_processes else 0,
@@ -182,6 +222,7 @@ class Pool:
             "sampling_seconds": self.sampling_seconds
             + (time.perf_counter() - self.running_since if self.running_since is not None else 0),
             "yield_count": self.yield_count,
+            "root_drain_seconds": self.root_drain_seconds,
             "parked": len(self.parked),
             "closed": self.closed,
             "refills": self.refills,
@@ -230,6 +271,7 @@ class Pool:
         # 独立测试可注入已有槽位；正常池由构造器初始化这些计数。
         self.parked = getattr(self, "parked", {})
         self.yield_count = getattr(self, "yield_count", 0)
+        self.root_drain_seconds = getattr(self, "root_drain_seconds", 0.0)
         self.sampling_seconds = getattr(self, "sampling_seconds", 0)
         if getattr(self, "paused_at", None) is not None:
             paused = previous - self.paused_at
@@ -242,6 +284,9 @@ class Pool:
         previous_active = 0
         next_snapshot = previous
         stopping = yielding = yielded = False
+        yielding_at = None
+        if self.input_processes is not None and hasattr(jobs, "collection_version"):
+            self.input_processes.collection_version(jobs.collection_version())
         cancel = False
         waiting = deque()
         ready = []
@@ -257,6 +302,7 @@ class Pool:
         )
         discarded_slots = set()
         failed = True
+        launcher = getattr(self, "launcher", None)
 
         def flush_responses():
             while sending:
@@ -280,9 +326,10 @@ class Pool:
                 self.responses.append(time.perf_counter() - message["received_at"])
 
         def check_yield():
-            nonlocal yielding, stopping
+            nonlocal yielding, stopping, yielding_at
             if not yielding and yield_when is not None and yield_when():
                 yielding = stopping = True
+                yielding_at = time.perf_counter()
             return yielding
 
         def cancelled():
@@ -317,8 +364,9 @@ class Pool:
                     sending.popleft().result()
                 sending.append(sender.submit(send, responses, clients))
 
-        def receive():
-            group, inference, ticket = waiting.popleft()
+        def receive(index=0):
+            group, inference, ticket = waiting[index]
+            del waiting[index]
             logits = inference.finish(ticket)
             if not cancelled():
                 if any(jobs.inferences[m["model"]] is not inference for _, _, m in group):
@@ -330,6 +378,12 @@ class Pool:
             while waiting:
                 receive()
             flush_responses()
+
+        def wake_completed(_):
+            try:
+                self.events.put_nowait(((None, None), None))
+            except queue.Full:
+                pass  # 已有待处理消息会唤醒主线程；下一轮会读取完成票据。
 
         def assign(i):
             task = jobs.claim()
@@ -359,6 +413,8 @@ class Pool:
                 request["inputRefs"] = True
             if task.get("teacher"):
                 request["teacher"] = task["teacher"]
+            if self.input_processes is not None and hasattr(jobs, "collector"):
+                request["_collector"] = jobs.collector(task)
             self.clients[i].send(request)
             return True
 
@@ -394,11 +450,15 @@ class Pool:
                     if inference not in active_inferences:
                         active_inferences.add(inference)
                         inference_cleanup.callback(inference.close)
+                        if launcher is not None:
+                            inference.set_launcher(launcher)
                     if not cancelled():
                         ticket = inference.submit(
                             [m["input"] for _, _, m in group],
                             slots=[(i, self.generations[i]) for i, _, _ in group],
                         )
+                        if ticket.launch is not None:
+                            ticket.launch.add_done_callback(wake_completed)
                         waiting.append((group, inference, ticket))
                         continue
                 # 不支持异步的后端沿用同步路由；当前/历史模型无需在切换时排空。
@@ -457,11 +517,33 @@ class Pool:
                     snapshot(self.metrics())
                     next_snapshot = now + 5
                 # 设备执行期间继续接收新帧；队列暂空不阻塞回收尚未完成的票据。
-                if waiting and (cancelled() or waiting[0][2].ready()):
+                completed = next(
+                    (i for i, (_, _, ticket) in enumerate(waiting) if ticket.ready()), None
+                )
+                if waiting and (cancelled() or completed is not None):
+                    receive(0 if completed is None else completed)
+                elif (
+                    waiting
+                    and self.device.type == "cuda"
+                    and (not getattr(self, "background_launch", False) or len(waiting) == 1)
+                    and self.events.empty()
+                    and len(ready) + sum(len(group) for group, _, _ in waiting)
+                    == len(self.slots) - len(self.parked)
+                ):
+                    # 所有可运行槽都在等待模型，直接等设备事件；不再轮询空 I/O 队列。
                     receive()
                 before = time.perf_counter()
                 try:
-                    messages = [self.events.get(timeout=0.001 if waiting else 0.25)]
+                    timeout = (
+                        0
+                        if ready and len(waiting) < 2
+                        else 0.25
+                        if waiting and all(ticket.launch is not None for _, _, ticket in waiting)
+                        else 0.001
+                        if waiting
+                        else 0.25
+                    )
+                    messages = [self.events.get(timeout=timeout)]
                 except queue.Empty:
                     if any(
                         now - t["last_activity"] > 900
@@ -489,6 +571,8 @@ class Pool:
                 pending = []
                 raw = message = None
                 for (i, generation), raw in messages:
+                    if i is None:
+                        continue  # 设备完成通知只唤醒调度器，不属于原生进程的协议帧。
                     if generation != self.generations[i]:
                         continue  # 已关闭管道的 EOF；不能发送到新进程。
                     if i not in self.slots:
@@ -516,6 +600,8 @@ class Pool:
                         raise RuntimeError("内存任务工作进程退出；丢弃未完成局") from raw
                     message = self.clients[i].checked(raw)
                     task = self.slots[i]
+                    if self.input_processes is not None and hasattr(jobs, "collected"):
+                        jobs.collected(task, message)
                     task["last_activity"] = time.perf_counter()
                     if message["type"] == "done" and message.get("model") == task.get(
                         "startup_model", self.model_hash
@@ -587,6 +673,8 @@ class Pool:
                 waiting.clear()
                 ready.clear()
                 ended = time.perf_counter()
+                if yielding_at is not None:
+                    self.root_drain_seconds += ended - yielding_at
                 self.sampling_seconds += ended - self.running_since
                 self.running_since = None
                 if yielded and not cancel and not failed:

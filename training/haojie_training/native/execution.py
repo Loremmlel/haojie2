@@ -1,7 +1,10 @@
 """已校验原生请求的策略执行器；异步票据独占输入缓冲和输出，回收后才能复用。"""
 
+import queue
+import threading
 import time
 from collections import Counter
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 
 import torch
@@ -26,9 +29,13 @@ class InferenceStats:
     inflight: int = 0
     submit_seconds: float = 0.0
     wait_seconds: float = 0.0
+    background_calls: int = 0
+    background_launch_seconds: float = 0.0
+    background_wait_seconds: float = 0.0
     requests: int = 0
     entities: int = 0
     candidates: int = 0
+    scored_candidates: int = 0
     entity_slots: int = 0
     candidate_slots: int = 0
     batch_sizes: Counter = field(default_factory=Counter)
@@ -50,15 +57,25 @@ class InferenceStats:
             "async_discarded": self.async_discarded,
             "async_submit_seconds": self.submit_seconds,
             "async_wait_seconds": self.wait_seconds,
+            "background_forwards": self.background_calls,
+            "background_launch_seconds": self.background_launch_seconds,
+            "background_wait_seconds": self.background_wait_seconds,
             "inference_requests": self.requests,
             "inference_seconds": self.execution_seconds,
             # 异步只加提交和回收等待；设备事件与组批可重叠，不能再简单相加。
-            "inference_timing": "synchronous-wall-or-async-submit-plus-wait",
+            "inference_timing": "host-submit-plus-background-launch-plus-device-wait"
+            if self.background_calls
+            else "synchronous-wall-or-async-submit-plus-wait",
             "collation_seconds": self.collation_seconds,
             "mean_batch": self.requests / max(1, self.calls),
+            "mean_entities": self.entities / max(1, self.requests),
+            "mean_candidates": self.candidates / max(1, self.requests),
+            "mean_scored_candidates": self.scored_candidates / max(1, self.requests),
             "batch_sizes": dict(self.batch_sizes),
             "entity_fill": self.entities / max(1, self.entity_slots),
             "candidate_fill": self.candidates / max(1, self.candidate_slots),
+            "candidates": self.candidates,
+            "scored_candidates": self.scored_candidates,
             "cuda_timing_sample": dict(self.cuda_timing),
         }
 
@@ -73,9 +90,76 @@ class InferenceTicket:
     logits: torch.Tensor
     owners: tuple
     timing: object = None
+    launch: object = None
 
     def ready(self):
+        if self.launch is not None:
+            if not self.launch.done():
+                return False
+            self.launch.result()
         return self.event.query()
+
+
+class ForwardWorkers:
+    """常驻双流发射；窗口先排空再清 AMP，关闭工作池时才停止线程。"""
+
+    def __init__(self, device, count=2):
+        self.device, self.next = device, 0
+        self.queues, self.threads = [], []
+        self.closed = False
+        try:
+            for index in range(count):
+                incoming, started = queue.SimpleQueue(), Future()
+                stream = torch.cuda.Stream(device=device)
+                thread = threading.Thread(
+                    target=self.run, args=(incoming, stream, started), name=f"haojie-launch-{index}"
+                )
+                self.queues.append(incoming)
+                self.threads.append(thread)
+                thread.start()
+                started.result(timeout=30)
+        except BaseException:
+            self.close()
+            raise
+
+    def run(self, incoming, stream, started):
+        try:
+            with (
+                torch.cuda.device(self.device),
+                torch.cuda.stream(stream),
+                torch.autocast(self.device.type, enabled=False),
+            ):
+                started.set_result(None)
+                while item := incoming.get():
+                    future, function, args = item
+                    if future.set_running_or_notify_cancel():
+                        try:
+                            future.set_result(function(*args))
+                        except BaseException as error:
+                            future.set_exception(error)
+        except BaseException as error:
+            if not started.done():
+                started.set_exception(error)
+            else:
+                raise
+
+    def submit(self, function, *args):
+        if self.closed:
+            raise RuntimeError("GPU 发射线程已关闭")
+        future = Future()
+        self.queues[self.next].put((future, function, args))
+        self.next = (self.next + 1) % len(self.queues)
+        return future
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        for incoming in self.queues:
+            incoming.put(None)
+        for thread in self.threads:
+            if thread.ident is not None:
+                thread.join()
 
 
 class PolicyInference:
@@ -89,13 +173,19 @@ class PolicyInference:
         self.buffers = {}
         self.stats = stats if stats is not None else InferenceStats()
         self.packed = (
-            PackedPolicy(model, self.buffers, self.pinned)
+            PackedPolicy(model, self.buffers, self.pinned, precision)
             if supports_packed(model, self.device, precision)
             else None
         )
         self._alternate_packed = None
         self._tickets = [None, None]
         self._slots = set()
+        self.launcher, self.weights_ready = None, None
+
+    def set_launcher(self, launcher):
+        if any(ticket is not None for ticket in self._tickets):
+            raise RuntimeError("推理未排空时不能切换发射器")
+        self.launcher, self.weights_ready = launcher, None
 
     @property
     def supports_packed_batches(self):
@@ -156,6 +246,9 @@ class PolicyInference:
             self.stats.entities += layout["entities"]
             self.stats.entity_slots += layout["entities"]
             self.stats.candidates += layout["candidates"]
+            self.stats.scored_candidates += (
+                layout["scored_candidates"] if packed.native_dispatch else layout["candidate_slots"]
+            )
             self.stats.candidate_slots += layout["candidate_slots"]
         else:
             examples = [
@@ -174,7 +267,7 @@ class PolicyInference:
     def _events(self):
         # 每256批取一组设备事件，只作分账诊断；计时开销仍包含在总墙钟内。
         return (
-            [torch.cuda.Event(enable_timing=True) for _ in range(4)]
+            [torch.cuda.Event(enable_timing=True, blocking=i == 3) for i in range(4)]
             if (self.device.type == "cuda" and self.stats.calls % 256 == 0)
             else None
         )
@@ -183,7 +276,13 @@ class PolicyInference:
         with torch.no_grad(), autocast(self.device, self.precision):
             if events:
                 events[0].record(torch.cuda.current_stream(self.device))
-            batch = {k: v.to(self.device, non_blocking=self.pinned) for k, v in batch.items()}
+            # 原生评分只读取遮罩的输出形状，有效位置已在 CPU 排好，无需上传遮罩。
+            batch = {
+                k: v
+                if k == "candidate_mask" and packed is not None and packed.native_dispatch
+                else v.to(self.device, non_blocking=self.pinned)
+                for k, v in batch.items()
+            }
             if readout is not None:
                 readout = tuple(v.to(self.device, non_blocking=self.pinned) for v in readout)
             if events:
@@ -244,30 +343,53 @@ class PolicyInference:
         except ValueError:
             raise RuntimeError("两组推理均在途，须先回收一组") from None
         if index and self._alternate_packed is None:
-            self._alternate_packed = PackedPolicy(self.model, {}, self.pinned)
+            self._alternate_packed = PackedPolicy(self.model, {}, self.pinned, self.precision)
         packed = self._alternate_packed if index else self.packed
         batch, layout, readout = self._prepare(examples, packed)
         before = time.perf_counter()
         stream = torch.cuda.current_stream(self.device)
         events = self._events()
-        try:
-            output, device_batch, device_readout = self._forward(
-                batch, layout, readout, packed, events
+        launcher = getattr(self, "launcher", None)
+        if launcher is not None and self.weights_ready is not None and packed.native_dispatch:
+            logits = torch.empty(
+                batch["candidate_mask"].shape, dtype=torch.float32, device="cpu", pin_memory=True
             )
-            with torch.inference_mode():
-                logits = torch.empty(
-                    output.shape, dtype=output.dtype, device="cpu", pin_memory=True
+            event = events[3] if events else torch.cuda.Event(blocking=True)
+            launch = launcher.submit(
+                self._launch,
+                batch,
+                layout,
+                readout,
+                packed,
+                events,
+                logits,
+                event,
+                self.weights_ready,
+            )
+            owners = (batch,)
+            self.stats.background_calls += 1
+        else:
+            launch = None
+            try:
+                output, device_batch, device_readout = self._forward(
+                    batch, layout, readout, packed, events
                 )
-                logits.copy_(output, non_blocking=True)
-            event = events[3] if events else torch.cuda.Event()
-            event.record(stream)
-        except BaseException:
-            # 提交中断也必须等已入队拷贝结束，才能再次写主机缓冲。
-            stream.synchronize()
-            raise
-        ticket = InferenceTicket(
-            index, slots, event, logits, (batch, device_batch, device_readout, output), events
-        )
+                with torch.inference_mode():
+                    logits = torch.empty(
+                        output.shape, dtype=output.dtype, device="cpu", pin_memory=True
+                    )
+                    logits.copy_(output, non_blocking=True)
+                event = events[3] if events else torch.cuda.Event(blocking=True)
+                event.record(stream)
+            except BaseException:
+                # 提交中断也必须等已入队拷贝结束，才能再次写主机缓冲。
+                stream.synchronize()
+                raise
+            owners = (batch, device_batch, device_readout, output)
+            if launcher is not None and packed.native_dispatch:
+                # 首批在主流填充全模型的共享 AMP 缓存，其他流先等转换写入完成。
+                self.weights_ready = event
+        ticket = InferenceTicket(index, slots, event, logits, owners, events, launch)
         # 当前与历史模型共用统计，跨执行器的在途工作同样计入重叠。
         self.stats.async_overlaps += self.stats.inflight > 0
         self.stats.inflight += 1
@@ -280,19 +402,52 @@ class PolicyInference:
         self._count(examples)
         return ticket
 
+    def _launch(self, batch, layout, readout, packed, events, logits, event, weights_ready):
+        began = time.perf_counter()
+        stream = torch.cuda.current_stream(self.device)
+        try:
+            stream.wait_event(weights_ready)
+            output, device_batch, device_readout = self._forward(
+                batch, layout, readout, packed, events
+            )
+            with torch.inference_mode():
+                logits.copy_(output, non_blocking=True)
+            event.record(stream)
+            launched = time.perf_counter() - began
+            before_wait = time.perf_counter()
+            event.synchronize()
+            return (
+                (device_batch, device_readout, output),
+                launched,
+                time.perf_counter() - before_wait,
+            )
+        except BaseException:
+            stream.synchronize()
+            raise
+
     def _release(self, ticket):
         if self._tickets[ticket.buffer] is not ticket:
             raise ValueError("推理票据过期、重复回收或属于其他执行器")
-        before = time.perf_counter()
-        ticket.event.synchronize()
-        elapsed = time.perf_counter() - before
-        self.stats.wait_seconds += elapsed
-        self.stats.execution_seconds += elapsed
-        self._record_timing(ticket.timing)
-        self._tickets[ticket.buffer] = None
-        self._slots.difference_update(ticket.slots)
-        self.stats.inflight -= 1
-        ticket.owners = ()
+        try:
+            if ticket.launch is not None:
+                before = time.perf_counter()
+                owners, elapsed, device_wait = ticket.launch.result()
+                ticket.owners += owners
+                self.stats.background_wait_seconds += time.perf_counter() - before
+                self.stats.background_launch_seconds += elapsed
+                self.stats.wait_seconds += device_wait
+                self.stats.execution_seconds += elapsed + device_wait
+            before = time.perf_counter()
+            ticket.event.synchronize()
+            elapsed = time.perf_counter() - before
+            self.stats.wait_seconds += elapsed
+            self.stats.execution_seconds += elapsed
+            self._record_timing(ticket.timing)
+        finally:
+            self._tickets[ticket.buffer] = None
+            self._slots.difference_update(ticket.slots)
+            self.stats.inflight -= 1
+            ticket.owners, ticket.launch = (), None
 
     def finish(self, ticket):
         self._release(ticket)
@@ -310,5 +465,6 @@ class PolicyInference:
                     self._release(ticket)
                 except BaseException as caught:
                     error = error or caught
+        self.launcher, self.weights_ready = None, None
         if error is not None:
             raise error

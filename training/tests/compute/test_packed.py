@@ -9,9 +9,9 @@ import torch
 from torch.nn import functional as F
 
 from haojie_training.data import INPUT_KEYS, collate_inputs, synthetic_batch, validate_inputs
-from haojie_training.model import ModelConfig, PolicyValueNet
+from haojie_training.model import RECENT_JOURNAL, ModelConfig, PolicyValueNet
 from haojie_training.native.execution import InferenceStats, PolicyInference
-from haojie_training.native.packed import supports_packed
+from haojie_training.native.packed import ENCODER_KEYS, POLICY_KEYS, PackedPolicy, supports_packed
 from haojie_training.runtime import autocast
 
 
@@ -75,6 +75,65 @@ class PackedTests(unittest.TestCase):
     def setUpClass(cls):
         torch.set_num_threads(1)
 
+    @unittest.skipUnless(os.environ.get("HAOJIE_ATEN") == "1", "需要已构建 ATen C++ 执行器")
+    def test_aten_cpu_collation_matches_reference_without_cuda(self):
+        from haojie_training.native.aten import operator
+        from haojie_training.native.client import decode
+
+        operator()
+        model = PolicyValueNet().eval()
+        rows = examples(model.config)
+        keys = (
+            "entities",
+            "globals",
+            "candidates",
+            "kinds",
+            "sources",
+            "targets",
+            "entity_mask",
+            "candidate_mask",
+        )
+        arrays = [
+            decode(
+                b"".join(row[key].numpy().tobytes() for key in keys),
+                len(row["entities"]),
+                len(row["sources"]),
+                _arrays=True,
+                _defer=True,
+            )
+            for row in rows
+        ]
+        _, tensors, values = torch.ops.haojie.pack(
+            [row.address for row in arrays],
+            [row.entity_count for row in arrays],
+            [row.candidate_count for row in arrays],
+            [],
+            False,
+            RECENT_JOURNAL,
+        )
+        actual = dict(zip(ENCODER_KEYS + POLICY_KEYS, tensors))
+        reference = PackedPolicy(model, {}, False)
+        reference.operator = operator()
+        expected, layout = reference.batch(rows)
+        for key in expected:
+            torch.testing.assert_close(actual[key], expected[key], atol=0, rtol=0)
+        self.assertEqual(actual["candidate_positions"].tolist(), [0, 1, 2, 3, 4, 6, 7, 12])
+        self.assertEqual(
+            values,
+            [
+                layout[key]
+                for key in (
+                    "max_k",
+                    "max_q",
+                    "max_active",
+                    "size",
+                    "entities",
+                    "candidates",
+                    "candidate_slots",
+                )
+            ],
+        )
+
     def test_compaction_sequence_boundaries_weights_and_ownership(self):
         torch.manual_seed(73)
         model = PolicyValueNet(ModelConfig(width=64, layers=4, heads=4, ffn=256)).eval()
@@ -88,7 +147,8 @@ class PackedTests(unittest.TestCase):
         self.assertTrue(runner.supports_packed_batches)
         batch, layout = runner.packed.batch(rows)
         self.assertEqual(batch["cu_k"].tolist(), [0, 31, 37, 38])
-        self.assertEqual(batch["cu_q"].tolist(), [0, 3, 6, 7])
+        self.assertEqual(batch["cu_q"].tolist(), [0, 2, 5, 6])
+        self.assertEqual(batch["readout"].tolist(), [0, 13, 31, 34, 36, 37])
         self.assertEqual(batch["cu_active"].tolist(), [0, 24, 29, 30])
         self.assertEqual(
             batch["active"].tolist(),
@@ -196,6 +256,49 @@ class PackedTests(unittest.TestCase):
         self._cuda_packed_logits_update_and_timing("bf16", 3e-3, 3e-3)
 
     @unittest.skipUnless(
+        torch.cuda.is_available()
+        and torch.cuda.is_bf16_supported()
+        and os.environ.get("HAOJIE_ATEN") == "1",
+        "需要 CUDA BF16 和已构建 ATen C++ 执行器",
+    )
+    def test_fused_residual_norm_matches_reference_and_preserves_grad_fallback(self):
+        from haojie_training.native.aten import operator
+        from haojie_training.native.kernels import residual_norm
+
+        operator()
+        kernel, error = residual_norm(torch.cuda.current_device())
+        self.assertIsNotNone(kernel, error)
+        pointers = kernel[:2]
+        stream = torch.cuda.current_stream().cuda_stream
+        torch.manual_seed(719)
+        weight, bias = (torch.randn(384, device="cuda") for _ in range(2))
+        for count in (1, 37, 8193):
+            with torch.no_grad():
+                left = torch.randn(count, 384, device="cuda")
+                right = torch.randn_like(left, dtype=torch.bfloat16)
+                summed, normalized = torch.ops.haojie.add_norm(
+                    left, right, weight, bias, 1e-5, *pointers, stream
+                )
+                expected = left + right
+                torch.testing.assert_close(summed, expected, atol=0, rtol=0)
+                torch.testing.assert_close(
+                    normalized,
+                    F.layer_norm(expected, (384,), weight, bias, 1e-5),
+                    atol=2e-6,
+                    rtol=2e-5,
+                )
+        left = torch.randn(3, 384, device="cuda", requires_grad=True)
+        right = torch.randn(3, 384, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+        _, actual = torch.ops.haojie.add_norm(left, right, weight, bias, 1e-5, *pointers, stream)
+        expected = F.layer_norm(left + right, (384,), weight, bias, 1e-5)
+        for actual_grad, expected_grad in zip(
+            torch.autograd.grad(actual.square().sum(), (left, right)),
+            torch.autograd.grad(expected.square().sum(), (left, right)),
+            strict=True,
+        ):
+            torch.testing.assert_close(actual_grad, expected_grad, atol=0, rtol=0)
+
+    @unittest.skipUnless(
         torch.cuda.is_available() and os.environ.get("HAOJIE_ATEN") == "1",
         "需要已构建 ATen C++ 执行器",
     )
@@ -204,10 +307,15 @@ class PackedTests(unittest.TestCase):
         model = PolicyValueNet().cuda().eval()
         keys = list(model.state_dict())
         rows = examples(model.config)
-        for precision in ("fp32", "bf16"):
+        modes = [("fp32", False, False), ("bf16", False, False), ("bf16", False, True)]
+        if torch.backends.cuda.is_flash_attention_available():
+            modes.extend((("bf16", True, False), ("bf16", True, True)))
+        for precision, flash, fused in modes:
             atol, rtol = (2e-6, 2e-5) if precision == "fp32" else (3e-3, 3e-3)
             runner = PolicyInference(model, "cuda", precision)
             self.assertIsNotNone(runner.packed.operator)
+            runner.packed.flash = flash
+            runner.packed.fused = fused
             for group in (rows, rows[:1], rows[1:]):
                 batch = {k: v.cuda() for k, v in collate_inputs(group, model.config).items()}
                 with torch.no_grad(), autocast(torch.device("cuda"), precision):
@@ -286,6 +394,47 @@ class PackedTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "invalid packed frame values"):
             runner.packed.batch([malformed])
         self.assertFalse(malformed.validated)
+
+    @unittest.skipUnless(
+        torch.cuda.is_available()
+        and torch.cuda.is_bf16_supported()
+        and os.environ.get("HAOJIE_ATEN") == "1",
+        "需要 CUDA BF16 和已构建 ATen C++ 执行器",
+    )
+    def test_factored_policy_preserves_full_candidates_and_live_weights(self):
+        torch.manual_seed(927)
+        model = PolicyValueNet().cuda().eval()
+        rows = []
+        for entities, candidates in ((37, 512), (67, 41)):
+            batch = synthetic_batch(model.config, 1, entities, candidates, seed=entities)
+            row = {key: value[0] for key, value in batch.items() if key in INPUT_KEYS}
+            row["entity_mask"].fill_(True)
+            row["candidate_mask"].fill_(True)
+            row["sources"].fill_(-1)
+            row["targets"].fill_(entities - 1)
+            row["candidate_mask"][-1] = False
+            rows.append(row)
+        runner = PolicyInference(model, "cuda", "bf16")
+        batch = {key: value.cuda() for key, value in collate_inputs(rows, model.config).items()}
+        for updated in (False, True):
+            if updated:
+                with torch.no_grad():
+                    model.policy[0].weight.mul_(0.75)
+                    model.policy[0].bias.add_(0.1)
+            with torch.no_grad(), autocast(torch.device("cuda"), "bf16"):
+                expected = model.policy_logits(batch).cpu()
+            for factored, fused in ((False, False), (False, True), (True, True)):
+                runner.packed.factored = factored
+                runner.packed.fused = fused
+                actual = runner(rows)
+                torch.testing.assert_close(actual, expected, atol=3e-3, rtol=3e-3)
+                self.assertEqual(actual.shape, (2, 512))
+                self.assertTrue(
+                    torch.equal(
+                        actual[~batch["candidate_mask"].cpu()],
+                        expected[~batch["candidate_mask"].cpu()],
+                    )
+                )
 
     @unittest.skipUnless(
         torch.cuda.is_available() and torch.cuda.is_bf16_supported(), "需要 CUDA BF16"

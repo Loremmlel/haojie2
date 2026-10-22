@@ -1,12 +1,13 @@
 """常驻 Pool 的内存任务出口；双方版本按真实行动者路由，终局后才接纳当前方样本。"""
 
 import hashlib
+import pickle
 import time
 
 import torch
 
 from ..native.execution import PolicyInference
-from .memory import Trajectory
+from .memory import ExampleCollector, Trajectory
 
 # 持续局的协议路由与权重摘要分开；每条训练样本另记实际行为版本。
 CURRENT_ROUTE = hashlib.sha256(b"haojie-continuous-current-v1").hexdigest()
@@ -134,10 +135,11 @@ class MemoryJobs:
             if self.evaluation
             else plan["sampler_seed"],
             "trajectory": Trajectory(task_id, context=context),
-            "last_index": -1,
-            "last_decision": 0,
             "context": context,
         }
+        task["collector"] = ExampleCollector(
+            task["trajectory"], models, self.current, self.mc_context, self.continuous
+        )
         if self.evaluation and self.teacher:
             task["teacher"] = 3 - self.evaluation["side"]
         if not self.evaluation:
@@ -154,26 +156,22 @@ class MemoryJobs:
     def example(self, task, message):
         if self.evaluation:
             return
-        actor = message["actor"]
-        if actor not in (1, 2) or message["model"] != task["models"][actor - 1]:
-            raise ValueError("样本实际行动者与行为版本不一致")
-        if message["index"] < task["last_index"]:
-            raise ValueError("样本命令序号倒退")
-        task["last_index"] = message["index"]
-        if self.mc_context:
-            if (
-                message.get("semantics") != "mc-context-v2"
-                or message["decision"] <= task["last_decision"]
-            ):
-                raise ValueError("决策身份重复或样本语义不匹配")
-            task["last_decision"] = message["decision"]
-        if message["model"] == self.current:
-            behavior = (
-                {"behavior_version": self.version, "behavior_generation": self.c.generation}
-                if self.continuous
-                else None
-            )
-            task["trajectory"].add(message, behavior=behavior)
+        task["collector"].add(message, self.version, getattr(self.c, "generation", 0))
+
+    def collection_version(self):
+        return self.version, getattr(self.c, "generation", 0)
+
+    def collector(self, task):
+        return None if self.evaluation else task["collector"]
+
+    def collected(self, task, message):
+        progress = message.pop("_trajectory_progress", None)
+        if progress is not None:
+            task["trajectory"].__dict__.update(progress)
+        trace = message.pop("_collected_trajectory", None)
+        if trace is not None:
+            # 仅反序列化本服务启动的输入进程返回的对象，不读取原生引擎的用户载荷。
+            task["trajectory"] = pickle.loads(trace)
 
     def infer(self, messages, *, completed=None):
         """同步或异步结果共享 MC 变换；已完成张量仅用于同一模型的一组请求。"""

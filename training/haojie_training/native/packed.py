@@ -8,6 +8,26 @@ import torch
 
 from ..model import HISTORY_LAYERS, RECENT_JOURNAL, ModelConfig, PolicyValueNet
 
+ENCODER_KEYS = (
+    "entities",
+    "kinds",
+    "globals",
+    "global_indices",
+    "cu_k",
+    "cu_q",
+    "cu_active",
+    "readout",
+    "active",
+)
+POLICY_KEYS = (
+    "head_indices",
+    "sources",
+    "targets",
+    "candidates",
+    "candidate_mask",
+    "candidate_positions",
+)
+
 
 def supports_packed(model, device, precision):
     """私有算子只在当前固定依赖及已验证的原网络配置启用，其他入口沿用普通推理。"""
@@ -66,8 +86,15 @@ def prepare_row(row):
         remap = np.zeros(len(row["entities"]) + 1, dtype=np.int64)
         remap[valid + 1] = np.arange(1, length + 1)
         source, target = remap[row["sources"] + 1], remap[row["targets"] + 1]
-    positions, inverse = np.unique(
-        np.concatenate((np.zeros(1, dtype=np.int64), source, target)), return_inverse=True
+    # 末层只需有效候选的查询；完整 K/V 与中层活跃集合继续保留。
+    selected = row["candidate_mask"]
+    positions = np.unique(
+        np.concatenate((np.zeros(1, dtype=np.int64), source[selected], target[selected]))
+    )
+    readout_map = np.zeros(length + 1, dtype=np.int64)
+    readout_map[positions] = np.arange(len(positions))
+    inverse = np.concatenate(
+        (np.zeros(1, dtype=np.int64), readout_map[source], readout_map[target])
     )
     # 与 model.active_tokens 同一集合；有效近期日志、非历史实体及有效候选引用。
     journal = row["kinds"] == 250
@@ -85,11 +112,26 @@ def prepare_row(row):
 class PackedPolicy:
     """只持有原模块和主机容量；每次前向直接读取最新参数，不缓存实体表示。"""
 
-    def __init__(self, model, buffers, pinned):
+    def __init__(self, model, buffers, pinned, precision="fp32"):
         self.model, self.buffers, self.pinned = model, buffers, pinned
         from .aten import operator, parameters
 
         self.operator = operator() if pinned else None
+        self.flash = (
+            self.operator is not None
+            and torch.backends.cuda.flash_sdp_enabled()
+            and torch.backends.cuda.is_flash_attention_available()
+        )
+        self.factored = True
+        self.fused = True
+        self.residual_norm, self.norm_error = None, None
+        if self.operator is not None and precision == "bf16":
+            from .kernels import residual_norm
+
+            self.residual_norm, self.norm_error = residual_norm(
+                model.entity_projection.weight.device.index
+            )
+        self.modules = tuple(model.modules()) if self.operator else ()
         self.weights, self.epsilon = parameters(model) if self.operator else (None, None)
         self.policy_weights = (
             [
@@ -110,7 +152,8 @@ class PackedPolicy:
 
     def batch(self, examples):
         """压紧有效实体并重映射末层指针；原始特征、候选顺序和输入帧保持不变。"""
-        if self.operator is not None and all(hasattr(row, "address") for row in examples):
+        native = self.native_dispatch
+        if native and all(hasattr(row, "address") for row in examples):
             self.cpp_buffers, tensors, values = torch.ops.haojie.pack(
                 [row.address for row in examples],
                 [row.entity_count for row in examples],
@@ -121,28 +164,7 @@ class PackedPolicy:
             )
             for row in examples:
                 row.validated = True
-            return dict(
-                zip(
-                    (
-                        "entities",
-                        "kinds",
-                        "globals",
-                        "global_indices",
-                        "cu_k",
-                        "cu_q",
-                        "cu_active",
-                        "readout",
-                        "active",
-                        "head_indices",
-                        "sources",
-                        "targets",
-                        "candidates",
-                        "candidate_mask",
-                        "candidate_positions",
-                    ),
-                    tensors,
-                )
-            ), dict(
+            layout = dict(
                 zip(
                     (
                         "max_k",
@@ -156,6 +178,8 @@ class PackedPolicy:
                     values,
                 )
             )
+            layout["scored_candidates"] = tensors[-1].numel()
+            return dict(zip(ENCODER_KEYS + POLICY_KEYS, tensors)), layout
 
         for row in examples:
             if hasattr(row, "ensure_validated"):
@@ -189,6 +213,7 @@ class PackedPolicy:
         read_starts = list(accumulate(queries, initial=0))
         active_starts = list(accumulate(active_lengths, initial=0))
         size, actions, reads = len(examples), max(len(r["sources"]) for r in examples), max(queries)
+        scored = sum(np.count_nonzero(row["candidate_mask"]) for row, *_ in records)
         config = self.model.config
         batch = {
             "entities": empty("entities", (starts[-1], config.entity_features), torch.float32),
@@ -200,23 +225,28 @@ class PackedPolicy:
             "cu_active": empty("cu_active", (size + 1,), torch.int32),
             "readout": empty("readout", (read_starts[-1],), torch.long),
             "active": empty("active", (active_starts[-1],), torch.long),
-            "head_indices": empty("head_indices", (size, reads), torch.long),
-            "sources": empty("sources", (size, actions), torch.long),
-            "targets": empty("targets", (size, actions), torch.long),
+            "head_indices": empty(
+                "head_indices", (scored,) if native else (size, reads), torch.long
+            ),
+            "sources": empty("sources", (scored,) if native else (size, actions), torch.long),
+            "targets": empty("targets", (scored,) if native else (size, actions), torch.long),
             "candidates": empty(
-                "candidates", (size, actions, config.action_features), torch.float32
+                "candidates",
+                (scored, config.action_features)
+                if native
+                else (size, actions, config.action_features),
+                torch.float32,
             ),
             "candidate_mask": empty("candidate_mask", (size, actions), torch.bool),
         }
-        if self.operator is not None:
-            batch["candidate_positions"] = empty(
-                "candidate_positions", (sum(len(r["sources"]) for r in examples),), torch.long
-            )
+        if native:
+            batch["candidate_positions"] = empty("candidate_positions", (scored,), torch.long)
         # NumPy 视图直接填充原页锁定容量；交付后的 CUDA 票据继续独占这组缓冲。
         arrays = {key: value.numpy() for key, value in batch.items()}
-        arrays["sources"].fill(-1)
-        arrays["targets"].fill(-1)
-        arrays["candidates"].fill(0)
+        if not native:
+            arrays["sources"].fill(-1)
+            arrays["targets"].fill(-1)
+            arrays["candidates"].fill(0)
         arrays["candidate_mask"].fill(False)
         arrays["cu_k"][:] = starts
         arrays["cu_q"][:] = read_starts
@@ -235,18 +265,24 @@ class PackedPolicy:
             arrays["globals"][i] = row["globals"]
             arrays["readout"][qstart:qend] = positions + start
             arrays["active"][astart:aend] = active + start
-            arrays["head_indices"][i].fill(qstart)
-            arrays["head_indices"][i, : len(positions)] = np.arange(qstart, qend)
-            arrays["sources"][i, :count] = inverse[1 : 1 + count] - 1
-            arrays["targets"][i, :count] = inverse[1 + count :] - 1
-            arrays["candidates"][i, :count] = row["candidates"]
             arrays["candidate_mask"][i, :count] = row["candidate_mask"]
-            if self.operator is not None:
-                arrays["candidate_positions"][candidate_start : candidate_start + count] = (
-                    np.arange(count) + i * actions
-                )
-            candidate_start += count
-        return batch, {
+            if native:
+                # 读出位置在 CPU 已知，不再上传补齐特征或在 GPU 重复展开指针。
+                positions = np.flatnonzero(row["candidate_mask"])
+                selected = slice(candidate_start, candidate_start + len(positions))
+                arrays["head_indices"][selected] = qstart
+                arrays["sources"][selected] = qstart + inverse[1 + positions]
+                arrays["targets"][selected] = qstart + inverse[1 + count + positions]
+                arrays["candidates"][selected] = row["candidates"][positions]
+                arrays["candidate_positions"][selected] = positions + i * actions
+                candidate_start = selected.stop
+            else:
+                arrays["head_indices"][i].fill(qstart)
+                arrays["head_indices"][i, : len(positions)] = np.arange(qstart, qend)
+                arrays["sources"][i, :count] = inverse[1 : 1 + count] - 1
+                arrays["targets"][i, :count] = inverse[1 + count :] - 1
+                arrays["candidates"][i, :count] = row["candidates"]
+        layout = {
             "max_k": max(lengths),
             "max_q": max(queries),
             "max_active": max(active_lengths),
@@ -255,49 +291,43 @@ class PackedPolicy:
             "candidates": sum(len(row["sources"]) for row in examples),
             "candidate_slots": size * actions,
         }
+        if native:
+            layout["scored_candidates"] = batch["candidate_positions"].numel()
+        return batch, layout
+
+    @property
+    def native_dispatch(self):
+        return self.operator is not None and not any(
+            m._forward_hooks or m._forward_pre_hooks for m in self.modules
+        )
 
     def forward(self, batch, layout):
         """浅层全量交互，中层只更新活跃查询，末层读出；每层保留全部 K/V。"""
         model = self.model
-        if self.operator is not None and not any(
-            m._forward_hooks or m._forward_pre_hooks for m in model.modules()
-        ):
+        if self.native_dispatch:
+            norm = self.residual_norm if self.fused else None
             x = self.operator(
-                [
-                    batch[key]
-                    for key in (
-                        "entities",
-                        "kinds",
-                        "globals",
-                        "global_indices",
-                        "cu_k",
-                        "cu_q",
-                        "cu_active",
-                        "readout",
-                        "active",
-                    )
-                ],
+                [batch[key] for key in ENCODER_KEYS],
                 self.weights,
                 model.config.heads,
                 HISTORY_LAYERS,
                 [layout["max_k"], layout["max_q"], layout["max_active"]],
                 self.epsilon,
+                self.flash,
+                self.fused,
+                norm[0] if norm else 0,
+                norm[1] if norm else 0,
+                torch.cuda.current_stream(model.entity_projection.weight.device).cuda_stream
+                if norm
+                else 0,
             )
             return torch.ops.haojie.packed_score(
                 x,
-                [
-                    batch[key]
-                    for key in (
-                        "head_indices",
-                        "sources",
-                        "targets",
-                        "candidates",
-                        "candidate_mask",
-                        "candidate_positions",
-                    )
-                ],
+                [batch[key] for key in POLICY_KEYS],
                 self.policy_weights,
                 model.action_projection[2].eps,
+                self.factored,
+                self.fused,
             )
         x = model.entity_projection(batch["entities"]) + model.kind_embedding(batch["kinds"])
         # 与普通encode的cat类型提升一致：AMP全局投影并入FP32残差流。

@@ -63,10 +63,16 @@ jobs:
         run: |
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
           python -m pip install ./training
+      - name: Build optional C++ dispatcher on Linux CPU
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install './training[native]'
+          python -m haojie_training.native.aten
       - name: Memory console, real teacher and recovery checks
         shell: pwsh
         run: |
           $env:HAOJIE_NATIVE = if ($IsWindows) { "$PWD/artifacts/native-target/release/haojie-engine.exe" } else { "$PWD/artifacts/native-target/release/haojie-engine" }
+          $env:HAOJIE_ATEN = if ($IsLinux) { '1' } else { 'auto' }
           python -m unittest discover -s training/tests -p 'test_*.py' -v
           exit $LASTEXITCODE
       - name: Server 32-process training and backup restore

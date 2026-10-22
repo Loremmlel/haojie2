@@ -3,10 +3,25 @@
 import random
 import time
 from collections import Counter, deque
+from dataclasses import dataclass
 
 import torch
 
+from ..native.client import ArrayInput
 from ..native.model import example
+
+
+@dataclass
+class _PendingExample:
+    frame: object
+    entities: int
+    candidates: int
+    selected: int
+    metadata: dict
+
+    def materialize(self):
+        inputs = ArrayInput(data=self.frame, entities=self.entities, candidates=self.candidates)
+        return {**example(inputs, self.selected), "_meta": self.metadata}
 
 
 def size_of(row):
@@ -30,6 +45,11 @@ class Trajectory:
 
     @property
     def rows(self):
+        # 只有最终保留的行才创建 Torch 对象；蓄水替换仍使用同一个随机流与内存计账。
+        for group in (self.choices, self.passes):
+            for index, (row, actor, step, size) in enumerate(group):
+                if isinstance(row, _PendingExample):
+                    group[index] = (row.materialize(), actor, step, size)
         return self.choices + self.passes
 
     def add(self, message, *, behavior=None):
@@ -48,8 +68,7 @@ class Trajectory:
         index = self.rng.randrange(self.eligible_groups[is_pass])
         if len(group) == limit and index >= limit:
             return
-        row = example(message["input"], message["selected"])
-        row["_meta"] = {
+        metadata = {
             "game": self.context,
             "actor": message["actor"],
             "stage": key,
@@ -58,7 +77,21 @@ class Trajectory:
             "entered": time.time(),
             **(behavior or {}),
         }
-        item = (row, message["actor"], message["step"], size_of(row))
+        inputs = message["input"]
+        if isinstance(inputs, ArrayInput) and inputs._data is not None:
+            frame = inputs._data
+            if getattr(inputs, "shared", False):
+                frame = bytearray(memoryview(frame)[: inputs.frame_bytes])
+            if not 0 <= message["selected"] < inputs.candidate_count:
+                raise ValueError("样本候选索引无效")
+            row = _PendingExample(
+                frame, inputs.entity_count, inputs.candidate_count, message["selected"], metadata
+            )
+            used = inputs.frame_bytes + inputs.candidate_count * 4 + 5 + 4096
+        else:
+            row = {**example(inputs, message["selected"]), "_meta": metadata}
+            used = size_of(row)
+        item = (row, message["actor"], message["step"], used)
         if len(group) < limit:
             if is_pass and len(self.choices) + len(self.passes) == self.capacity:
                 # Pass出现时随机缩减普通组，仍是该组的均匀子样本；总额不增加。
@@ -76,6 +109,45 @@ class Trajectory:
             # MC Q 对每个实际分解选择监督；状态价值也按该前缀所属方学习。
             row["value_mask"] = torch.tensor(True)
             yield row
+
+
+class ExampleCollector:
+    """本地或输入进程共用的逐局采样出口，蓄水随机流仍由原任务编号独立拥有。"""
+
+    def __init__(self, trajectory, models, current, mc_context, continuous):
+        self.trajectory, self.models, self.current = trajectory, models, current
+        self.mc_context, self.continuous = mc_context, continuous
+        self.last_index, self.last_decision = -1, 0
+
+    def add(self, message, version, generation):
+        actor = message["actor"]
+        if actor not in (1, 2) or message["model"] != self.models[actor - 1]:
+            raise ValueError("样本实际行动者与行为版本不一致")
+        if message["index"] < self.last_index:
+            raise ValueError("样本命令序号倒退")
+        self.last_index = message["index"]
+        if self.mc_context:
+            if (
+                message.get("semantics") != "mc-context-v2"
+                or message["decision"] <= self.last_decision
+            ):
+                raise ValueError("决策身份重复或样本语义不匹配")
+            self.last_decision = message["decision"]
+        if message["model"] == self.current:
+            behavior = (
+                {"behavior_version": version, "behavior_generation": generation}
+                if self.continuous
+                else None
+            )
+            self.trajectory.add(message, behavior=behavior)
+
+    def progress(self):
+        result = {
+            name: getattr(self.trajectory, name)
+            for name in ("seen", "eligible", "oversize", "used", "coverage")
+        }
+        result["coverage"] = result["coverage"].copy()
+        return result
 
 
 class SamplePool:

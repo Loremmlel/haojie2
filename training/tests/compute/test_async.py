@@ -1,10 +1,13 @@
 """双缓冲的所有权、实际 Pool 排空边界与 CUDA 同结果回归。"""
 
+import os
 import queue
 import threading
 import time
 import unittest
 from collections import deque
+from concurrent.futures import Future
+from contextlib import nullcontext
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,7 +17,12 @@ import torch
 from haojie_training.console.sampling import MemoryJobs
 from haojie_training.data import INPUT_KEYS, synthetic_batch
 from haojie_training.model import ModelConfig, PolicyValueNet
-from haojie_training.native.execution import InferenceStats, InferenceTicket, PolicyInference
+from haojie_training.native.execution import (
+    ForwardWorkers,
+    InferenceStats,
+    InferenceTicket,
+    PolicyInference,
+)
 from haojie_training.native.pool import Pool, _group_size
 from haojie_training.runtime import cpu_state
 
@@ -249,6 +257,60 @@ class PoolAsyncTests(unittest.TestCase):
         self.pool.events.advance, self.runner.finish = advance, ready_finish
         self.add(0, self.request(0))
         self.pool.run(self.jobs, keep_open=True)
+        self.assertEqual(self.committed, [10])
+        self.assertFalse(self.unfinished or self.runner.active)
+
+    def test_completed_second_stream_returns_before_slow_first_stream(self):
+        def advance():
+            self.assertTrue(self.runner.active)
+            self.runner.active[-1].event.synchronize()
+
+        self.pool.events.advance = advance
+        for slot in range(2):
+            self.add(slot, self.request(slot))
+        self.pool.run(self.jobs, keep_open=True)
+        self.assertEqual(self.committed, [11, 10])
+        self.assertEqual([slot for slot, _, _ in self.sent], [1, 0])
+        self.assertFalse(self.unfinished or self.runner.active)
+
+    def test_background_completion_wakes_idle_queue_without_millisecond_polling(self):
+        self.pool.background_launch = True
+        submit, get = self.runner.submit, self.pool.events.get
+        waits = []
+
+        def queued(*args, **kwargs):
+            ticket = submit(*args, **kwargs)
+            ticket.launch = Future()
+            return ticket
+
+        def advance():
+            ticket = self.runner.active[-1]
+            ticket.event.synchronize()
+            ticket.launch.set_result(None)
+
+        def receive(*args, **kwargs):
+            if self.pool.events.empty() and kwargs.get("timeout", 0) > 0:
+                waits.append(kwargs["timeout"])
+            return get(*args, **kwargs)
+
+        self.runner.submit = queued
+        self.pool.events.advance, self.pool.events.get = advance, receive
+        for slot in range(2):
+            self.add(slot, self.request(slot))
+        self.pool.run(self.jobs, keep_open=True)
+        self.assertTrue(waits)
+        self.assertEqual(set(waits), {0.25})
+        self.assertEqual(self.committed, [11, 10])
+        self.assertFalse(self.unfinished or self.runner.active)
+
+    def test_cuda_waits_for_event_when_all_slots_already_wait_for_model(self):
+        self.pool.device = torch.device("cuda")
+        self.pool.clients = self.pool.clients[:1]
+        self.pool.slots = {0: self.pool.slots[0]}
+        self.pool.events.advance = lambda: self.fail("所有槽均等模型时仍轮询空输入队列")
+        self.add(0, self.request(0))
+        with patch("torch.autocast", return_value=nullcontext()):
+            self.pool.run(self.jobs, keep_open=True)
         self.assertEqual(self.committed, [10])
         self.assertFalse(self.unfinished or self.runner.active)
 
@@ -494,6 +556,89 @@ class AsyncOwnershipTests(unittest.TestCase):
         self.assertFalse(first.owners or second.owners or runner._slots)
         self.assertEqual(runner.stats.async_discarded, 1)
         self.assertEqual(runner.stats.inflight, 0)
+
+    def test_background_failure_propagates_and_releases_cpu_leases(self):
+        runner = PolicyInference(PolicyValueNet(ModelConfig.tiny()), "cpu")
+        failure = Future()
+        failure.set_exception(ValueError("后台发射失败"))
+        ticket = InferenceTicket(
+            0,
+            ((0, 0),),
+            SimpleNamespace(query=lambda: self.fail("读取了未记录的事件")),
+            torch.zeros(1, 1),
+            (object(),),
+            launch=failure,
+        )
+        runner._tickets, runner._slots = [ticket, None], {(0, 0)}
+        runner.stats.inflight = 1
+        with self.assertRaisesRegex(ValueError, "后台发射失败"):
+            ticket.ready()
+        with self.assertRaisesRegex(ValueError, "后台发射失败"):
+            runner.close()
+        self.assertFalse(ticket.owners or ticket.launch or runner._slots)
+        self.assertEqual(runner.stats.inflight, 0)
+
+    @unittest.skipUnless(
+        torch.cuda.is_available()
+        and torch.cuda.is_bf16_supported()
+        and os.environ.get("HAOJIE_ATEN") == "1",
+        "需要 CUDA BF16 和 ATen C++ 发射器",
+    )
+    def test_background_streams_refresh_weights_only_after_every_window_drains(self):
+        for precision in ("fp32", "bf16"):
+            self._background_streams_refresh_weights(precision)
+
+    def _background_streams_refresh_weights(self, precision):
+        torch.manual_seed(121)
+        model = PolicyValueNet().cuda().eval()
+        groups = [
+            [
+                {
+                    key: value[0]
+                    for key, value in synthetic_batch(
+                        model.config, 1, entities, 4, seed=entities
+                    ).items()
+                    if key in INPUT_KEYS
+                }
+            ]
+            for entities in (5, 9, 13)
+        ]
+        runner = PolicyInference(model, "cuda", precision)
+        previous = None
+        launcher = ForwardWorkers(torch.device("cuda"))
+        try:
+            for window in range(2):
+                if window:
+                    with torch.no_grad():
+                        model.blocks[0].qkv.weight.mul_(0.75)
+                        model.policy[-1].bias.add_(0.1)
+                with torch.autocast("cuda", enabled=False):
+                    expected = [runner(rows) for rows in groups]
+                    runner.set_launcher(launcher)
+                    first = runner.submit(groups[0], slots=[(0, window)])
+                    second = runner.submit(groups[1], slots=[(1, window)])
+                    self.assertIsNone(first.launch)
+                    self.assertIsNotNone(second.launch)
+                    retained = runner.finish(first)
+                    third = runner.submit(groups[2], slots=[(2, window)])
+                    for ticket, reference in ((second, expected[1]), (third, expected[2])):
+                        ticket.launch.result(timeout=10)
+                        torch.testing.assert_close(
+                            runner.finish(ticket), reference, atol=3e-3, rtol=3e-3
+                        )
+                    torch.testing.assert_close(retained, expected[0], atol=3e-3, rtol=3e-3)
+                    if previous is not None:
+                        self.assertFalse(torch.equal(retained, previous))
+                    previous = retained.clone()
+                    runner.close()
+        finally:
+            runner.close()
+            launcher.close()
+        self.assertTrue(all(not thread.is_alive() for thread in launcher.threads))
+        self.assertEqual(runner.stats.background_calls, 4)
+        self.assertGreater(runner.stats.background_launch_seconds, 0)
+        self.assertEqual(runner.stats.inflight, 0)
+        self.assertFalse(torch.is_autocast_enabled("cuda"))
 
     def test_failed_device_submission_synchronizes_before_reuse(self):
         runner = PolicyInference(PolicyValueNet(ModelConfig.tiny()), "cpu")

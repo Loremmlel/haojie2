@@ -1,12 +1,15 @@
 """真实进程共享帧的所有权、二进制评分等价与取消；短命令预算仅用于协议验收。"""
 
+import asyncio
 import gzip
 import hashlib
 import json
 import os
+import pickle
 import queue
 import threading
 import unittest
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -18,12 +21,183 @@ from haojie_training.native import client as client_module
 from haojie_training.native.client import Client, decode
 from haojie_training.native.model import example
 from haojie_training.native.packed import PackedPolicy, prepare_row
-from haojie_training.native.transport import FrameBuffer, InputProcesses, SharedInput, worker_count
+from haojie_training.native.transport import (
+    FrameBuffer,
+    InputProcesses,
+    ReadLoop,
+    SharedInput,
+    worker_count,
+)
 
 from .test_packed import examples
 
 
 class InputTests(unittest.TestCase):
+    def test_reservoir_defers_tensors_and_keeps_exact_samples_after_shared_overwrite(self):
+        from haojie_training.console.memory import Trajectory, size_of
+        from haojie_training.model import ModelConfig
+
+        row = examples(ModelConfig())[1]
+        keys = (
+            "entities",
+            "globals",
+            "candidates",
+            "kinds",
+            "sources",
+            "targets",
+            "entity_mask",
+            "candidate_mask",
+        )
+        frame = bytearray(b"".join(row[key].numpy().tobytes() for key in keys))
+        inputs = decode(
+            frame, len(row["entities"]), len(row["sources"]), _owned=True, _arrays=True, _defer=True
+        )
+        inputs.shared = True
+        pending, reference = Trajectory(7, capacity=16), Trajectory(7, capacity=16)
+        messages = [
+            {
+                "input": inputs,
+                "selected": i % 2,
+                "actor": 1 + i % 2,
+                "step": i,
+                "bytes": len(frame),
+                "candidates": len(row["sources"]),
+                "pass": i % 17 == 0,
+                "stage": "target",
+                "decision": i + 1,
+            }
+            for i in range(500)
+        ]
+        with patch("haojie_training.console.memory.example", wraps=example) as conversion:
+            for message in messages:
+                pending.add(message)
+            self.assertEqual(conversion.call_count, 0)
+            frame[:] = bytes(len(frame))
+            actual = pending.rows
+            self.assertEqual(conversion.call_count, 16)
+            self.assertEqual(pending.used, sum(size_of(item[0]) for item in actual))
+            self.assertIs(pending.rows[0][0], actual[0][0])
+            self.assertEqual(conversion.call_count, 16)
+        for message in messages:
+            reference.add({**message, "input": {key: row[key].numpy() for key in keys}})
+        self.assertEqual(pending.rng.getstate(), reference.rng.getstate())
+        self.assertEqual(pending.used, reference.used)
+        self.assertEqual(pending.coverage, reference.coverage)
+        for (left, *tail), (right, *right_tail) in zip(actual, reference.rows, strict=True):
+            self.assertEqual(tail, right_tail)
+            for key in left:
+                if key != "_meta":
+                    torch.testing.assert_close(left[key], right[key], atol=0, rtol=0)
+            self.assertEqual(left["_meta"]["decision"], right["_meta"]["decision"])
+
+    @unittest.skipIf(os.name == "nt", "Windows 保留原阻塞读取后端")
+    def test_async_decoder_keeps_reference_ownership_and_detects_partial_frame(self):
+        from haojie_training.model import ModelConfig
+
+        row = examples(ModelConfig())[0]
+        # 正文跨越头部预读和管道容量，覆盖直接读取、大帧让出及末尾断管。
+        for key in ("entities", "kinds", "entity_mask"):
+            row[key] = row[key].repeat((256, 1) if key == "entities" else (256,))
+        keys = (
+            "entities",
+            "globals",
+            "candidates",
+            "kinds",
+            "sources",
+            "targets",
+            "entity_mask",
+            "candidate_mask",
+        )
+        body = b"".join(row[key].numpy().tobytes() for key in keys)
+        header = {
+            "type": "infer",
+            "id": 1,
+            "model": "a" * 64,
+            "actor": 1,
+            "commandIndex": 0,
+            "entities": len(row["entities"]),
+            "candidates": len(row["sources"]),
+            "bytes": len(body),
+        }
+        reference = {"type": "example", "inputRef": 1, "model": "a" * 64, "actor": 1, "index": 0}
+        for complete in (True, False):
+            incoming, outgoing = os.pipe()
+            client = Client.__new__(Client)
+            client.process = SimpleNamespace(stdout=os.fdopen(incoming, "rb"))
+            client._input_refs, client.arrays, client.defer_validation = True, True, False
+            client.buffer_factory_async = None
+            client.frame_limit = len(body)
+            client.read_seconds = client.decode_seconds = client.tensor_bytes = 0
+            messages = []
+
+            async def publish(message):
+                messages.append(message)
+
+            client._publish_async = publish
+            payload = json.dumps(header).encode() + b"\n" + (body if complete else body[:-1])
+            if complete:
+                payload += json.dumps(reference).encode() + b"\n"
+
+            def write():
+                with os.fdopen(outgoing, "wb", buffering=0) as stream:
+                    for offset in range(0, len(payload), 4093):
+                        stream.write(payload[offset : offset + 4093])
+
+            thread = threading.Thread(target=write)
+            thread.start()
+            try:
+                asyncio.run(client._read_async())
+            finally:
+                client.process.stdout.close()
+            thread.join(timeout=3)
+            self.assertFalse(thread.is_alive())
+            if complete:
+                self.assertEqual(len(messages), 3)
+                self.assertIs(messages[0]["input"], messages[1]["input"])
+                for key in keys:
+                    np.testing.assert_array_equal(messages[0]["input"][key], row[key].numpy())
+            else:
+                self.assertEqual(len(messages), 1)
+            self.assertIsInstance(messages[-1], RuntimeError)
+            self.assertEqual(str(messages[-1]), "原生进程已退出")
+
+    @unittest.skipUnless(os.environ.get("HAOJIE_ATEN") == "1", "需要 C++ 输入视图")
+    def test_native_retained_frame_is_owned_and_mixed_dtypes_still_serialize(self):
+        from haojie_training.model import ModelConfig
+
+        row = examples(ModelConfig())[0]
+        keys = (
+            "entities",
+            "globals",
+            "candidates",
+            "kinds",
+            "sources",
+            "targets",
+            "entity_mask",
+            "candidate_mask",
+        )
+        frame = bytearray(b"".join(row[key].numpy().tobytes() for key in keys))
+        arrays = decode(
+            frame,
+            len(row["entities"]),
+            len(row["sources"]),
+            _owned=True,
+            _arrays=True,
+            _defer=True,
+        )
+        shared = SharedInput(arrays, None)
+        retained = example(shared, 1)
+        self.assertIsNone(shared._values)
+        frame[:] = bytes(len(frame))
+        for key in keys:
+            torch.testing.assert_close(retained[key], row[key], atol=0, rtol=0)
+        saved = BytesIO()
+        torch.save(retained, saved)
+        saved.seek(0)
+        restored = torch.load(saved, weights_only=True)
+        for key in retained:
+            torch.testing.assert_close(restored[key], retained[key], atol=0, rtol=0)
+
     def test_shared_ring_retires_growth_instead_of_accumulating_descriptors(self):
         frames = FrameBuffer()
         try:
@@ -349,6 +523,130 @@ class ProcessTests(unittest.TestCase):
                 owner.close()
             self.assertFalse(owner.segments)
             self.assertTrue(all(not process.is_alive() for process in owner.workers))
+
+    def test_worker_collector_preserves_reservoir_labels_and_owned_samples(self):
+        from haojie_training.console.memory import ExampleCollector, Trajectory
+
+        def collector():
+            return ExampleCollector(
+                Trajectory(7, capacity=16, context={"task": 7}),
+                ["a" * 64] * 2,
+                "a" * 64,
+                True,
+                True,
+            )
+
+        def collect(client, receive, local=None, owner=None):
+            version, generation, requests = "v1", 1, 0
+            request = self.request()
+            if owner is not None:
+                owner.collection_version((version, generation))
+                request["_collector"] = collector()
+            client.send(request)
+            while True:
+                message = receive()
+                if message["type"] == "done":
+                    self.assertFalse(message["outcome"]["terminated"])
+                    self.assertIsNone(message["outcome"]["returns"])
+                    return (
+                        local.trajectory
+                        if local is not None
+                        else pickle.loads(message.pop("_collected_trajectory")),
+                        requests,
+                    )
+                if message["type"] == "example":
+                    self.assertIsNotNone(local, "入选与丢弃样本仍逐条回传到主进程")
+                    local.add(message, version, generation)
+                else:
+                    self.assertEqual(message["type"], "infer")
+                    if message["commandIndex"] >= 1 and generation == 1:
+                        version, generation = "v2", 2
+                        if owner is not None:
+                            owner.collection_version((version, generation))
+                    client.send(
+                        {
+                            "id": message["id"],
+                            "model": message["model"],
+                            "logits": np.linspace(-3, 3, message["candidates"], dtype=np.float32),
+                        }
+                    )
+                    requests += 1
+                client.release(message)
+
+        with Client(self.engine, arrays=True) as client:
+            expected, expected_requests = collect(client, client.receive, local=collector())
+        events = queue.Queue(maxsize=4)
+        owner = InputProcesses(self.engine, 1, 1, events, 4 * 2**20)
+        try:
+            client = owner.client(0, 0)
+
+            def receive():
+                identity, raw = events.get(timeout=30)
+                self.assertEqual(identity, (0, 0))
+                return client.checked(raw)
+
+            actual, requests = collect(client, receive, owner=owner)
+        finally:
+            owner.close()
+        self.assertEqual(requests, expected_requests)
+        self.assertEqual(actual.rng.getstate(), expected.rng.getstate())
+        for name in ("seen", "eligible", "oversize", "used", "coverage"):
+            self.assertEqual(getattr(actual, name), getattr(expected, name), name)
+        self.assertGreater(len(actual.rows), 0)
+        for (row, *tail), (reference, *expected_tail) in zip(
+            actual.rows, expected.rows, strict=True
+        ):
+            self.assertEqual(tail, expected_tail)
+            for key in row:
+                if key != "_meta":
+                    torch.testing.assert_close(row[key], reference[key], atol=0, rtol=0)
+            metadata, expected_metadata = dict(row["_meta"]), dict(reference["_meta"])
+            metadata.pop("entered")
+            expected_metadata.pop("entered")
+            self.assertEqual(metadata, expected_metadata)
+        self.assertTrue(all(not row[0]["value_mask"].item() for row in actual.rows))
+
+    @unittest.skipIf(os.name == "nt", "Windows 保留原阻塞读取后端")
+    def test_one_loop_preserves_protocol_with_idle_slot_and_descriptor_replacement(self):
+        with Client(self.engine, arrays=True) as client:
+            expected = self.run_protocol(client, client.receive, binary=True)
+        loop, clients = ReadLoop(), []
+        try:
+            clients = [Client(self.engine, arrays=True, read_loop=loop) for _ in range(2)]
+            for client in clients:
+                self.assertEqual(self.run_protocol(client, client.receive, binary=True), expected)
+            clients[0].close()
+            clients[0] = Client(self.engine, arrays=True, read_loop=loop)
+            self.assertEqual(
+                self.run_protocol(clients[0], clients[0].receive, binary=True), expected
+            )
+        finally:
+            for client in clients:
+                client.close()
+            loop.close()
+        self.assertFalse(loop.tasks or loop.thread.is_alive())
+
+    @unittest.skipIf(os.name == "nt", "Windows 保留原阻塞读取后端")
+    def test_full_async_queue_does_not_block_closing_other_slots(self):
+        loop, clients = ReadLoop(), []
+        events = queue.Queue(maxsize=1)
+        try:
+            clients = [
+                Client(self.engine, arrays=True, events=events, identity=(slot, 0), read_loop=loop)
+                for slot in range(2)
+            ]
+            for client in clients:
+                client.send(self.request())
+            # 满队列在关闭期间保持未消费；其他协程仍须能处理取消。
+            first = events.get(timeout=30)
+            events.put(first)
+            for client in clients:
+                client.close()
+        finally:
+            for client in clients:
+                client.close()
+            loop.close()
+        self.assertFalse(loop.tasks or loop.thread.is_alive())
 
     def test_inflight_cancel_and_resource_restart(self):
         events = queue.Queue(maxsize=2)

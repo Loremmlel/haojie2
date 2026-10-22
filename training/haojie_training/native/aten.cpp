@@ -1,6 +1,10 @@
-// 只把原紧凑主干的 ATen 发射循环移到 C++；参数、精度与每层算子顺序均由调用方提供。
+// 原网络的紧凑执行：直接引用参数，保留层次和精度，只合并等价的算子计算。
 #include <ATen/Functions.h>
+#include <ATen/autocast_mode.h>
+#include <ATen/core/grad_mode.h>
+#include <ATen/ops/from_blob.h>
 #include <torch/library.h>
+#include <c10/core/DeviceGuard.h>
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
@@ -92,7 +96,7 @@ pack(at::IntArrayRef addresses, at::IntArrayRef entities, at::IntArrayRef action
               "invalid packed frame descriptors");
   std::vector<PackedRow> rows;
   int64_t tokens = 0, reads = 0, active_count = 0, max_k = 0, max_q = 0, max_active = 0;
-  int64_t max_actions = 0, total_actions = 0;
+  int64_t max_actions = 0, total_actions = 0, scored_actions = 0;
   for (int64_t index = 0; index < size; ++index) {
     TORCH_CHECK(addresses[index] > 0 && entities[index] > 0 && actions[index] > 0,
                 "invalid packed frame shape");
@@ -120,7 +124,8 @@ pack(at::IntArrayRef addresses, at::IntArrayRef entities, at::IntArrayRef action
     row.positions.push_back(0);
     for (const auto* pointers : {row.sources, row.targets}) {
       for (int64_t action = 0; action < row.actions; ++action)
-        row.positions.push_back(row.remap[pointers[action] + 1]);
+        if (row.candidate_mask[action])
+          row.positions.push_back(row.remap[pointers[action] + 1]);
     }
     std::sort(row.positions.begin(), row.positions.end());
     row.positions.erase(std::unique(row.positions.begin(), row.positions.end()), row.positions.end());
@@ -157,13 +162,14 @@ pack(at::IntArrayRef addresses, at::IntArrayRef entities, at::IntArrayRef action
     max_active = std::max(max_active, int64_t(row.active.size()));
     max_actions = std::max(max_actions, row.actions);
     total_actions += row.actions;
+    scored_actions += std::count(row.candidate_mask, row.candidate_mask + row.actions, true);
     rows.push_back(std::move(row));
   }
   TORCH_CHECK(tokens <= std::numeric_limits<int32_t>::max(), "packed token index overflow");
   const std::vector<std::vector<int64_t>> shapes = {
       {tokens,64}, {tokens}, {size,32}, {size}, {size+1}, {size+1}, {size+1},
-      {reads}, {active_count}, {size,max_q}, {size,max_actions}, {size,max_actions},
-      {size,max_actions,64}, {size,max_actions}, {total_actions}};
+      {reads}, {active_count}, {scored_actions}, {scored_actions}, {scored_actions},
+      {scored_actions,64}, {size,max_actions}, {scored_actions}};
   const std::vector<at::ScalarType> types = {
       at::kFloat, at::kLong, at::kFloat, at::kLong, at::kInt, at::kInt, at::kInt,
       at::kLong, at::kLong, at::kLong, at::kLong, at::kLong, at::kFloat, at::kBool, at::kLong};
@@ -177,9 +183,6 @@ pack(at::IntArrayRef addresses, at::IntArrayRef entities, at::IntArrayRef action
     storage.push_back(buffer);
     batch.push_back(buffer.narrow(0, 0, count).view(shapes[key]));
   }
-  batch[10].fill_(-1);
-  batch[11].fill_(-1);
-  batch[12].zero_();
   batch[13].zero_();
   int64_t start = 0, qstart = 0, astart = 0, candidate_start = 0;
   batch[4].data_ptr<int32_t>()[0] = 0;
@@ -201,25 +204,71 @@ pack(at::IntArrayRef addresses, at::IntArrayRef entities, at::IntArrayRef action
       batch[7].data_ptr<int64_t>()[qstart + query] = row.positions[query] + start;
     for (size_t entity = 0; entity < row.active.size(); ++entity)
       batch[8].data_ptr<int64_t>()[astart + entity] = row.active[entity] + start;
-    auto* head = batch[9].data_ptr<int64_t>() + index * max_q;
-    std::fill_n(head, max_q, qstart);
-    for (size_t query = 0; query < row.positions.size(); ++query) head[query] = qstart + query;
     for (int64_t action = 0; action < row.actions; ++action) {
-      batch[14].data_ptr<int64_t>()[candidate_start + action] = index * max_actions + action;
-      batch[10].data_ptr<int64_t>()[index * max_actions + action] = row.inverse[1 + action] - 1;
-      batch[11].data_ptr<int64_t>()[index * max_actions + action] = row.inverse[1 + row.actions + action] - 1;
+      // 校验覆盖原帧全部行；仅将实际评分项和已算好的读出索引上传 GPU。
+      if (!row.candidate_mask[action]) continue;
+      batch[9].data_ptr<int64_t>()[candidate_start] = qstart;
+      batch[10].data_ptr<int64_t>()[candidate_start] = qstart + row.inverse[1 + action];
+      batch[11].data_ptr<int64_t>()[candidate_start] = qstart + row.inverse[1 + row.actions + action];
+      std::memcpy(batch[12].data_ptr<float>() + candidate_start * 64,
+                  row.candidates + action * 64, 64 * sizeof(float));
+      batch[14].data_ptr<int64_t>()[candidate_start++] = index * max_actions + action;
     }
-    std::memcpy(batch[12].data_ptr<float>() + index * max_actions * 64, row.candidates, row.actions * 64 * sizeof(float));
     std::memcpy(batch[13].data_ptr<bool>() + index * max_actions, row.candidate_mask, row.actions * sizeof(bool));
     start += row.valid.size() + 1;
     qstart += row.positions.size();
     astart += row.active.size();
-    candidate_start += row.actions;
     batch[4].data_ptr<int32_t>()[index + 1] = start;
     batch[5].data_ptr<int32_t>()[index + 1] = qstart;
     batch[6].data_ptr<int32_t>()[index + 1] = astart;
   }
   return {storage, batch, {max_k,max_q,max_active,size,tokens-size,total_actions,size*max_actions}};
+}
+
+at::Tensor linear_gelu(const at::Tensor& input, const at::Tensor& weight,
+                       const at::Tensor& bias, bool fused) {
+  if (fused && input.is_cuda() && at::autocast::is_autocast_enabled(at::kCUDA) &&
+      at::autocast::get_autocast_dtype(at::kCUDA) == at::kBFloat16) {
+    // CUDA 的融合算子同样使用 tanh GELU，沿用原 AMP 的 BF16 权重缓存。
+    auto values = at::autocast::cached_cast(at::kBFloat16, input);
+    auto matrix = at::autocast::cached_cast(at::kBFloat16, weight);
+    auto offset = at::autocast::cached_cast(at::kBFloat16, bias);
+    c10::impl::ExcludeDispatchKeyGuard guard(c10::DispatchKey::AutocastCUDA);
+    return at::_addmm_activation(offset, values, matrix.t(), 1, 1, true);
+  }
+  return at::gelu(at::linear(input, weight, bias), "tanh");
+}
+
+std::tuple<at::Tensor, at::Tensor> add_norm(
+    const at::Tensor& residual, const at::Tensor& added,
+    const at::Tensor& weight, const at::Tensor& bias, double epsilon,
+    int64_t kernel, int64_t launch, int64_t stream) {
+  if (kernel && launch && !at::GradMode::is_enabled() && residual.is_cuda() &&
+      residual.scalar_type() == at::kFloat && residual.dim() == 2 && residual.size(0) > 0 &&
+      added.scalar_type() == at::kBFloat16 && residual.size(1) == 384 &&
+      residual.sizes() == added.sizes() && residual.device() == added.device() &&
+      weight.device() == residual.device() && bias.device() == residual.device() &&
+      weight.scalar_type() == at::kFloat && bias.scalar_type() == at::kFloat &&
+      weight.dim() == 1 && bias.dim() == 1 && weight.numel() == 384 && bias.numel() == 384 &&
+      residual.is_contiguous() && added.is_contiguous() && weight.is_contiguous() && bias.is_contiguous()) {
+    const c10::DeviceGuard device_guard(residual.device());
+    auto updated = at::empty_like(residual), normalized = at::empty_like(residual);
+    const void *input = residual.data_ptr(), *skip = added.data_ptr();
+    const void *gamma = weight.data_ptr(), *beta = bias.data_ptr();
+    void *sum = updated.data_ptr(), *output = normalized.data_ptr();
+    float eps = epsilon;
+    void* arguments[] = {&input, &skip, &gamma, &beta, &sum, &output, &eps};
+    using Launch = int (*)(void*, unsigned int, unsigned int, unsigned int,
+                           unsigned int, unsigned int, unsigned int, unsigned int,
+                           void*, void**, void**);
+    const auto error = reinterpret_cast<Launch>(launch)(
+        reinterpret_cast<void*>(kernel), residual.size(0), 1, 1, 128, 1, 1, 0,
+        reinterpret_cast<void*>(stream), arguments, nullptr);
+    TORCH_CHECK(error == 0, "residual LayerNorm launch failed: ", error);
+    return {updated, normalized};
+  }
+  auto updated = at::add(residual, added);
+  return {updated, at::layer_norm(updated, {weight.numel()}, weight, bias, epsilon)};
 }
 
 at::Tensor packed_encode(
@@ -228,7 +277,8 @@ at::Tensor packed_encode(
     int64_t heads,
     int64_t history_layers,
     at::IntArrayRef maxima,
-    at::ArrayRef<double> epsilon) {
+    at::ArrayRef<double> epsilon,
+    bool flash, bool fused, int64_t kernel, int64_t launch, int64_t stream) {
   TORCH_CHECK(input.size() == 9 && weights.size() >= 19 &&
                   (weights.size() - 7) % 12 == 0,
               "invalid packed encoder arguments");
@@ -254,15 +304,26 @@ at::Tensor packed_encode(
     const auto positions = input[last ? 7 : 8];
     auto q = sparse ? qkv[0].index_select(0, positions) : qkv[0];
     auto residual = sparse ? x.index_select(0, positions) : x;
-    auto result = at::_efficient_attention_forward(
-        q.unsqueeze(0), qkv[1].unsqueeze(0), qkv[2].unsqueeze(0),
-        std::nullopt, input[query == 0 ? 4 : query == 1 ? 5 : 6], input[4],
-        maxima[query], maxima[0], 0.0, 0, false);
-    auto attended = std::get<0>(result).squeeze(0).reshape({-1, width});
-    auto updated = at::add(residual, at::linear(attended, weights[base + 4], weights[base + 5]));
-    normalized = at::layer_norm(
-        updated, {width}, weights[base + 6], weights[base + 7], epsilon[index * 2 + 1]);
-    auto hidden = at::gelu(at::linear(normalized, weights[base + 8], weights[base + 9]), "tanh");
+    at::Tensor attended;
+    if (flash && q.scalar_type() == at::kBFloat16) {
+      // 沿用 Torch jagged SDPA 的变长 Flash 路径；查询集合和完整 K/V 边界不变。
+      auto result = at::_flash_attention_forward(
+          q, qkv[1], qkv[2], input[query == 0 ? 4 : query == 1 ? 5 : 6], input[4],
+          maxima[query], maxima[0], 0.0, false, false);
+      attended = std::get<0>(result).reshape({-1, width});
+    } else {
+      auto result = at::_efficient_attention_forward(
+          q.unsqueeze(0), qkv[1].unsqueeze(0), qkv[2].unsqueeze(0),
+          std::nullopt, input[query == 0 ? 4 : query == 1 ? 5 : 6], input[4],
+          maxima[query], maxima[0], 0.0, 0, false);
+      attended = std::get<0>(result).squeeze(0).reshape({-1, width});
+    }
+    at::Tensor updated;
+    std::tie(updated, normalized) = add_norm(
+        residual, at::linear(attended, weights[base + 4], weights[base + 5]),
+        weights[base + 6], weights[base + 7], epsilon[index * 2 + 1],
+        fused ? kernel : 0, launch, stream);
+    auto hidden = linear_gelu(normalized, weights[base + 8], weights[base + 9], fused);
     updated = at::add(updated, at::linear(hidden, weights[base + 10], weights[base + 11]));
     x = sparse && !last ? x.index_copy(0, positions, updated) : updated;
   }
@@ -271,33 +332,69 @@ at::Tensor packed_encode(
 }
 
 at::Tensor packed_score(at::Tensor x, at::TensorList input, at::TensorList weights,
-                        double epsilon) {
-  // 仅省去跨局补齐的候选行；每个原始候选仍经过相同投影、评分与最终遮罩。
+                        double epsilon, bool factored, bool fused) {
+  // 未遮罩候选使用原投影与评分；补齐和已遮罩行直接保留原来的 -1e9 输出。
   TORCH_CHECK(input.size() == 6 && weights.size() == 10, "invalid packed policy arguments");
-  const auto size = input[1].size(0), actions = input[1].size(1), width = x.size(1);
+  const auto size = input[4].size(0), actions = input[4].size(1), width = x.size(1);
   const auto positions = input[5];
-  const auto rows = at::floor_divide(positions, actions);
-  const auto starts = at::mul(rows, input[0].size(1));
-  const auto heads = input[0].reshape({-1});
-  auto context = x.index_select(0, heads.index_select(0, starts));
-  auto sources = x.index_select(0, heads.index_select(
-      0, at::add(at::add(starts, input[1].reshape({-1}).index_select(0, positions)), 1)));
-  auto targets = x.index_select(0, heads.index_select(
-      0, at::add(at::add(starts, input[2].reshape({-1}).index_select(0, positions)), 1)));
-  auto candidates = input[3].reshape({-1, 64}).index_select(0, positions);
-  auto projected = at::gelu(at::linear(candidates, weights[0], weights[1]), "tanh");
+  const auto context = input[0], sources = input[1], targets = input[2], candidates = input[3];
+  auto projected = linear_gelu(candidates, weights[0], weights[1], fused);
   projected = at::layer_norm(projected, {width}, weights[2], weights[3], epsilon);
-  auto output = at::cat(std::vector<at::Tensor>{context, sources, targets, projected}, -1);
-  output = at::gelu(at::linear(output, weights[4], weights[5]), "tanh");
-  output = at::gelu(at::linear(output, weights[6], weights[7]), "tanh");
+  at::Tensor output;
+  if (factored && projected.scalar_type() == at::kBFloat16 && positions.numel() >= 4 * x.size(0)) {
+    // 同一实体在线性层的三段投影先算一次，再按原候选索引读取；不缓存跨前向表示。
+    auto weight = at::autocast::cached_cast(at::kBFloat16, weights[4]);
+    auto bias = at::autocast::cached_cast(at::kBFloat16, weights[5]);
+    auto values = x.to(at::kBFloat16);
+    {
+      c10::impl::ExcludeDispatchKeyGuard guard(c10::DispatchKey::AutocastCUDA);
+      auto component = [&](int64_t part) {
+        return at::mm(values, weight.narrow(1, part * width, width).t(), at::kFloat);
+      };
+      output = at::add(component(0).index_select(0, context), component(1).index_select(0, sources));
+      output.add_(component(2).index_select(0, targets));
+      output.add_(at::mm(projected, weight.narrow(1, 3 * width, width).t(), at::kFloat));
+      output.add_(bias.to(at::kFloat));
+      output = output.to(at::kBFloat16);
+    }
+    output = at::gelu(output, "tanh");
+  } else {
+    output = at::cat(std::vector<at::Tensor>{x.index_select(0, context),
+        x.index_select(0, sources), x.index_select(0, targets), projected}, -1);
+    output = linear_gelu(output, weights[4], weights[5], fused);
+  }
+  output = linear_gelu(output, weights[6], weights[7], fused);
   output = at::linear(output, weights[8], weights[9]).reshape({-1}).to(at::kFloat);
   auto logits = at::full({size * actions}, -1e9, output.options());
   logits.index_copy_(0, positions, output);
-  return logits.view({size, actions}).masked_fill(input[4].logical_not(), -1e9);
+  return logits.view({size, actions});
+}
+
+std::vector<at::Tensor> input_views(at::Tensor bytes, int64_t entities, int64_t candidates) {
+  TORCH_CHECK(bytes.device().is_cpu() && bytes.scalar_type() == at::kByte &&
+                  bytes.dim() == 1 && bytes.is_contiguous() && entities > 0 && candidates > 0 &&
+                  bytes.numel() == entities * 265 + candidates * 273 + 128,
+              "invalid owned input frame");
+  int64_t offset = 0;
+  auto field = [&](at::ScalarType type, at::IntArrayRef shape) {
+    // 各字段独立 Storage，共同持有整帧所有者；允许按原格式序列化不同 dtype。
+    auto tensor = at::from_blob(bytes.data_ptr<uint8_t>() + offset, shape,
+        [owner = bytes](void*) {}, bytes.options().dtype(type));
+    offset += tensor.nbytes();
+    return tensor;
+  };
+  return {field(at::kFloat, {entities,64}), field(at::kFloat, {32}),
+          field(at::kFloat, {candidates,64}), field(at::kLong, {entities}),
+          field(at::kLong, {candidates}), field(at::kLong, {candidates}),
+          field(at::kBool, {entities}), field(at::kBool, {candidates})};
 }
 
 TORCH_LIBRARY(haojie, library) {
-  library.def("packed_score(Tensor encoded, Tensor[] input, Tensor[] weights, float epsilon) -> Tensor");
+  library.def("add_norm(Tensor residual, Tensor added, Tensor weight, Tensor bias, float epsilon, int kernel=0, int launch=0, int stream=0) -> (Tensor, Tensor)");
+  library.impl("add_norm", c10::DispatchKey::CompositeImplicitAutograd, TORCH_FN(add_norm));
+  library.def("input_views(Tensor bytes, int entities, int candidates) -> Tensor[]");
+  library.impl("input_views", c10::DispatchKey::CompositeExplicitAutograd, TORCH_FN(input_views));
+  library.def("packed_score(Tensor encoded, Tensor[] input, Tensor[] weights, float epsilon, bool factored=False, bool fused=False) -> Tensor");
   library.impl("packed_score", c10::DispatchKey::CompositeImplicitAutograd,
                TORCH_FN(packed_score));
   library.def(
@@ -306,7 +403,8 @@ TORCH_LIBRARY(haojie, library) {
   library.impl("pack", c10::DispatchKey::CompositeExplicitAutograd, TORCH_FN(pack));
   library.def(
       "packed_encode(Tensor[] input, Tensor[] weights, int heads, int history_layers, "
-      "int[] maxima, float[] epsilon) -> Tensor");
+      "int[] maxima, float[] epsilon, bool flash=False, bool fused=False, "
+      "int kernel=0, int launch=0, int stream=0) -> Tensor");
   library.impl("packed_encode", c10::DispatchKey::CompositeImplicitAutograd,
                TORCH_FN(packed_encode));
 }

@@ -18,7 +18,11 @@ Windows 程序为 `artifacts/native-target/release/haojie-engine.exe`，Linux �
 
 ## CUDA 的 C++ 输入拼装与算子调度
 
-正式模型的紧凑推理将输入拼装、主干及候选评分的 ATen 调用放到 C++，复用同一组权重、AMP 和 CUDA 算子。读取线程只交付公开帧和所有权，C++ 在批量拼装时统一检查数值、词表和指针边界，再写入复用的 pinned 缓冲。数组视图等到 Python 实际需要时才创建。候选评分只计算各局原本存在的候选行，随后还原原输出布局和遮罩，省去跨局补齐行的矩阵计算。双缓冲忙时继续收集就绪请求，再统一组批。模型结构、特征、MC-Q 目标和优化器保持原定义。
+正式模型的紧凑推理将输入拼装、主干及候选评分的 ATen 调用放到 C++，复用同一组权重、AMP 和 CUDA 算子。读取端只交付公开帧和所有权，C++ 在批量拼装时统一检查数值、词表和指针边界，再写入复用的 pinned 缓冲。数组视图等到 Python 实际需要时才创建。有效候选的特征和最终读出索引在 CPU 压紧后上传，评分再写回原来的候选位置；补齐及已遮罩项保持 `-1e9`。末层查询只保留全局及有效候选引用，前层交互和完整 K/V 保留。双缓冲忙时继续收集就绪请求，再统一组批。模型结构、特征、MC-Q 目标和优化器保持原定义。
+
+支持的 BF16 紧凑路径使用变长 Flash Attention，以及 CUDA 矩阵乘法与 tanh GELU 融合；参数继续引用原网络，FP32 沿用原算子。融合对应 Torch 2.14 的 [`_addmm_activation` CUDA 定义](https://github.com/pytorch/pytorch/blob/v2.14.0/torch/_decomp/decompositions.py)和 [cuBLAS GELU 公式](https://docs.nvidia.com/cuda/cublas/index.html#cublasltepilogue-t)。数值回归覆盖原网络、变长序列、两种注意力内核、融合开关及更新后的权重。
+
+注意力输出的残差加法与前馈输入 LayerNorm 合用一个 CUDA 内核，继续输出 FP32 残差和归一化结果，使用原权重及 epsilon。该内核通过 Torch 随带的 NVRTC 编译，无须额外安装 CUDA toolkit；需要梯度、布局不适用或编译不可用时沿用原 ATen 算子。`normalization_backend` 和 `normalization_compile_error` 记录实际后端及可选编译诊断，训练模型与优化器继续使用原路径。
 
 Colab 安装脚本在 CUDA 检查后自动编译。已有 Linux/WSL CUDA 环境在仓库根执行一次（需要系统 C++ 编译器，无须 nvcc）：
 
@@ -31,7 +35,9 @@ python -m haojie_training.native.aten
 
 整批二进制评分在一次 C++ 调用中写回 Rust，避免 Python 逐条写管道的 GIL 切换；JSON 控制头、身份和 FP32 评分字节保持协议定义。32 个及以上环境的 C++ 采样窗口将 Python 线程切换间隔收紧到至多 0.5 毫秒，排空推理后恢复宿主原值，更新和保存不沿用该调整。
 
-当前默认仍为线程输入；独立输入进程接收、解析并共享原帧，C++ 路径不再在输入进程重复准备索引。每槽两块缓冲在扩容且旧租约归还后立即释放旧映射，并通知父进程关闭旧句柄；映射数量不随扩容次数累积。状态另列 `input_layout`、`policy_layout`、`python_switch_ms` 和共享映射当前/峰值数量。进程数量按目标机器实际终局吞吐选择，见 [Colab 配置](COLAB.md#服务器配置与测量)。
+默认输入仍在主进程内处理；Linux 管道共用一个 asyncio 读取线程，以 `readv` 直接读入独占帧或共享槽，Windows 保留逐槽阻塞读取。独立输入进程接收、解析并共享原帧，在同一个任务收集器中完成身份核对与蓄水；主进程只接收推理、计数及完成的轨迹。蓄水先保留独立原帧，真实终局时才为最终入选行构造训练张量，随机选择、覆盖统计和内存计账保持原流程。每槽两块缓冲在扩容且旧租约归还后立即释放旧映射，并通知父进程关闭旧句柄；映射数量不随扩容次数累积。状态另列 `read_backend`、`input_layout`、`policy_layout`、`mean_entities`、`mean_scored_candidates`、`python_switch_ms` 和共享映射当前/峰值数量。进程数量按目标机器实际终局吞吐选择，见 [Colab 配置](COLAB.md#服务器配置与测量)。
+
+`HAOJIE_LAUNCH_WORKERS=0|1|2` 可选择在常驻线程中发射 CUDA 工作，默认 0；诊断入口对应 `--launch-workers`。额外发射线程各自持有流，在窗口内共享已预热的 AMP 权重缓存，排空后才允许更新。该配置与 CPU 输入进程数独立，按目标设备的实际终局吞吐单独选择。
 
 ## 原生协议与旧记录
 

@@ -1,8 +1,10 @@
 """CPU 输入进程分摊协议与索引准备；共享槽在显式归还前不可覆盖，GPU 仍由主进程独占。"""
 
+import asyncio
 import math
 import multiprocessing as mp
 import os
+import pickle
 import queue
 import threading
 import time
@@ -14,6 +16,45 @@ import torch
 
 from .client import ArrayInput, Client, array_views, send_many
 from .packed import prepare_row
+
+
+class ReadLoop:
+    """Linux 管道共用一个事件循环，避免每个环境的阻塞读线程争抢 GIL。"""
+
+    def __init__(self):
+        self.loop, self.tasks = asyncio.new_event_loop(), {}
+        self.thread = threading.Thread(target=self.run, name="haojie-input", daemon=True)
+        self.thread.start()
+
+    def run(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+        self.loop.close()
+
+    def add(self, client):
+        async def register():
+            self.tasks[client] = asyncio.create_task(client._read_async())
+
+        asyncio.run_coroutine_threadsafe(register(), self.loop).result(timeout=10)
+
+    def remove(self, client):
+        async def unregister():
+            task = self.tasks.pop(client, None)
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run_coroutine_threadsafe(unregister(), self.loop).result(timeout=10)
+
+    def close(self):
+        if not self.loop.is_closed():
+            for client in list(self.tasks):
+                self.remove(client)
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self.thread.join(timeout=2)
 
 
 def worker_count(environments, device="cpu"):
@@ -88,6 +129,14 @@ class FrameBuffer:
             offset += values.nbytes
         return descriptors, prepared[-1]
 
+    async def acquire_async(self, size):
+        while True:
+            with self.condition:
+                segment = self.ring[self.index]
+                if self.stopped or segment is None or not self.references.get(segment.name, 0):
+                    return self.acquire(size)
+            await asyncio.sleep(0.001)
+
     def retain(self):
         with self.condition:
             self.serial += 1
@@ -118,15 +167,31 @@ class FrameBuffer:
 
 
 def _worker(executable, slots, commands, events, frame_limit, prepare_inputs, defer_validation):
-    """spawn 不继承 CUDA 上下文；每个引擎仍有独立读线程，阻塞 I/O 不占其他槽。"""
+    """spawn 不继承 CUDA 上下文；Linux 合并管道读取，Windows 保留原槽位读线程。"""
     torch.set_num_threads(1)
-    clients, buffers, closed = {}, {}, {}
+    clients, buffers, closed, collectors = {}, {}, {}, {}
+    behavior = (None, None)
+    read_loop = ReadLoop() if os.name != "nt" else None
 
     class Publisher:
-        def put(self, value, timeout):
+        def outgoing(self, value):
             identity, message = value
             slot, _ = identity
             started = time.perf_counter()
+            collector = collectors.get(slot)
+            if collector is not None and isinstance(message, dict):
+                if message.get("type") == "example":
+                    # 原帧来自可复用共享槽；只有蓄水入选的样本才独立复制。
+                    message["input"].shared = True
+                    collector.add(message, *behavior)
+                    return None
+                if message.get("type") == "infer":
+                    message["_trajectory_progress"] = collector.progress()
+                elif message.get("type") == "done":
+                    message["_collected_trajectory"] = pickle.dumps(
+                        collector.trajectory, protocol=5
+                    )
+                    collectors.pop(slot)
             if isinstance(message, dict) and "input" in message:
                 message = dict(message)
                 inputs = message.pop("input")
@@ -140,6 +205,13 @@ def _worker(executable, slots, commands, events, frame_limit, prepare_inputs, de
             client = clients[slot]
             metrics = (client.read_seconds, client.decode_seconds, client.tensor_bytes)
             outgoing = ("event", identity, message, metrics, time.perf_counter() - started)
+            return slot, outgoing
+
+        def put(self, value, timeout):
+            prepared = self.outgoing(value)
+            if prepared is None:
+                return
+            slot, outgoing = prepared
             while not closed[slot].is_set():
                 try:
                     events.put(outgoing, timeout=0.1)
@@ -147,10 +219,23 @@ def _worker(executable, slots, commands, events, frame_limit, prepare_inputs, de
                 except queue.Full:
                     pass
 
+        async def put_async(self, value):
+            prepared = self.outgoing(value)
+            if prepared is None:
+                return
+            slot, outgoing = prepared
+            while not closed[slot].is_set():
+                try:
+                    events.put_nowait(outgoing)
+                    return
+                except queue.Full:
+                    await asyncio.sleep(0.001)
+
     def close(slot):
         closed[slot].set()
         buffers[slot].stop()
         clients[slot].close()
+        collectors.pop(slot, None)
         del clients[slot]
         buffers.pop(slot).close()
 
@@ -164,7 +249,9 @@ def _worker(executable, slots, commands, events, frame_limit, prepare_inputs, de
             arrays=True,
             frame_limit=frame_limit,
             buffer_factory=buffers[slot].acquire,
+            buffer_factory_async=buffers[slot].acquire_async,
             defer_validation=defer_validation,
+            read_loop=read_loop,
         )
         clients[slot] = client
         events.put(("ready", slot, client.ready, client.process.pid))
@@ -177,7 +264,11 @@ def _worker(executable, slots, commands, events, frame_limit, prepare_inputs, de
             if operation == "stop":
                 break
             if operation == "send":
+                if value.get("op") == "sample":
+                    collectors[slot] = value.pop("_collector", None)
                 clients[slot].send(value)
+            elif operation == "behavior":
+                behavior = value
             elif operation == "responses":
                 send_many([(clients[target], response) for target, response, _ in value])
                 for target, response, lease in value:
@@ -193,6 +284,8 @@ def _worker(executable, slots, commands, events, frame_limit, prepare_inputs, de
     finally:
         for slot in list(clients):
             close(slot)
+        if read_loop is not None:
+            read_loop.close()
         commands.close()
         # 父进程关闭时不等待尚未消费的诊断消息；大张量从不进入此队列。
         events.cancel_join_thread()
@@ -347,6 +440,11 @@ class InputProcesses:
         index = self.routes[slot]
         with self.locks[index]:
             self.commands[index].send((operation, slot, value))
+
+    def collection_version(self, value):
+        for sender, lock in zip(self.commands, self.locks):
+            with lock:
+                sender.send(("behavior", 0, value))
 
     def respond(self, responses):
         """同一模型批次按 CPU 进程合并回传与归还，避免每条评分两次 IPC。"""
