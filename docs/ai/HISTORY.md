@@ -12,6 +12,8 @@
 | 早期训练路线与逐轮实验进度                       | [历史进度](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)                                                                                              |
 | 已执行的本地产物回收范围                         | [2026-10-03 记录](https://github.com/Loremmlel/haojie2/blob/d920e181dccb425c0a77d57b473fb98f45163b69/docs/maintenance/CLEANUP-2026-10-03.md)                                                                                     |
 | 早期 UI 工程选型                                 | [2.0.1 工程记录](https://github.com/Loremmlel/haojie2/blob/d920e181dccb425c0a77d57b473fb98f45163b69/docs/ENGINEERING.md)                                                                                                         |
+| 2026-10-21 规则引擎采样优化                      | [收束记录](https://github.com/Loremmlel/haojie2/blob/e91856fde94075c0f18e1ba8789d34d697ee8c49/docs/ai/experiments/ENGINE-SAMPLING-2026-10-21.md)                                                                                 |
+| 独立流水线前的训练性能与已撤回实验               | [阶段测量](https://github.com/Loremmlel/haojie2/blob/e91856fde94075c0f18e1ba8789d34d697ee8c49/training/PERFORMANCE.md)                                                                                                           |
 
 作者[原始 AI 实战观察](AI-HARD-PLAYTEST-2026-09-07.md)、[规则反馈](../feedback/)和版本对应的 `docs/playtests/` 回放保留原内容。历史回放使用各自原规则提交验证，当前规则回放在 `docs/playtests/current/`。模型、原始轨迹、优化器和其他本地产物由使用者保管，文档清理不会删除它们。
 

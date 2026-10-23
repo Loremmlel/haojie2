@@ -58,16 +58,17 @@ v3 减少了未被候选引用的亡者和较早日志自身反复更新的深�
 
 控制台和云端以 `decomposed-mc-q-v2` 让真实终局收益监督实际分解选择。旧记录和教师轨迹按各自的方法及来源处理；共享原生支持与记录审核边界见 [NATIVE.md](NATIVE.md)。
 
-| 模块                                     | 职责                                       |
-| ---------------------------------------- | ------------------------------------------ |
-| `console/controller.py`                  | 后台生命周期、阶段切换、控制意图及内存状态 |
-| `console/config.py`                      | 设置默认值、字段和范围校验                 |
-| `console/storage.py`                     | 配额、原子写入、实验目录及恢复点读取校验   |
-| `console/sampling.py` / `memory.py`      | 任务分配、终局样本留存与消费               |
-| `console/evaluation.py` / `opponents.py` | 冻结评测、历史模型和正式教师               |
-| `native/`                                | 引擎进程、二进制帧、内存采样调度及批量推理 |
-| `model.py` / `runtime.py`                | 网络、优化器、设备精度、检查点加载和恢复   |
-| `data.py` / `prepare.py`                 | 张量校验、组批、分片及轨迹转换             |
+| 模块                                     | 职责                                          |
+| ---------------------------------------- | --------------------------------------------- |
+| `console/controller.py`                  | 后台生命周期、阶段切换、控制意图及内存状态    |
+| `console/pipeline.py`                    | 独立采样/推理进程、有界终局交接与冻结权重发布 |
+| `console/config/`                        | 设置默认值、字段和范围校验                    |
+| `console/storage.py`                     | 配额、原子写入、实验目录及恢复点读取校验      |
+| `console/sampling.py` / `memory.py`      | 任务分配、终局样本留存与消费                  |
+| `console/evaluation.py` / `opponents.py` | 冻结评测、历史模型和正式教师                  |
+| `native/`                                | 引擎进程、二进制帧、内存采样调度及批量推理    |
+| `model.py` / `runtime.py`                | 网络、优化器、设备精度、检查点加载和恢复      |
+| `data.py` / `prepare.py`                 | 张量校验、组批、分片及轨迹转换                |
 
 `runtime.read_checkpoint` 一次读取检查点并检查格式及网络版本，各入口继续核对自己的规则、数据或运行条件。`checkpoint_config` 保留为仅读取配置的兼容入口。
 

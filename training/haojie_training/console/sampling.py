@@ -67,6 +67,7 @@ class MemoryJobs:
         self.result = None
         self.resource_failure = None
         self.cancel = None
+        self.remote = None
         # 推理执行器跨训练轮复用；历史对手也计入同一工作池，监控不再读取空统计。
         inference = controller.pool.inference
         inference.model.eval()
@@ -83,12 +84,26 @@ class MemoryJobs:
                 model.eval(), controller.device, stats=inference.stats
             )
 
-    def next_window(self, current, historical):
+    @classmethod
+    def results(cls, controller, remote):
+        """学习进程只接纳终局；沿用同一收益、样本与排错出口，不创建推理模型。"""
+        jobs = cls.__new__(cls)
+        jobs.c, jobs.remote = controller, remote
+        jobs.finished = 0
+        jobs.result = jobs.evaluation = jobs.resource_failure = None
+        jobs.inferences, jobs.root_versions = {}, {}
+        return jobs
+
+    def next_window(self, current, historical, *, snapshot=None):
         """发布独立推理快照；旧根继续持有原权重，历史对手仍按整局冻结。"""
         self.release_unused()
         if self.continuous and current != self.version:
             if len(self.root_versions) < 4:
-                model = deepcopy(self.c.trainer.model).eval().requires_grad_(False)
+                model = (
+                    snapshot
+                    if snapshot is not None
+                    else deepcopy(self.c.trainer.model).eval().requires_grad_(False)
+                )
                 inference = PolicyInference(model, self.c.device, stats=self.c.pool.inference.stats)
                 self.root_versions[current] = (inference, self.c.generation, self.c.trainer.updates)
                 self.inferences[self.current] = self.c.pool.inference = inference
@@ -108,9 +123,11 @@ class MemoryJobs:
                 model.eval(), self.c.device, stats=inference.stats
             )
 
-    def release_unused(self):
+    def release_unused(self, protected=()):
         """只释放没有在途对局或决策根引用的冻结版本。"""
-        used = {model for task in self.c.pool.slots.values() for model in task["models"]}
+        used = {model for task in self.c.pool.slots.values() for model in task["models"]} | set(
+            protected
+        )
         for version in list(self.inferences):
             if version != self.current and version not in used:
                 self.inferences.pop(version).close()
@@ -142,6 +159,8 @@ class MemoryJobs:
         return self.root_versions[version][0] if version else self.inferences[message["model"]]
 
     def publication_metrics(self):
+        if getattr(self, "remote", None) is not None:
+            return self.remote.publication_metrics()
         return {
             "published_model": self.version,
             "root_snapshots": len(self.root_versions),

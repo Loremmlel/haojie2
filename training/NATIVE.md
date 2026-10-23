@@ -35,7 +35,7 @@ python -m haojie_training.native.aten
 
 整批 BF16 二进制评分在一次 C++ 调用中写回 Rust，避免 Python 逐条写管道的 GIL 切换；二进制 v2 协议的浮点字段使用小端 BF16，实体、候选和全局帧分别占 137、145 和 64 字节。32 个及以上环境的 C++ 采样窗口将 Python 线程切换间隔收紧到至多 0.5 毫秒，排空推理后恢复宿主原值，更新和保存不沿用该调整。
 
-默认输入仍在主进程内处理；Linux 管道共用一个 asyncio 读取线程，以 `readv` 直接读入独占帧或共享槽，Windows 保留逐槽阻塞读取。独立输入进程接收、解析并共享原帧，在同一个任务收集器中完成身份核对与蓄水；主进程只接收推理、计数及完成的轨迹。蓄水先保留独立原帧，真实终局时才为最终入选行构造训练张量，随机选择、覆盖统计和内存计账保持原流程。每槽两块缓冲在扩容且旧租约归还后立即释放旧映射，并通知父进程关闭旧句柄；映射数量不随扩容次数累积。状态另列 `read_backend`、`input_layout`、`policy_layout`、`mean_entities`、`mean_scored_candidates`、`python_switch_ms` 和共享映射当前/峰值数量。进程数量按目标机器实际终局吞吐选择，见 [Colab 配置](COLAB.md#服务器配置与测量)。
+CUDA 默认由 `console/pipeline.py` 的常驻进程集中推理，并按 CPU/RAM 配额分配独立输入进程；学习器只接收有界队列中的结案轨迹。Linux 使用 asyncio 与 `readv` 直接读帧，Windows 使用逐槽读取。输入进程完成身份核对和蓄水，采样侧批量校验、拼装原帧并回传评分；真实终局后，学习侧才物化最终入选行。每槽两块共享缓冲在扩容且旧租约归还后释放旧映射，映射数量不随扩容次数累积。状态给出 `sampling_process`、`host_worker_pids`、读帧/布局/批量和共享映射当前/峰值；`--sampling-backend local` 可复用原执行层作诊断对照。配置见 [Colab](COLAB.md#服务器配置与测量)。
 
 `HAOJIE_LAUNCH_WORKERS=0|1|2` 可选择在常驻线程中发射 CUDA 工作，默认 0；诊断入口对应 `--launch-workers`。额外发射线程各自持有流，直接读取同一份 BF16 参数，排空后才允许更新。该配置与 CPU 输入进程数独立，按目标设备的实际终局吞吐单独选择。
 

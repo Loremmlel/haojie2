@@ -63,11 +63,16 @@ def cpu_state(value):
 
 
 def _finite(tensors):
-    """每个设备只取回一次检查结果；CPU 步数不与 GPU 状态混叠。"""
+    """分组最大绝对值捕获 NaN/Inf；避免为每个参数及 Adam 状态发射数个小内核。"""
     checks = defaultdict(list)
     for tensor in tensors:
-        checks[tensor.device].append(torch.isfinite(tensor).all())
-    return all(bool(torch.stack(values).all()) for values in checks.values())
+        if tensor.numel():
+            checks[tensor.device].append(tensor)
+    with torch.no_grad():
+        return all(
+            bool(torch.isfinite(torch.stack(torch._foreach_norm(values, math.inf))).all())
+            for values in checks.values()
+        )
 
 
 class BF16AdamW(torch.optim.Optimizer):

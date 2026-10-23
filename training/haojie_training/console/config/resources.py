@@ -187,8 +187,16 @@ def monitor(controller):
                 "available_ram": available_memory(),
                 "workers": max(0, len(workers) - 1) if current else None,
                 "processes": workers,
-                "gpu_allocated": torch.cuda.memory_allocated(device) if cuda else None,
-                "gpu_reserved": torch.cuda.memory_reserved(device) if cuda else None,
+                "gpu_allocated": (
+                    torch.cuda.memory_allocated(device) + controller.runtime.get("gpu_allocated", 0)
+                )
+                if cuda
+                else None,
+                "gpu_reserved": (
+                    torch.cuda.memory_reserved(device) + controller.runtime.get("gpu_reserved", 0)
+                )
+                if cuda
+                else None,
                 "gpu_utilization": None,
             }
             if cuda and nvml:

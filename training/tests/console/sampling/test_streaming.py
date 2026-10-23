@@ -171,7 +171,7 @@ class StreamingTests(unittest.TestCase):
     def setUpClass(cls):
         torch.set_num_threads(1)
         cls.engine = os.environ["HAOJIE_NATIVE"]
-        root = Path(__file__).resolve().parents[3]
+        root = Path(__file__).resolve().parents[4]
         fixture = root / "tests/fixtures/native/late-starts.json.gz"
         starts = json.loads(
             gzip.decompress(fixture.read_bytes())

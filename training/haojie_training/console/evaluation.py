@@ -84,7 +84,7 @@ class Evaluation:
         began = time.monotonic()
         teacher = None
         historical = None
-        # 评测使用独立进程；训练长局停留在决策根，评测结束后原槽继续。
+        # 评测使用独立环境；训练采样句柄暂时移出控制器，结束后归还原句柄。
         sampling_pool, sampling_jobs, sampling_runtime = c.pool, c.sampling_jobs, c.runtime
         c.pool = c.sampling_jobs = None
         try:

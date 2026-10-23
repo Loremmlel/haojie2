@@ -1,4 +1,4 @@
-"""单一后台控制器拥有训练生命周期；HTTP仅提交意图，GPU阶段串行执行。"""
+"""后台线程拥有学习与保存，独立采样进程持续供给；HTTP 仅提交控制意图。"""
 
 import copy
 import hashlib
@@ -27,20 +27,21 @@ from .config.resources import available_memory, torch_threads
 from .evaluation import evaluate_slice
 from .memory import SamplePool
 from .opponents import ready
+from .pipeline import SamplingPipeline
 from .sampling import MemoryJobs
 from .storage import FORMAT, restore_recovery
 
 
-def identity(model):
+def identity(model, state=None):
     digest = hashlib.sha256()
-    for name, value in cpu_state(model.state_dict()).items():
+    for name, value in (cpu_state(model.state_dict()) if state is None else state).items():
         digest.update(name.encode())
         digest.update(value.contiguous().view(torch.uint8).numpy().tobytes())
     return digest.hexdigest()
 
 
 class Controller:
-    """HTTP 提交运行意图，后台线程串行拥有模型、采样器和检查点提交。
+    """HTTP 提交运行意图；后台线程拥有学习模型、样本池与检查点及采样进程句柄。
 
     暂停通过事件在阶段边界取消，样本池仅保留在内存；恢复和新实验成功后
     才切换持久化身份。设置校验和恢复文件校验分别由 config、storage 负责。
@@ -99,7 +100,9 @@ class Controller:
         self.sampling_jobs = None
         # 生产 MC-Q 使用跨轮对局；固定任务集基准可显式关闭以核对相同轨迹。
         self.continuous_selfplay = True
+        self.sampling_backend = "auto"
         self.version = None
+        self.weight_snapshot = None
         self.meta = None
         self.rng = random.Random(self.config["seed"])
         self._reset_progress()
@@ -503,7 +506,7 @@ class Controller:
         self.samples.generation = self.generation
         if payload:
             self.samples.restore_totals(payload.get("sample_totals", {}))
-        self.version = identity(self.trainer.model)
+        self._capture_weights()
         if payload:
             try:
                 recent = self.store.read_metrics()
@@ -531,7 +534,18 @@ class Controller:
                 if isinstance(value, torch.Tensor) and key != "step":
                     state[key] = value.to(device)
 
+    def _capture_weights(self):
+        # 同一次冻结同时供摘要、发布和历史保存使用，避免重复搬运整份 GPU 权重。
+        state = cpu_state(self.trainer.model.state_dict())
+        if self.device.type == "cpu":
+            state = {key: value.clone() for key, value in state.items()}
+        self.version = identity(self.trainer.model, state)
+        self.weight_snapshot = (id(self.trainer.model), self.trainer.updates, self.version, state)
+
     def _weights(self):
+        key = (id(self.trainer.model), self.trainer.updates, self.version)
+        if self.weight_snapshot is None or self.weight_snapshot[:3] != key:
+            self._capture_weights()
         return {
             "format": "haojie-stream-weights-v1",
             "network": NETWORK_VERSION,
@@ -539,7 +553,7 @@ class Controller:
             "config": asdict(self.trainer.model.config),
             "metadata": self.meta,
             "updates": self.trainer.updates,
-            "model": cpu_state(self.trainer.model.state_dict()),
+            "model": self.weight_snapshot[3],
         }
 
     def _history(self):
@@ -603,15 +617,19 @@ class Controller:
         )
 
     def _progress(self, metrics):
-        self.runtime = {
-            **metrics,
-            **(self.sampling_jobs.publication_metrics() if self.sampling_jobs else {}),
-            "inflight_bytes": sum(t["trajectory"].used for t in self.pool.slots.values()),
-            "inflight_samples": sum(t["trajectory"].seen for t in self.pool.slots.values()),
-            "historical_models": max(0, len(self.sampling_jobs.inferences) - 1)
-            if self.sampling_jobs
-            else 0,
-        }
+        self.runtime = (
+            metrics
+            if isinstance(self.pool, SamplingPipeline)
+            else {
+                **metrics,
+                **(self.sampling_jobs.publication_metrics() if self.sampling_jobs else {}),
+                "inflight_bytes": sum(t["trajectory"].used for t in self.pool.slots.values()),
+                "inflight_samples": sum(t["trajectory"].seen for t in self.pool.slots.values()),
+                "historical_models": max(0, len(self.sampling_jobs.inferences) - 1)
+                if self.sampling_jobs
+                else 0,
+            }
+        )
         if available_memory() < 256 * 2**20:
             raise MemoryError("可用RAM不足256MiB；已暂停并丢弃在途局")
         self._snapshots()
@@ -637,6 +655,11 @@ class Controller:
     def _new_pool(self, count):
         from ..native.execution import PolicyInference
 
+        if self.config["method"] == METHOD and (
+            self.sampling_backend == "pipeline"
+            or (self.sampling_backend == "auto" and self.device.type == "cuda")
+        ):
+            return SamplingPipeline(self, count)
         model = self.trainer.model
         if self.continuous_selfplay and self.config["method"] == METHOD:
             model = copy.deepcopy(model).eval().requires_grad_(False)
@@ -688,6 +711,8 @@ class Controller:
         if self.pool is None:
             self.pool = self._new_pool(count)
         self.pool.set_target(count)
+        if isinstance(self.pool, SamplingPipeline):
+            return self._sample_pipeline()
         jobs = self.sampling_jobs if continuous else None
         historical = self._historical(jobs)
         if jobs is None:
@@ -749,6 +774,37 @@ class Controller:
             if not continuous:
                 self.sampling_jobs = None
 
+    def _sample_pipeline(self):
+        """只等待有界结案队列；学习、保存及发布期间采样进程继续推进。"""
+        if self.sampling_jobs is None:
+            self.sampling_jobs = MemoryJobs.results(self, self.pool)
+        jobs = self.sampling_jobs
+        self.pool.receiver = jobs
+        games, samples, finished = (
+            self.counts["games"],
+            self.counts["retained_samples"],
+            jobs.finished,
+        )
+        self.pool.wait(self, jobs)
+        before, after, delta = self.pool.account(self)
+        elapsed = after.get("sampling_seconds", 0) - before.get("sampling_seconds", 0)
+        with self.lock:
+            self.last_round = {
+                **delta,
+                "seconds": elapsed,
+                "games": self.counts["games"] - games,
+                "retained_samples": self.counts["retained_samples"] - samples,
+                "mean_batch": delta["inference_requests"] / max(1, delta["forwards"]),
+                "requests_per_second": delta["requests"] / max(0.001, elapsed),
+                "environments": self.pool.environments,
+                "completed_tasks": jobs.finished - finished,
+                "carried_games": len(self.pool.slots),
+                "mean_active_environments": (
+                    after.get("active_slot_seconds", 0) - before.get("active_slot_seconds", 0)
+                )
+                / max(0.001, elapsed),
+            }
+
     def _update(self):
         self.state = "updating"
         self.trainer.model.train()
@@ -759,6 +815,9 @@ class Controller:
         for step in range(self.update_budget):
             if self.cancel.is_set() or not self.samples.rows:
                 break
+            if step % 16 == 0 and isinstance(self.pool, SamplingPipeline):
+                self.pool.refresh(self)
+                self._progress(self.pool.metrics())
             examples = self.samples.batch(self.config["batch_size"], self.rng)
             groups = (
                 update_groups(examples, self.trainer.model.config)
@@ -776,7 +835,7 @@ class Controller:
             self.update_progress = step + 1
             if self.snapshot_requests:
                 self._snapshots()
-        self.version = identity(self.trainer.model)
+        self._capture_weights()
         if self.update_progress:
             self.generation += 1
             self.samples.expire(self.generation)
@@ -792,6 +851,8 @@ class Controller:
                 and self.trainer.updates - self.history_step >= self.config["history_every"]
             ):
                 self._history()
+        if isinstance(self.pool, SamplingPipeline) and not self.cancel.is_set():
+            self.pool.publish(self)
         self.update_progress = 0
 
     @staticmethod
@@ -816,6 +877,12 @@ class Controller:
         )
 
     def _close_pool(self):
+        if isinstance(self.pool, SamplingPipeline):
+            try:
+                self.pool.close(self)
+            finally:
+                self.pool = self.sampling_jobs = None
+            return
         if self.pool:
             try:
                 if self.sampling_jobs:
@@ -1016,7 +1083,7 @@ class Controller:
         self._initialize()
         if weights:
             self.trainer.model.load_state_dict(weights.state_dict())
-            self.version = identity(self.trainer.model)
+            self._capture_weights()
             # 继承后替换本实验初始化权重；旧实验原件保留。
             self._history()
             self.store.save_tensor("baseline", 0, self._weights(), 1)

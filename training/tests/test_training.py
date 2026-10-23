@@ -15,7 +15,7 @@ from torch.utils._pytree import tree_flatten
 from haojie_training.data import FORMAT, load_dataset, synthetic_batch, validate_batch
 from haojie_training.evaluate import value_baselines, value_diagnostics, value_quality
 from haojie_training.model import ModelConfig, PolicyValueNet, policy_value_loss, stable_tanh
-from haojie_training.runtime import BF16AdamW, Trainer
+from haojie_training.runtime import BF16AdamW, Trainer, _finite
 from haojie_training.train import initialize_weights
 
 
@@ -28,6 +28,24 @@ class TrainingTests(unittest.TestCase):
         torch.manual_seed(7)
         self.config = ModelConfig.tiny()
         self.batch = synthetic_batch(self.config, 3, 8, 6)
+
+    def test_grouped_health_keeps_finite_extremes_and_detects_nonfinite_values(self):
+        for device in ("cpu", *(["cuda"] if torch.cuda.is_available() else [])):
+            with self.subTest(device=device):
+                values = [
+                    torch.empty(0, dtype=torch.bfloat16, device=device),
+                    torch.tensor(
+                        torch.finfo(torch.bfloat16).max, dtype=torch.bfloat16, device=device
+                    ),
+                    torch.ones((4, 6), dtype=torch.bfloat16, device=device)[:, ::2],
+                ]
+                self.assertTrue(_finite(values))
+                for invalid in (float("nan"), float("inf"), -float("inf")):
+                    values[-1][2, 1] = invalid
+                    self.assertFalse(_finite(values))
+                    values[-1][2, 1] = 1
+                self.assertTrue(_finite(iter(values)))
+                self.assertTrue(_finite([]))
 
     def test_bf16_adam_retains_small_updates_moment_decay_and_integer_steps(self):
         parameter = torch.nn.Parameter(torch.ones(1, dtype=torch.bfloat16))

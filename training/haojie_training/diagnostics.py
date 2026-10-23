@@ -16,8 +16,11 @@ from unittest.mock import patch
 
 import torch
 
+from .console import controller as controller_module
 from .console.config.resources import _cpu_total, _processes, hardware, monitor
 from .console.controller import Controller
+from .console.memory import SamplePool
+from .console.pipeline import SamplingPipeline
 from .console.sampling import MemoryJobs
 from .console.storage import Store
 from .data import synthetic_batch
@@ -27,6 +30,7 @@ from .native.execution import ForwardWorkers, PolicyInference
 from .native.packed import PackedPolicy
 from .native.pool import Pool
 from .native.transport import ReadLoop
+from .runtime import BF16AdamW, Trainer
 
 
 class MeasuredJobs(MemoryJobs):
@@ -77,7 +81,20 @@ class MeasuredController(Controller):
     def _update(self):
         if getattr(self, "fixed_work", False):
             self.completed_rows.extend(row for row, _, _ in self.samples.rows)
-        return super()._update()
+        original = controller_module.collate_examples
+
+        def collate(rows, config):
+            work = self.training_work
+            lengths = [len(row["entities"]) for row in rows]
+            work["batches"] += 1
+            work["examples"] += len(rows)
+            work["entity_rows"] += sum(lengths)
+            work["padded_entity_slots"] += len(rows) * max(lengths)
+            work["candidate_rows"] += sum(len(row["sources"]) for row in rows)
+            return original(rows, config)
+
+        with patch.object(controller_module, "collate_examples", collate):
+            return super()._update()
 
     def _progress(self, metrics):
         self.last_sampling_snapshot = metrics
@@ -121,7 +138,7 @@ def sample_fingerprint(rows):
 
 
 @contextmanager
-def profiling(mode, output, report, wait_batches=1):
+def profiling(mode, output, report, wait_batches=1, stage="sampling"):
     if mode == "none":
         yield
         return
@@ -156,7 +173,10 @@ def profiling(mode, output, report, wait_batches=1):
                     row["calls"] += 1
                     row["wall"] += time.perf_counter() - began
                     row["cpu"] += time.thread_time() - process
-                    if trace and cls is PolicyInference and name == "finish":
+                    if trace and (
+                        (stage == "sampling" and cls is PolicyInference and name == "finish")
+                        or (stage == "learning" and cls is Trainer and name == "step_batches")
+                    ):
                         trace.step()
 
             stack.enter_context(patch.object(cls, name, measured))
@@ -164,16 +184,26 @@ def profiling(mode, output, report, wait_batches=1):
         for cls, names in (
             (Pool, ("run",)),
             (PackedPolicy, ("batch", "forward")),
-            (PolicyInference, ("submit", "finish")),
+            (PolicyInference, ("_prepare", "_forward", "submit", "finish")),
             (ForwardWorkers, ("run",)),
             (Client, ("send", "_read", "_publish")),
             (ReadLoop, ("run",)),
             (MemoryJobs, ("example", "infer")),
+            (Controller, ("_update", "_weights", "_history")),
+            (SamplePool, ("batch",)),
+            (Trainer, ("_loss", "step_batches")),
+            (BF16AdamW, ("step",)),
         ):
             for name in names:
                 instrument(cls, name)
         instrument(client_module, "decode")
         instrument(client_module, "send_many")
+        instrument(controller_module, "collate_examples")
+        instrument(controller_module, "update_groups")
+        instrument(controller_module, "identity")
+        instrument(controller_module, "cpu_state")
+        instrument(torch.autograd, "backward")
+        instrument(torch.nn.utils, "clip_grad_norm_")
         instrument(json, "loads")
         try:
             yield
@@ -202,7 +232,10 @@ def main():
         "--initialize-from", type=Path, help="只读加载固定兼容权重，重建优化器以比较执行路径"
     )
     parser.add_argument("--environments", type=int, default=30)
-    parser.add_argument("--host-workers", type=int, default=0)
+    parser.add_argument(
+        "--host-workers", type=int, default=-1, help="-1 按 CPU/RAM 自动分配输入进程"
+    )
+    parser.add_argument("--sampling-backend", choices=("auto", "pipeline", "local"), default="auto")
     parser.add_argument("--launch-workers", type=int, choices=(0, 1, 2))
     parser.add_argument("--inference-batch-size", type=int, default=24)
     parser.add_argument("--batch-wait-ms", type=float, default=0)
@@ -222,12 +255,13 @@ def main():
     )
     parser.add_argument("--switch-ms", type=float, help="当前进程的 Python 线程切换间隔")
     parser.add_argument("--profile", choices=("none", "cpu", "cuda"), default="none")
+    parser.add_argument("--profile-stage", choices=("sampling", "learning"), default="sampling")
     parser.add_argument(
         "--profile-wait-batches", type=int, default=1, help="CUDA 剖析前跳过的真实批数"
     )
     args = parser.parse_args()
-    if min(args.games, args.deadline) <= 0 or args.updates < 0 or not 0 <= args.host_workers <= 16:
-        parser.error("终局和时限须为正数，更新数须非负，输入进程数须为 0 至 16")
+    if min(args.games, args.deadline) <= 0 or args.updates < 0 or not -1 <= args.host_workers <= 16:
+        parser.error("终局和时限须为正数，更新数须非负，输入进程数须为 -1 至 16")
     if args.seconds is not None and args.seconds <= 0:
         parser.error("固定测量时长须为正数")
     if args.finite and args.seconds is not None:
@@ -249,7 +283,9 @@ def main():
             parser.error("线程切换间隔须在 0 至 100 毫秒之间")
         sys.setswitchinterval(args.switch_ms / 1000)
     args.output.mkdir(parents=True, exist_ok=False)
-    os.environ["HAOJIE_HOST_WORKERS"] = str(args.host_workers)
+    os.environ["HAOJIE_HOST_WORKERS"] = (
+        "auto" if args.host_workers == -1 else str(args.host_workers)
+    )
     if args.launch_workers is not None:
         os.environ["HAOJIE_LAUNCH_WORKERS"] = str(args.launch_workers)
     start_bytes = args.starts.read_bytes() if args.starts else None
@@ -272,8 +308,21 @@ def main():
     )
     controller.thread.join()
     controller.continuous_selfplay = not args.finite
+    controller.sampling_backend = args.sampling_backend
+    controller.sampling_profile = (
+        (
+            "cpu" if args.profile_stage == "learning" else args.profile,
+            str(args.output / "sampling"),
+            args.profile_wait_batches,
+        )
+        if args.profile != "none"
+        else None
+    )
     controller.fixed_work, controller.completed_rows = args.finite, []
     controller.closed_tasks = []
+    controller.training_work = dict.fromkeys(
+        ("batches", "examples", "entity_rows", "padded_entity_slots", "candidate_rows"), 0
+    )
     controller.trace_resize = bool(args.resize_at)
     controller.config.update(
         environments=args.environments,
@@ -333,7 +382,9 @@ def main():
             torch.cuda.synchronize()
         # Reader 在线程创建时绑定入口，必须先挂剖析，再建立进程池。
         profile_scope.enter_context(
-            profiling(args.profile, args.output, report, args.profile_wait_batches)
+            profiling(
+                args.profile, args.output, report, args.profile_wait_batches, args.profile_stage
+            )
         )
         controller.pool = controller._new_pool(args.environments)
         report["startup_seconds"] = controller.pool.startup_seconds
@@ -406,6 +457,8 @@ def main():
             print(json.dumps(windows[-1]), flush=True)
             if args.finite:
                 break
+        if isinstance(controller.pool, SamplingPipeline):
+            controller.pool.close(controller)
         saving = time.perf_counter()
         controller._save()
         elapsed = time.perf_counter() - began
@@ -433,6 +486,9 @@ def main():
             counts=dict(controller.counts),
             updates=controller.trainer.updates,
             consumed_samples=controller.samples.consumed,
+            consumed_samples_per_second=controller.samples.consumed / elapsed,
+            updates_per_second=controller.trainer.updates / elapsed,
+            training_work=controller.training_work,
             terminal_samples_per_second=controller.counts["retained_samples"] / elapsed,
             terminal_games_per_second=controller.counts["games"] / elapsed,
             runtime={
@@ -454,10 +510,19 @@ def main():
             raise RuntimeError("并发计划未完整执行，详见 resize_events")
     except BaseException as error:
         report["error"] = f"{type(error).__name__}: {error}"
+        report["failure_resources"] = controller.telemetry
+        report["measurements"] = getattr(controller, "measurements", [])
         jobs = controller.sampling_jobs
         if jobs is not None and jobs.result and jobs.result.get("error"):
             report["failed_game"] = jobs.result
+        if isinstance(controller.pool, SamplingPipeline):
+            try:
+                controller.pool.close(controller)
+            except Exception as cleanup_error:
+                report["failure_cleanup_error"] = str(cleanup_error)
+        if controller.trainer is not None:
             report["updates"] = controller.trainer.updates
+            report["counts"] = dict(controller.counts)
             report["last_sampling_snapshot"] = getattr(controller, "last_sampling_snapshot", None)
             try:
                 controller._save()
@@ -471,6 +536,9 @@ def main():
             scheduled.cancel()
             scheduled.join(timeout=2)
         controller._close_pool()
+        child_profile = args.output / "sampling" / "report.json"
+        if child_profile.exists():
+            report["sampling_profile"] = json.loads(child_profile.read_text(encoding="utf-8"))
         report["counts_after_close"] = dict(controller.counts)
         controller.close()
         report["closed_tasks"] = controller.closed_tasks

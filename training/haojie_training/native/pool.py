@@ -5,6 +5,7 @@ import queue
 import sys
 import threading
 import time
+import weakref
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
@@ -356,6 +357,7 @@ class Pool:
         cancel_event=None,
         keep_open=False,
         yield_when=None,
+        maintenance=None,
     ):
         """仅接纳真实终局；快照执行器允许各局在根内让出并保留原生进度。
 
@@ -394,8 +396,16 @@ class Pool:
         cancel = False
         waiting = deque()
         ready = []
-        active_inferences = set()
+        active_inferences = weakref.WeakSet()
         inference_cleanup = ExitStack()
+
+        def close_active():
+            # 常驻服务会释放旧版本；清理注册不能延长所有历史模型的生命期。
+            with ExitStack() as cleanup:
+                for inference in list(active_inferences):
+                    cleanup.callback(inference.close)
+
+        inference_cleanup.callback(close_active)
         sending = deque()
         sender = (
             inference_cleanup.enter_context(
@@ -559,7 +569,6 @@ class Pool:
                 if not cancelled() and getattr(inference, "supports_async", False):
                     if inference not in active_inferences:
                         active_inferences.add(inference)
-                        inference_cleanup.callback(inference.close)
                         if launcher is not None:
                             inference.set_launcher(launcher)
                     if not cancelled():
@@ -591,6 +600,8 @@ class Pool:
                 ready = dispatch(pending)
                 del pending
             while True:
+                if maintenance is not None:
+                    maintenance()
                 while sending and sending[0].done():
                     sending.popleft().result()
                 if cancel_event and cancel_event.is_set():
@@ -611,6 +622,7 @@ class Pool:
                             self.clients[i] is not None
                             and i not in self.slots
                             and i not in self.retiring
+                            and getattr(jobs, "admission_open", lambda slot: True)(i)
                         ):
                             before = time.perf_counter()
                             if assign(i) and self.finished:
@@ -624,6 +636,10 @@ class Pool:
                     yielded = True
                     break
                 if not self.slots:
+                    if getattr(jobs, "waiting_for_admission", lambda: False)():
+                        previous_active = 0
+                        time.sleep(0.01)
+                        continue
                     break
                 previous_active = len(self.slots) - len(self.parked)
                 if snapshot and now >= next_snapshot:
@@ -653,7 +669,7 @@ class Pool:
                         if ready and len(waiting) < 2
                         else 0.25
                         if waiting and all(ticket.launch is not None for _, _, ticket in waiting)
-                        else 0.001
+                        else 0.0001
                         if waiting
                         else 0.25
                     )
@@ -779,7 +795,7 @@ class Pool:
                 try:
                     flush_responses()
                 finally:
-                    inference_cleanup.close()
+                    inference_cleanup.__exit__(*sys.exc_info())
             except BaseException:
                 failed = True
                 raise
