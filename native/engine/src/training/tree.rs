@@ -114,6 +114,14 @@ impl<'a> Tree<'a> {
     ) -> Result<Self, String> {
         Self::with_position(None, Cow::Borrowed(view.position()), view.viewer, catalog)
     }
+    /// 可暂停运行时拥有公开副本；不借用权威状态，也不跨线程移动 Rc。
+    pub fn own_view(
+        view: crate::runtime::PublicPosition,
+        catalog: &'a Catalog,
+    ) -> Result<Self, String> {
+        let viewer = view.viewer;
+        Self::with_position(None, Cow::Owned(view.into_position()), viewer, catalog)
+    }
     fn with_position(
         observation: Option<&'a Value>,
         state: Cow<'a, State>,
@@ -529,6 +537,16 @@ impl<'a> Tree<'a> {
         let node = Rc::new(node);
         self.nodes.insert(cursor.to_vec(), node.clone());
         Ok(node)
+    }
+
+    /// 在线状态机只保留当前栈的节点；已排除的分支不再持有整组候选。
+    pub fn retain_path(&mut self, cursor: &[usize]) {
+        self.nodes.retain(|path, _| cursor.starts_with(path));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_node(&mut self, node: Node) {
+        self.nodes.insert(node.cursor.clone(), Rc::new(node));
     }
 }
 

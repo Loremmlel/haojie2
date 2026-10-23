@@ -23,13 +23,11 @@ def main():
         [engine, "--training"],
         input=b'{"op":"close"}\n',
         capture_output=True,
-        check=True,
         timeout=30,
     )
-    ready = json.loads(response.stdout)
-    assert ready["engine"] == identity
-    assert ready["protocol"] == identity["protocols"]["training"]
-    assert ready["rulesHash"] == identity["rulesHash"]
+    assert response.returncode != 0, "旧训练宿主不得继续可用"
+    assert identity["protocols"]["training"] == "haojie-root-vtrace-v1"
+    assert "native-thread-runtime" in identity["capabilities"]
     print(json.dumps(identity, indent=2))
 
 

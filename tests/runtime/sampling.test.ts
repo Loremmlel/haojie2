@@ -15,7 +15,6 @@ import {
   createDecisionEncoder,
   createSamplingEncoder,
 } from '../../src/ai/training/encoding/decision';
-import { TinyPolicy } from '../../scripts/training/sampling/policy';
 import {
   RuleError,
   ensure,
@@ -327,7 +326,7 @@ test('外部别名资源走整图兼容入口，保留引用关系且不修改�
   assert.equal(env.observation(1).units[1].abilityCharges?.[21]?.charge, 1);
 });
 
-test('决策内固定行前向与独立张量前向逐位一致，前缀、掩码和新局面不串用', () => {
+test('决策编码的固定行与拥有型张量一致，前缀、掩码和新局面不串用', () => {
   const s = fixture();
   const u = add(s, 26, 1, 2, 5);
   add(s, 1, 2, 3, 5);
@@ -340,22 +339,19 @@ test('决策内固定行前向与独立张量前向逐位一致，前缀、掩�
       ply: i,
       revived: false,
     });
-  const policy = new TinyPolicy(73129);
   for (const viewer of [1, 2, 1] as const) {
     const o = observe(s, viewer),
       tree = new TrainingActionTree(o, viewer);
     const owned = createDecisionEncoder(o, viewer),
-      borrowed = createSamplingEncoder(o, viewer),
-      forward = policy.decision();
+      borrowed = createSamplingEncoder(o, viewer);
     const root = tree.node();
     const nodes = [root, ...root.choices.flatMap((c, i) => (c.next ? [tree.node([i])] : [])), root];
     for (const node of nodes.filter((n) => n.choices.length)) {
       const a = owned(node),
         b = borrowed(node);
       assert.deepEqual(b, a);
-      assert.deepEqual(forward(b), policy.logits(a));
       b.entity_mask[0] = false;
-      assert.deepEqual(forward(b), policy.logits(b), '池化必须重新读取掩码');
+      assert.equal(borrowed(node).entity_mask[0], true, '重新编码必须恢复有效实体掩码');
       a.entities[0][0] = 999;
       assert.notEqual(borrowed(node).entities[0][0], 999, '拥有型张量不能污染只读行');
     }

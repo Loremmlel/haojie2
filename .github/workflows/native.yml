@@ -8,8 +8,6 @@ on:
         'src/**',
         'scripts/training/**',
         'training/**',
-        'notebooks/**',
-        'scripts/colab/**',
         'tests/**',
         'package*.json',
         '.github/workflows/native.yml',
@@ -21,8 +19,6 @@ on:
         'src/**',
         'scripts/training/**',
         'training/**',
-        'notebooks/**',
-        'scripts/colab/**',
         'tests/**',
         'package*.json',
         '.github/workflows/native.yml',
@@ -40,7 +36,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.1
@@ -58,30 +54,17 @@ jobs:
       - run: npm run native:check
       - run: npm run native:build
       - run: npm run train:rules:check
-      - run: npm run train:teacher:check
-      - name: Install Python console and execution tests
+      - name: Install BF16 contract test dependencies
         run: |
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
           python -m pip install ./training
-      - name: Build optional C++ dispatcher on Linux CPU
-        if: runner.os == 'Linux'
-        run: |
-          python -m pip install './training[native]'
-          python -m haojie_training.native.aten
-      - name: Memory console, real teacher and recovery checks
+      - name: Native threads, V-trace and in-flight recovery
         shell: pwsh
         run: |
-          $env:HAOJIE_NATIVE = if ($IsWindows) { "$PWD/artifacts/native-target/release/haojie-engine.exe" } else { "$PWD/artifacts/native-target/release/haojie-engine" }
-          $env:HAOJIE_ATEN = if ($IsLinux) { '1' } else { 'auto' }
-          python -m unittest discover -s training/tests -p 'test_*.py' -v
+          $env:HAOJIE_NATIVE_LIB = if ($IsWindows) { "$PWD/artifacts/native-target/release/haojie_native.dll" } else { "$PWD/artifacts/native-target/release/libhaojie_native.so" }
+          python -m unittest discover -s training/tests/online -p 'test_*.py' -v
           exit $LASTEXITCODE
-      - name: Server 32-process training and backup restore
-        if: runner.os == 'Linux'
-        env:
-          HAOJIE_NATIVE: artifacts/native-target/release/haojie-engine
-          HAOJIE_TEST_ENVIRONMENTS: '32'
-        run: python -m unittest training.tests.console.test_cloud.CloudTests.test_real_training_backup_restart_and_optimizer_continuation -v
-      - name: Release identity and representative rule / candidate / encoding differential
+      - name: Rules, public action tree, encoding and record audit
         shell: pwsh
         run: |
           $engine = if ($IsWindows) { 'artifacts/native-target/release/haojie-engine.exe' } else { 'artifacts/native-target/release/haojie-engine' }
@@ -93,50 +76,27 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           node --import tsx --test tests/runtime/native-record.test.ts
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          $env:HAOJIE_NATIVE = (Resolve-Path $engine).Path
-          $env:HAOJIE_PYTHON = (Get-Command python).Source
-          node --import tsx --test tests/runtime/mc-context.differential.ts
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           node --import tsx scripts/training/native/ci/hashes.ts --executable $engine --output artifacts/native-hashes.json
           exit $LASTEXITCODE
-      - name: Install browser for the existing console acceptance flow
-        if: runner.os == 'Linux'
-        run: npx playwright install --with-deps chromium
-      - name: Console start, pause, update, restore and experiment flow
-        if: runner.os == 'Linux'
-        env:
-          HAOJIE_PYTHON: python
-          HAOJIE_NATIVE: artifacts/native-target/release/haojie-engine
-        run: |
-          node tests/browser/console/run.mjs
-          node tests/browser/console/colab.mjs
-          node tests/browser/console/notebook.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: native-${{ matrix.os }}
           retention-days: 7
           path: |
-            artifacts/native-target/release/haojie-engine
-            artifacts/native-target/release/haojie-engine.exe
+            artifacts/native-target/release/haojie-engine*
+            artifacts/native-target/release/*haojie_native*
             artifacts/native-rules/*.json
             artifacts/native-encoding/*.json
             artifacts/native-hashes.json
-            artifacts/console-browser-*/*.json
-            artifacts/console-browser-*/*.png
-            artifacts/colab-browser/*.png
-            artifacts/notebook-browser-*/*.png
-            artifacts/notebook-browser-*/*.json
   installed:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Build source-only delivery
-        run: python3 scripts/training/native/pipeline/package.py --output artifacts/native-package/source.tar.gz
-      - name: Install without host runtime or repository mounts
-        run: docker build -f scripts/training/native/ci/Dockerfile -t haojie-native-check artifacts/native-package
-      - name: Installed training, console and cloud recovery checks
+      - run: python3 scripts/training/native/pipeline/package.py --output artifacts/native-package/source.tar.gz
+      - run: docker build -f scripts/training/native/ci/Dockerfile -t haojie-native-check artifacts/native-package
+      - name: Installed native library and recovery checks
         run: |
           mkdir -p artifacts/native-evidence
           docker run --rm --network none --user "$(id -u):$(id -g)" --env HOME=/tmp --mount type=bind,source="$PWD/artifacts/native-evidence",target=/evidence haojie-native-check

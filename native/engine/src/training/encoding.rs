@@ -5,7 +5,7 @@ use crate::tree::{Node, Tree};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::borrow::Cow;
-use std::cell::{OnceCell, RefMut};
+use std::cell::RefMut;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -134,8 +134,6 @@ pub struct Input {
     pub candidate_mask: Vec<bool>,
     pub sources: Vec<i32>,
     pub targets: Vec<i32>,
-    #[serde(skip)]
-    fixed_wire: Option<(usize, Rc<OnceCell<FixedWire>>)>,
 }
 /// 固定区一次连续生成；节点追加区复用容量。两区都直接写最终数值行，不逐行装箱。
 #[derive(Clone, Default)]
@@ -182,25 +180,6 @@ pub struct Workspace {
     identities: HashMap<String, usize>,
     initialized: bool,
 }
-struct FixedWire {
-    entities: Vec<u8>,
-    kinds: Vec<u8>,
-}
-
-pub fn tensor_size(input: &Input) -> usize {
-    (input.entities.len() + input.candidates.len()) * 128
-        + input.globals.len() * 2
-        + (input.kinds.len() + input.sources.len() + input.targets.len()) * 8
-        + input.entity_mask.len()
-        + input.candidate_mask.len()
-}
-
-#[cfg(test)]
-pub fn tensor_bytes(input: &Input, bytes: &mut Vec<u8>) {
-    bytes.clear();
-    append_tensor_bytes(input, bytes);
-}
-
 /// BF16 最近偶数舍入；NaN 保持非有限标记，交由输入边界拒绝。
 pub fn bf16_bits(value: f64) -> u16 {
     let bits = (value as f32).to_bits();
@@ -215,55 +194,6 @@ pub fn bf16_value(bits: u16) -> f64 {
     f32::from_bits((bits as u32) << 16) as f64
 }
 
-/// 直接追加最终帧；不可变固定区只转换一次，浮点字段统一为 BF16。
-pub fn append_tensor_bytes(input: &Input, bytes: &mut Vec<u8>) {
-    fn rows<'a>(bytes: &mut Vec<u8>, values: impl IntoIterator<Item = &'a f64>) {
-        for &n in values {
-            bytes.extend_from_slice(&bf16_bits(n).to_le_bytes());
-        }
-    }
-    bytes.reserve(tensor_size(input));
-    let fixed = input.fixed_wire.as_ref().map(|(count, cell)| {
-        (
-            *count,
-            cell.get_or_init(|| {
-                let mut entities = Vec::with_capacity(count * 128);
-                for row in input.entities.iter().take(*count) {
-                    rows(&mut entities, row.iter());
-                }
-                let mut kinds = Vec::with_capacity(count * 8);
-                for &n in &input.kinds[..*count] {
-                    kinds.extend_from_slice(&(n as i64).to_le_bytes());
-                }
-                FixedWire { entities, kinds }
-            }),
-        )
-    });
-    let count = fixed.map_or(0, |(n, _)| n);
-    if let Some((_, wire)) = fixed {
-        bytes.extend_from_slice(&wire.entities);
-    }
-    for row in input.entities.iter().skip(count) {
-        rows(bytes, row.iter());
-    }
-    rows(bytes, &input.globals);
-    for row in &input.candidates {
-        rows(bytes, row);
-    }
-    if let Some((_, wire)) = fixed {
-        bytes.extend_from_slice(&wire.kinds);
-    }
-    for &n in &input.kinds[count..] {
-        bytes.extend_from_slice(&(n as i64).to_le_bytes());
-    }
-    for list in [&input.sources, &input.targets] {
-        for &n in list {
-            bytes.extend_from_slice(&(n as i64).to_le_bytes());
-        }
-    }
-    bytes.extend(input.entity_mask.iter().map(|b| u8::from(*b)));
-    bytes.extend(input.candidate_mask.iter().map(|b| u8::from(*b)));
-}
 struct Encoder<'a> {
     s: &'a State,
     catalog: &'a Catalog,
@@ -844,7 +774,6 @@ pub struct BaseEncoding {
     indices: HashMap<String, usize>,
     identities: HashMap<String, usize>,
     globals: Vec<f64>,
-    wire: Rc<OnceCell<FixedWire>>,
 }
 fn optional_text(v: &Value) -> Result<Option<&str>, String> {
     if v.is_null() {
@@ -1219,7 +1148,6 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
         0.0,
     ]);
     Ok(BaseEncoding {
-        wire: Rc::new(OnceCell::new()),
         entities: Rc::new(e.entities.tail),
         kinds: e.kinds,
         indices: e.indices.into_owned(),
@@ -1509,7 +1437,6 @@ fn encode_mode(
         candidates,
         sources,
         targets,
-        fixed_wire: borrow.then(|| (base.entities.len(), Rc::clone(&base.wire))),
     };
     workspace.initialized = true;
     Ok(())
@@ -1529,7 +1456,7 @@ mod buffer_tests {
     }
 
     #[test]
-    fn synchronous_workspace_matches_owned_rows_and_wire_after_reuse_and_errors() {
+    fn synchronous_workspace_matches_owned_rows_after_reuse_and_errors() {
         let catalog = crate::catalog::embedded().unwrap();
         for shrine in [false, true] {
             let state = crate::runtime::create(731280031, shrine, &catalog).unwrap();
@@ -1551,17 +1478,7 @@ mod buffer_tests {
                 let expected = serde_json::to_value(&owned).unwrap();
                 let mut input = encode_sampling(&tree, node).unwrap();
                 assert_eq!(serde_json::to_value(&*input).unwrap(), expected);
-                let mut a = vec![];
-                let mut b = vec![];
-                tensor_bytes(&owned, &mut a);
-                tensor_bytes(&input, &mut b);
-                assert_eq!(a, b);
-                assert_eq!(tensor_size(&input), b.len());
-                let mut framed = b"control\n".to_vec();
-                append_tensor_bytes(&input, &mut framed);
-                assert_eq!(&framed[..8], b"control\n");
-                assert_eq!(&framed[8..], b);
-                retained.push((owned, expected, a));
+                retained.push((owned, expected));
                 crate::records::add_pass(&mut input);
                 input.entity_mask[0] = false;
                 input.candidate_mask[0] = false;
@@ -1575,11 +1492,8 @@ mod buffer_tests {
                 serde_json::to_value(&*encode_sampling(&tree, &root).unwrap()).unwrap(),
                 serde_json::to_value(encode(&tree, &root).unwrap()).unwrap()
             );
-            for (owned, value, bytes) in retained {
+            for (owned, value) in retained {
                 assert_eq!(serde_json::to_value(&owned).unwrap(), value);
-                let mut current = vec![];
-                tensor_bytes(&owned, &mut current);
-                assert_eq!(current, bytes);
             }
         }
     }

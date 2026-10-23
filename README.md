@@ -1,10 +1,10 @@
 # 浩劫 3.0 · 神龛 / haojie2
 
-服务器与 Colab 集中训练见 [快速启动](training/COLAB.md) 和 [Notebook](notebooks/haojie_colab.ipynb)。
+原生 V-trace 训练见[快速启动](training/README.md)和 [Colab Notebook](training/notebooks/root-vtrace.ipynb)，当前验收进度见[实测记录](training/online/VALIDATION.md)。
 
 React + TypeScript 回合制战棋，支持经典 / 神龛模式、同屏双人和三档本地 AI。游戏发行物是一个可离线打开的 HTML，React、样式、棋子、特效和 AI Worker 全部内联。
 
-仓库也包含 **Rust 规则引擎 + Python 训练控制台**：在本机页面管理自对弈、持续训练、暂停恢复、历史对手和真实三档 AI 评测。训练模型尚未接入网页发行版，网页继续使用现有手工搜索 AI。
+仓库也包含 **Rust 原生多局运行时 + Python 单 GPU 训练所有者**，通过命令控制并发、保存和恢复未完成对局。训练模型尚未接入网页发行版，网页继续使用现有手工搜索 AI。
 
 ## 游戏开发与发行
 
@@ -33,21 +33,20 @@ npm run deploy:check # 检查根发行物与源码构建一致
 
 ```sh
 npm run native:build
-python -m haojie_training.console
+python -m haojie_training.online run --directory artifacts/root-vtrace/my-run
 ```
 
-使用已安装训练包的 Python。浏览器打开 `http://127.0.0.1:8765`，在页面中新建训练，然后开始 / 继续；默认受管根为 `~/.haojie-training`。可用 `--engine` 指定引擎，`--root` 指定整个训练根。
+使用已安装训练包的 Python。通过同一模块的 `status`、`resize`、`save`、`stop` 命令控制运行；停止保存未完成对局，恢复使用 `run --resume`。
 
-| 用途                                 | 入口                                       |
-| ------------------------------------ | ------------------------------------------ |
-| 日常训练、暂停恢复、评测与 20GB 配额 | [训练控制台](training/CONSOLE.md)          |
-| 云端训练、并发采样与备份恢复         | [Colab / Linux 服务](training/COLAB.md)    |
-| 数据准备、模型训练、推理与导出       | [Python 训练包](training/README.md)        |
-| 教师数据、已有搜索记录、模型对战     | [TypeScript 训练工具](docs/ai/TRAINING.md) |
-| 模型输入和样本语义                   | [编码协议](training/ENCODING.md)           |
-| 当前实现和维护导航                   | [AI / 训练状态](docs/ai/STATUS.md)         |
+| 用途                           | 入口                                       |
+| ------------------------------ | ------------------------------------------ |
+| 安装、启动、并发控制与保存恢复 | [Python 训练包](training/README.md)        |
+| 模型输入、连续轨迹与运行时     | [新系统契约](training/online/README.md)    |
+| 规则参照与历史记录审核         | [TypeScript 验证工具](docs/ai/TRAINING.md) |
+| 真实硬件结果与尚未完成的验收   | [验收记录](training/online/VALIDATION.md)  |
+| 当前实现和维护导航             | [AI / 训练状态](docs/ai/STATUS.md)         |
 
-训练控制台和云端服务使用终局收益更新 MC-Q 模型。自然棋力由冻结模型的独立评测检验；历史实验和测量见[历史索引](docs/ai/HISTORY.md)，共享原生支持和旧记录边界见[原生支持](training/NATIVE.md)。
+训练只维护新 V-trace 路径，旧模型和实验产物保留原样。自然棋力需要固定对手的独立评测；历史实验和测量见[历史索引](docs/ai/HISTORY.md)，原生接口见[引擎说明](native/engine/README.md)。
 
 ## 仓库结构
 
@@ -57,7 +56,7 @@ python -m haojie_training.console
 | `src/ai/`、`src/match/`     | 本地 AI 搜索、公开训练编码、对局环境       |
 | `src/ui/`                   | React 游戏界面，组件与样式按功能就近维护   |
 | `native/engine/`            | Rust 规则实现、动作树、编码与原生采样协议  |
-| `training/haojie_training/` | Python 模型、训练器、原生宿主和 Web 控制台 |
+| `training/haojie_training/` | BF16 模型、连续轨迹学习器和单 GPU 控制层   |
 | `scripts/`                  | 构建、CLI、数据工具和原生差分验证          |
 | `tests/`、`training/tests/` | 游戏行为、浏览器、TS / Rust 对应及训练验证 |
 | `docs/`                     | 当前接口、规则与维护说明                   |
@@ -97,7 +96,7 @@ npm run test:browser
 npm run test:pages
 ```
 
-原生代码另运行 `npm run native:test`、`npm run native:check`，并使用已安装训练依赖的 Python 运行 `python -m unittest discover -s training/tests -p 'test_*.py'`；原生测试通过 `HAOJIE_NATIVE` 指定已构建引擎。CI 还验证两端规则、动作候选、编码、规范哈希、MC-Q 选择和独立安装恢复。
+原生代码另运行 `npm run native:test`、`npm run native:check`，并使用已安装训练依赖的 Python 运行 `python -m unittest discover -s training/tests/online -p 'test_*.py'`；独立安装测试通过 `HAOJIE_NATIVE_LIB` 指定共享库。CI 验证两端规则、动作候选、公开编码、规范哈希和新训练会话恢复；CUDA 棋力和性能另做实测。
 
 浏览器验收默认在网络离线的 `file://` 页面执行真实操作；特效开发预览使用 `npm run preview:vfx`。CLI 对局和回放使用 `npm run play:cli`，参数见[CLI 手册](docs/CLI.md)。
 

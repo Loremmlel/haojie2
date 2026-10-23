@@ -15,4 +15,5 @@ RUN python -m venv /work/venv && \
     /work/venv/bin/python /work/source/scripts/training/native/ci/isolation.py --trace /work/install-processes.log --installation && \
     /work/venv/bin/python /work/source/scripts/training/native/ci/isolation.py
 ENV HAOJIE_NATIVE=/work/source/native/engine/target/release/haojie-engine
-CMD ["/bin/sh", "-ec", "strace -f -e trace=execve -o /evidence/processes.log /work/venv/bin/python /work/source/scripts/training/native/ci/installed.py --engine $HAOJIE_NATIVE --source /work/source --output /evidence/closure; /work/venv/bin/python /work/source/scripts/training/native/ci/isolation.py --trace /evidence/processes.log > /evidence/processes.json"]
+ENV HAOJIE_NATIVE_LIB=/work/source/native/engine/target/release/libhaojie_native.so
+CMD ["/bin/sh", "-ec", "strace -f -e trace=execve -o /evidence/processes.log /work/venv/bin/python /work/source/scripts/training/native/ci/installed.py --engine $HAOJIE_NATIVE --library $HAOJIE_NATIVE_LIB --source /work/source --output /evidence/closure; /work/venv/bin/python /work/source/scripts/training/native/ci/isolation.py --trace /evidence/processes.log > /evidence/processes.json"]

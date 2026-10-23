@@ -27,6 +27,9 @@ impl PublicPosition {
     pub fn position(&self) -> &State {
         &self.position
     }
+    pub fn into_position(self) -> State {
+        self.position
+    }
 }
 
 pub fn public_view(s: &State, viewer: usize) -> Result<PublicPosition, String> {

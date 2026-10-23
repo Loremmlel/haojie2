@@ -4,7 +4,6 @@ import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { savedGameSamples } from '../../scripts/training/import/save';
-import { encodeTeacherFile } from '../../scripts/training/encode';
 import { inspectTeacherFiles } from '../../scripts/training/inspect-teacher';
 import { readTrainingRecords } from '../../scripts/training/records/replay';
 import {
@@ -26,9 +25,6 @@ async function verifyPipeline(session: Session) {
     const report = await inspectTeacherFiles([path], true);
     assert.equal(report.counts.commands, session.record!.cursor);
     assert.equal(report.profiles['saved-game:unrated'].unknownSearchStats, session.record!.cursor);
-    const encoded: any[] = [];
-    for await (const row of encodeTeacherFile(path)) encoded.push(row);
-    assert.ok(encoded.some((r) => r.type === 'example'));
     assert.ok(rows.every((r) => !('observation' in r)));
     const restored: any[] = [];
     for await (const row of readTrainingRecords(path)) restored.push(row);
@@ -43,7 +39,7 @@ async function verifyPipeline(session: Session) {
   }
 }
 
-test('网页增量存档的79步记录可审计并进入现有训练编码器', async () => {
+test('网页增量存档的79步记录可独立重放审计', async () => {
   const [header, ...entries] = (
     await readFile('docs/playtests/current/cli-feedback5-20260923.jsonl', 'utf8')
   )

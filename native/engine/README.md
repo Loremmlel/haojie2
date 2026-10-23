@@ -1,67 +1,29 @@
-# haojie-engine 维护入口
+# Rust 原生引擎与训练运行时
 
-`native/engine/` 是正式维护的 Rust 引擎，crate 与默认二进制均为 `haojie-engine`。现有单 crate、CLI 与运行内核继续维护，内部 Rust 模块不承诺永久稳定。浏览器使用 TS；旧教师/PUCT 不由原生训练入口调用。
+同一 crate 输出 `haojie-engine` 开发验证程序和 `haojie_native` 共享库。Python 训练使用进程内共享库；旧 `--training` 子进程宿主已删除。
 
-## 代码职责
+| 位置                                  | 职责                                           |
+| ------------------------------------- | ---------------------------------------------- |
+| `src/main.rs`、`modules.rs`           | 开发 CLI、模块声明和构建身份                   |
+| `src/library.rs`、`online/runtime.rs` | 批量 FFI、多局原生 worker、可保存动作状态机    |
+| `src/development.rs`                  | 可信开发协议、规则与公开输入差分、历史记录审核 |
+| `src/core/`、`commands/`、`setup/`    | 正式规则、原子提交、状态所有权与公开观察       |
+| `src/training/`                       | 公开输入边界、惰性动作树、编码与旧记录审核     |
 
-| 位置                                   | 维护职责                                             |
-| -------------------------------------- | ---------------------------------------------------- |
-| `src/main.rs`                          | CLI 模式选择和版本输出                               |
-| `src/development.rs`                   | 可信开发 JSON 协议、驻留会话及差分/基准入口          |
-| `src/setup/catalog.rs`                 | 两个宿主共用的规则包加载、完整校验和规则字节哈希     |
-| `src/core/command.rs`、`src/commands/` | 命令类型、公共阶段检查后的分派及规则执行             |
-| `src/training/`                        | 训练宿主、公开输入边界、动作树、编码、采样和记录审核 |
+## 构建与验证
 
-训练宿主直接加载嵌入规则包；开发会话先接收 `init`。两者共用同一解析器和规则内核，开发协议的驻留状态只在完整校验成功后替换。新增模块由构建身份和交付打包自动收集，不维护第二份源码清单。
-
-## 构建与支持范围
-
-在仓库根目录执行，Rust/Cargo 1.98.1、链接器；Python 主线要求 3.12。Windows x64 与 Linux x64 纳入 CI，macOS 与其他架构尚未验收。CUDA 由现有 Python 模型负责，Rust 不绑定 GPU；XPU 不在本轮验证范围。
+需要 Rust 1.98.1 和平台链接器。Windows/Linux 使用同一实现。
 
 ```sh
 cargo build --locked --release --manifest-path native/engine/Cargo.toml --target-dir artifacts/native-target
 cargo test --locked --manifest-path native/engine/Cargo.toml --target-dir artifacts/native-target
 cargo clippy --locked --all-targets --manifest-path native/engine/Cargo.toml --target-dir artifacts/native-target -- -D warnings
-cargo fmt --manifest-path native/engine/Cargo.toml --check
 ```
 
-等价开发入口为 `npm run native:build`、`native:test`、`native:check`；npm 只用于宿主开发验收。Windows 程序为 `artifacts/native-target/release/haojie-engine.exe`，Linux 无扩展名。训练安装、启动、记录、编码和恢复只依赖交付包、Python 与 Rust，不调用 Node/Bun/tsx。
+输出位于 `artifacts/native-target/release`：Windows 为 `haojie_native.dll`，Linux 为 `libhaojie_native.so`。独立安装时通过 `HAOJIE_NATIVE_LIB` 指定共享库。`haojie-engine --version` 返回规则、源码内容哈希和新训练协议身份。
 
-`haojie-engine --version`（或 `--capabilities`）输出引擎版本、源码内容 SHA256、编译器、目标平台、构建配置、探针状态、规则包哈希、规则/编码/记录/协议版本及能力。源码身份覆盖 Cargo 文件、build.rs、全部 Rust 和规则数据；不是 Git 基点的猜测。宿主应核对身份与协议，名称变化没有改变存档或模型格式。默认 release 不带 `kernel-profile`；显式探针构建放另一 target 目录，不能用于正式速度结论。
+`hj_create` 在 worker 内创建规则目录和全部游戏状态，不将 `Rc` 所有权强行声明为线程安全。`hj_submit` / `hj_poll` 交换连续二进制请求与结果；控制边界可保存或恢复正式状态、两类 RNG、根前缀、排除集合、回溯及事件历史。`hj_close` 释放 worker，`hj_memory_bytes` 提供活动分配字节计数。
 
-## 能力与信任边界
+所有正式命令继续通过共享规则内核提交。公开树只接收白名单观察；正式 RNG 仅供规则执行，采样 RNG 独立保存。模型版本由 Python 所有者绑定根，训练数据不持有行为权重槽。
 
-| 入口                          | 正式维护能力                                                                   | 输入责任                                                                                 |
-| ----------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `--training`                  | 原生创建、连续采样、公开视图/编码、记录写入与审核；Python 完整学习阶段恢复接线 | 校验种子、规则、前缀命令、权限、记录链、模型响应和版本；接受外部记录，不接受任意权威状态 |
-| `--development`（无参数兼容） | create/observe、只读查询/预检、执行、驻留状态及差分/诊断                       | 可信开发接口；仅接收 TS 重建或原生创建的规范局面，不能替代存档解析、联网鉴权或训练边界   |
-| Rust 模块                     | 类型化内核、共享查询、事务、编码与出口                                         | 内部接口；改动须维护 TS 对应和失败原子性                                                 |
-
-训练协议 `haojie-training-binary-v1`：JSON 行控制加 LE 张量；握手附完整引擎身份。记录为 `haojie-native-record-v1`，编码为 `haojie-entities-factorized-v1`，规则包为 `haojie-rules-package-v1`。共享执行层、张量所有权和旧记录边界见[原生支持](../../training/NATIVE.md)，安装见[训练包说明](../../training/README.md)。
-
-控制台能力通过训练握手 `capabilities` 显式协商：`memory-examples-v1`、`mc-context-v2`、`actor-model-routing-v1`、`teacher-v2`。`sample` 可选 `memory:true`（禁止同时传记录路径）、`models:[先手哈希,后手哈希]`、`teacher:1|2`（仅内存模式）。模型请求附实际 `actor` 与该方固定 `model`。普通内存样本在权威接受后由 `records::examples` 编码；`mcContext:true` 则发送采样器真实分解选择与 Pass 的输入张量，附 `semantics:mc-context-v2`、decision/step/stage/selected/actor/model。教师消息只有该方公开 `observation`，回复命令仍由权威引擎校验；教师评测不输出训练样本。省略内存字段时仍支持协议层完整记录，编码/规则/记录版本未改变；Python 独立记录 CLI 已移除。流式恢复另用 `haojie-stream-recovery-v1`，见[控制台协议与生命周期](../../training/CONSOLE.md)。
-
-审核器 `haojie-native-audit-v1` 的完成回执绑定同一次读取的原始字节 SHA256、规则包、完整编码 schema 和审核器源码身份。Rust `audit` 协议保留重放校验和可选编码，独立 TS 规则审核继续在宿主 CI 执行；旧 Python 审核、缓存凭据及分片准备入口已移除。
-
-开发协议仍为 `haojie-native-engine-v4`，先 `init` 提交规则、图鉴、战斗参数、抽取池、配方与可选编码 schema。保留 `run/load/bench`、`create/observe/reset/step/export`、`training-nodes`、`sample-game`；客户端在 [scripts/training/native/client.ts](../../scripts/training/native/client.ts)。`step` 检查 revision，逐条提交成功前缀，非法命令不提交资源/RNG；规则拒绝为 invalid，预检抵达随机边界为 uncertain，unsupported 必须使完整规则验收失败。权威 export 绝不能作为模型输入。
-
-## 日常验收与交付
-
-[原生 CI](../../.github/workflows/native.yml) 在原生、规则、编码、训练宿主及测试变动时运行锁定构建、fmt/test/Clippy、release 身份、代表性双端规则/动作树/公开信息/编码/规范哈希差分，以及交付包独立安装后的控制台／云端真实更新、服务重启和备份恢复。原有 TS 与离线浏览器 CI 保留。历史多种子耐久实验和性能脚本已清理，复现时使用[固定版本 7fc8e85](https://github.com/Loremmlel/haojie2/tree/7fc8e85/scripts/training/native/endurance)。
-
-```sh
-python scripts/training/native/pipeline/package.py --output artifacts/delivery/source.tar.gz
-node --import tsx scripts/training/native/validate.ts --fixtures-only --output artifacts/native-rules
-node --import tsx scripts/training/native/sampling/validate.ts --output artifacts/native-encoding
-```
-
-两个差分命令可用 `--executable` 显式指定程序。Python 原生测试必须设置 `HAOJIE_NATIVE`；缺程序立即失败。包内自带已核验的晚盘前缀和规则/哈希向量，不依赖开发机 artifacts；前缀在仓库以 gzip 保存，打包时解压为 `fixtures/late-starts.json`。包的来源及成员哈希在旁边 manifest；交付包不含 Node、TS、模型或训练产物。Linux 隔离验收见 `scripts/training/native/ci/Dockerfile`，容器只挂证据输出目录、关闭网络；扫描整个根并核对实际 execve，不允许绝对路径或回退脚本绕回宿主。
-
-## 维护、升级与排错
-
-- 唯一规则数值源仍是 TS catalog/combat/recipes/pools/schema。变动后运行 `scripts/training/native/rules-package.ts` 并提交规则包；`npm run train:rules:check` 拒绝过期。安装和运行不自动生成规则包。
-- 按 [双端运行内核对应](../../docs/ai/RUNTIME.md) 同步规则、公开白名单、字段所有权和编码。新增冷字段须说明分离/失效边界；差分覆盖失败、连锁、反应、同长度替换和历史快照。
-- 升级先保存原始记录、模型、数据与来源，再核对 `--version` 和检查点契约。旧模型/记录按原版本验收；不改写历史哈希，不因改名升级协议。完整学习阶段可恢复；半局递归栈不可精确恢复。
-- 规则包/协议/编码不匹配时重建匹配的源码版本；不回退 TS。命令超时或模型响应错误保留成功记录前缀，关闭本次子进程，再从报告定位错误。
-- 默认开发验证只用随仓库夹具；`validate.ts --all-workers` 是显式历史研究入口，依赖原始历史轨迹，缺数据不得跳过或补造。
-- 当前维护范围见 [AI / 训练状态](../../docs/ai/STATUS.md)；既往性能数据和失败证据保留在[固定历史记录](https://github.com/Loremmlel/haojie2/blob/d920e181dccb425c0a77d57b473fb98f45163b69/docs/ai/performance/engine/README.md)。
+TS/Rust 的状态、候选及公开编码对应继续由 `scripts/training/native/validate.ts` 和 `sampling/validate.ts` 验证。历史记录只审核，不恢复旧采样和训练入口。真实硬件测量与未验收项见[验收记录](../../training/online/VALIDATION.md)。

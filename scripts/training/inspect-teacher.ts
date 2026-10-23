@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { decisionOwner } from '../../src/ai/observation';
 import { HAOJIE_RULESET } from '../../src/engine/online/player-view';
-import { encodingSourceHash } from './encode';
+import { encodingSourceHash } from './records/identity';
 import { TrainingActionTree } from '../../src/ai/training/action-tree';
 import { createDecisionEncoder } from '../../src/ai/training/encoding/decision';
 import { readTrainingRecords } from './records/replay';

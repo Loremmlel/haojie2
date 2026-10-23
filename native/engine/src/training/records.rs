@@ -11,10 +11,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    fs::{File, OpenOptions},
-    io::{BufRead, BufReader, BufWriter, Read, Write},
-    path::{Path, PathBuf},
+    fs::File,
+    io::{BufRead, BufReader, Read},
+    path::Path,
 };
+#[cfg(test)]
+use std::{fs::OpenOptions, io::{BufWriter, Write}, path::PathBuf};
 
 pub const FORMAT: &str = "haojie-native-record-v1";
 pub const AUDITOR: &str = "haojie-native-audit-v1";
@@ -65,12 +67,14 @@ impl Start {
         Ok(s)
     }
 }
+#[cfg(test)]
 pub struct Writer {
     file: BufWriter<File>,
     partial: PathBuf,
     target: PathBuf,
     previous: String,
 }
+#[cfg(test)]
 impl Writer {
     pub fn new(path: &Path) -> Result<Self, String> {
         if path.exists() {

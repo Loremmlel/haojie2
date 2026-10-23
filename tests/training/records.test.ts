@@ -3,11 +3,40 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runSelfPlay } from '../../scripts/training/self-play';
-import { readTrainingRecords } from '../../scripts/training/records/replay';
+import { recordHeader, readTrainingRecords } from '../../scripts/training/records/replay';
 import { withRecordOutput } from '../../scripts/training/records/io';
-import { encodeTeacherFile } from '../../scripts/training/encode';
 import { TrainingEnvironment } from '../../src/match/training';
+import { fingerprint } from '../../src/ai/observation';
+
+// 使用固定正式命令构造审核夹具，不重新引入旧教师采样器。
+function fixtureRecords(rules: 'classic' | 'shrine', seed: number) {
+  const env = new TrainingEnvironment({ seed, rules, maxCommands: 1 });
+  const rows: any[] = [
+    { type: 'game', game: 0, source: 'teacher', ...recordHeader(env), rules, seed },
+  ];
+  const observation = env.observation(1);
+  const command =
+    rules === 'classic'
+      ? { type: 'summon' as const }
+      : {
+          type: 'choose-shrine' as const,
+          player: 1 as const,
+          shrineKind: observation.shrineDraft!.offers[1][0],
+          parity: 'even' as const,
+        };
+  env.step(1, command);
+  rows.push({
+    type: 'sample',
+    game: 0,
+    index: 0,
+    actor: 1,
+    command,
+    before: fingerprint(observation),
+    after: fingerprint(env.observation()),
+  });
+  rows.push({ type: 'outcome', game: 0, ...env.status(), after: fingerprint(env.observation()) });
+  return rows;
+}
 
 async function collect(rows: AsyncIterable<any>) {
   const result = [];
@@ -15,17 +44,11 @@ async function collect(rows: AsyncIterable<any>) {
   return result;
 }
 
-test('压缩和普通增量轨迹重建相同操作者观察与训练输入，神龛暗选仍脱敏', async () => {
+test('压缩和普通增量轨迹重建相同操作者观察，神龛暗选仍脱敏', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'haojie-records-'));
   try {
     for (const rules of ['classic', 'shrine'] as const) {
-      const rows: any[] = [];
-      await runSelfPlay(
-        { games: 2, seed: 90, rules, maxCommands: 8, simulations: 40 },
-        async (row) => {
-          rows.push(row);
-        },
-      );
+      const rows = fixtureRecords(rules, 90);
       assert.ok(rows.every((row) => !('observation' in row)));
       const paths = ['.jsonl', '.jsonl.gz'].map((suffix) => join(folder, rules + suffix));
       for (const path of paths)
@@ -34,10 +57,6 @@ test('压缩和普通增量轨迹重建相同操作者观察与训练输入，�
         });
       const restored = await collect(readTrainingRecords(paths[1]));
       assert.deepEqual(restored, await collect(readTrainingRecords(paths[0])));
-      assert.deepEqual(
-        await collect(encodeTeacherFile(paths[1])),
-        await collect(encodeTeacherFile(paths[0])),
-      );
       let env: TrainingEnvironment;
       for (const row of restored) {
         if (row.type === 'game')
@@ -51,7 +70,7 @@ test('压缩和普通增量轨迹重建相同操作者观察与训练输入，�
           env!.step(row.actor, row.command);
         }
       }
-      assert.ok((await readFile(paths[1])).length < (await readFile(paths[0])).length / 2);
+      assert.deepEqual([...(await readFile(paths[1])).subarray(0, 2)], [0x1f, 0x8b]);
     }
   } finally {
     await rm(folder, { recursive: true, force: true });
@@ -61,10 +80,7 @@ test('压缩和普通增量轨迹重建相同操作者观察与训练输入，�
 test('旧格式、顺序、规则版本、操作者、前后指纹和伪造结果均拒绝，缺失结束行不给价值标签', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'haojie-invalid-records-'));
   try {
-    const rows: any[] = [];
-    await runSelfPlay({ games: 1, seed: 19, maxCommands: 3, simulations: 40 }, async (row) => {
-      rows.push(row);
-    });
+    const rows = fixtureRecords('classic', 19);
     const path = join(folder, 'test.jsonl');
     const mutations: ((copy: any[]) => void)[] = [
       (r) => {
@@ -126,13 +142,10 @@ test('压缩截断和坏JSON不会被当成正常中断；生成失败仍封好g
     const path = join(folder, 'teacher.jsonl.gz');
     await assert.rejects(
       withRecordOutput(path, async (emit) => {
-        await runSelfPlay(
-          { games: 1, seed: 19, maxCommands: 3, simulations: 40 },
-          async (row: any) => {
-            if (row.type === 'outcome') throw new Error('生成器失败');
-            await emit(row);
-          },
-        );
+        for (const row of fixtureRecords('classic', 19)) {
+          if (row.type === 'outcome') throw new Error('生成器失败');
+          await emit(row);
+        }
       }),
       /生成器失败/,
     );

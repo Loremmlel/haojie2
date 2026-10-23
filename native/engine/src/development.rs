@@ -6,7 +6,7 @@ use crate::{
     command::apply_runtime,
     encoding, geometry, inspection,
     model::{COMMANDS, Catalog, Command, Failure, PROTOCOL, RULESET, State},
-    policy, records, runtime, sampler, tree,
+    records, runtime, tree,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -156,25 +156,11 @@ fn handle(
                 json!({"protocol":PROTOCOL,"ruleset":RULESET,"commands":COMMANDS,"completeEngine":true}),
             )
         }
-        "sample-game" => {
-            #[cfg(feature = "kernel-profile")]
-            let kernel = {
-                profile::start();
-                profile::scope(profile::Phase::Kernel)
-            };
-            let result = sampler::game(&request, catalog.as_ref().ok_or("initialize first")?);
-            #[cfg(feature = "kernel-profile")]
-            {
-                drop(kernel);
-                let profile = profile::finish();
-                result.map(|mut v| {
-                    v["kernelProfile"] = profile;
-                    v
-                })
-            }
-            #[cfg(not(feature = "kernel-profile"))]
-            result
-        }
+        "audit-record" => records::audit(
+            std::path::Path::new(request["record"].as_str().ok_or("record required")?),
+            catalog.as_ref().ok_or("initialize first")?,
+            |_, _| Ok(()),
+        ),
         "hash-states" => {
             // 可信开发入口的差分参照；正式训练仍只接收已校验起点与命令记录。
             let states: Vec<State> =
@@ -195,23 +181,19 @@ fn handle(
             let cursors: Vec<Vec<usize>> =
                 serde_json::from_value(request["cursors"].take()).map_err(|e| e.to_string())?;
             let mut tree = tree::Tree::new(&request["observation"], actor, catalog)?;
-            let policy = policy::TinyPolicy::new(73129);
             let mut nodes = vec![];
             let mut encoded = vec![];
-            let mut logits = vec![];
             for cursor in cursors {
                 let node = tree.node(&cursor)?;
                 if request["encode"] == true && !node.choices.is_empty() {
                     let input = encoding::encode(&tree, &node)?;
-                    logits.push(json!(policy.logits(&input)));
                     encoded.push(json!(input));
                 } else if request["encode"] == true {
-                    logits.push(Value::Null);
                     encoded.push(Value::Null);
                 }
                 nodes.push(node.wire());
             }
-            Ok(json!({"nodes":nodes,"encoded":encoded,"logits":logits}))
+            Ok(json!({"nodes":nodes,"encoded":encoded}))
         }
         "run" | "load" => {
             let catalog = catalog.as_ref().ok_or("initialize first")?;

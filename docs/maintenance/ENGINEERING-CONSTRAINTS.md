@@ -126,7 +126,9 @@ HaojieGame保持本地协议；HaojieOnlineGame只消费PlayerView和宿主回�
 
 见`docs/feedback/FEEDBACK-2026-09-23.md`。部署行改为当前局面实时判定，覆盖此前回合开始快照要求；共用`deploymentRows`，旧存档的deployRows不能授权落子。小屋排除普通20死亡，王城不受影响；普通20反伤20且保持原50%分界。墓地通过allegiance统一视为中立，不能重铸，保留来源owner兼容存档。AI可在原预算内比较移动开行后部署，不以行权奖励代替安全评估。当前CLI回放`docs/playtests/current/cli-feedback5-20260923.jsonl`；9月21日counter-freeze旧回放固定`b49223f9f8f3e8beb55199b963afbd4bf2020126`，不改历史指纹。
 
-训练轨迹使用`haojie-training-record-v1`，按种子/起点与命令重放，不逐步保存Observation或异常快照。读写复用`scripts/training/records`，支持`.jsonl.gz`；实际上限与两个规则版本必须校验。旧快照训练JSONL直接拒绝并提示重新生成，此决定不影响游戏存档兼容。预处理经管道写二进制`.pt`，不得增加大数组JSON中间文件；缺少结束行只给策略监督，损坏压缩/JSON明确失败。历史实验与规则指纹不改写。
+历史 `haojie-training-record-v1` 按种子/起点与命令重放审核，读写复用 `scripts/training/records`，支持 `.jsonl.gz`；实际上限与两个规则版本必须校验。历史实验与规则指纹不改写，缺少结束行不补终局结果。
+
+2026-10-23 全量重写取代旧训练架构限制：唯一训练系统为 Rust 原生多局运行时与 Python 单 GPU V-trace 学习器。新连续轨迹保存原始公开根、每个随机微步的候选支持集、行为概率、失败/回溯历史与同席位后继；BF16 为唯一模型计算路径。检查点保存未完成局和未消费轨迹，不等待整局结束。旧模型、优化器和原始实验保留，不添加兼容训练入口。TS/Rust 继续核对规则、公开观察、候选和特征语义；新 GPU 学习与线程调度统一由新运行时负责。当前实现与待验收缺口以 `training/online/VALIDATION.md` 为准。
 
 ## 增量存档（2026-09-23）
 

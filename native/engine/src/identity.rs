@@ -19,14 +19,14 @@ pub fn describe() -> Value {
         "encoding": "haojie-entities-factorized-v1",
         "record": crate::records::FORMAT,
         "auditor": crate::records::AUDITOR,
-        "protocols": {"training": crate::training_host::PROTOCOL, "development": crate::model::PROTOCOL},
-        "capabilities": ["create", "observe", "query", "preflight", "execute", "continuous-sampling", "public-encoding", "record-write", "record-audit", "audited-encoding", "learning-stage-resume", "memory-examples-v1", "mc-context-v2", "mc-input-ref-v1", "actor-model-routing-v1", "teacher-v2"],
+        "protocols": {"training": "haojie-root-vtrace-v1", "development": crate::model::PROTOCOL},
+        "capabilities": ["create", "observe", "query", "preflight", "execute", "public-encoding", "record-audit", "native-thread-runtime", "root-vtrace", "inflight-resume"],
         "interfaces": {
-            "training": "validated-start-command-record-input",
+            "training": "batched-in-process-bf16-ffi",
             "development": "trusted-canonical-state-and-rule-package",
             "rust": "internal"
         },
-        "resume": "python-checkpoint-at-complete-learning-stage"
+        "resume": "atomic-rule-and-optimizer-boundary"
     })
 }
 

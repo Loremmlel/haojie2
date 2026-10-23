@@ -6,7 +6,6 @@ import { createDecisionEncoder } from '../../../../src/ai/training/encoding/deci
 import { observe } from '../../../../src/ai/observation';
 import { createTrainingInspector } from '../../../../src/ai/training/queries';
 import { createGame } from '../../../../src/engine/commands/game';
-import { TinyPolicy } from '../../sampling/policy';
 import { nativeClient } from '../client';
 import { fixtures } from '../fixtures';
 import { combatFixtures } from '../combat-fixtures';
@@ -44,14 +43,12 @@ const wire = (n: ActionNode) =>
     })),
   });
 let maxError = 0,
-  maxLogitError = 0,
   nodes = 0,
   roots = 0;
 function near(a: any, b: any, path: string, tolerance: number) {
   if (typeof a === 'number' && typeof b === 'number') {
     const error = Math.abs(a - b);
-    if (path.startsWith('logits')) maxLogitError = Math.max(maxLogitError, error);
-    else maxError = Math.max(maxError, error);
+    maxError = Math.max(maxError, error);
     assert.ok(error <= tolerance, `${path}: ${a} != ${b}`);
   } else if (Array.isArray(a)) {
     assert.equal(a.length, b.length, path);
@@ -62,7 +59,6 @@ function near(a: any, b: any, path: string, tolerance: number) {
   } else assert.equal(a, b, path);
 }
 try {
-  const policy = new TinyPolicy(73129);
   const cases = [
     ...fixtures(),
     ...combatFixtures(),
@@ -100,12 +96,10 @@ try {
         expected.forEach((n, i) => {
           if (!n.choices.length) {
             assert.equal(got.encoded[i], null);
-            assert.equal(got.logits[i], null);
             return;
           }
           const encoded = encode(n);
           near(got.encoded[i], encoded, `${name}:encoded-${i}`, 2e-15);
-          near(got.logits[i], policy.logits(encoded), `logits:${name}:${i}`, 2e-8);
         });
       } catch (error) {
         save('failure.json', { name, observation, cursors, got, expected: expected.map(wire) });
@@ -113,7 +107,7 @@ try {
       }
       roots++;
       nodes += cursors.length;
-      if (roots % 100 === 0) console.log(JSON.stringify({ roots, nodes, maxError, maxLogitError }));
+      if (roots % 100 === 0) console.log(JSON.stringify({ roots, nodes, maxError }));
     }
   const base = canonical(observe(createGame(731270001)));
   const invalid = async (observation: unknown, pattern: RegExp) =>
@@ -131,10 +125,9 @@ try {
     roots,
     nodes,
     maxError,
-    maxLogitError,
     rejectedPrivacyAndSchemaCases: 4,
   });
-  console.log(JSON.stringify({ roots, nodes, maxError, maxLogitError }));
+  console.log(JSON.stringify({ roots, nodes, maxError }));
 } finally {
   client.close();
 }

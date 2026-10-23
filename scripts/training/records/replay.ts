@@ -18,9 +18,9 @@ export function recordHeader(env: Pick<TrainingEnvironment, 'limits'>) {
 }
 
 /**
- * 唯一训练轨迹读取边界：版本、权限、顺序、前后指纹和结果必须通过正式引擎重放。
+ * 历史轨迹审核边界：版本、权限、顺序、前后指纹和结果必须通过正式引擎重放。
  * 磁盘不含逐步观察；只在内存补出操作者白名单，种子/初始存档绝不进入编码器。
- * 缺少结束行的完整命令前缀只允许策略监督，不从最后局面猜测价值标签。
+ * 缺少结束行不从最后局面猜测价值标签；此协议不接入新连续轨迹学习器。
  */
 export async function* readTrainingRecords(path: string): AsyncGenerator<any> {
   let env: TrainingEnvironment | undefined;

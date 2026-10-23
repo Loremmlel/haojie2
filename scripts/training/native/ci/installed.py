@@ -10,6 +10,7 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", type=Path, required=True)
+    parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -19,7 +20,7 @@ def main():
     engine = args.engine.resolve(strict=True)
     if source in Path(haojie_training.__file__).resolve().parents:
         raise RuntimeError("验收必须使用独立安装的包，不能从源码或 PYTHONPATH 回退")
-    env = {**os.environ, "HAOJIE_NATIVE": str(engine)}
+    env = {**os.environ, "HAOJIE_NATIVE_LIB": str(args.library.resolve(strict=True))}
     env.pop("PYTHONPATH", None)
     args.output.mkdir(parents=True, exist_ok=False)
     for name, argv in (
@@ -34,7 +35,7 @@ def main():
                 "unittest",
                 "discover",
                 "-s",
-                source / "training/tests",
+                source / "training/tests/online",
                 "-p",
                 "test_*.py",
                 "-v",
