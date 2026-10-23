@@ -39,8 +39,6 @@ def restore_recovery(store, metadata, device, log):
             trainer = Trainer(
                 PolicyValueNet(ModelConfig(**saved["config"])),
                 device,
-                precision=saved["precision"],
-                optimizer="auto",
                 objective=payload["config"]["method"],
             )
             trainer.restore_payload(saved, saved["metadata"])

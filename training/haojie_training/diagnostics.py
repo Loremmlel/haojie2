@@ -27,7 +27,6 @@ from .native.execution import ForwardWorkers, PolicyInference
 from .native.packed import PackedPolicy
 from .native.pool import Pool
 from .native.transport import ReadLoop
-from .runtime import autocast
 
 
 class MeasuredJobs(MemoryJobs):
@@ -115,7 +114,7 @@ def sample_fingerprint(rows):
             if isinstance(tensor, torch.Tensor):
                 value = tensor.detach().cpu().contiguous()
                 digest.update(json.dumps((key, str(value.dtype), list(value.shape))).encode())
-                digest.update(value.numpy().tobytes())
+                digest.update(value.reshape(-1).view(torch.uint8).numpy().tobytes())
         records.append(digest.digest())
     return hashlib.sha256(b"".join(sorted(records))).hexdigest()
 
@@ -198,12 +197,14 @@ def main():
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--initialize-from", type=Path, help="只读加载固定兼容权重，重建优化器以比较执行路径"
+    )
     parser.add_argument("--environments", type=int, default=30)
     parser.add_argument("--host-workers", type=int, default=0)
     parser.add_argument("--launch-workers", type=int, choices=(0, 1, 2))
     parser.add_argument("--inference-batch-size", type=int, default=24)
     parser.add_argument("--batch-wait-ms", type=float, default=0)
-    parser.add_argument("--sampling-precision", choices=("fp32", "bf16"), default="bf16")
     parser.add_argument("--games", type=int, default=4)
     parser.add_argument("--finite", action="store_true", help="固定任务批次完成后再更新一次")
     parser.add_argument("--updates", type=int, default=16)
@@ -261,7 +262,12 @@ def main():
             parser.error("起点索引超出文件范围")
         starts = [starts[index] for index in args.start_indices]
     controller = MeasuredController(
-        args.engine, Store(args.output / "training"), device=args.device, threads=1, starts=starts
+        args.engine,
+        Store(args.output / "training"),
+        device=args.device,
+        threads=1,
+        starts=starts,
+        imported=args.initialize_from,
     )
     controller.thread.join()
     controller.continuous_selfplay = not args.finite
@@ -272,7 +278,6 @@ def main():
         environments=args.environments,
         inference_batch_size=args.inference_batch_size,
         batch_wait_ms=args.batch_wait_ms,
-        sampling_precision=args.sampling_precision,
         games_per_round=args.games if args.finite else 48,
         updates_per_round=args.updates,
         seed=args.seed,
@@ -289,6 +294,9 @@ def main():
         "torch": torch.__version__,
         "python_switch_ms": sys.getswitchinterval() * 1000,
         "engine_sha256": hashlib.sha256(args.engine.read_bytes()).hexdigest(),
+        "initial_checkpoint_sha256": hashlib.sha256(args.initialize_from.read_bytes()).hexdigest()
+        if args.initialize_from
+        else None,
         "starts_sha256": hashlib.sha256(start_bytes).hexdigest() if start_bytes else None,
         "source_sha256": hashlib.sha256(
             b"".join(
@@ -317,7 +325,7 @@ def main():
         controller.trainer.model.eval()
         warmup = synthetic_batch(controller.trainer.model.config, 8, 64, 24)
         warmup = {key: value.to(controller.device) for key, value in warmup.items()}
-        with torch.no_grad(), autocast(controller.device, args.sampling_precision):
+        with torch.no_grad():
             for _ in range(3):
                 controller.trainer.model.policy_logits(warmup)
         if controller.device.type == "cuda":

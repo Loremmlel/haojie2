@@ -32,6 +32,10 @@ from haojie_training.native.transport import (
 from .test_packed import examples
 
 
+def wire_values(tensor):
+    return (tensor.view(torch.uint16) if tensor.dtype == torch.bfloat16 else tensor).numpy()
+
+
 class InputTests(unittest.TestCase):
     def test_reservoir_defers_tensors_and_keeps_exact_samples_after_shared_overwrite(self):
         from haojie_training.console.memory import Trajectory, size_of
@@ -48,7 +52,7 @@ class InputTests(unittest.TestCase):
             "entity_mask",
             "candidate_mask",
         )
-        frame = bytearray(b"".join(row[key].numpy().tobytes() for key in keys))
+        frame = bytearray(b"".join(wire_values(row[key]).tobytes() for key in keys))
         inputs = decode(
             frame, len(row["entities"]), len(row["sources"]), _owned=True, _arrays=True, _defer=True
         )
@@ -79,7 +83,7 @@ class InputTests(unittest.TestCase):
             self.assertIs(pending.rows[0][0], actual[0][0])
             self.assertEqual(conversion.call_count, 16)
         for message in messages:
-            reference.add({**message, "input": {key: row[key].numpy() for key in keys}})
+            reference.add({**message, "input": {key: wire_values(row[key]) for key in keys}})
         self.assertEqual(pending.rng.getstate(), reference.rng.getstate())
         self.assertEqual(pending.used, reference.used)
         self.assertEqual(pending.coverage, reference.coverage)
@@ -108,7 +112,7 @@ class InputTests(unittest.TestCase):
             "entity_mask",
             "candidate_mask",
         )
-        body = b"".join(row[key].numpy().tobytes() for key in keys)
+        body = b"".join(wire_values(row[key]).tobytes() for key in keys)
         header = {
             "type": "infer",
             "id": 1,
@@ -155,7 +159,7 @@ class InputTests(unittest.TestCase):
                 self.assertEqual(len(messages), 3)
                 self.assertIs(messages[0]["input"], messages[1]["input"])
                 for key in keys:
-                    np.testing.assert_array_equal(messages[0]["input"][key], row[key].numpy())
+                    np.testing.assert_array_equal(messages[0]["input"][key], wire_values(row[key]))
             else:
                 self.assertEqual(len(messages), 1)
             self.assertIsInstance(messages[-1], RuntimeError)
@@ -176,7 +180,7 @@ class InputTests(unittest.TestCase):
             "entity_mask",
             "candidate_mask",
         )
-        frame = bytearray(b"".join(row[key].numpy().tobytes() for key in keys))
+        frame = bytearray(b"".join(wire_values(row[key]).tobytes() for key in keys))
         arrays = decode(
             frame,
             len(row["entities"]),
@@ -244,7 +248,7 @@ class InputTests(unittest.TestCase):
             row = {k: v.clone() for k, v in source.items()}
             if key is not None:
                 row[key][index] = value
-            frame = b"".join(row[k].numpy().tobytes() for k in keys)
+            frame = b"".join(wire_values(row[k]).tobytes() for k in keys)
             result = []
             for native in (client_module.native_io, lambda: None):
                 with patch.object(client_module, "native_io", native):
@@ -254,7 +258,7 @@ class InputTests(unittest.TestCase):
                         )
                         result.append(None)
                         for field in keys:
-                            np.testing.assert_array_equal(actual[field], row[field].numpy())
+                            np.testing.assert_array_equal(actual[field], wire_values(row[field]))
                     except ValueError as error:
                         result.append(str(error))
             self.assertEqual(result[0], result[1], (key, index, value))
@@ -265,10 +269,10 @@ class InputTests(unittest.TestCase):
         reader, writer = os.pipe()
         stream = os.fdopen(writer, "wb", buffering=0)
         client = SimpleNamespace(
-            ready={"capabilities": ["logits-f32-v1"]},
+            ready={"capabilities": ["logits-bf16-v1"]},
             process=SimpleNamespace(stdin=stream),
         )
-        scores = np.linspace(-4, 4, 100000, dtype=np.float32)
+        scores = wire_values(torch.linspace(-4, 4, 100000, dtype=torch.bfloat16))
         response = {"id": 7, "model": '带引号"的版本', "logits": scores}
         received = bytearray()
 
@@ -297,14 +301,14 @@ class InputTests(unittest.TestCase):
         reader, writer = os.pipe()
         with os.fdopen(writer, "wb", buffering=0) as stream:
             client = SimpleNamespace(
-                ready={"capabilities": ["logits-f32-v1"]},
+                ready={"capabilities": ["logits-bf16-v1"]},
                 process=SimpleNamespace(stdin=stream),
             )
             with self.assertRaisesRegex(ValueError, "模型输出非有限"):
                 client_module.send_many(
                     [
-                        (client, {"id": 1, "logits": np.zeros(1, dtype=np.float32)}),
-                        (client, {"id": 2, "logits": np.array([np.nan], dtype=np.float32)}),
+                        (client, {"id": 1, "logits": np.zeros(1, dtype=np.uint16)}),
+                        (client, {"id": 2, "logits": np.array([0x7FC0], dtype=np.uint16)}),
                     ]
                 )
         self.assertEqual(os.read(reader, 1), b"")
@@ -351,7 +355,7 @@ class InputTests(unittest.TestCase):
         from haojie_training.model import ModelConfig
 
         rows = examples(ModelConfig())
-        arrays = [{key: value.numpy() for key, value in row.items()} for row in rows]
+        arrays = [{key: wire_values(value) for key, value in row.items()} for row in rows]
         shared = [SharedInput(row, prepare_row(row)) for row in arrays]
         packed = PackedPolicy(SimpleNamespace(config=ModelConfig()), {}, False)
         before, layout = packed.batch(arrays)
@@ -379,7 +383,7 @@ class InputTests(unittest.TestCase):
             "entity_mask",
             "candidate_mask",
         )
-        frame = bytearray(b"".join(row[key].numpy().tobytes() for key in keys))
+        frame = bytearray(b"".join(wire_values(row[key]).tobytes() for key in keys))
         output = decode(frame, len(row["entities"]), len(row["sources"]), _arrays=True)
         deferred = decode(
             frame, len(row["entities"]), len(row["sources"]), _arrays=True, _defer=True
@@ -390,8 +394,8 @@ class InputTests(unittest.TestCase):
         self.assertTrue(deferred.validated)
         frame[:] = bytes(len(frame))
         for key in keys:
-            np.testing.assert_array_equal(output[key], row[key].numpy())
-            np.testing.assert_array_equal(deferred[key], row[key].numpy())
+            np.testing.assert_array_equal(output[key], wire_values(row[key]))
+            np.testing.assert_array_equal(deferred[key], wire_values(row[key]))
         for arrays in (False, True):
             with self.assertRaisesRegex(ValueError, "可训练候选"):
                 decode(frame, len(row["entities"]), len(row["sources"]), _arrays=arrays)
@@ -475,11 +479,11 @@ class ProcessTests(unittest.TestCase):
                             np.testing.assert_array_equal(actual, reference)
                     else:
                         self.assertIsNone(message["input"].packing)
-                scores = np.linspace(-3, 3, message["candidates"], dtype=np.float32)
+                scores = torch.linspace(-3, 3, message["candidates"], dtype=torch.bfloat16)
                 response = {
                     "id": message["id"],
                     "model": message["model"],
-                    "logits": scores if binary else scores.tolist(),
+                    "logits": wire_values(scores) if binary else scores.tolist(),
                 }
                 if native_batch:
                     client_module.send_many([(client, response)])
@@ -495,7 +499,7 @@ class ProcessTests(unittest.TestCase):
         torch.testing.assert_close(retained["entities"], snapshot, atol=0, rtol=0)
         return digest.hexdigest(), count
 
-    def test_shared_workers_match_json_trajectory_and_release_buffers(self):
+    def test_shared_workers_match_list_boundary_trajectory_and_release_buffers(self):
         with Client(self.engine, arrays=True) as client:
             expected = self.run_protocol(client, client.receive, binary=False)
         with Client(self.engine, arrays=True) as client:
@@ -567,7 +571,9 @@ class ProcessTests(unittest.TestCase):
                         {
                             "id": message["id"],
                             "model": message["model"],
-                            "logits": np.linspace(-3, 3, message["candidates"], dtype=np.float32),
+                            "logits": wire_values(
+                                torch.linspace(-3, 3, message["candidates"], dtype=torch.bfloat16)
+                            ),
                         }
                     )
                     requests += 1
@@ -669,8 +675,8 @@ class ProcessTests(unittest.TestCase):
                 client.send(self.request())
                 message = client.receive()
                 count = message["candidates"]
-                header = {"id": message["id"], "model": message["model"], "logitsBytes": count * 4}
-                payload = np.full(count, np.nan, dtype="<f4").tobytes()
+                header = {"id": message["id"], "model": message["model"], "logitsBytes": count * 2}
+                payload = np.full(count, 0x7FC0, dtype="<u2").tobytes()
                 if bad == "size":
                     header["logitsBytes"] += 1
                     payload = b""

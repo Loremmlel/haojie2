@@ -11,6 +11,29 @@ HISTORY_LAYERS = 2
 RECENT_JOURNAL = 16
 
 
+class _Tanh(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, value):
+        ctx.save_for_backward(value)
+        return value.tanh()
+
+    @staticmethod
+    def backward(ctx, gradient):
+        # 不用 1-tanh(x)^2：BF16 将较大的输出舍入到 ±1 后会错误清零梯度。
+        (value,) = ctx.saved_tensors
+        exponential = (-2 * value.abs()).exp()
+        return gradient * (4 * exponential / (1 + exponential).square())
+
+
+def stable_tanh(value):
+    return _Tanh.apply(value)
+
+
+class StableTanh(nn.Module):
+    def forward(self, value):
+        return stable_tanh(value)
+
+
 def active_tokens(batch: dict[str, Tensor]) -> Tensor:
     """历史先完整交互两层；近期日志及有效候选引用继续接受每层更新。
 
@@ -67,14 +90,14 @@ class EncoderBlock(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.heads = config.heads
-        self.attention_norm = nn.LayerNorm(config.width)
-        self.qkv = nn.Linear(config.width, 3 * config.width)
-        self.output = nn.Linear(config.width, config.width)
-        self.ffn_norm = nn.LayerNorm(config.width)
+        self.attention_norm = nn.LayerNorm(config.width, dtype=torch.bfloat16)
+        self.qkv = nn.Linear(config.width, 3 * config.width, dtype=torch.bfloat16)
+        self.output = nn.Linear(config.width, config.width, dtype=torch.bfloat16)
+        self.ffn_norm = nn.LayerNorm(config.width, dtype=torch.bfloat16)
         self.ffn = nn.Sequential(
-            nn.Linear(config.width, config.ffn),
+            nn.Linear(config.width, config.ffn, dtype=torch.bfloat16),
             nn.GELU(approximate="tanh"),
-            nn.Linear(config.ffn, config.width),
+            nn.Linear(config.ffn, config.width, dtype=torch.bfloat16),
         )
 
     def forward(self, x: Tensor, allowed: Tensor, readout: Tensor | None = None) -> Tensor:
@@ -106,28 +129,34 @@ class PolicyValueNet(nn.Module):
     def __init__(self, config: ModelConfig = ModelConfig()):
         super().__init__()
         self.config = config
-        self.entity_projection = nn.Linear(config.entity_features, config.width)
-        self.kind_embedding = nn.Embedding(config.kind_count, config.width, padding_idx=0)
-        self.global_projection = nn.Linear(config.global_features, config.width)
+        self.entity_projection = nn.Linear(
+            config.entity_features, config.width, dtype=torch.bfloat16
+        )
+        self.kind_embedding = nn.Embedding(
+            config.kind_count, config.width, padding_idx=0, dtype=torch.bfloat16
+        )
+        self.global_projection = nn.Linear(
+            config.global_features, config.width, dtype=torch.bfloat16
+        )
         self.blocks = nn.ModuleList(EncoderBlock(config) for _ in range(config.layers))
-        self.norm = nn.LayerNorm(config.width)
+        self.norm = nn.LayerNorm(config.width, dtype=torch.bfloat16)
         self.action_projection = nn.Sequential(
-            nn.Linear(config.action_features, config.width),
+            nn.Linear(config.action_features, config.width, dtype=torch.bfloat16),
             nn.GELU(approximate="tanh"),
-            nn.LayerNorm(config.width),
+            nn.LayerNorm(config.width, dtype=torch.bfloat16),
         )
         self.policy = nn.Sequential(
-            nn.Linear(config.width * 4, config.width),
+            nn.Linear(config.width * 4, config.width, dtype=torch.bfloat16),
             nn.GELU(approximate="tanh"),
-            nn.Linear(config.width, config.width),
+            nn.Linear(config.width, config.width, dtype=torch.bfloat16),
             nn.GELU(approximate="tanh"),
-            nn.Linear(config.width, 1),
+            nn.Linear(config.width, 1, dtype=torch.bfloat16),
         )
         self.value = nn.Sequential(
-            nn.Linear(config.width, config.width),
+            nn.Linear(config.width, config.width, dtype=torch.bfloat16),
             nn.GELU(approximate="tanh"),
-            nn.Linear(config.width, 1),
-            nn.Tanh(),
+            nn.Linear(config.width, 1, dtype=torch.bfloat16),
+            StableTanh(),
         )
 
     def encode(self, batch: dict[str, Tensor], readout: Tensor | None = None) -> Tensor:
@@ -167,10 +196,10 @@ class PolicyValueNet(nn.Module):
         sources = x.gather(1, (batch["sources"] + 1).unsqueeze(-1).expand(-1, -1, x.shape[-1]))
         targets = x.gather(1, (batch["targets"] + 1).unsqueeze(-1).expand(-1, -1, x.shape[-1]))
         targets = self.target_context(batch, x, targets)
-        # 候选投影与评分矩阵共用所选 AMP；仅标量输出、遮罩和收益回归保留 FP32。
+        # 参数、残差、评分与收益回归共用 BF16。
         actions = self.action_projection(batch["candidates"])
         action_context = torch.cat((context, sources, targets, actions), dim=-1)
-        logits = self.policy(action_context).squeeze(-1).float()
+        logits = self.policy(action_context).squeeze(-1)
         logits = logits.masked_fill(~batch["candidate_mask"], -1e9)
         return logits
 
@@ -210,11 +239,11 @@ class PolicyValueNet(nn.Module):
             "targets": torch.ones_like(targets),
             "candidate_mask": batch["candidate_mask"].gather(1, selected[:, None]),
         }
-        return self.score_policy(chosen, x).squeeze(1), self.value(x[:, 0]).squeeze(-1).float()
+        return self.score_policy(chosen, x).squeeze(1), self.value(x[:, 0]).squeeze(-1)
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         x = self.encode(batch)
-        return self.score_policy(batch, x), self.value(x[:, 0]).squeeze(-1).float()
+        return self.score_policy(batch, x), self.value(x[:, 0]).squeeze(-1)
 
     def entity_context(self, batch: dict[str, Tensor], entities: Tensor) -> Tensor:
         """默认保持原实体投影；研究模型可展开已有公开字段，不更改旧检查点参数。"""
@@ -235,6 +264,6 @@ def policy_value_loss(
     """策略支持软访问分布/one-hot教师标签；截断样本的价值mask为False，不充当平局。"""
     logits, value = output
     policy_loss = -(batch["policy"] * F.log_softmax(logits, dim=-1)).sum(dim=-1).mean()
-    known = batch["value_mask"].float()
+    known = batch["value_mask"].to(torch.bfloat16)
     value_loss = ((value - batch["value"]).square() * known).sum() / known.sum().clamp_min(1)
     return policy_loss + value_weight * value_loss

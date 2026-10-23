@@ -15,10 +15,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from ..data import bf16_tensors
 from ..model import ModelConfig
 from .aten import native_io
 
-LOGITS_CAPABILITY = "logits-f32-v1"
+LOGITS_CAPABILITY = "logits-bf16-v1"
 KIND_COUNT = ModelConfig().kind_count
 
 
@@ -69,7 +70,7 @@ class Client:
         self.stderr_reader.start()
         try:
             self.ready = self.receive(cancel_event=startup_cancel)
-            if self.ready.get("protocol") != "haojie-training-binary-v1":
+            if self.ready.get("protocol") != "haojie-training-binary-v2":
                 raise ValueError("原生训练协议不匹配")
         except BaseException:
             self.close()
@@ -231,7 +232,7 @@ class Client:
                     entities, candidates = meta.get("entities"), meta.get("candidates")
                     if (
                         any(type(n) is not int or n < 1 for n in (size, entities, candidates))
-                        or size != entities * 265 + candidates * 273 + 128
+                        or size != entities * 137 + candidates * 145 + 64
                     ):
                         raise ValueError("张量消息长度无效")
                     if size > self.frame_limit:
@@ -327,17 +328,19 @@ class Client:
             self._input_refs = enabled
         payload = b""
         logits = value.get("logits")
+        if isinstance(logits, (list, tuple)):
+            logits = torch.tensor(logits, dtype=torch.bfloat16).view(torch.uint16).numpy()
         if isinstance(logits, np.ndarray):
-            if logits.ndim != 1 or logits.dtype != np.float32:
-                raise ValueError("模型评分需要一维 CPU FP32 数组")
-            if not np.isfinite(logits).all():
+            if logits.ndim != 1 or logits.dtype != np.uint16:
+                raise ValueError("模型评分需要一维 CPU BF16 位数组")
+            if ((logits & 0x7F80) == 0x7F80).any():
                 raise ValueError("模型输出非有限")
             if LOGITS_CAPABILITY in self.ready.get("capabilities", []):
-                payload = logits.astype("<f4", copy=False).tobytes()
+                payload = logits.astype("<u2", copy=False).tobytes()
                 value = {**value, "logitsBytes": len(payload)}
                 del value["logits"]
             else:
-                value = {**value, "logits": logits.tolist()}
+                raise ValueError("原生引擎缺少 BF16 评分协议")
         try:
             self.process.stdin.write(
                 json.dumps(value, allow_nan=False, separators=(",", ":")).encode() + b"\n" + payload
@@ -420,7 +423,7 @@ class ArrayInput(Mapping):
         self._values, self._data = values, data
         self.entity_count = len(values["entities"]) if values is not None else entities
         self.candidate_count = len(values["sources"]) if values is not None else candidates
-        self.frame_bytes = self.entity_count * 265 + self.candidate_count * 273 + 128
+        self.frame_bytes = self.entity_count * 137 + self.candidate_count * 145 + 64
         if data is not None:
             self.address = (
                 values["entities"].ctypes.data
@@ -465,9 +468,9 @@ def array_views(data, entities, candidates, *, lazy=False):
     offset = 0
     inputs = {}
     for key, shape, dtype in (
-        ("entities", (entities, 64), "<f4"),
-        ("globals", (32,), "<f4"),
-        ("candidates", (candidates, 64), "<f4"),
+        ("entities", (entities, 64), "<u2"),
+        ("globals", (32,), "<u2"),
+        ("candidates", (candidates, 64), "<u2"),
         ("kinds", (entities,), "<i8"),
         ("sources", (candidates,), "<i8"),
         ("targets", (candidates,), "<i8"),
@@ -486,7 +489,7 @@ def array_views(data, entities, candidates, *, lazy=False):
 def decode(data, entities, candidates, *, _owned=False, _arrays=False, _defer=False):
     if any(type(n) is not int or n < 1 for n in (entities, candidates)):
         raise ValueError("张量维度无效")
-    if len(data) != entities * 265 + candidates * 273 + 128:
+    if len(data) != entities * 137 + candidates * 145 + 64:
         raise ValueError("张量字节长度不匹配")
     # 可变调用者缓冲不能借用；读取线程交付独占 bytearray 后不再写入。
     inputs = array_views(
@@ -494,7 +497,11 @@ def decode(data, entities, candidates, *, _owned=False, _arrays=False, _defer=Fa
     )
     if not _defer:
         validate(inputs)
-    return inputs if _arrays else {key: torch.from_numpy(value) for key, value in inputs.items()}
+    return (
+        inputs
+        if _arrays
+        else bf16_tensors({key: torch.from_numpy(value) for key, value in inputs.items()})
+    )
 
 
 def validate(inputs):
@@ -518,7 +525,7 @@ def validate(inputs):
         return
     # 帧布局已限定白名单、dtype与形状；直接在零拷贝视图校验，避免读取线程
     # 为几十个小型CPU算子反复进出PyTorch/GIL。与validate_inputs保持同一数值边界。
-    if any(not np.isfinite(inputs[k]).all() for k in ("entities", "globals", "candidates")):
+    if any(((inputs[k] & 0x7F80) == 0x7F80).any() for k in ("entities", "globals", "candidates")):
         raise ValueError("输入含非有限数值")
     kinds = inputs["kinds"]
     if (kinds < 0).any() or (kinds >= KIND_COUNT).any():
@@ -545,7 +552,7 @@ def send_many(responses):
         or any(
             LOGITS_CAPABILITY not in getattr(client, "ready", {}).get("capabilities", [])
             or not isinstance(value.get("logits"), np.ndarray)
-            or value["logits"].dtype != np.float32
+            or value["logits"].dtype != np.uint16
             or value["logits"].ndim != 1
             or not value["logits"].flags.c_contiguous
             for client, value in responses

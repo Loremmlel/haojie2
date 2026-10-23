@@ -62,7 +62,9 @@ const wait = async (url, predicate) => {
     assert.notEqual(state.state, 'error', state.error);
     await new Promise((done) => setTimeout(done, 250));
   }
-  throw Error('状态等待超时');
+  const state = await (await fetch(url + '/api/status')).json();
+  await writeFile(resolve(output, 'timeout.json'), JSON.stringify(state, null, 2));
+  throw Error(`状态等待超时：${state.state}，并发 ${JSON.stringify(state.concurrency)}`);
 };
 try {
   const root = resolve(output, 'managed');
@@ -102,8 +104,11 @@ try {
   await wait(url, (s) => s.concurrency.actual === 3 && s.concurrency.requested === 3);
   await page.locator('[name="environments"]').fill('1');
   await page.getByRole('button', { name: '应用并发量', exact: true }).click();
-  await wait(url, (s) => s.concurrency.actual === 1 && !s.concurrency.pending);
-  checks.push('运行中独立提交并发、回车扩容、按钮缩容收敛');
+  await wait(url, (s) => s.concurrency.requested === 1);
+  await page.waitForFunction(() =>
+    document.getElementById('concurrency-help').textContent.includes('目标 1'),
+  );
+  checks.push('运行中独立提交并发、回车扩容、缩容显示目标与终局等待');
   await page.reload();
   await page.getByRole('button', { name: '暂停', exact: true }).click();
   const pauseAt = performance.now();

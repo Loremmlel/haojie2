@@ -143,7 +143,7 @@ class NativeTests(unittest.TestCase):
     def test_eof_during_frame_is_distinct_from_corruption(self):
         for payload, kind in (
             (b'{"type":"infer"', RuntimeError),
-            (b'{"bytes":666,"entities":1,"candidates":1}\nabc', RuntimeError),
+            (b'{"bytes":346,"entities":1,"candidates":1}\nabc', RuntimeError),
             (b'{"bytes":10,"entities":1,"candidates":1}\nabc', ValueError),
             (b"{bad json}\n", ValueError),
         ):
@@ -159,9 +159,12 @@ class NativeTests(unittest.TestCase):
                 self.assertEqual(str(results[-1]), "原生进程已退出")
 
     def test_large_valid_frame_is_distinct_from_resource_and_protocol_errors(self):
-        entities = 8200
+        entities = 16400
         body = (
-            torch.zeros(entities * 64 + 32 + 64).numpy().tobytes()
+            torch.zeros(entities * 64 + 32 + 64, dtype=torch.bfloat16)
+            .view(torch.uint16)
+            .numpy()
+            .tobytes()
             + torch.zeros(entities, dtype=torch.int64).numpy().tobytes()
             + torch.full((2,), -1, dtype=torch.int64).numpy().tobytes()
             + bytes([1]) * (entities + 1)

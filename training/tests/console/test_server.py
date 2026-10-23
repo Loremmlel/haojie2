@@ -90,7 +90,7 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(profile["environments"], 1)
                 self.assertEqual(profile["games_per_round"], 2)
                 self.assertEqual(profile["pool_mib"], 256)
-                self.assertEqual(profile["sampling_precision"], "bf16")
+                self.assertNotIn("sampling_precision", profile)
 
     def test_shared_defaults_scale_and_new_experiments_keep_explicit_settings(self):
         with (
@@ -128,7 +128,7 @@ class ServerTests(unittest.TestCase):
             with patch.object(config, "resolve_device", return_value=torch.device("xpu")):
                 self.assertEqual(defaults()["environments"], 80)
 
-    def test_initialization_uses_selected_gpu_precision_and_current_thread_policy(self):
+    def test_initialization_uses_single_numeric_trainer_and_current_thread_policy(self):
         c = Controller.__new__(Controller)
         c.device = torch.device("cuda:1")
         c.requested_threads = 0
@@ -153,12 +153,6 @@ class ServerTests(unittest.TestCase):
         c.engine, c.store, c.config = "unused", Mock(), defaults("cpu")
         c.store.names.return_value = []
 
-        def bf16_supported(**kwargs):
-            self.assertEqual(kwargs, {"including_emulation": False})
-            selected.assert_called_once_with(torch.device("cuda:1"))
-            selected.return_value.__enter__.assert_called_once()
-            return True
-
         with (
             patch("haojie_training.console.controller.Client") as client,
             patch("haojie_training.console.controller.metadata", return_value={}),
@@ -167,13 +161,12 @@ class ServerTests(unittest.TestCase):
                 "haojie_training.console.controller.Trainer", side_effect=RuntimeError("done")
             ) as trainer,
             patch.object(torch, "manual_seed"),
-            patch.object(torch.cuda, "device") as selected,
-            patch.object(torch.cuda, "is_bf16_supported", side_effect=bf16_supported),
         ):
             client.return_value.__enter__.return_value.ready = {"capabilities": ["mc-context-v2"]}
             with self.assertRaisesRegex(RuntimeError, "done"):
                 c._initialize()
-            self.assertEqual(trainer.call_args.kwargs["precision"], "bf16")
+            self.assertNotIn("precision", trainer.call_args.kwargs)
+            self.assertNotIn("optimizer", trainer.call_args.kwargs)
 
     def test_cpu_threads_respect_quota_explicit_override_and_auto_device(self):
         for capacity, expected in ((0.5, 1), (3.9, 3), (16, 4)):
@@ -218,7 +211,9 @@ class ServerTests(unittest.TestCase):
                     self.assertEqual(resources.available_memory(), 256 * 2**20)
 
     def test_old_recovery_options_and_server_ranges(self):
-        original = {**defaults(), "inference_batch_size": 32, "sampling_precision": "fp32"}
+        original = {**defaults(), "inference_batch_size": 32}
+        for precision in ("fp32", "bf16", "fp16"):
+            self.assertEqual(upgrade({**original, "sampling_precision": precision}), original)
         legacy = {
             k: v
             for k, v in original.items()

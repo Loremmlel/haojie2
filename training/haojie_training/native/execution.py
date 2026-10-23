@@ -9,9 +9,8 @@ from dataclasses import dataclass, field
 
 import torch
 
-from ..data import INPUT_KEYS, _collate
+from ..data import INPUT_KEYS, _collate, bf16_tensors
 from ..model import PolicyValueNet
-from ..runtime import autocast
 from .packed import PackedPolicy, supports_packed
 
 
@@ -101,7 +100,7 @@ class InferenceTicket:
 
 
 class ForwardWorkers:
-    """常驻双流发射；窗口先排空再清 AMP，关闭工作池时才停止线程。"""
+    """常驻双流发射；窗口先排空，关闭工作池时才停止线程。"""
 
     def __init__(self, device, count=2):
         self.device, self.next = device, 0
@@ -124,11 +123,7 @@ class ForwardWorkers:
 
     def run(self, incoming, stream, started):
         try:
-            with (
-                torch.cuda.device(self.device),
-                torch.cuda.stream(stream),
-                torch.autocast(self.device.type, enabled=False),
-            ):
+            with torch.cuda.device(self.device), torch.cuda.stream(stream):
                 started.set_result(None)
                 while item := incoming.get():
                     future, function, args = item
@@ -163,18 +158,18 @@ class ForwardWorkers:
 
 
 class PolicyInference:
-    def __init__(self, model, device, precision="fp32", *, pinned=True, stats=None):
-        self.model, self.device, self.precision = model, torch.device(device), precision
-        if precision == "bf16" and self.device.type == "cuda":
+    def __init__(self, model, device, *, pinned=True, stats=None):
+        self.model, self.device, self.precision = model, torch.device(device), "bf16"
+        if self.device.type == "cuda":
             with torch.cuda.device(self.device):
-                if not torch.cuda.is_bf16_supported():
-                    raise ValueError("本 CUDA 设备不支持 BF16，请使用 FP32 采样")
+                if not torch.cuda.is_bf16_supported(including_emulation=False):
+                    raise ValueError("本 CUDA 设备不支持 BF16")
         self.pinned = pinned and self.device.type == "cuda"
         self.buffers = {}
         self.stats = stats if stats is not None else InferenceStats()
         self.packed = (
-            PackedPolicy(model, self.buffers, self.pinned, precision)
-            if supports_packed(model, self.device, precision)
+            PackedPolicy(model, self.buffers, self.pinned)
+            if supports_packed(model, self.device)
             else None
         )
         self._alternate_packed = None
@@ -252,10 +247,12 @@ class PolicyInference:
             self.stats.candidate_slots += layout["candidate_slots"]
         else:
             examples = [
-                {
-                    key: value if isinstance(value, torch.Tensor) else torch.from_numpy(value)
-                    for key, value in row.items()
-                }
+                bf16_tensors(
+                    {
+                        key: value if isinstance(value, torch.Tensor) else torch.from_numpy(value)
+                        for key, value in row.items()
+                    }
+                )
                 for row in examples
             ]
             layout = None
@@ -273,7 +270,7 @@ class PolicyInference:
         )
 
     def _forward(self, batch, layout, readout, packed, events):
-        with torch.no_grad(), autocast(self.device, self.precision):
+        with torch.no_grad():
             if events:
                 events[0].record(torch.cuda.current_stream(self.device))
             # 原生评分只读取遮罩的输出形状，有效位置已在 CPU 排好，无需上传遮罩。
@@ -343,7 +340,7 @@ class PolicyInference:
         except ValueError:
             raise RuntimeError("两组推理均在途，须先回收一组") from None
         if index and self._alternate_packed is None:
-            self._alternate_packed = PackedPolicy(self.model, {}, self.pinned, self.precision)
+            self._alternate_packed = PackedPolicy(self.model, {}, self.pinned)
         packed = self._alternate_packed if index else self.packed
         batch, layout, readout = self._prepare(examples, packed)
         before = time.perf_counter()
@@ -352,7 +349,7 @@ class PolicyInference:
         launcher = getattr(self, "launcher", None)
         if launcher is not None and self.weights_ready is not None and packed.native_dispatch:
             logits = torch.empty(
-                batch["candidate_mask"].shape, dtype=torch.float32, device="cpu", pin_memory=True
+                batch["candidate_mask"].shape, dtype=torch.bfloat16, device="cpu", pin_memory=True
             )
             event = events[3] if events else torch.cuda.Event(blocking=True)
             launch = launcher.submit(
@@ -387,7 +384,7 @@ class PolicyInference:
                 raise
             owners = (batch, device_batch, device_readout, output)
             if launcher is not None and packed.native_dispatch:
-                # 首批在主流填充全模型的共享 AMP 缓存，其他流先等转换写入完成。
+                # 首批确认当前权重已就绪；其他流继续等待同一发布边界。
                 self.weights_ready = event
         ticket = InferenceTicket(index, slots, event, logits, owners, events, launch)
         # 当前与历史模型共用统计，跨执行器的在途工作同样计入重叠。

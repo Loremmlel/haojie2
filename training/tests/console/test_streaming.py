@@ -41,7 +41,7 @@ def limited_tasks(limit):
 
 class HistoryLeaseTests(unittest.TestCase):
     def test_live_history_cap_and_current_route_ownership(self):
-        current = Mock(precision="fp32", stats=object())
+        current = Mock(precision="bf16", stats=object())
         frozen = Mock()
         frozen.eval.return_value = frozen
         c = SimpleNamespace(
@@ -445,7 +445,7 @@ class StreamingTests(unittest.TestCase):
                     for key in sorted(k for k in row if not k.startswith("_")):
                         value = row[key].contiguous()
                         digest.update(f"{key}:{value.dtype}:{list(value.shape)}".encode())
-                        digest.update(value.numpy().tobytes())
+                        digest.update(value.reshape(-1).view(torch.uint8).numpy().tobytes())
                     samples.append((meta["game"]["task"], meta["decision"], digest.hexdigest()))
                 self.assertTrue(samples)
                 summaries.append((c.counts["seen_samples"], sorted(samples)))

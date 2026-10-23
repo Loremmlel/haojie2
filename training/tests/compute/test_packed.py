@@ -12,7 +12,6 @@ from haojie_training.data import INPUT_KEYS, collate_inputs, synthetic_batch, va
 from haojie_training.model import RECENT_JOURNAL, ModelConfig, PolicyValueNet
 from haojie_training.native.execution import InferenceStats, PolicyInference
 from haojie_training.native.packed import ENCODER_KEYS, POLICY_KEYS, PackedPolicy, supports_packed
-from haojie_training.runtime import autocast
 
 
 def examples(config):
@@ -95,7 +94,7 @@ class PackedTests(unittest.TestCase):
         )
         arrays = [
             decode(
-                b"".join(row[key].numpy().tobytes() for key in keys),
+                b"".join(row[key].view(torch.uint8).numpy().tobytes() for key in keys),
                 len(row["entities"]),
                 len(row["sources"]),
                 _arrays=True,
@@ -162,7 +161,7 @@ class PackedTests(unittest.TestCase):
             with torch.inference_mode():
                 expected = model.policy_logits(dense)
             actual = runner(rows)
-            torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-5)
+            torch.testing.assert_close(actual, expected, atol=0.001, rtol=0.008)
             self.assertTrue(
                 torch.equal(
                     actual.argsort(dim=-1, stable=True), expected.argsort(dim=-1, stable=True)
@@ -186,7 +185,7 @@ class PackedTests(unittest.TestCase):
             updated = runner(rows)
             with torch.inference_mode():
                 expected = model.policy_logits(dense)
-            torch.testing.assert_close(updated, expected, atol=2e-6, rtol=2e-5)
+            torch.testing.assert_close(updated, expected, atol=0.001, rtol=0.008)
             self.assertFalse(torch.equal(updated, actual))
             runner(rows[:1])
         torch.testing.assert_close(actual, retained, atol=0, rtol=0)
@@ -202,16 +201,15 @@ class PackedTests(unittest.TestCase):
     def test_fallbacks_and_device_capability(self):
         model = PolicyValueNet(ModelConfig.tiny()).eval()
         self.assertFalse(PolicyInference(model, "cpu").supports_packed_batches)
-        self.assertFalse(PolicyInference(model, "cpu", "bf16").supports_async)
-        self.assertFalse(supports_packed(model, torch.device("xpu"), "bf16"))
-        self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
-        self.assertFalse(supports_packed(model, torch.device("cuda"), "bf16"))
+        self.assertFalse(PolicyInference(model, "cpu").supports_async)
+        self.assertFalse(supports_packed(model, torch.device("xpu")))
+        self.assertFalse(supports_packed(model, torch.device("cuda")))
 
         class ExtendedPolicy(PolicyValueNet):
             pass
 
         research = ExtendedPolicy(model.config).eval()
-        self.assertFalse(supports_packed(research, torch.device("cuda"), "fp32"))
+        self.assertFalse(supports_packed(research, torch.device("cuda")))
         # 使用小配置代替正式配置检查版本和后端门槛，无须建立 CUDA 上下文。
         with (
             patch("haojie_training.native.packed.ModelConfig", return_value=model.config),
@@ -222,38 +220,31 @@ class PackedTests(unittest.TestCase):
             patch("torch.cuda.device", return_value=nullcontext()),
             patch("torch.backends.cuda.can_use_efficient_attention", return_value=True) as usable,
         ):
-            self.assertTrue(supports_packed(model, torch.device("cuda"), "fp32"))
+            self.assertTrue(supports_packed(model, torch.device("cuda")))
             query = usable.call_args.args[0].query
             self.assertEqual(
                 query.shape, (1, model.config.heads, 1, model.config.width // model.config.heads)
             )
             self.assertEqual(query.data_ptr(), model.entity_projection.weight.data_ptr())
-            self.assertEqual(query.dtype, torch.float32)
+            self.assertEqual(query.dtype, torch.bfloat16)
             self.assertFalse(query.requires_grad)
-            self.assertTrue(supports_packed(model, torch.device("cuda"), "bf16"))
-            self.assertEqual(usable.call_args.args[0].query.dtype, torch.bfloat16)
             with patch("torch.backends.cuda.can_use_efficient_attention", return_value=False):
-                self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
-                self.assertFalse(supports_packed(model, torch.device("cuda"), "bf16"))
+                self.assertFalse(supports_packed(model, torch.device("cuda")))
                 self.assertFalse(PolicyInference(model, "cuda").supports_packed_batches)
             with patch("torch.version.cuda", None):
-                self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
+                self.assertFalse(supports_packed(model, torch.device("cuda")))
                 self.assertFalse(PolicyInference(model, "cuda").supports_packed_batches)
             with patch("torch.__version__", "2.15.0"):
-                self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
+                self.assertFalse(supports_packed(model, torch.device("cuda")))
             with patch("torch.backends.cuda.mem_efficient_sdp_enabled", return_value=False):
-                self.assertFalse(supports_packed(model, torch.device("cuda"), "fp32"))
-
-    @unittest.skipUnless(torch.cuda.is_available(), "CUDA 紧凑推理需要 GPU 执行器")
-    def test_cuda_packed_logits_update_and_timing(self):
-        self._cuda_packed_logits_update_and_timing("fp32", 2e-6, 2e-5)
+                self.assertFalse(supports_packed(model, torch.device("cuda")))
 
     @unittest.skipUnless(
         torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
         "CUDA BF16 紧凑推理需要支持的 GPU 执行器",
     )
     def test_cuda_bf16_packed_logits_update_and_timing(self):
-        self._cuda_packed_logits_update_and_timing("bf16", 3e-3, 3e-3)
+        self._cuda_packed_logits_update_and_timing(3e-3, 3e-3)
 
     @unittest.skipUnless(
         torch.cuda.is_available()
@@ -271,10 +262,10 @@ class PackedTests(unittest.TestCase):
         pointers = kernel[:2]
         stream = torch.cuda.current_stream().cuda_stream
         torch.manual_seed(719)
-        weight, bias = (torch.randn(384, device="cuda") for _ in range(2))
+        weight, bias = (torch.randn(384, device="cuda", dtype=torch.bfloat16) for _ in range(2))
         for count in (1, 37, 8193):
             with torch.no_grad():
-                left = torch.randn(count, 384, device="cuda")
+                left = torch.randn(count, 384, device="cuda", dtype=torch.bfloat16)
                 right = torch.randn_like(left, dtype=torch.bfloat16)
                 summed, normalized = torch.ops.haojie.add_norm(
                     left, right, weight, bias, 1e-5, *pointers, stream
@@ -284,10 +275,10 @@ class PackedTests(unittest.TestCase):
                 torch.testing.assert_close(
                     normalized,
                     F.layer_norm(expected, (384,), weight, bias, 1e-5),
-                    atol=2e-6,
-                    rtol=2e-5,
+                    atol=0.016,
+                    rtol=0.008,
                 )
-        left = torch.randn(3, 384, device="cuda", requires_grad=True)
+        left = torch.randn(3, 384, device="cuda", dtype=torch.bfloat16, requires_grad=True)
         right = torch.randn(3, 384, device="cuda", dtype=torch.bfloat16, requires_grad=True)
         _, actual = torch.ops.haojie.add_norm(left, right, weight, bias, 1e-5, *pointers, stream)
         expected = F.layer_norm(left + right, (384,), weight, bias, 1e-5)
@@ -315,18 +306,18 @@ class PackedTests(unittest.TestCase):
                 layer.eps *= index + 1
         keys = list(model.state_dict())
         rows = examples(model.config)
-        modes = [("fp32", False, False), ("bf16", False, False), ("bf16", False, True)]
+        modes = [(False, False), (False, True)]
         if torch.backends.cuda.is_flash_attention_available():
-            modes.extend((("bf16", True, False), ("bf16", True, True)))
-        for precision, flash, fused in modes:
-            atol, rtol = (2e-6, 2e-5) if precision == "fp32" else (3e-3, 3e-3)
-            runner = PolicyInference(model, "cuda", precision)
+            modes.extend(((True, False), (True, True)))
+        for flash, fused in modes:
+            atol, rtol = 3e-3, 3e-3
+            runner = PolicyInference(model, "cuda")
             self.assertIsNotNone(runner.packed.operator)
             runner.packed.flash = flash
             runner.packed.fused = fused
             for group in (rows, rows[:1], rows[1:]):
                 batch = {k: v.cuda() for k, v in collate_inputs(group, model.config).items()}
-                with torch.no_grad(), autocast(torch.device("cuda"), precision):
+                with torch.no_grad():
                     expected = model.policy_logits(batch).cpu()
                 torch.testing.assert_close(runner(group), expected, atol=atol, rtol=rtol)
             self.assertEqual(
@@ -335,7 +326,7 @@ class PackedTests(unittest.TestCase):
             with torch.no_grad():
                 model.blocks[0].qkv.weight.mul_(0.75)
             batch = {k: v.cuda() for k, v in collate_inputs(rows, model.config).items()}
-            with torch.no_grad(), autocast(torch.device("cuda"), precision):
+            with torch.no_grad():
                 expected = model.policy_logits(batch).cpu()
             torch.testing.assert_close(runner(rows), expected, atol=atol, rtol=rtol)
         self.assertEqual(list(model.state_dict()), keys)
@@ -348,7 +339,7 @@ class PackedTests(unittest.TestCase):
         from haojie_training.native.client import decode
 
         model = PolicyValueNet().cuda().eval()
-        runner = PolicyInference(model, "cuda", "bf16")
+        runner = PolicyInference(model, "cuda")
         keys = (
             "entities",
             "globals",
@@ -362,7 +353,8 @@ class PackedTests(unittest.TestCase):
         rows = examples(model.config)
         for group in (rows, rows[:1], rows[1:]):
             frames = [
-                bytearray(b"".join(row[key].numpy().tobytes() for key in keys)) for row in group
+                bytearray(b"".join(row[key].view(torch.uint8).numpy().tobytes() for key in keys))
+                for row in group
             ]
             arrays = [
                 decode(
@@ -389,7 +381,9 @@ class PackedTests(unittest.TestCase):
             for frame in frames:
                 frame[:] = bytes(len(frame))
             torch.testing.assert_close(actual["entities"], snapshot, atol=0, rtol=0)
-        frame = bytearray(b"".join(rows[0][key].numpy().tobytes() for key in keys))
+        frame = bytearray(
+            b"".join(rows[0][key].view(torch.uint8).numpy().tobytes() for key in keys)
+        )
         malformed = decode(
             frame,
             len(rows[0]["entities"]),
@@ -422,14 +416,14 @@ class PackedTests(unittest.TestCase):
             row["targets"].fill_(entities - 1)
             row["candidate_mask"][-1] = False
             rows.append(row)
-        runner = PolicyInference(model, "cuda", "bf16")
+        runner = PolicyInference(model, "cuda")
         batch = {key: value.cuda() for key, value in collate_inputs(rows, model.config).items()}
         for updated in (False, True):
             if updated:
                 with torch.no_grad():
                     model.policy[0].weight.mul_(0.75)
                     model.policy[0].bias.add_(0.1)
-            with torch.no_grad(), autocast(torch.device("cuda"), "bf16"):
+            with torch.no_grad():
                 expected = model.policy_logits(batch).cpu()
             for factored, fused in ((False, False), (False, True), (True, True)):
                 runner.packed.factored = factored
@@ -444,39 +438,15 @@ class PackedTests(unittest.TestCase):
                     )
                 )
 
-    @unittest.skipUnless(
-        torch.cuda.is_available() and torch.cuda.is_bf16_supported(), "需要 CUDA BF16"
-    )
-    def test_bf16_window_reuses_casts_and_refreshes_after_update(self):
-        model = PolicyValueNet(ModelConfig.tiny()).cuda().eval()
-        rows = examples(model.config)
-        runner = PolicyInference(model, "cuda", "bf16")
-        runner(rows)
-        counts, outputs = [], []
-        for scope in (torch.no_grad(), torch.autocast("cuda", enabled=False)):
-            with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as trace:
-                with scope:
-                    runner(rows)
-                    outputs.append(runner(rows))
-            counts.append(sum(e.count for e in trace.key_averages() if e.key == "aten::_to_copy"))
-        self.assertLess(counts[1], counts[0])
-        torch.testing.assert_close(*outputs, atol=0, rtol=0)
-        with torch.no_grad():
-            model.policy[-1].weight.mul_(0.5)
-        with torch.autocast("cuda", enabled=False):
-            refreshed = runner(rows)
-        self.assertFalse(torch.equal(refreshed, outputs[0]))
-        self.assertFalse(torch.is_autocast_enabled("cuda"))
-
-    def _cuda_packed_logits_update_and_timing(self, precision, atol, rtol):
+    def _cuda_packed_logits_update_and_timing(self, atol, rtol):
         torch.manual_seed(73)
         model = PolicyValueNet().cuda().eval()
-        runner = PolicyInference(model, "cuda", precision)
+        runner = PolicyInference(model, "cuda")
         if not runner.supports_packed_batches:
             self.skipTest("本 Torch/CUDA 后端沿用普通推理")
         rows = examples(model.config)
         batch = {key: value.cuda() for key, value in collate_inputs(rows, model.config).items()}
-        with torch.inference_mode(), autocast(torch.device("cuda"), precision):
+        with torch.inference_mode():
             expected = model.policy_logits(batch).cpu()
         dtypes = []
         handle = model.blocks[0].qkv.register_forward_hook(
@@ -490,8 +460,8 @@ class PackedTests(unittest.TestCase):
         finally:
             handle.remove()
             head_handle.remove()
-        self.assertEqual(dtypes, [torch.bfloat16 if precision == "bf16" else torch.float32] * 2)
-        self.assertEqual(actual.dtype, torch.float32)
+        self.assertEqual(dtypes, [torch.bfloat16] * 2)
+        self.assertEqual(actual.dtype, torch.bfloat16)
         torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
         self.assertTrue(
             torch.equal(actual.argsort(dim=-1, stable=True), expected.argsort(dim=-1, stable=True))
@@ -500,7 +470,7 @@ class PackedTests(unittest.TestCase):
         with torch.no_grad():
             model.policy[-1].weight.mul_(0.5)
         updated = runner(rows)
-        with torch.inference_mode(), autocast(torch.device("cuda"), precision):
+        with torch.inference_mode():
             expected = model.policy_logits(batch).cpu()
         torch.testing.assert_close(updated, expected, atol=atol, rtol=rtol)
         self.assertTrue(

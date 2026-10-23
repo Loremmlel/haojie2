@@ -1,4 +1,4 @@
-"""可选 ATen C++ 发射器；复用 Torch 的构建缓存、CUDA 算子和 AMP，不另存模型。"""
+"""可选 ATen C++ 发射器；复用 Torch 的构建缓存与 BF16 CUDA 算子，不另存模型。"""
 
 import ctypes
 import hashlib

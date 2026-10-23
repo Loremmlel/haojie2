@@ -1,5 +1,5 @@
-//! 与经济性实验 TinyPolicy 同形；双精度累加，每层和池化写回 Float32，不训练权重。
-use crate::encoding::Input;
+//! 与 TS TinyPolicy 同形；权重、每层和池化写回 BF16，标量累加不训练权重。
+use crate::encoding::{Input, bf16_bits, bf16_value};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 /// 行身份限定一次决策；Weak 防止释放后的地址复用命中旧投影，不缓存池化或候选结果。
@@ -10,7 +10,7 @@ pub struct Decision<'a> {
 struct EntityProjection {
     row: Weak<Vec<[f64; 64]>>,
     kind: usize,
-    hidden: Rc<Vec<f32>>,
+    hidden: Rc<Vec<u16>>,
 }
 impl Decision<'_> {
     pub fn logits(&mut self, input: &Input) -> Vec<f64> {
@@ -36,21 +36,21 @@ impl Random {
     }
 }
 pub struct TinyPolicy {
-    embedding: Vec<f32>,
-    entity: Vec<f32>,
-    global: Vec<f32>,
-    action: Vec<f32>,
-    output: Vec<f32>,
+    embedding: Vec<u16>,
+    entity: Vec<u16>,
+    global: Vec<u16>,
+    action: Vec<u16>,
+    output: Vec<u16>,
 }
-fn layer(input: &[f64], weights: &[f32]) -> Vec<f32> {
+fn layer(input: &[f64], weights: &[u16]) -> Vec<u16> {
     weights
         .chunks_exact(input.len() + 1)
         .map(|w| {
-            let mut value = w[input.len()] as f64;
+            let mut value = bf16_value(w[input.len()]);
             for (x, w) in input.iter().zip(w) {
-                value += x * (*w as f64);
+                value += bf16_value(bf16_bits(*x)) * bf16_value(*w);
             }
-            value.tanh() as f32
+            bf16_bits(value.tanh())
         })
         .collect()
 }
@@ -59,9 +59,9 @@ impl TinyPolicy {
         #[cfg(feature = "kernel-profile")]
         let _profile = crate::profile::scope(crate::profile::Phase::Policy);
         let mut random = Random::new(seed);
-        let mut matrix = |inputs: usize, outputs: usize| -> Vec<f32> {
+        let mut matrix = |inputs: usize, outputs: usize| -> Vec<u16> {
             (0..(inputs + 1) * outputs)
-                .map(|_| ((random.next() * 2.0 - 1.0) / (inputs as f64).sqrt()) as f32)
+                .map(|_| bf16_bits((random.next() * 2.0 - 1.0) / (inputs as f64).sqrt()))
                 .collect()
         };
         Self {
@@ -108,7 +108,7 @@ impl TinyPolicy {
                 }
                 entity_input[..64].copy_from_slice(row.as_slice());
                 for j in 0..16 {
-                    entity_input[64 + j] = self.embedding[k * 16 + j] as f64;
+                    entity_input[64 + j] = bf16_value(self.embedding[k * 16 + j]);
                 }
                 let hidden = Rc::new(layer(&entity_input, &self.entity));
                 if let Some(cache) = cache.as_mut()
@@ -131,14 +131,14 @@ impl TinyPolicy {
         for (entity, mask) in entities.iter().zip(&input.entity_mask) {
             if *mask {
                 for (c, v) in context.iter_mut().zip(entity.iter()) {
-                    *c = (*c as f64 + *v as f64 / count) as f32;
+                    *c = bf16_bits(bf16_value(*c) + bf16_value(*v) / count);
                 }
             }
         }
-        let empty = [0.0; 32];
+        let empty = [0u16; 32];
         let mut action_input = [0.0; 160];
         for j in 0..32 {
-            action_input[64 + j] = context[j] as f64;
+            action_input[64 + j] = bf16_value(context[j]);
         }
         input
             .candidates
@@ -155,15 +155,15 @@ impl TinyPolicy {
                     .map(|v| v.as_slice())
                     .unwrap_or(&empty);
                 for j in 0..32 {
-                    action_input[96 + j] = source[j] as f64;
-                    action_input[128 + j] = target[j] as f64;
+                    action_input[96 + j] = bf16_value(source[j]);
+                    action_input[128 + j] = bf16_value(target[j]);
                 }
                 let hidden = layer(&action_input, &self.action);
-                let mut out = self.output[32] as f64;
+                let mut out = bf16_value(self.output[32]);
                 for (h, w) in hidden.iter().zip(&self.output) {
-                    out += (*h as f64) * (*w as f64);
+                    out += bf16_value(*h) * bf16_value(*w);
                 }
-                out
+                bf16_value(bf16_bits(out))
             })
             .collect()
     }

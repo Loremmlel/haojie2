@@ -36,12 +36,12 @@ def episode(client, infer, rng, case, learning):
             return message, list(trajectory.terminal({"1": message["reward"]})) if learning else []
 
 
-def run(engine, seed, rounds=320, device="cpu", precision="fp32"):
+def run(engine, seed, rounds=320, device="cpu"):
     torch.manual_seed(seed)
     device = resolve_device(device)
     model = PolicyValueNet(ModelConfig.tiny()).to(device)
-    trainer = Trainer(model, device, precision=precision, objective="decomposed-mc-q-v2")
-    infer = PolicyInference(model, device, precision)
+    trainer = Trainer(model, device, objective="decomposed-mc-q-v2")
+    infer = PolicyInference(model, device)
     rng = random.Random(seed)
     pool = SamplePool(16 * 2**20)
     with Client(engine) as client:
@@ -78,7 +78,7 @@ def run(engine, seed, rounds=320, device="cpu", precision="fp32"):
     return {
         "seed": seed,
         "device": str(device),
-        "precision": precision,
+        "precision": "bf16",
         "before": before,
         "after": after,
         "updates": trainer.updates,
@@ -95,13 +95,12 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rounds", type=int, default=320)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
     parser.add_argument("--seeds", type=int, nargs="+", default=[17, 29, 43])
     args = parser.parse_args()
     torch.set_num_threads(1)
     results = []
     for seed in args.seeds:
-        result = run(args.engine, seed, args.rounds, args.device, args.precision)
+        result = run(args.engine, seed, args.rounds, args.device)
         results.append(result)
         print(json.dumps(result, ensure_ascii=False), flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -1,15 +1,12 @@
-"""导出动态ONNX和少量真实公开输入；CPU数值对照不代替浏览器验收或完整对局。"""
+"""导出 BF16 ONNX 与真实公开输入；保留 Torch 参考值供目标后端验收。"""
 
 import argparse
-import copy
 import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
 
-import numpy as np
 import onnx
-import onnxruntime as ort
 import torch
 from torch import nn
 
@@ -30,21 +27,14 @@ INPUTS = (
 
 
 class ExportNet(nn.Module):
-    """保持八个公开输入；混合FP16仅转换主干/价值头，候选评分和外部浮点协议仍FP32。"""
+    """保持八个公开输入及 BF16 参数，不插入精度回退。"""
 
-    def __init__(self, model, mixed=False):
+    def __init__(self, model):
         super().__init__()
-        self.model = copy.deepcopy(model).eval()
-        if mixed:
-            self.model.half()
-            self.model.action_projection.float()
-            self.model.policy.float()
+        self.model = model.eval()
 
     def forward(self, *inputs):
         batch = dict(zip(INPUTS, inputs, strict=True))
-        dtype = self.model.entity_projection.weight.dtype
-        for key in ("entities", "globals"):
-            batch[key] = batch[key].to(dtype)
         return self.model(batch)
 
 
@@ -71,19 +61,6 @@ def cases_from_data(dataset):
     return [
         (name, indices, select_batch(dataset, torch.tensor(indices))) for name, indices in choices
     ]
-
-
-def output_error(actual, expected, mask):
-    logits, value = [torch.from_numpy(x) for x in actual]
-    reference, reference_value = expected
-    return {
-        "finite": bool(torch.isfinite(logits).all() and torch.isfinite(value).all()),
-        "max_logit_abs": float((logits - reference).abs()[mask].max()),
-        "max_probability_abs": float((logits.softmax(-1) - reference.softmax(-1)).abs().max()),
-        "max_value_abs": float((value - reference_value).abs().max()),
-        "top1_equal": int((logits.argmax(-1) == reference.argmax(-1)).sum()),
-        "samples": len(value),
-    }
 
 
 def main():
@@ -155,49 +132,49 @@ def main():
         "versions": {
             "torch": torch.__version__,
             "onnx": onnx.__version__,
-            "onnxruntime": ort.__version__,
         },
         "cases_sha256": sha256(case_path),
         "models": {},
     }
-    for precision in ("fp32", "mixed-fp16"):
-        path = args.output / f"{precision}.onnx"
-        wrapped = ExportNet(model, mixed=precision == "mixed-fp16").eval()
-        # CPU 融合 SDPA 会对动态历史查询数设置额外 guard；数学后端保留同一注意力图。
-        with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.MATH):
-            torch.onnx.export(
-                wrapped,
-                tuple(example[key] for key in INPUTS),
-                str(path),
-                input_names=list(INPUTS),
-                output_names=["logits", "value"],
-                dynamic_shapes=(shapes,),
-                dynamo=True,
-                opset_version=18,
-                external_data=False,
-            )
-        onnx.checker.check_model(str(path))
-        options = ort.SessionOptions()
-        options.intra_op_num_threads = 4
-        session = ort.InferenceSession(str(path), options, providers=["CPUExecutionProvider"])
-        results = {}
-        for name, _, batch in cases:
-            actual = session.run(None, {key: batch[key].numpy() for key in INPUTS})
-            if not all(np.isfinite(value).all() for value in actual):
-                raise ValueError(f"{precision}/{name}输出非有限数值")
-            results[name] = output_error(actual, references[name], batch["candidate_mask"])
-            if (
-                precision == "fp32"
-                and max(results[name]["max_probability_abs"], results[name]["max_value_abs"]) > 1e-3
-            ):
-                raise ValueError(f"FP32导出数值对照失败：{results[name]}")
-        manifest["models"][precision] = {
-            "file": path.name,
-            "bytes": path.stat().st_size,
-            "sha256": sha256(path),
-            "native_cpu_parity": results,
-        }
-        print(f"{precision}: {path.stat().st_size} bytes; {results}", flush=True)
+    path = args.output / "bf16.onnx"
+    # 导出数学图，避免把某一设备的私有 Flash 算子写入可移植文件。
+    with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.MATH):
+        torch.onnx.export(
+            ExportNet(model),
+            tuple(example[key] for key in INPUTS),
+            str(path),
+            input_names=list(INPUTS),
+            output_names=["logits", "value"],
+            dynamic_shapes=(shapes,),
+            dynamo=True,
+            opset_version=18,
+            external_data=False,
+        )
+    graph = onnx.load(path)
+    onnx.checker.check_model(graph)
+    if any(
+        t.data_type in (onnx.TensorProto.FLOAT, onnx.TensorProto.FLOAT16, onnx.TensorProto.DOUBLE)
+        for t in graph.graph.initializer
+    ):
+        raise ValueError("导出图包含非 BF16 浮点参数")
+    if any(
+        node.op_type == "Cast"
+        and any(
+            attribute.name == "to"
+            and attribute.i
+            in (onnx.TensorProto.FLOAT, onnx.TensorProto.FLOAT16, onnx.TensorProto.DOUBLE)
+            for attribute in node.attribute
+        )
+        for node in graph.graph.node
+    ):
+        raise ValueError("导出后端插入了非 BF16 计算转换；未发布导出清单")
+    manifest["models"]["bf16"] = {
+        "file": path.name,
+        "bytes": path.stat().st_size,
+        "sha256": sha256(path),
+        "verification": "ONNX 结构及参数类型已检查；目标后端须另验 cases.json 数值",
+    }
+    print(f"BF16: {path.stat().st_size} bytes", flush=True)
     (args.output / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

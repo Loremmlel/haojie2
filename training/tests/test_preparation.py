@@ -31,7 +31,9 @@ class PreparationTests(unittest.TestCase):
         data["candidate_mask"] = [True, True, True]
         row = {"input": data, "selected": 1, "policy": [0.25, 0.75, 0.0]}
         example = tensor_example(row, config)
-        torch.testing.assert_close(example["policy"], torch.tensor([0.25, 0.75, 0.0]))
+        torch.testing.assert_close(
+            example["policy"], torch.tensor([0.25, 0.75, 0.0], dtype=torch.bfloat16)
+        )
         self.assertFalse(bool(example["value_mask"]))
         for invalid in ([0.2, 0.3, 0.0], [0.5, -0.2, 0.7], [float("nan"), 0.5, 0.5]):
             with self.assertRaises(ValueError):

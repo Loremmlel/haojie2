@@ -1,6 +1,5 @@
 // 原网络的紧凑执行：直接引用参数，保留层次和精度，只合并等价的算子计算。
 #include <ATen/Functions.h>
-#include <ATen/autocast_mode.h>
 #include <ATen/core/grad_mode.h>
 #include <ATen/ops/from_blob.h>
 #include <torch/library.h>
@@ -25,10 +24,10 @@
 // 返回校验错误编号，输入仍遵守原二进制协议，不跳过公开边界检查。
 extern "C" HAOJIE_EXPORT int haojie_validate(
     const void* address, int64_t entities, int64_t candidates, int64_t kind_count) {
-  const auto* values = static_cast<const float*>(address);
+  const auto* values = static_cast<const uint16_t*>(address);
   const auto floats = entities * 64 + 32 + candidates * 64;
   for (int64_t index = 0; index < floats; ++index)
-    if (!std::isfinite(values[index])) return 1;
+    if ((values[index] & 0x7f80) == 0x7f80) return 1;
   const auto* kinds = reinterpret_cast<const int64_t*>(values + floats);
   for (int64_t index = 0; index < entities; ++index)
     if (kinds[index] < 0 || kinds[index] >= kind_count) return 2;
@@ -54,13 +53,13 @@ extern "C" HAOJIE_EXPORT int haojie_send(
     const char* const* headers, int64_t size) {
   // 所有评分先检查后写管道，避免非法数值成为已执行动作。
   for (int64_t row = 0; row < size; ++row) {
-    const auto* values = reinterpret_cast<const float*>(addresses[row]);
+    const auto* values = reinterpret_cast<const uint16_t*>(addresses[row]);
     for (int64_t index = 0; index < counts[row]; ++index)
-      if (!std::isfinite(values[index])) return -1;
+      if ((values[index] & 0x7f80) == 0x7f80) return -1;
   }
   for (int64_t row = 0; row < size; ++row) {
     std::string packet(headers[row]);
-    packet.append(reinterpret_cast<const char*>(addresses[row]), counts[row] * sizeof(float));
+    packet.append(reinterpret_cast<const char*>(addresses[row]), counts[row] * sizeof(uint16_t));
     size_t offset = 0;
     while (offset < packet.size()) {
 #ifdef _WIN32
@@ -80,7 +79,7 @@ extern "C" HAOJIE_EXPORT int haojie_send(
 
 // 输入地址只来自已验证且持有租约的协议帧；不接收模型提供的地址或权威游戏状态。
 struct PackedRow {
-  const float *entities, *globals, *candidates;
+  const at::BFloat16 *entities, *globals, *candidates;
   const int64_t *kinds, *sources, *targets;
   const bool *mask, *candidate_mask;
   int64_t count, actions;
@@ -106,7 +105,7 @@ pack(at::IntArrayRef addresses, at::IntArrayRef entities, at::IntArrayRef action
     PackedRow row;
     row.count = entities[index];
     row.actions = actions[index];
-    row.entities = reinterpret_cast<const float*>(addresses[index]);
+    row.entities = reinterpret_cast<const at::BFloat16*>(addresses[index]);
     row.globals = row.entities + row.count * 64;
     row.candidates = row.globals + 32;
     row.kinds = reinterpret_cast<const int64_t*>(row.candidates + row.actions * 64);
@@ -171,8 +170,8 @@ pack(at::IntArrayRef addresses, at::IntArrayRef entities, at::IntArrayRef action
       {reads}, {active_count}, {scored_actions}, {scored_actions}, {scored_actions},
       {scored_actions,64}, {size,max_actions}, {scored_actions}};
   const std::vector<at::ScalarType> types = {
-      at::kFloat, at::kLong, at::kFloat, at::kLong, at::kInt, at::kInt, at::kInt,
-      at::kLong, at::kLong, at::kLong, at::kLong, at::kLong, at::kFloat, at::kBool, at::kLong};
+      at::kBFloat16, at::kLong, at::kBFloat16, at::kLong, at::kInt, at::kInt, at::kInt,
+      at::kLong, at::kLong, at::kLong, at::kLong, at::kLong, at::kBFloat16, at::kBool, at::kLong};
   std::vector<at::Tensor> storage, batch;
   for (size_t key = 0; key < shapes.size(); ++key) {
     int64_t count = 1;
@@ -190,15 +189,15 @@ pack(at::IntArrayRef addresses, at::IntArrayRef entities, at::IntArrayRef action
   batch[6].data_ptr<int32_t>()[0] = 0;
   for (int64_t index = 0; index < size; ++index) {
     const auto& row = rows[index];
-    auto* destination = batch[0].data_ptr<float>() + start * 64;
+    auto* destination = batch[0].data_ptr<at::BFloat16>() + start * 64;
     std::fill_n(destination, 64, 0);
     auto* kinds = batch[1].data_ptr<int64_t>() + start;
     kinds[0] = 0;
     for (size_t entity = 0; entity < row.valid.size(); ++entity) {
-      std::memcpy(destination + (entity + 1) * 64, row.entities + row.valid[entity] * 64, 64 * sizeof(float));
+      std::memcpy(destination + (entity + 1) * 64, row.entities + row.valid[entity] * 64, 64 * sizeof(at::BFloat16));
       kinds[entity + 1] = row.kinds[row.valid[entity]];
     }
-    std::memcpy(batch[2].data_ptr<float>() + index * 32, row.globals, 32 * sizeof(float));
+    std::memcpy(batch[2].data_ptr<at::BFloat16>() + index * 32, row.globals, 32 * sizeof(at::BFloat16));
     batch[3].data_ptr<int64_t>()[index] = start;
     for (size_t query = 0; query < row.positions.size(); ++query)
       batch[7].data_ptr<int64_t>()[qstart + query] = row.positions[query] + start;
@@ -210,8 +209,8 @@ pack(at::IntArrayRef addresses, at::IntArrayRef entities, at::IntArrayRef action
       batch[9].data_ptr<int64_t>()[candidate_start] = qstart;
       batch[10].data_ptr<int64_t>()[candidate_start] = qstart + row.inverse[1 + action];
       batch[11].data_ptr<int64_t>()[candidate_start] = qstart + row.inverse[1 + row.actions + action];
-      std::memcpy(batch[12].data_ptr<float>() + candidate_start * 64,
-                  row.candidates + action * 64, 64 * sizeof(float));
+      std::memcpy(batch[12].data_ptr<at::BFloat16>() + candidate_start * 64,
+                  row.candidates + action * 64, 64 * sizeof(at::BFloat16));
       batch[14].data_ptr<int64_t>()[candidate_start++] = index * max_actions + action;
     }
     std::memcpy(batch[13].data_ptr<bool>() + index * max_actions, row.candidate_mask, row.actions * sizeof(bool));
@@ -227,14 +226,9 @@ pack(at::IntArrayRef addresses, at::IntArrayRef entities, at::IntArrayRef action
 
 at::Tensor linear_gelu(const at::Tensor& input, const at::Tensor& weight,
                        const at::Tensor& bias, bool fused) {
-  if (fused && input.is_cuda() && at::autocast::is_autocast_enabled(at::kCUDA) &&
-      at::autocast::get_autocast_dtype(at::kCUDA) == at::kBFloat16) {
-    // CUDA 的融合算子同样使用 tanh GELU，沿用原 AMP 的 BF16 权重缓存。
-    auto values = at::autocast::cached_cast(at::kBFloat16, input);
-    auto matrix = at::autocast::cached_cast(at::kBFloat16, weight);
-    auto offset = at::autocast::cached_cast(at::kBFloat16, bias);
-    c10::impl::ExcludeDispatchKeyGuard guard(c10::DispatchKey::AutocastCUDA);
-    return at::_addmm_activation(offset, values, matrix.t(), 1, 1, true);
+  if (fused && input.is_cuda()) {
+    // BF16 参数直接交给 Tensor Core，不再保留另一份转换缓存。
+    return at::_addmm_activation(bias, input, weight.t(), 1, 1, true);
   }
   return at::gelu(at::linear(input, weight, bias), "tanh");
 }
@@ -244,11 +238,11 @@ std::tuple<at::Tensor, at::Tensor> add_norm(
     const at::Tensor& weight, const at::Tensor& bias, double epsilon,
     int64_t kernel, int64_t launch, int64_t stream) {
   if (kernel && launch && !at::GradMode::is_enabled() && residual.is_cuda() &&
-      residual.scalar_type() == at::kFloat && residual.dim() == 2 && residual.size(0) > 0 &&
+      residual.scalar_type() == at::kBFloat16 && residual.dim() == 2 && residual.size(0) > 0 &&
       added.scalar_type() == at::kBFloat16 && residual.size(1) == 384 &&
       residual.sizes() == added.sizes() && residual.device() == added.device() &&
       weight.device() == residual.device() && bias.device() == residual.device() &&
-      weight.scalar_type() == at::kFloat && bias.scalar_type() == at::kFloat &&
+      weight.scalar_type() == at::kBFloat16 && bias.scalar_type() == at::kBFloat16 &&
       weight.dim() == 1 && bias.dim() == 1 && weight.numel() == 384 && bias.numel() == 384 &&
       residual.is_contiguous() && added.is_contiguous() && weight.is_contiguous() && bias.is_contiguous()) {
     const c10::DeviceGuard device_guard(residual.device());
@@ -343,19 +337,16 @@ at::Tensor packed_score(at::Tensor x, at::TensorList input, at::TensorList weigh
   at::Tensor output;
   if (factored && projected.scalar_type() == at::kBFloat16 && positions.numel() >= 4 * x.size(0)) {
     // 同一实体在线性层的三段投影先算一次，再按原候选索引读取；不缓存跨前向表示。
-    auto weight = at::autocast::cached_cast(at::kBFloat16, weights[4]);
-    auto bias = at::autocast::cached_cast(at::kBFloat16, weights[5]);
-    auto values = x.to(at::kBFloat16);
+    auto weight = weights[4];
+    auto bias = weights[5];
     {
-      c10::impl::ExcludeDispatchKeyGuard guard(c10::DispatchKey::AutocastCUDA);
       auto component = [&](int64_t part) {
-        return at::mm(values, weight.narrow(1, part * width, width).t(), at::kFloat);
+        return at::mm(x, weight.narrow(1, part * width, width).t());
       };
       output = at::add(component(0).index_select(0, context), component(1).index_select(0, sources));
       output.add_(component(2).index_select(0, targets));
-      output.add_(at::mm(projected, weight.narrow(1, 3 * width, width).t(), at::kFloat));
-      output.add_(bias.to(at::kFloat));
-      output = output.to(at::kBFloat16);
+      output.add_(at::mm(projected, weight.narrow(1, 3 * width, width).t()));
+      output.add_(bias);
     }
     output = at::gelu(output, "tanh");
   } else {
@@ -364,7 +355,7 @@ at::Tensor packed_score(at::Tensor x, at::TensorList input, at::TensorList weigh
     output = linear_gelu(output, weights[4], weights[5], fused);
   }
   output = linear_gelu(output, weights[6], weights[7], fused);
-  output = at::linear(output, weights[8], weights[9]).reshape({-1}).to(at::kFloat);
+  output = at::linear(output, weights[8], weights[9]).reshape({-1});
   auto logits = at::full({size * actions}, -1e9, output.options());
   logits.index_copy_(0, positions, output);
   return logits.view({size, actions});
@@ -373,7 +364,7 @@ at::Tensor packed_score(at::Tensor x, at::TensorList input, at::TensorList weigh
 std::vector<at::Tensor> input_views(at::Tensor bytes, int64_t entities, int64_t candidates) {
   TORCH_CHECK(bytes.device().is_cpu() && bytes.scalar_type() == at::kByte &&
                   bytes.dim() == 1 && bytes.is_contiguous() && entities > 0 && candidates > 0 &&
-                  bytes.numel() == entities * 265 + candidates * 273 + 128,
+                  bytes.numel() == entities * 137 + candidates * 145 + 64,
               "invalid owned input frame");
   int64_t offset = 0;
   auto field = [&](at::ScalarType type, at::IntArrayRef shape) {
@@ -383,8 +374,8 @@ std::vector<at::Tensor> input_views(at::Tensor bytes, int64_t entities, int64_t 
     offset += tensor.nbytes();
     return tensor;
   };
-  return {field(at::kFloat, {entities,64}), field(at::kFloat, {32}),
-          field(at::kFloat, {candidates,64}), field(at::kLong, {entities}),
+  return {field(at::kBFloat16, {entities,64}), field(at::kBFloat16, {32}),
+          field(at::kBFloat16, {candidates,64}), field(at::kLong, {entities}),
           field(at::kLong, {candidates}), field(at::kLong, {candidates}),
           field(at::kBool, {entities}), field(at::kBool, {candidates})};
 }

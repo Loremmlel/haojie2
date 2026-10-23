@@ -19,7 +19,7 @@ haojie-console = "haojie_training.console.server:main"
 
 [project.optional-dependencies]
 dev = ["ruff==0.15.6"]
-export = ["onnx==1.23.0", "onnxscript==0.7.2", "onnxruntime==1.30.0"]
+export = ["onnx==1.23.0", "onnxscript==0.7.2"]
 native = ["ninja==1.13.0"]
 
 [tool.setuptools.packages.find]

@@ -2,7 +2,7 @@
 
 import math
 
-from ...runtime import default_precision, resolve_device
+from ...runtime import resolve_device
 from .resources import available_memory, cpu_capacity
 
 METHOD = "decomposed-mc-q-v2"
@@ -56,18 +56,17 @@ def defaults(device="auto"):
         "method": METHOD,
         "temperature": 0.25,
         "batch_wait_ms": 0.0,
-        "sampling_precision": default_precision(device),
     }
 
 
 def upgrade(config):
-    """旧恢复点只补齐新增执行选项；原学习参数逐项保留并继续校验。"""
+    """旧恢复点强制移除精度选择；学习参数逐项保留并继续校验。"""
     result = {
         "inference_batch_size": 32,
         "batch_wait_ms": 0.0,
-        "sampling_precision": "fp32",
         **config,
     }
+    result.pop("sampling_precision", None)
     validate(result)
     return result
 
@@ -77,7 +76,6 @@ def validate(config):
         "method",
         "temperature",
         "batch_wait_ms",
-        "sampling_precision",
     }:
         raise ValueError("设置字段不匹配")
     for key, (_, low, high) in _INTEGERS.items():
@@ -89,5 +87,3 @@ def validate(config):
         value = config[key]
         if type(value) not in (int, float) or not math.isfinite(value) or not low <= value <= high:
             raise ValueError(f"{key} 必须为 {low} 至 {high} 的有限数值")
-    if config["sampling_precision"] not in {"fp32", "bf16"}:
-        raise ValueError("采样精度必须为 fp32 或 bf16")

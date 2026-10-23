@@ -2,6 +2,7 @@
 
 import torch
 
+from ..data import bf16_tensors
 from ..model import PolicyValueNet
 from ..prepare import digest
 from ..runtime import read_checkpoint
@@ -40,7 +41,7 @@ def model_from(path, ready, device="cpu"):
 def example(inputs, selected=0):
     native = isinstance(inputs, ArrayInput) and inputs._data is not None and operator() is not None
     count = inputs.candidate_count if native else len(inputs["candidate_mask"])
-    policy = torch.zeros(count)
+    policy = torch.zeros(count, dtype=torch.bfloat16)
     policy[selected] = 1
     if native:
         storage = torch.frombuffer(
@@ -68,8 +69,8 @@ def example(inputs, selected=0):
         if getattr(inputs, "shared", False):
             tensors = {key: value.clone() for key, value in tensors.items()}
     return {
-        **tensors,
+        **bf16_tensors(tensors),
         "policy": policy,
-        "value": torch.tensor(0.0),
+        "value": torch.tensor(0.0, dtype=torch.bfloat16),
         "value_mask": torch.tensor(False),
     }

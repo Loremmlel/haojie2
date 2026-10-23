@@ -73,7 +73,7 @@ class MemoryJobs:
         if historical:
             model, identity = historical
             self.inferences[identity] = PolicyInference(
-                model.eval(), controller.device, inference.precision, stats=inference.stats
+                model.eval(), controller.device, stats=inference.stats
             )
 
     def next_window(self, current, historical):
@@ -85,7 +85,7 @@ class MemoryJobs:
         if historical and historical[1] not in self.inferences:
             model, version = historical
             self.inferences[version] = PolicyInference(
-                model.eval(), self.c.device, inference.precision, stats=inference.stats
+                model.eval(), self.c.device, stats=inference.stats
             )
 
     def release_unused(self):
@@ -190,8 +190,8 @@ class MemoryJobs:
                 if self.c.config["method"].startswith("decomposed-mc-q-")
                 else output
             )
-            return output.float()
-        result = torch.zeros((len(messages), width))
+            return output
+        result = torch.zeros((len(messages), width), dtype=torch.bfloat16)
         for identity in identities:
             indices = [i for i, m in enumerate(messages) if m["model"] == identity]
             output = (

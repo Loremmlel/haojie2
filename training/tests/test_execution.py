@@ -35,7 +35,7 @@ class ExecutionTests(unittest.TestCase):
             "entity_mask",
             "candidate_mask",
         )
-        data = bytearray(b"".join(batch[k][0].numpy().tobytes() for k in keys))
+        data = bytearray(b"".join(batch[k][0].view(torch.uint8).numpy().tobytes() for k in keys))
         inputs = decode(data, 4, 5)
         data[:] = b"\0" * len(data)
         for k in keys:
@@ -54,7 +54,9 @@ class ExecutionTests(unittest.TestCase):
         ):
             invalid = {k: v.clone() for k, v in batch.items()}
             invalid[key].fill_(value)
-            raw = bytearray(b"".join(invalid[k][0].numpy().tobytes() for k in keys))
+            raw = bytearray(
+                b"".join(invalid[k][0].view(torch.uint8).numpy().tobytes() for k in keys)
+            )
             with self.assertRaises(ValueError):
                 decode(raw, 4, 5)
 
@@ -102,7 +104,7 @@ class ExecutionTests(unittest.TestCase):
             "entity_mask",
             "candidate_mask",
         )
-        data = b"".join(batch[k][0].numpy().tobytes() for k in keys)
+        data = b"".join(batch[k][0].view(torch.uint8).numpy().tobytes() for k in keys)
         infer = {
             "type": "infer",
             "id": 1,
@@ -215,7 +217,7 @@ class ExecutionTests(unittest.TestCase):
             torch.testing.assert_close(a.grad, b.grad, atol=2e-6, rtol=2e-5)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA专项回归，需要GPU执行器")
-    def test_prefetch_and_fused_update_restore(self):
+    def test_prefetch_and_bf16_update_restore(self):
         config = ModelConfig.tiny()
         dataset = synthetic_batch(config, 9, 7, 6)
         kwargs = dict(seed=17, start=3, steps=4, size=3, bucket_size=4)
@@ -225,13 +227,9 @@ class ExecutionTests(unittest.TestCase):
         ):
             for key in plain:
                 torch.testing.assert_close(plain[key], prefetched[key], rtol=0, atol=0)
-        a = Trainer(PolicyValueNet(config), torch.device("cuda"), optimizer="foreach")
-        b = Trainer(copy.deepcopy(a.model), torch.device("cuda"), optimizer="fused")
+        b = Trainer(PolicyValueNet(config), torch.device("cuda"))
         batch = {k: v[:3].cuda() for k, v in dataset.items()}
-        a.step(batch)
         b.step(batch)
-        for x, y in zip(a.model.parameters(), b.model.parameters()):
-            torch.testing.assert_close(x, y, atol=2e-6, rtol=2e-5)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "checkpoint.pt"
             b.save(path, {"test": True})

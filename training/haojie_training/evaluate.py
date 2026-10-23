@@ -3,7 +3,6 @@
 import torch
 
 from .data import select_batch
-from .runtime import autocast
 
 
 def value_baselines(dataset, records=None):
@@ -26,7 +25,8 @@ def value_diagnostics(predictions, dataset, records, baselines):
     actors = torch.tensor([r["actor"] for r in records]) if records is not None else None
     seat_prediction = (
         torch.tensor(
-            [baselines["by_actor"].get(str(int(actor)), baselines["mean"]) for actor in actors]
+            [baselines["by_actor"].get(str(int(actor)), baselines["mean"]) for actor in actors],
+            dtype=torch.bfloat16,
         )
         if actors is not None
         else torch.full_like(targets, baselines["mean"])
@@ -120,7 +120,7 @@ def value_quality(diagnostics, minimum_games=4):
 
 
 @torch.inference_mode()
-def evaluate(model, dataset, device, precision, batch_size, records=None, baselines=None):
+def evaluate(model, dataset, device, batch_size, records=None, baselines=None):
     was_training = model.training
     model.eval()
     nll = correct = choices = choice_correct = roots = root_correct = known = squared = 0
@@ -133,8 +133,7 @@ def evaluate(model, dataset, device, precision, batch_size, records=None, baseli
             end = min(size, start + batch_size)
             batch = select_batch(dataset, torch.arange(start, end))
             batch = {key: value.to(device) for key, value in batch.items()}
-            with autocast(device, precision):
-                logits, value = model(batch)
+            logits, value = model(batch)
             predictions.append(value.cpu())
             hit = logits.argmax(1) == batch["policy"].argmax(1)
             hits.extend(hit.cpu().tolist())
@@ -228,7 +227,6 @@ def main():
     parser.add_argument("--validation", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--precision", choices=["fp32", "bf16", "fp16"], default="fp32")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--threads", type=int, default=4)
     args = parser.parse_args()
@@ -260,7 +258,7 @@ def main():
         "checkpoint": str(args.checkpoint),
         "digests": digests,
         "device": str(device),
-        "precision": args.precision,
+        "precision": "bf16",
         "value_weight": payload.get("value_weight", 1.0),
     }
     for name, data, metadata in (
@@ -268,7 +266,7 @@ def main():
         ("validation", validation, validation_meta),
     ):
         report[name] = evaluate(
-            model, data, device, args.precision, args.batch_size, metadata.get("records"), baselines
+            model, data, device, args.batch_size, metadata.get("records"), baselines
         )
     args.report.parent.mkdir(parents=True, exist_ok=True)
     with args.report.open("x", encoding="utf-8") as output:

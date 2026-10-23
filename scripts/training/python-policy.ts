@@ -9,7 +9,6 @@ export interface PolicyProcessOptions {
   python: string;
   checkpoint: string;
   device: string;
-  precision: string;
   threads: number;
   timeoutMs: number;
   signal?: AbortSignal;
@@ -46,8 +45,6 @@ export class PythonPolicy {
         options.checkpoint,
         '--device',
         options.device,
-        '--precision',
-        options.precision,
         '--threads',
         String(options.threads),
       ],

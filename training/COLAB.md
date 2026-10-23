@@ -34,7 +34,7 @@ HAOJIE_NATIVE=/var/tmp/haojie-tools/native-target/release/haojie-engine \
 
 历史性能配置和逐轮结果见 [PERFORMANCE.md](PERFORMANCE.md)，其中的实验脚本在清理前固定版本中保留。当前训练直接通过 Notebook 或云端控制台启动。
 
-CUDA FP32 / BF16 正式模型在固定 Torch 2.14.0 下共用紧凑实体布局和双缓冲推理，计算沿用所选精度。安装脚本同时构建 ATen C++ 输入拼装与主干调度扩展，需要系统 C++ 编译器；训练启动直接加载匹配缓存。已有环境的启用与回退见 [NATIVE.md](NATIVE.md#cuda-的-c-输入拼装与算子调度)。GUI、Colab、历史对手和评测共用该执行器。采样窗口的安全点排空在途推理后更新参数，长局保留并继续；暂停、保存和换模型前也先排空。统计中的 `dispatch_backend`、`packed_forwards`、`async_forwards`、`async_overlaps` 可核对实际采用的路径。CPU、XPU 和扩展模型沿用普通推理，同时共享引擎、编码、训练及保存优化。
+CUDA 正式模型在固定 Torch 2.14.0 下使用 BF16 紧凑实体布局和双缓冲推理。安装脚本同时构建 ATen C++ 输入拼装与主干调度扩展，需要系统 C++ 编译器；训练启动直接加载匹配缓存。已有环境的启用见 [NATIVE.md](NATIVE.md#cuda-的-c-输入拼装与算子调度)。GUI、Colab、历史对手和评测共用该执行器。采样窗口的安全点排空在途推理后更新参数，长局保留并继续；暂停、保存和换模型前也先排空。统计中的 `dispatch_backend`、`packed_forwards`、`async_forwards`、`async_overlaps` 可核对实际采用的路径。CPU、XPU 和扩展模型使用普通 BF16 推理，同时共享引擎、编码、训练及保存优化。
 
 64 环境的动态批量会产生不同尺寸的临时张量。训练包在导入 Torch 前默认设置 `PYTORCH_ALLOC_CONF=expandable_segments:True`，降低 CUDA 缓存预留；已有任一分配器配置都会原样保留。如果嵌入宿主已先导入 Torch，应在启动宿主进程前设置环境，例如：
 
@@ -93,7 +93,6 @@ fi
 | `inference_batch_size` | 1–256，单次推理请求上限；按模型分组，普通推理另按实体长度分桶。       |
 | `batch_wait_ms`        | 0–10，额外组批窗口；默认 0，先测吞吐再增加。                          |
 | `batch_size`           | 1–256，梯度更新批量；与推理批量独立。                                 |
-| `sampling_precision`   | FP32 / BF16；新实验在支持 BF16 的 CUDA 上默认 BF16，恢复沿用原值。    |
 | `pool_mib`             | 16–131072，RAM 样本池预算；模型、进程和缓冲另占内存。                 |
 | `--torch-threads`      | Torch CPU 算子线程数，默认 0 自动选择；不限制 Rust 子进程使用其他核。 |
 
@@ -111,7 +110,7 @@ Python 输入链路支持独立分进程：Notebook 第 1 步的 `HOST_WORKERS=-
 
 高并发供给已在本机验证到 128 个真实 Rust 环境，推理批量上限 64、额外等待 0；线程和四输入进程均能完成采样、更新、保存与退出。可在暂停后将环境数和推理批量改为该配置，再观察本机实际终局样本/秒。训练 batch、模型、温度和单局预算沿用原值。固定时长对照使用 `python -m haojie_training.diagnostics --engine PATH --output NEW_PATH --environments 128 --inference-batch-size 64 --updates 0 --seconds 120`；`--updates 0` 沿用生产的自动更新预算，未完成局单列并排除终局样本。
 
-BF16 现在覆盖实体主干、候选特征投影和整个评分头的矩阵运算；标量评分转换成 FP32 后再做遮罩、收益回归及协议回传，参数与 AdamW 累积状态保持 FP32。采样窗口复用 PyTorch 自带的 AMP 权重缓存，窗口退出时先排空推理并清理缓存，再允许更新权重。旧实验若保存了 FP32 采样，请在第 1 步将 `SAMPLING_PRECISION` 设为 `bf16`，或暂停后在控制台修改采样精度。现有 v3 权重和优化器仍可恢复；BF16 评分头会改变后续浮点轨迹。
+BF16 覆盖参数、公开特征、残差、评分、收益回归、协议帧及 AdamW 矩；优化器用 BF16 舍入余量保留小更新，步数使用整数。采样直接引用 BF16 参数，不再使用 AMP 权重副本。旧设置的精度选择在恢复/加载边界移除，旧 v3 权重和优化器转换后续训，原文件保持只读。面板的 execution 与实际数值体系一致。数值迁移会改变后续浮点轨迹，学习与吞吐分别验收。
 
 原始状态中的 `runtime.host_workers`、`host_worker_pids` 和 `host_prepare_seconds` 可确认进程路径，`resources.processes` 查看每个 Python 进程的 CPU。`send_seconds` 在进程路径计主进程提交回包的时间；读帧、校验和输入准备是跨线程/进程累计时间，可以重叠。结合阶段墙钟、实际推理批量和终局样本/秒判断吞吐，不能把这些累计时间直接相加。
 
@@ -146,7 +145,7 @@ python -m haojie_training.cloud \
 
 2026-10-20 已在 WSL Ubuntu 24.04 的独立目录完成 Python 3.12.3、Torch 2.14.0+cu130、Rust 1.98.1 安装、依赖一致性检查及 release 引擎构建，并通过 Notebook 语法与异步监控单测。安装记录位于本地 `artifacts/performance-20261020/linux/bootstrap.log`，依赖与引擎身份见同目录 `environment.json`。
 
-最终源码在同一 Linux 环境通过 CPU 小模型 32 进程的备份恢复验收（实际峰值 32），以及 CUDA 正式模型的双进程恢复验收。CPU 采样和更新均为 FP32；CUDA 采样为 FP32、更新为 BF16，这是基线和当前实现共有的默认精度。两者均逐项核对 Adam 状态、Python/Torch CPU/CUDA 随机状态、累计样本账目与空 RAM 样本池，再重新采样并继续更新。日志分别为上述目录中的 `final/cpu32-tiny-recovery.log`、`final/cuda-full-recovery.log`。现有 `CloudTests.test_real_training_backup_restart_and_optimizer_continuation` 可用 `HAOJIE_TEST_ENVIRONMENTS`、`HAOJIE_TEST_DEVICE=cpu|cuda` 和 `HAOJIE_TEST_FULL_MODEL=1` 选择验收配置；默认仍为 CPU 小模型。该生命周期测试保留 32 命令预算。
+2026-10-20 的冻结实现曾通过 CPU 小模型 32 进程备份恢复及 CUDA 正式模型双进程恢复验收，逐项核对 Adam 状态、Python/Torch 随机状态、累计样本账目与空 RAM 样本池，再继续更新。该历史实现早于 BF16-only 迁移，日志保留于上述目录中的 `final/cpu32-tiny-recovery.log`、`final/cuda-full-recovery.log`。现行 `CloudTests.test_real_training_backup_restart_and_optimizer_continuation` 使用 BF16，可用 `HAOJIE_TEST_ENVIRONMENTS`、`HAOJIE_TEST_DEVICE=cpu|cuda` 和 `HAOJIE_TEST_FULL_MODEL=1` 选择验收配置；默认仍为 CPU 小模型。该生命周期测试保留 32 命令预算。
 
 正式模型还完成了全部四份晚盘起点的 32 进程完整周期：32 局均真实终局，保留 3800 条样本、完成 16 次更新与保存，容量淘汰为零。报告为 `final/cuda32-late.json`；性能配对与自然开局记录见 [PERFORMANCE.md](PERFORMANCE.md)。
 

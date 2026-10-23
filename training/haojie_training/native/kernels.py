@@ -24,17 +24,20 @@ __device__ float row_sum(float value) {
 }
 
 extern "C" __global__ void residual_norm(
-    const float* residual, const unsigned short* added,
-    const float* weight, const float* bias,
-    float* sum, float* normalized, float epsilon) {
+    const unsigned short* residual, const unsigned short* added,
+    const unsigned short* weight, const unsigned short* bias,
+    unsigned short* sum, unsigned short* normalized, float epsilon) {
   const int column = threadIdx.x;
   const long long base = static_cast<long long>(blockIdx.x) * 384 + column;
   float value[3];
   #pragma unroll
   for (int i = 0; i < 3; ++i) {
     const auto index = base + i * 128;
-    value[i] = residual[index] + __uint_as_float(unsigned(added[index]) << 16);
-    sum[index] = value[i];
+    const float added_value = __uint_as_float(unsigned(residual[index]) << 16)
+                            + __uint_as_float(unsigned(added[index]) << 16);
+    const unsigned bits = __float_as_uint(added_value);
+    sum[index] = (bits + 0x7fff + ((bits >> 16) & 1)) >> 16;
+    value[i] = __uint_as_float(unsigned(sum[index]) << 16);
   }
   const float mean = row_sum(value[0] + value[1] + value[2]) / 384.0f;
   float variance = 0.0f;
@@ -47,7 +50,10 @@ extern "C" __global__ void residual_norm(
   #pragma unroll
   for (int i = 0; i < 3; ++i) {
     const int channel = column + i * 128;
-    normalized[base + i * 128] = value[i] * inverse * weight[channel] + bias[channel];
+    const float output = value[i] * inverse * __uint_as_float(unsigned(weight[channel]) << 16)
+                       + __uint_as_float(unsigned(bias[channel]) << 16);
+    const unsigned bits = __float_as_uint(output);
+    normalized[base + i * 128] = (bits + 0x7fff + ((bits >> 16) & 1)) >> 16;
   }
 }
 """

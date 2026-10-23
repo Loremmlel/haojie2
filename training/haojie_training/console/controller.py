@@ -20,7 +20,7 @@ from ..model import NETWORK_VERSION, ModelConfig, PolicyValueNet
 from ..native.client import Client
 from ..native.model import metadata, model_from
 from ..native.pool import Pool
-from ..runtime import Trainer, cpu_state, default_precision, resolve_device
+from ..runtime import Trainer, cpu_state, resolve_device
 from .config import METHOD as METHOD
 from .config import defaults, validate
 from .config.resources import available_memory, torch_threads
@@ -35,7 +35,7 @@ def identity(model):
     digest = hashlib.sha256()
     for name, value in cpu_state(model.state_dict()).items():
         digest.update(name.encode())
-        digest.update(value.contiguous().numpy().tobytes())
+        digest.update(value.contiguous().view(torch.uint8).numpy().tobytes())
     return digest.hexdigest()
 
 
@@ -66,7 +66,7 @@ class Controller:
         self.evaluation = None
         self.candidate = None
         self.update_budget = 0
-        self.execution_precision = "fp32"
+        self.execution_precision = "bf16"
         self.readiness = {"training": False, "engine": "等待检查", "teacher": ready()}
         self.requested_threads = threads
         self.device = resolve_device(device)
@@ -173,9 +173,9 @@ class Controller:
                     "generation": self.generation,
                     "readiness": self.readiness,
                     "execution": {
-                        "sampling": self.config["sampling_precision"],
+                        "sampling": "bf16",
                         "updating": self.execution_precision,
-                        "optimizer": "auto",
+                        "optimizer": "bf16-compensated-adamw",
                     },
                     "update_budget": self.update_budget,
                     "evaluation_job": self.evaluation.summary() if self.evaluation else None,
@@ -472,12 +472,9 @@ class Controller:
             torch.manual_seed(self.config["seed"])
             model = PolicyValueNet(ModelConfig.tiny() if self.tiny else ModelConfig())
         if payload is None:
-            precision = default_precision(self.device)
             trainer = Trainer(
                 model,
                 self.device,
-                precision=precision,
-                optimizer="auto",
                 objective=self.config["method"],
             )
         if payload:
@@ -646,7 +643,7 @@ class Controller:
             batch_wait_ms=self.config["batch_wait_ms"],
             max_batch_size=self.config["inference_batch_size"],
             inference=(
-                PolicyInference(self.trainer.model, self.device, self.config["sampling_precision"]),
+                PolicyInference(self.trainer.model, self.device),
                 self.version,
             ),
             frame_limit=min(32 * 2**20, max(4 * 2**20, available_memory() // (16 * count))),

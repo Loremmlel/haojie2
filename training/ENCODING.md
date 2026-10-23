@@ -65,6 +65,8 @@ v1是可验证的起点。网络CLI支持完整命令和对局，但不能因此
 
 ## 内存推理输入引用
 
+当前内存传输使用 `haojie-training-binary-v2`：浮点特征与评分是小端 BF16，索引仍为 int64，遮罩为布尔。实体、候选和全局分别占 137、145、64 字节，评分能力为 `logits-bf16-v1`。Rust 与 Python 必须一起更新；旧记录和张量文件仅在加载边界转换，原件不改写。
+
 二进制协议可选能力 `mc-input-ref-v1`，仅在双方协商且 `memory=true, mcContext=true, inputRefs=true` 时启用。完整 `infer` 帧携带 id/model/actor/commandIndex；紧邻决策的 `example` 可用 `inputRef` 引用该输入，index 必须等于 commandIndex。接收方持有独立帧所有权，引用消费后立即失效，新的推理会替换旧引用，终局/错误/教师帧清空引用。
 
 引用消息禁止混入 bytes/entities/candidates/input；未协商、重复、跨模型/行动者/命令和过期引用直接拒绝。没有推理的强制选择发送完整张量。此优化不改变模型输入、记录格式、随机数或选择语义；未启用时仍发送原完整 example 帧。MC 差分测试逐张量比较两种传输模式。

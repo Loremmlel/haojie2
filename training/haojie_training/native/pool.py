@@ -443,8 +443,8 @@ class Pool:
 
         def respond(group, logits, leases=None):
             cancelled()
-            # 每批只构造一次 NumPy 视图；原生客户端协商二进制回传，旧执行器沿用列表。
-            scores = logits.numpy() if logits is not None else None
+            # 每批只构造一次 BF16 位视图，所有客户端使用同一二进制评分协议。
+            scores = logits.view(torch.uint16).numpy() if logits is not None else None
             responses = []
             for row, (i, task_id, message) in enumerate(group):
                 if leases is not None:
@@ -573,10 +573,6 @@ class Pool:
                 respond(group, logits)
             return []
 
-        # 仅延长 AMP 权重缓存寿命，不在调度器开启低精度；各模型仍独立选择精度。
-        # 窗口退出前先排空推理，再清空缓存，下一次更新后的权重不会读到旧转换值。
-        inference_cleanup.enter_context(torch.autocast(self.device.type, enabled=False))
-        inference_cleanup.callback(torch.clear_autocast_cache)
         if getattr(self, "defer_validation", False) and self.environments >= 32:
             # 高频管道线程会拖延 GPU 发射线程重新取得 GIL；仅在采样窗口收紧间隔。
             previous_interval = sys.getswitchinterval()

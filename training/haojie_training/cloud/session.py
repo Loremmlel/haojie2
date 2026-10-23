@@ -111,6 +111,9 @@ class Session:
                 controller.command("restore")
                 wait_for(controller, lambda: controller.state == "paused")
             if settings:
+                settings = dict(settings)
+                if settings.pop("sampling_precision", None) is not None:
+                    controller.log("旧设置的精度选择已迁移；采样和更新统一使用 BF16")
                 controller.command("settings", settings)
             if not recovering:
                 # 保存同时初始化模型；权重导入仍走控制器的兼容检查。

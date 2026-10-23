@@ -188,8 +188,8 @@ struct FixedWire {
 }
 
 pub fn tensor_size(input: &Input) -> usize {
-    (input.entities.len() + input.candidates.len()) * 256
-        + input.globals.len() * 4
+    (input.entities.len() + input.candidates.len()) * 128
+        + input.globals.len() * 2
         + (input.kinds.len() + input.sources.len() + input.targets.len()) * 8
         + input.entity_mask.len()
         + input.candidate_mask.len()
@@ -201,11 +201,25 @@ pub fn tensor_bytes(input: &Input, bytes: &mut Vec<u8>) {
     append_tensor_bytes(input, bytes);
 }
 
-/// 直接追加到最终发送帧；保留已有控制头，不可变固定区只转换一次，协议布局不变。
+/// BF16 最近偶数舍入；NaN 保持非有限标记，交由输入边界拒绝。
+pub fn bf16_bits(value: f64) -> u16 {
+    let bits = (value as f32).to_bits();
+    if bits & 0x7fff_ffff > 0x7f80_0000 {
+        ((bits >> 16) as u16) | 0x0040
+    } else {
+        (bits.wrapping_add(0x7fff + ((bits >> 16) & 1)) >> 16) as u16
+    }
+}
+
+pub fn bf16_value(bits: u16) -> f64 {
+    f32::from_bits((bits as u32) << 16) as f64
+}
+
+/// 直接追加最终帧；不可变固定区只转换一次，浮点字段统一为 BF16。
 pub fn append_tensor_bytes(input: &Input, bytes: &mut Vec<u8>) {
     fn rows<'a>(bytes: &mut Vec<u8>, values: impl IntoIterator<Item = &'a f64>) {
         for &n in values {
-            bytes.extend_from_slice(&(n as f32).to_le_bytes());
+            bytes.extend_from_slice(&bf16_bits(n).to_le_bytes());
         }
     }
     bytes.reserve(tensor_size(input));
@@ -213,7 +227,7 @@ pub fn append_tensor_bytes(input: &Input, bytes: &mut Vec<u8>) {
         (
             *count,
             cell.get_or_init(|| {
-                let mut entities = Vec::with_capacity(count * 256);
+                let mut entities = Vec::with_capacity(count * 128);
                 for row in input.entities.iter().take(*count) {
                     rows(&mut entities, row.iter());
                 }
@@ -1504,6 +1518,15 @@ fn encode_mode(
 #[cfg(test)]
 mod buffer_tests {
     use super::*;
+
+    #[test]
+    fn bf16_wire_rounds_ties_to_even_and_preserves_special_values() {
+        assert_eq!(bf16_value(bf16_bits(1.0 + 1.0 / 256.0)), 1.0);
+        assert_eq!(bf16_value(bf16_bits(1.0 + 3.0 / 256.0)), 1.0 + 1.0 / 64.0);
+        assert_eq!(bf16_bits(-0.0), 0x8000);
+        assert!(bf16_value(bf16_bits(f64::NAN)).is_nan());
+        assert!(bf16_value(bf16_bits(f64::INFINITY)).is_infinite());
+    }
 
     #[test]
     fn synchronous_workspace_matches_owned_rows_and_wire_after_reuse_and_errors() {

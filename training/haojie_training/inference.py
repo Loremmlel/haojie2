@@ -13,7 +13,7 @@ import torch
 
 from .data import FLOAT_KEYS, INDEX_KEYS, INPUT_KEYS, MASK_KEYS, validate_inputs
 from .model import NETWORK_VERSION, PolicyValueNet
-from .runtime import autocast, read_checkpoint, resolve_device, synchronize
+from .runtime import read_checkpoint, resolve_device, synchronize
 
 
 def decode_input(raw, config):
@@ -40,7 +40,7 @@ def decode_input(raw, config):
             raise ValueError(f"{key}必须是数组")
         check(values)
         dtype = (
-            torch.float32 if key in FLOAT_KEYS else torch.bool if key in MASK_KEYS else torch.long
+            torch.bfloat16 if key in FLOAT_KEYS else torch.bool if key in MASK_KEYS else torch.long
         )
         batch[key] = torch.tensor(values, dtype=dtype).unsqueeze(0)
     validate_inputs(batch, config)
@@ -56,7 +56,6 @@ def main(load_checkpoint=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--device", choices=["cpu", "xpu", "cuda"], default="cpu")
-    parser.add_argument("--precision", choices=["fp32", "bf16", "fp16"], default="fp32")
     parser.add_argument("--threads", type=int, default=4)
     args = parser.parse_args()
     if args.threads < 1:
@@ -96,7 +95,7 @@ def main(load_checkpoint=None):
             "schema": metadata["schema"],
             "checkpoint_sha256": digest,
             "device": str(device),
-            "precision": args.precision,
+            "precision": "bf16",
             "threads": args.threads,
             "torch": torch.__version__,
             "load_ms": (time.perf_counter() - start) * 1000,
@@ -117,7 +116,7 @@ def main(load_checkpoint=None):
                 raise ValueError("id必须为整数")
             batch = decode_input(request["inputs"], config)
             validated = time.perf_counter()
-            with torch.inference_mode(), autocast(device, args.precision):
+            with torch.inference_mode():
                 batch = {key: tensor.to(device) for key, tensor in batch.items()}
                 logits, value = model(batch)
                 logits, value = logits.cpu(), value.cpu()

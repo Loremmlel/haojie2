@@ -21,6 +21,18 @@ ACTION_KEYS = {"candidates", "sources", "targets", "candidate_mask", "policy"}
 INPUT_KEYS = (FLOAT_KEYS | MASK_KEYS | INDEX_KEYS) - {"policy", "value", "value_mask"}
 
 
+def bf16_tensors(tensors):
+    """旧数据仅在读取边界转换，不修改原文件或共享映射。"""
+    return {
+        key: (
+            value.view(torch.bfloat16) if value.dtype == torch.uint16 else value.to(torch.bfloat16)
+        )
+        if key in FLOAT_KEYS
+        else value
+        for key, value in tensors.items()
+    }
+
+
 class TensorShards:
     """校验并映射只读分片，仅标签/长度常驻；取样才填充，不把全库展开到最大形状。
 
@@ -51,7 +63,7 @@ class TensorShards:
             for key in ("ruleset", "encoding", "schema", "source_sha256", "synthetic"):
                 if shard["metadata"].get(key) != payload["metadata"].get(key):
                     raise ValueError(f"分片{key}不匹配")
-            batch = shard["tensors"]
+            batch = bf16_tensors(shard["tensors"])
             validate_batch(batch, config)
             if len(batch["value"]) != item["examples"]:
                 raise ValueError("分片样本数不匹配")
@@ -200,7 +212,7 @@ def validate_inputs(batch: dict[str, Tensor], config: ModelConfig) -> None:
         if not isinstance(tensor, Tensor) or tensor.device.type != "cpu":
             raise ValueError(f"{key}必须是CPU张量")
         expected = (
-            torch.float32 if key in FLOAT_KEYS else torch.bool if key in MASK_KEYS else torch.long
+            torch.bfloat16 if key in FLOAT_KEYS else torch.bool if key in MASK_KEYS else torch.long
         )
         if tensor.dtype != expected:
             raise ValueError(f"{key}需要{expected}")
@@ -244,8 +256,8 @@ def validate_batch(batch: dict[str, Tensor], config: ModelConfig) -> None:
     validate_inputs({key: batch[key] for key in INPUT_KEYS}, config)
     size, actions = batch["candidate_mask"].shape
     for key, shape, dtype in [
-        ("policy", (size, actions), torch.float32),
-        ("value", (size,), torch.float32),
+        ("policy", (size, actions), torch.bfloat16),
+        ("value", (size,), torch.bfloat16),
         ("value_mask", (size,), torch.bool),
     ]:
         tensor = batch[key]
@@ -261,7 +273,12 @@ def validate_batch(batch: dict[str, Tensor], config: ModelConfig) -> None:
     policy = batch["policy"]
     if (policy < 0).any() or (policy[~batch["candidate_mask"]] != 0).any():
         raise ValueError("策略标签不能向无效候选分配概率")
-    if not torch.allclose(policy.sum(dim=1), torch.ones(size), atol=1e-5, rtol=0):
+    if not torch.allclose(
+        policy.sum(dim=1),
+        torch.ones(size, dtype=torch.bfloat16),
+        atol=torch.finfo(torch.bfloat16).eps,
+        rtol=0,
+    ):
         raise ValueError("策略目标必须归一化")
     if (batch["value"].abs() > 1).any():
         raise ValueError("价值目标必须在[-1,1]内，且采用观察所属方视角")
@@ -281,21 +298,31 @@ def synthetic_batch(
 
     # 全局token作为基地/空参数的占位，指针只落到本样本的有效实体。
     def indices():
-        return (torch.rand(size, actions, generator=rng) * (entity_counts[:, None] + 1)).long() - 1
+        return (
+            torch.rand(size, actions, generator=rng, dtype=torch.bfloat16)
+            * (entity_counts[:, None] + 1)
+        ).long() - 1
 
-    labels = (torch.rand(size, generator=rng) * action_counts).long()
+    labels = torch.randint(0, 2**24, (size,), generator=rng) % action_counts
     batch = {
-        "entities": torch.randn(size, entities, config.entity_features, generator=rng) * 0.2,
+        "entities": torch.randn(
+            size, entities, config.entity_features, generator=rng, dtype=torch.bfloat16
+        )
+        * 0.2,
         "kinds": torch.randint(1, config.kind_count, (size, entities), generator=rng),
         "entity_mask": entity_mask,
-        "globals": torch.randn(size, config.global_features, generator=rng) * 0.2,
-        "candidates": torch.randn(size, actions, config.action_features, generator=rng) * 0.2,
+        "globals": torch.randn(size, config.global_features, generator=rng, dtype=torch.bfloat16)
+        * 0.2,
+        "candidates": torch.randn(
+            size, actions, config.action_features, generator=rng, dtype=torch.bfloat16
+        )
+        * 0.2,
         "sources": indices(),
         "targets": indices(),
         "candidate_mask": candidate_mask,
-        "policy": torch.nn.functional.one_hot(labels, actions).float(),
-        "value": torch.randint(-1, 2, (size,), generator=rng).float(),
-        "value_mask": torch.rand(size, generator=rng) > 0.25,
+        "policy": torch.nn.functional.one_hot(labels, actions).to(torch.bfloat16),
+        "value": torch.randint(-1, 2, (size,), generator=rng).to(torch.bfloat16),
+        "value_mask": torch.rand(size, generator=rng, dtype=torch.bfloat16) > 0.25,
     }
     validate_batch(batch, config)
     return batch
@@ -318,7 +345,7 @@ def load_dataset(path: Path, config: ModelConfig) -> tuple[dict[str, Tensor] | T
         raise ValueError("数据集必须标明ruleset、encoding和synthetic")
     if payload["format"] == SHARD_FORMAT:
         return TensorShards(path, payload, config), metadata
-    batch = payload["tensors"]
+    batch = bf16_tensors(payload["tensors"])
     validate_batch(batch, config)
     # 旧格式保持整体驻留CPU的读取行为；扩量使用同入口的分片索引与mmap。
     return batch, metadata

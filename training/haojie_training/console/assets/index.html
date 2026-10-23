@@ -298,13 +298,6 @@
                   <input name="batch_wait_ms" type="number" min="0" max="10" step="0.1" required />
                 </label>
                 <label
-                  >采样推理精度
-                  <select name="sampling_precision">
-                    <option value="fp32">FP32</option>
-                    <option value="bf16">BF16（设备支持时）</option>
-                  </select>
-                </label>
-                <label
                   >RAM样本池（MiB）<input
                     name="pool_mib"
                     type="number"
@@ -465,10 +458,7 @@
             <option value="cpu">CPU</option>
           </select></label
         >
-        <p>
-          MC-Q v2 · CUDA采样FP32、更新BF16（支持时）· 自动更新预算。正常继续已有实验请使用顶部“开始
-          / 继续”。
-        </p>
+        <p>MC-Q v2 · BF16 采样与更新 · 自动更新预算。正常继续已有实验请使用顶部“开始 / 继续”。</p>
         <button type="submit" id="new-cancel" formmethod="dialog">取消</button
         ><button type="submit" class="primary">建立实验</button>
       </form>

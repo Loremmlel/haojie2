@@ -96,7 +96,6 @@ test('宿主取消后不提交网络旧结果；启动失败的子进程及时�
       python: join(tmpdir(), 'nonexistent-haojie-python.exe'),
       checkpoint: 'unused',
       device: 'cpu',
-      precision: 'fp32',
       threads: 1,
       timeoutMs: 1000,
     }),

@@ -8,6 +8,8 @@ from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
+import torch
+
 from haojie_training.console.config.resources import _cpu_total
 from haojie_training.console.memory import SamplePool, Trajectory
 from haojie_training.diagnostics import MeasuredJobs, profiling, resize_point, sample_fingerprint
@@ -119,7 +121,7 @@ class DiagnosticsTests(unittest.TestCase):
             "entity_mask",
             "candidate_mask",
         )
-        data = b"".join(row[key].numpy().tobytes() for key in keys)
+        data = b"".join(row[key].view(torch.uint8).numpy().tobytes() for key in keys)
         report = {}
         errors = []
 

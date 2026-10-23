@@ -118,7 +118,7 @@ def tensor_example(row: dict, config: ModelConfig) -> dict[str, torch.Tensor]:
     example = {
         key: torch.tensor(
             value,
-            dtype=torch.float32
+            dtype=torch.bfloat16
             if key in FLOAT_KEYS
             else torch.bool
             if key in MASK_KEYS
@@ -130,11 +130,11 @@ def tensor_example(row: dict, config: ModelConfig) -> dict[str, torch.Tensor]:
     if type(selected) is not int or not 0 <= selected < len(example["candidate_mask"]):
         raise ValueError("教师选择下标越界")
     if "policy" in row:
-        example["policy"] = torch.tensor(row["policy"], dtype=torch.float32)
+        example["policy"] = torch.tensor(row["policy"], dtype=torch.bfloat16)
     else:
-        example["policy"] = torch.zeros(len(example["candidate_mask"]))
+        example["policy"] = torch.zeros(len(example["candidate_mask"]), dtype=torch.bfloat16)
         example["policy"][selected] = 1
-    example["value"] = torch.tensor(0.0)
+    example["value"] = torch.tensor(0.0, dtype=torch.bfloat16)
     example["value_mask"] = torch.tensor(False)
     validate_batch({key: value.unsqueeze(0) for key, value in example.items()}, config)
     return example

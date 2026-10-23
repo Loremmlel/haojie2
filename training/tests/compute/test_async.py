@@ -7,7 +7,6 @@ import time
 import unittest
 from collections import deque
 from concurrent.futures import Future
-from contextlib import nullcontext
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -51,7 +50,9 @@ class FakeInference:
         self.on_submit = lambda: None
 
     def __call__(self, rows):
-        return torch.tensor([[row["value"] + self.offset, 0.0] for row in rows])
+        return torch.tensor(
+            [[row["value"] + self.offset, 0.0] for row in rows], dtype=torch.bfloat16
+        )
 
     def submit(self, rows, *, slots):
         if len(self.active) == 2 or any(
@@ -211,7 +212,9 @@ class PoolAsyncTests(unittest.TestCase):
         self.assertFalse(self.unfinished)
         for row, (slot, generation, response) in enumerate(self.sent):
             self.assertEqual((slot, generation), (row, 0))
-            self.assertEqual(response["logits"], expected[row, :1].tolist())
+            self.assertEqual(
+                response["logits"].tolist(), expected[row, :1].view(torch.uint16).tolist()
+            )
         self.assertFalse(self.runner.active)
 
     def test_request_arriving_during_gpu_wait_submits_before_finish(self):
@@ -309,8 +312,7 @@ class PoolAsyncTests(unittest.TestCase):
         self.pool.slots = {0: self.pool.slots[0]}
         self.pool.events.advance = lambda: self.fail("所有槽均等模型时仍轮询空输入队列")
         self.add(0, self.request(0))
-        with patch("torch.autocast", return_value=nullcontext()):
-            self.pool.run(self.jobs, keep_open=True)
+        self.pool.run(self.jobs, keep_open=True)
         self.assertEqual(self.committed, [10])
         self.assertFalse(self.unfinished or self.runner.active)
 
@@ -426,7 +428,9 @@ class PoolAsyncTests(unittest.TestCase):
                 self.assertFalse(self.unfinished)
                 self.assertFalse(any(runner.active for runner in self.jobs.inferences.values()))
                 for slot, _, response in self.sent:
-                    self.assertEqual(response["logits"], expected[slot, :1].tolist())
+                    self.assertEqual(
+                        response["logits"].tolist(), expected[slot, :1].view(torch.uint16).tolist()
+                    )
 
     def test_snapshot_drains_live_tickets(self):
         calls = []
@@ -585,10 +589,9 @@ class AsyncOwnershipTests(unittest.TestCase):
         "需要 CUDA BF16 和 ATen C++ 发射器",
     )
     def test_background_streams_refresh_weights_only_after_every_window_drains(self):
-        for precision in ("fp32", "bf16"):
-            self._background_streams_refresh_weights(precision)
+        self._background_streams_refresh_weights()
 
-    def _background_streams_refresh_weights(self, precision):
+    def _background_streams_refresh_weights(self):
         torch.manual_seed(121)
         model = PolicyValueNet().cuda().eval()
         groups = [
@@ -603,7 +606,7 @@ class AsyncOwnershipTests(unittest.TestCase):
             ]
             for entities in (5, 9, 13)
         ]
-        runner = PolicyInference(model, "cuda", precision)
+        runner = PolicyInference(model, "cuda")
         previous = None
         launcher = ForwardWorkers(torch.device("cuda"))
         try:
@@ -612,7 +615,7 @@ class AsyncOwnershipTests(unittest.TestCase):
                     with torch.no_grad():
                         model.blocks[0].qkv.weight.mul_(0.75)
                         model.policy[-1].bias.add_(0.1)
-                with torch.autocast("cuda", enabled=False):
+                with torch.no_grad():
                     expected = [runner(rows) for rows in groups]
                     runner.set_launcher(launcher)
                     first = runner.submit(groups[0], slots=[(0, window)])
@@ -695,24 +698,20 @@ class AsyncOwnershipTests(unittest.TestCase):
         self.assertEqual(synchronized, [0, 1])
         self.assertFalse(second.owners or runner._slots)
 
-    @unittest.skipUnless(torch.cuda.is_available(), "CUDA 双缓冲需要 GPU 执行器")
-    def test_cuda_same_outputs_timing_and_parameter_update_after_drain(self):
-        self._cuda_same_outputs_timing_and_parameter_update_after_drain("fp32")
-
     @unittest.skipUnless(
         torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
         "CUDA BF16 双缓冲需要支持的 GPU 执行器",
     )
     def test_cuda_bf16_outputs_timing_update_and_checkpoint_after_drain(self):
-        self._cuda_same_outputs_timing_and_parameter_update_after_drain("bf16")
+        self._cuda_same_outputs_timing_and_parameter_update_after_drain()
 
-    def _cuda_same_outputs_timing_and_parameter_update_after_drain(self, precision):
+    def _cuda_same_outputs_timing_and_parameter_update_after_drain(self):
         torch.manual_seed(93)
         model = PolicyValueNet().cuda().eval()
         stats = InferenceStats()
         runner, reference = (
-            PolicyInference(model, "cuda", precision, stats=stats),
-            PolicyInference(model, "cuda", precision),
+            PolicyInference(model, "cuda", stats=stats),
+            PolicyInference(model, "cuda"),
         )
         if not runner.supports_async:
             self.skipTest("本 Torch/CUDA 后端沿用同步推理")
@@ -757,7 +756,7 @@ class AsyncOwnershipTests(unittest.TestCase):
         restored = runner.finish(runner.submit(groups[0], slots=[(0, 2)]))
         torch.testing.assert_close(restored, expected[0], atol=0, rtol=0)
         torch.testing.assert_close(restored, reference(groups[0]), atol=0, rtol=0)
-        historical = PolicyInference(model, "cuda", precision, stats=stats)
+        historical = PolicyInference(model, "cuda", stats=stats)
         overlaps = stats.async_overlaps
         first = runner.submit(groups[0], slots=[(0, 3)])
         second = historical.submit(groups[1], slots=[(1, 3)])

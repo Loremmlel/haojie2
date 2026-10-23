@@ -29,27 +29,24 @@ POLICY_KEYS = (
 )
 
 
-def supports_packed(model, device, precision):
+def supports_packed(model, device):
     """私有算子只在当前固定依赖及已验证的原网络配置启用，其他入口沿用普通推理。"""
     if not (
         device.type == "cuda"
-        and precision in {"fp32", "bf16"}
         and type(model) is PolicyValueNet
         and model.config == ModelConfig()
-        and next(model.parameters()).dtype == torch.float32
+        and next(model.parameters()).dtype == torch.bfloat16
         and torch.__version__.split("+")[0] == "2.14.0"
         and torch.version.cuda is not None
         and torch.backends.cuda.is_built()
         and torch.backends.cuda.mem_efficient_sdp_enabled()
     ):
         return False
-    # 开关开启不代表当前构建/GPU有该内核；按正式头宽和实际AMP计算类型检查。
+    # 开关开启不代表当前构建/GPU有该内核；按正式头宽和 BF16 参数类型检查。
     width, heads = model.config.width, model.config.heads
     query = (
         model.entity_projection.weight.detach().view(-1)[:width].view(1, heads, 1, width // heads)
     )
-    if precision == "bf16":
-        query = query.to(dtype=torch.bfloat16)
     with torch.cuda.device(device):
         return torch.backends.cuda.can_use_efficient_attention(
             torch.backends.cuda.SDPAParams(query, query, query, None, 0.0, False, False)
@@ -99,7 +96,7 @@ def prepare_row(row):
     # 与 model.active_tokens 同一集合；有效近期日志、非历史实体及有效候选引用。
     journal = row["kinds"] == 250
     older = np.cumsum((journal & row["entity_mask"])[::-1])[::-1] > RECENT_JOURNAL
-    history = (journal & older) | (~journal & (row["entities"][:, 0] == 5 / 32))
+    history = (journal & older) | (~journal & (row["entities"][:, 0] == 0x3E20))
     active = np.concatenate((np.ones(1, dtype=bool), row["entity_mask"] & ~history))
     for key in ("sources", "targets"):
         active[np.where(row["candidate_mask"], row[key] + 1, 0)] = True
@@ -112,7 +109,7 @@ def prepare_row(row):
 class PackedPolicy:
     """只持有原模块和主机容量；每次前向直接读取最新参数，不缓存实体表示。"""
 
-    def __init__(self, model, buffers, pinned, precision="fp32"):
+    def __init__(self, model, buffers, pinned):
         self.model, self.buffers, self.pinned = model, buffers, pinned
         from .aten import operator, parameters
 
@@ -125,7 +122,7 @@ class PackedPolicy:
         self.factored = True
         self.fused = True
         self.residual_norm, self.norm_error = None, None
-        if self.operator is not None and precision == "bf16":
+        if self.operator is not None:
             from .kernels import residual_norm
 
             self.residual_norm, self.norm_error = residual_norm(
@@ -201,7 +198,13 @@ class PackedPolicy:
             prepared = getattr(row, "packing", None)
             # 主机准备统一走 NumPy 原生数组运算，避免每条请求反复进入小型 Torch 算子。
             row = {
-                key: value if isinstance(value, np.ndarray) else value.numpy()
+                key: value
+                if isinstance(value, np.ndarray)
+                else (
+                    value.view(torch.uint16).numpy()
+                    if value.dtype == torch.bfloat16
+                    else value.numpy()
+                )
                 for key, value in row.items()
             }
             valid, positions, inverse, active, length = prepared or prepare_row(row)
@@ -216,9 +219,9 @@ class PackedPolicy:
         scored = sum(np.count_nonzero(row["candidate_mask"]) for row, *_ in records)
         config = self.model.config
         batch = {
-            "entities": empty("entities", (starts[-1], config.entity_features), torch.float32),
+            "entities": empty("entities", (starts[-1], config.entity_features), torch.bfloat16),
             "kinds": empty("kinds", (starts[-1],), torch.long),
-            "globals": empty("globals", (size, config.global_features), torch.float32),
+            "globals": empty("globals", (size, config.global_features), torch.bfloat16),
             "global_indices": empty("global_indices", (size,), torch.long),
             "cu_k": empty("cu_k", (size + 1,), torch.int32),
             "cu_q": empty("cu_q", (size + 1,), torch.int32),
@@ -235,14 +238,17 @@ class PackedPolicy:
                 (scored, config.action_features)
                 if native
                 else (size, actions, config.action_features),
-                torch.float32,
+                torch.bfloat16,
             ),
             "candidate_mask": empty("candidate_mask", (size, actions), torch.bool),
         }
         if native:
             batch["candidate_positions"] = empty("candidate_positions", (scored,), torch.long)
         # NumPy 视图直接填充原页锁定容量；交付后的 CUDA 票据继续独占这组缓冲。
-        arrays = {key: value.numpy() for key, value in batch.items()}
+        arrays = {
+            key: (value.view(torch.uint16) if value.dtype == torch.bfloat16 else value).numpy()
+            for key, value in batch.items()
+        }
         if not native:
             arrays["sources"].fill(-1)
             arrays["targets"].fill(-1)
@@ -330,7 +336,7 @@ class PackedPolicy:
                 self.fused,
             )
         x = model.entity_projection(batch["entities"]) + model.kind_embedding(batch["kinds"])
-        # 与普通encode的cat类型提升一致：AMP全局投影并入FP32残差流。
+        # 全局与实体共用 BF16 残差流。
         global_tokens = model.global_projection(batch["globals"]).to(dtype=x.dtype)
         x.index_copy_(0, batch["global_indices"], global_tokens)
         width = model.config.width

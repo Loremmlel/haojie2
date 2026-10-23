@@ -48,9 +48,11 @@ training/.venv/bin/python -m haojie_training.console --device cpu
 
 ## 模型与维护职责
 
-`entity-transformer-v3` 为 6 层 Pre-LN Transformer：width 384、6 个注意力头、FFN 1536、dropout 0，共 11,695,874 个参数。64 维公开实体特征、类别嵌入和 32 维全局特征进入主干；64 维候选结合全局、来源及目标实体，输出候选评分和观察方价值。实体和候选数量可变，填充由掩码表示。候选投影、评分头、主干和价值头均使用所选 AMP 计算；最终评分、损失、参数和优化器累积状态保留 FP32。支持硬件 BF16 的 CUDA 新实验默认 BF16 采样和更新，恢复实验沿用原精度。
+`entity-transformer-v3` 为 6 层 Pre-LN Transformer：width 384、6 个注意力头、FFN 1536、dropout 0，共 11,695,874 个参数。64 维公开实体特征、类别嵌入和 32 维全局特征进入主干；64 维候选结合全局、来源及目标实体，输出候选评分和观察方价值。实体和候选数量可变，填充由掩码表示。参数、输入、残差、评分、损失、梯度及 AdamW 矩均使用 BF16；参数和两个矩分别保存 BF16 舍入余量，步数使用整数。旧兼容检查点在读取边界转换，原文件保持只读。
 
 亡者记录与 MC 尝试日志在前两层完整参与双向交互。最近 16 条有效 MC 日志、全部有效候选直接引用的历史实体继续按完整深度更新，复活目标和近期搜索过程保留深层局面上下文。其余历史在中间三层保留表示供所有活跃实体逐项关注，省去这些历史项的查询端注意力、输出投影和 FFN；末层沿用完整或稀疏读出。所有原始条目、字段、顺序与指针保留，历史表示的梯度也保留。普通与 CUDA 紧凑推理采用同一结构。
+
+底层 BF16 矩阵核使用较宽的内部累加；Torch 融合注意力的 log-sum-exp、CUDA LayerNorm 的均值/逆标准差辅助统计仍由后端以 FP32 产生。张量审计单独记录这些内部统计，模型参数、公开输入输出和优化器状态没有 FP32 副本或执行回退。ONNX 入口只导出 BF16 权重和参考输入，目标后端的执行与数值须另行验收。
 
 v3 减少了未被候选引用的亡者和较早日志自身反复更新的深度；当前实体和全局每层仍能关注全部历史。它使用新的网络版本，从新实验开始训练。旧 v2 或缺少网络版本的权重需由对应版本代码读取，本版本不迁移这些权重。两层 tiny 验收网络没有中间层，正式性能和历史交互验收使用更深的网络。
 
@@ -96,9 +98,9 @@ python -m haojie_training.train --data artifacts/training/pilot/encoded/train.pt
 python -m haojie_training.train --data artifacts/training/pilot/encoded/train.pt --validation artifacts/training/pilot/encoded/validation.pt --resume artifacts/training/pilot/model.pt --checkpoint artifacts/training/pilot/model.pt --device cpu --batch-size 8 --steps 20
 ```
 
-`--steps` 是本次新增步数。`--resume` 恢复模型、优化器、AMP、累计步骤、随机状态及来源，要求数据、结构、目标和精度兼容。新一轮数据用互斥的 `--initialize-from 父检查点`，只继承兼容权重并重建优化器；父文件只读，祖先训练族继续排除在新验证集之外。
+`--steps` 是本次新增步数。`--resume` 恢复模型、优化器、累计步骤、随机状态及来源，要求数据、结构与目标兼容；旧数值状态统一迁移为 BF16。新一轮数据用互斥的 `--initialize-from 父检查点`，只继承兼容权重并重建优化器；父文件只读，祖先训练族继续排除在新验证集之外。
 
-CUDA 可用 `--precision bf16 --threads 1`，`--optimizer auto` 选择受支持的执行方式。`--length-bucket-size 256` 可减少组批填充，设置随检查点保存。同设备确定性恢复使用 `--deterministic`，续训继承检查点的确定性、矩阵精度及优化器执行方式。
+CUDA 可用 `--threads 1`；执行精度和优化器实现统一，不提供切换选项。`--length-bucket-size 256` 可减少组批填充，设置随检查点保存。同设备确定性恢复使用 `--deterministic`，续训继承检查点的确定性设置。
 
 功能烟雾检查可以使用小模型和合成数据，合成标记随检查点保留：
 

@@ -15,7 +15,7 @@ use std::{
     time::Instant,
 };
 
-pub const PROTOCOL: &str = "haojie-training-binary-v1";
+pub const PROTOCOL: &str = "haojie-training-binary-v2";
 pub struct Wire<R, W> {
     input: R,
     output: W,
@@ -106,7 +106,7 @@ impl<R: BufRead, W: Write> Inference for Wire<R, W> {
                 "commandIndex":self.command_index,"ply":self.ply,"actor":self.actor}),
             input,
         )?;
-        let mut response = self.read()?;
+        let response = self.read()?;
         encoding::known(
             &response,
             &["id", "model", "logits", "logitsBytes", "cancel"],
@@ -117,25 +117,24 @@ impl<R: BufRead, W: Write> Inference for Wire<R, W> {
         if response["cancel"] == true {
             return Err("cancelled".into());
         }
-        let logits: Vec<f64> = if let Some(size) = response.get("logitsBytes") {
-            let expected = input.candidates.len() * 4;
-            if size.as_u64() != Some(expected as u64) || response.get("logits").is_some() {
-                return Err("invalid model logits frame".into());
-            }
-            // FP32 评分原值传输后再提升为 f64，与旧 JSON 数值的采样输入一致。
-            self.tensor_bytes.resize(expected, 0);
-            self.input
-                .read_exact(&mut self.tensor_bytes)
-                .map_err(|e| e.to_string())?;
-            self.tensor_bytes
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|bytes| f32::from_le_bytes(*bytes) as f64)
-                .collect()
-        } else {
-            serde_json::from_value(response["logits"].take()).map_err(|e| e.to_string())?
-        };
+        let expected = input.candidates.len() * 2;
+        if response["logitsBytes"].as_u64() != Some(expected as u64)
+            || response.get("logits").is_some()
+        {
+            return Err("invalid model logits frame".into());
+        }
+        // BF16 评分只在采样数值边界提升为标量，网络张量始终保持 BF16。
+        self.tensor_bytes.resize(expected, 0);
+        self.input
+            .read_exact(&mut self.tensor_bytes)
+            .map_err(|e| e.to_string())?;
+        let logits: Vec<f64> = self
+            .tensor_bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|bytes| encoding::bf16_value(u16::from_le_bytes(*bytes)))
+            .collect();
         if logits.len() != input.candidates.len() || logits.iter().any(|n| !n.is_finite()) {
             return Err("invalid model logits".into());
         }
@@ -472,7 +471,7 @@ pub fn serve() -> Result<(), String> {
         tensor_bytes: Vec::new(),
         control_bytes: Vec::new(),
     };
-    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":catalog::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe(),"capabilities":["memory-examples-v1","mc-context-v2","mc-input-ref-v1","logits-f32-v1","actor-model-routing-v1","teacher-v2"]}))?;
+    wire.send(&json!({"type":"ready","protocol":PROTOCOL,"rulesHash":catalog::rules_hash(),"ruleset":crate::model::RULESET,"schema":catalog.encoding,"engine":crate::identity::describe(),"capabilities":["memory-examples-v1","mc-context-v2","mc-input-ref-v1","logits-bf16-v1","actor-model-routing-v1","teacher-v2"]}))?;
     loop {
         let request = wire.read()?;
         let result = match request["op"].as_str() {

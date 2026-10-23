@@ -56,7 +56,7 @@ class Trajectory:
         self.seen += 1
         key = "pass" if message.get("pass") else message.get("stage", "unknown")
         self.coverage[key] += 1
-        size = message["bytes"] + message["candidates"] * 4 + 4096
+        size = message["bytes"] + message["candidates"] * 2 + 4096
         if size > self.sample_bytes:
             self.oversize += 1
             return
@@ -87,7 +87,7 @@ class Trajectory:
             row = _PendingExample(
                 frame, inputs.entity_count, inputs.candidate_count, message["selected"], metadata
             )
-            used = inputs.frame_bytes + inputs.candidate_count * 4 + 5 + 4096
+            used = inputs.frame_bytes + inputs.candidate_count * 2 + 3 + 4096
         else:
             row = {**example(inputs, message["selected"]), "_meta": metadata}
             used = size_of(row)
@@ -105,7 +105,7 @@ class Trajectory:
 
     def terminal(self, returns):
         for row, actor, step, _ in self.rows:
-            row["value"] = torch.tensor(float(returns[str(actor)]))
+            row["value"] = torch.tensor(float(returns[str(actor)]), dtype=torch.bfloat16)
             # MC Q 对每个实际分解选择监督；状态价值也按该前缀所属方学习。
             row["value_mask"] = torch.tensor(True)
             yield row

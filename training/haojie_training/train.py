@@ -59,7 +59,6 @@ def main():
     inputs.add_argument("--synthetic", action="store_true")
     inputs.add_argument("--data", type=Path)
     parser.add_argument("--device", default="auto")
-    parser.add_argument("--precision", choices=["fp32", "bf16", "fp16"], default="fp32")
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--entities", type=int, default=64)
@@ -78,7 +77,6 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--value-weight", type=float, default=1.0)
     parser.add_argument("--length-bucket-size", type=int, default=0)
-    parser.add_argument("--optimizer", choices=["auto", "foreach", "fused"], default="auto")
     parser.add_argument("--prefetch", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--overfit-examples", type=int, default=0)
@@ -110,7 +108,6 @@ def main():
     if deterministic:
         os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     torch.use_deterministic_algorithms(deterministic)
-    torch.set_float32_matmul_precision(saved_execution.get("matmul_precision", "highest"))
     torch.manual_seed(args.seed)
     config = (
         checkpoint_config(args.resume or args.initialize_from)
@@ -161,10 +158,8 @@ def main():
     trainer = Trainer(
         PolicyValueNet(config),
         device,
-        args.precision,
         lr=args.learning_rate,
         value_weight=args.value_weight,
-        optimizer=args.optimizer,
     )
     if args.resume:
         # 同数据续训保留已记录的初始化来源，其余元数据仍由restore严格比较。
@@ -191,14 +186,13 @@ def main():
         result = {}
         if dataset is not None:
             result["train"] = evaluate(
-                trainer.model, dataset, device, args.precision, args.batch_size, records, baselines
+                trainer.model, dataset, device, args.batch_size, records, baselines
             )
         if validation is not None:
             result["validation"] = evaluate(
                 trainer.model,
                 validation,
                 device,
-                args.precision,
                 args.batch_size,
                 validation_metadata.get("records"),
                 baselines,
@@ -273,7 +267,7 @@ def main():
         "config": asdict(config),
         "threads": torch.get_num_threads(),
         "device": str(device),
-        "precision": args.precision,
+        "precision": "bf16",
         "value_weight": args.value_weight,
         "parameters": sum(p.numel() for p in trainer.model.parameters()),
         "steps": trainer.steps,
@@ -284,9 +278,7 @@ def main():
         "save_seconds": save_seconds,
         "validation_before_seconds": validation_before_seconds,
         "validation_after_seconds": validation_after_seconds,
-        "optimizer_execution": "fused"
-        if trainer.optimizer.param_groups[0].get("fused")
-        else "foreach",
+        "optimizer_execution": "bf16-compensated-adamw",
         "prefetch": args.prefetch,
         "deterministic": deterministic,
         "checkpoint": str(args.checkpoint),

@@ -1,5 +1,7 @@
 """验证填充/候选语义、未决价值遮罩、真实优化更新和检查点续训。"""
 
+import copy
+import math
 import subprocess
 import sys
 import tempfile
@@ -7,11 +9,13 @@ import unittest
 from pathlib import Path
 
 import torch
+from torch.utils._python_dispatch import TorchDispatchMode
+from torch.utils._pytree import tree_flatten
 
 from haojie_training.data import FORMAT, load_dataset, synthetic_batch, validate_batch
 from haojie_training.evaluate import value_baselines, value_diagnostics, value_quality
-from haojie_training.model import ModelConfig, PolicyValueNet, policy_value_loss
-from haojie_training.runtime import Trainer, autocast
+from haojie_training.model import ModelConfig, PolicyValueNet, policy_value_loss, stable_tanh
+from haojie_training.runtime import BF16AdamW, Trainer
 from haojie_training.train import initialize_weights
 
 
@@ -24,6 +28,92 @@ class TrainingTests(unittest.TestCase):
         torch.manual_seed(7)
         self.config = ModelConfig.tiny()
         self.batch = synthetic_batch(self.config, 3, 8, 6)
+
+    def test_bf16_adam_retains_small_updates_moment_decay_and_integer_steps(self):
+        parameter = torch.nn.Parameter(torch.ones(1, dtype=torch.bfloat16))
+        optimizer = BF16AdamW([parameter], weight_decay=0)
+        for _ in range(1000):
+            parameter.grad = torch.ones_like(parameter)
+            optimizer.step()
+        state = optimizer.state[parameter]
+        self.assertAlmostEqual(parameter.item(), 0.7, delta=0.004)
+        self.assertAlmostEqual(state["exp_avg_sq"].item(), 1 - 0.999**1000, delta=0.004)
+        self.assertEqual(state["step"], 1000)
+        self.assertIs(type(state["step"]), int)
+        self.assertTrue(
+            all(v.dtype == torch.bfloat16 for v in state.values() if isinstance(v, torch.Tensor))
+        )
+        restored_parameter = torch.nn.Parameter(parameter.detach().clone())
+        restored = BF16AdamW([restored_parameter])
+        restored.load_state_dict(copy.deepcopy(optimizer.state_dict()))
+        parameter.grad = torch.ones_like(parameter)
+        restored_parameter.grad = torch.ones_like(restored_parameter)
+        optimizer.step()
+        restored.step()
+        torch.testing.assert_close(parameter, restored_parameter, rtol=0, atol=0)
+
+    def test_bf16_tanh_preserves_small_gradients_after_output_rounds_to_one(self):
+        values = torch.tensor([0, 5, -5, 10, 20], dtype=torch.bfloat16, requires_grad=True)
+        output = stable_tanh(values)
+        torch.testing.assert_close(output, values.tanh(), rtol=0, atol=0)
+        self.assertEqual(float(output[1].detach()), 1)
+        output.sum().backward()
+        self.assertEqual(values.grad.dtype, torch.bfloat16)
+        for value, gradient in zip(values.tolist(), values.grad.tolist()):
+            exponential = math.exp(-2 * abs(value))
+            expected = 4 * exponential / (1 + exponential) ** 2
+            self.assertAlmostEqual(gradient / expected, 1, delta=0.02)
+
+    def test_bf16_storage_and_kernel_auxiliary_dtype_audit(self):
+        class Audit(TorchDispatchMode):
+            def __torch_dispatch__(self, function, types, args=(), kwargs=None):
+                result = function(*args, **(kwargs or {}))
+                # 融合核的内部归一化统计单列；主输出、矩阵、梯度和优化器仍须为 BF16。
+                auxiliary = {
+                    "aten.native_layer_norm.default": {1, 2},
+                    "aten._scaled_dot_product_flash_attention_for_cpu.default": {1},
+                    "aten._scaled_dot_product_flash_attention.default": {1},
+                    "aten._scaled_dot_product_efficient_attention.default": {1},
+                }.get(str(function), set())
+                for index, value in enumerate(result if isinstance(result, tuple) else (result,)):
+                    if index in auxiliary:
+                        continue
+                    for tensor in tree_flatten(value)[0]:
+                        if isinstance(tensor, torch.Tensor) and tensor.is_floating_point():
+                            self_test.assertEqual(tensor.dtype, torch.bfloat16, str(function))
+                return result
+
+        self_test = self
+        for name in ("cpu", *(["cuda"] if torch.cuda.is_available() else [])):
+            with self.subTest(device=name), Audit():
+                trainer = Trainer(PolicyValueNet(self.config), torch.device(name))
+                batch = {key: value.to(name) for key, value in self.batch.items()}
+                trainer.step(batch)
+                payload = trainer.checkpoint({})
+                self.assertEqual(payload["precision"], "bf16")
+                self.assertNotIn("scaler", payload)
+                self.assertTrue(all(p.dtype == torch.bfloat16 for p in trainer.model.parameters()))
+                self.assertTrue(
+                    all(type(state["step"]) is int for state in trainer.optimizer.state.values())
+                )
+
+    def test_bf16_adam_migrates_old_moments_without_mutating_source(self):
+        parameter = torch.nn.Parameter(torch.ones(2))
+        old = torch.optim.AdamW([parameter])
+        parameter.grad = torch.ones_like(parameter)
+        old.step()
+        payload = old.state_dict()
+        new_parameter = torch.nn.Parameter(parameter.detach().to(torch.bfloat16))
+        new = BF16AdamW([new_parameter])
+        new.load_state_dict(payload)
+        self.assertEqual(payload["state"][0]["exp_avg"].dtype, torch.float32)
+        self.assertEqual(new.state[new_parameter]["exp_avg"].dtype, torch.bfloat16)
+        self.assertEqual(new.state[new_parameter]["step"], 1)
+        self.assertNotIn("fused", new.param_groups[0])
+        self.assertNotIn("foreach", new.param_groups[0])
+        new_parameter.grad = torch.ones_like(new_parameter)
+        new.step()
+        self.assertEqual(new.state[new_parameter]["step"], 2)
 
     def test_new_generation_transfers_weights_but_not_optimizer_or_data_identity(self):
         previous = Trainer(PolicyValueNet(self.config), torch.device("cpu"))
@@ -186,19 +276,21 @@ class TrainingTests(unittest.TestCase):
     def test_bf16_head_learns_adjacent_coordinates_and_resumes(self):
         device = torch.device("cuda")
         model = PolicyValueNet(self.config)
-        trainer = Trainer(model, device, precision="bf16", lr=0.002, objective="decomposed-mc-q-v2")
+        trainer = Trainer(model, device, lr=0.002, objective="decomposed-mc-q-v2")
         batch = synthetic_batch(self.config, 2, 4, 1)
-        # 两行公开上下文完全相同，监督仅依赖相邻格坐标；防止评分头重新隐藏 FP32 矩阵。
+        # 两行公开上下文完全相同，监督仅依赖相邻格坐标。
         batch = {
             key: value[:1].expand(2, *value.shape[1:]).clone().to(device)
             for key, value in batch.items()
         }
         batch["candidates"].zero_()
-        batch["candidates"][:, 0, 10] = torch.tensor([5 / 12, 6 / 12], device=device)
+        batch["candidates"][:, 0, 10] = torch.tensor(
+            [5 / 12, 6 / 12], device=device, dtype=torch.bfloat16
+        )
         batch["candidate_mask"].fill_(True)
         batch["policy"].fill_(1)
         batch["value_mask"].fill_(True)
-        batch["value"] = torch.tensor([-0.8, 0.8], device=device)
+        batch["value"] = torch.tensor([-0.8, 0.8], device=device, dtype=torch.bfloat16)
         dtypes = []
         handle = model.policy[0].register_forward_hook(
             lambda _module, _inputs, output: dtypes.append(output.dtype)
@@ -211,7 +303,7 @@ class TrainingTests(unittest.TestCase):
         for _ in range(199):
             final = float(trainer.step(batch))
         self.assertLess(final, initial * 0.6)
-        with torch.inference_mode(), autocast(device, "bf16"):
+        with torch.inference_mode():
             scores = model.policy_logits(batch).squeeze(1).tanh()
         self.assertLess(float(scores[0]), -0.5)
         self.assertGreater(float(scores[1]), 0.5)
@@ -224,7 +316,6 @@ class TrainingTests(unittest.TestCase):
         restored = Trainer(
             PolicyValueNet(self.config),
             device,
-            precision="bf16",
             lr=0.002,
             objective="decomposed-mc-q-v2",
         )

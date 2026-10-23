@@ -28,7 +28,11 @@ starts = json.loads(
 store = Store(args.root, limit=args.quota)
 lease = Lease(store)
 c = Controller(
-    args.engine, store, device=args.device, tiny=not args.default_model, starts=starts[:2]
+    args.engine,
+    store,
+    device=args.device,
+    tiny=not args.default_model,
+    starts=[starts[0], starts[2]],
 )
 c.command(
     "settings",

@@ -54,7 +54,6 @@ class Evaluation:
             "commands": self.config["max_commands"],
             "plies": self.config["max_plies"],
             "temperature": self.config["temperature"],
-            "sampling_precision": self.config["sampling_precision"],
             "seeds": "fixed-eval-family-1",
         }
         self.series = hashlib.sha256(
@@ -104,7 +103,7 @@ class Evaluation:
                 1,
                 c.device,
                 inference=(
-                    PolicyInference(model, c.device, self.config["sampling_precision"]),
+                    PolicyInference(model, c.device),
                     self.weights["version"],
                 ),
                 frame_limit=32 * 2**20,
