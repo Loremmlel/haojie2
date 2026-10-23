@@ -48,7 +48,7 @@ class Panel:
                     raise RuntimeError(
                         f"服务目标仍为 {confirmed}，请求值为 {requested}；请重新读取后重试"
                     )
-                message = f"服务已确认并发目标 {confirmed}；实际进程在下一采样窗口切换"
+                message = f"服务已确认并发目标 {confirmed}；原局保留，缩容等待终局"
             elif action != "status":
                 message = LABELS[action] + "请求已接收"
             return {
@@ -109,7 +109,7 @@ class Panel:
 <form data-kind="concurrency" novalidate>
 {field("environments", "并发环境（1–128）", 1, 128)}
 <button type="submit">应用并发量</button></form>
-<p>切换并发会取消在途局，保留模型、优化器与已完成样本。目标值由服务确认后显示。</p>
+<p>调整并发保留在途对局、模型、优化器与已完成样本。扩容逐步加入环境，缩容等待多余对局结束。目标值由服务确认后显示。</p>
 <details data-settings><summary>其他设置（暂停后应用）</summary>
 <form data-kind="evaluation" novalidate>{evaluation}
 <button type="submit">应用评测设置</button></form>

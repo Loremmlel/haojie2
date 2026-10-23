@@ -166,10 +166,13 @@ class FrameBuffer:
         self.segments.clear()
 
 
-def _worker(executable, slots, commands, events, frame_limit, prepare_inputs, defer_validation):
+def _worker(
+    executable, slots, commands, events, frame_limit, prepare_inputs, defer_validation, stopping
+):
     """spawn 不继承 CUDA 上下文；Linux 合并管道读取，Windows 保留原槽位读线程。"""
     torch.set_num_threads(1)
     clients, buffers, closed, collectors = {}, {}, {}, {}
+    slots = set(slots)
     behavior = (None, None)
     read_loop = ReadLoop() if os.name != "nt" else None
 
@@ -240,6 +243,7 @@ def _worker(executable, slots, commands, events, frame_limit, prepare_inputs, de
         buffers.pop(slot).close()
 
     def create(slot, generation):
+        slots.add(slot)
         buffers[slot] = FrameBuffer()
         closed[slot] = threading.Event()
         client = Client(
@@ -252,14 +256,15 @@ def _worker(executable, slots, commands, events, frame_limit, prepare_inputs, de
             buffer_factory_async=buffers[slot].acquire_async,
             defer_validation=defer_validation,
             read_loop=read_loop,
+            startup_cancel=stopping,
         )
         clients[slot] = client
-        events.put(("ready", slot, client.ready, client.process.pid))
+        events.put(("ready", slot, generation, client.ready, client.process.pid))
 
     try:
-        for slot in slots:
+        for slot in sorted(slots):
             create(slot, 0)
-        while True:
+        while not stopping.is_set():
             operation, slot, value = commands.recv()
             if operation == "stop":
                 break
@@ -278,7 +283,20 @@ def _worker(executable, slots, commands, events, frame_limit, prepare_inputs, de
             elif operation == "close":
                 close(slot)
             elif operation == "create":
-                create(slot, value)
+                try:
+                    create(slot, value)
+                except Exception as error:
+                    # 扩容失败只拒绝这个新槽，已有原生局继续留在同一输入进程。
+                    if slot in clients:
+                        close(slot)
+                    else:
+                        buffer = buffers.pop(slot, None)
+                        if buffer is not None:
+                            buffer.close()
+                        closed.pop(slot, None)
+                    if stopping.is_set():
+                        break
+                    events.put(("create-error", slot, value, str(error)))
     except BaseException as error:
         events.put(("fatal", tuple(slots), f"{type(error).__name__}: {error}"))
     finally:
@@ -309,12 +327,24 @@ class ProcessClient:
         self.errors = b""
         self.read_seconds = self.decode_seconds = self.tensor_bytes = self.prepare_seconds = 0
         self.closed = False
+        self.segment_names = set()
 
-    def initialize(self, generation=0):
+    def initialize(self, generation=0, *, create=False):
         self.generation, self.closed = generation, False
-        if generation:
+        if generation or create:
             self.owner.command(self.slot, "create", generation)
-        value = self.ready_queue.get(timeout=900)
+        until = time.monotonic() + 900
+        while not self.owner.closed.is_set():
+            remaining = until - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("CPU 输入槽启动超过保护时间")
+            try:
+                value = self.ready_queue.get(timeout=min(0.1, remaining))
+                break
+            except queue.Empty:
+                pass
+        else:
+            raise InterruptedError("CPU 输入进程已关闭")
         if isinstance(value, Exception):
             raise value
         self.ready, pid = value
@@ -327,11 +357,13 @@ class ProcessClient:
     def checked(self, value):
         value = Client.checked(self, value)
         for name in value.pop("_retired", ()):
+            self.segment_names.discard(name)
             retired = self.owner.segments.pop(name, None)
             if retired is not None:
                 retired.close()
         if "_buffer" in value:
             name = value.pop("_buffer")
+            self.segment_names.add(name)
             if name not in self.owner.segments:
                 self.owner.segments[name] = SharedMemory(name=name)
                 self.owner.peak_segments = max(self.owner.peak_segments, len(self.owner.segments))
@@ -371,6 +403,11 @@ class ProcessClient:
             except (BrokenPipeError, OSError):
                 pass
             self.closed = True
+            for name in self.segment_names:
+                segment = self.owner.segments.pop(name, None)
+                if segment is not None:
+                    segment.close()
+            self.segment_names.clear()
 
 
 class InputProcesses:
@@ -393,7 +430,8 @@ class InputProcesses:
         self.defer_validation = defer_validation
         self.peak_segments = 0
         context = mp.get_context("spawn")
-        self.incoming = context.Queue(maxsize=2 * environments)
+        self.stopping = context.Event()
+        self.incoming = context.Queue(maxsize=256)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
         try:
@@ -416,6 +454,7 @@ class InputProcesses:
                     frame_limit,
                     self.prepare_inputs,
                     self.defer_validation,
+                    self.stopping,
                 ),
                 name=f"haojie-input-{index}",
             )
@@ -432,6 +471,10 @@ class InputProcesses:
             self.routes.update(dict.fromkeys(slots, index))
 
     def client(self, slot, generation):
+        if slot == len(self.clients):
+            self.clients.append(ProcessClient(self, slot))
+            self.routes[slot] = slot % len(self.workers)
+            return self.clients[slot].initialize(generation, create=True)
         if generation:
             self.clients[slot] = ProcessClient(self, slot)
         return self.clients[slot].initialize(generation)
@@ -465,14 +508,21 @@ class InputProcesses:
                 for index, process in enumerate(self.workers):
                     if process.exitcode is not None and index not in failed:
                         failed.add(index)
-                        for slot, route in self.routes.items():
+                        for slot, route in tuple(self.routes.items()):
                             if route == index:
                                 self._failure(slot, f"CPU 输入进程退出：{process.exitcode}")
                 continue
             kind, *values = item
             if kind == "ready":
-                slot, ready, pid = values
-                self.clients[slot].ready_queue.put((ready, pid))
+                slot, generation, ready, pid = values
+                client = self.clients[slot]
+                if generation == client.generation:
+                    client.ready_queue.put((ready, pid))
+            elif kind == "create-error":
+                slot, generation, error = values
+                client = self.clients[slot]
+                if generation == client.generation:
+                    client.ready_queue.put(RuntimeError(error))
             elif kind == "fatal":
                 slots, error = values
                 for slot in slots:
@@ -488,6 +538,8 @@ class InputProcesses:
 
     def _failure(self, slot, error):
         client = self.clients[slot]
+        if client.closed:
+            return
         value = RuntimeError(error)
         client.ready_queue.put(value)
         self._publish(((slot, client.generation), value))
@@ -502,6 +554,7 @@ class InputProcesses:
 
     def close(self):
         self.closed.set()
+        self.stopping.set()
         for sender, lock in zip(self.commands, self.locks):
             try:
                 with lock:

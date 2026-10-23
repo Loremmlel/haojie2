@@ -259,7 +259,15 @@ class Dashboard:
                 "评测进程 / 训练并发目标" if evaluating else "并发进程 / 目标",
                 f"{number(concurrency.get('actual'))} / "
                 f"{number(concurrency.get('requested'))}"
-                + (" · 待生效" if concurrency.get("pending") and not evaluating else ""),
+                + (
+                    " · 等待终局"
+                    if concurrency.get("pending")
+                    and not evaluating
+                    and concurrency.get("actual", 0) > concurrency.get("requested", 0)
+                    else " · 正在扩容"
+                    if concurrency.get("pending") and not evaluating
+                    else ""
+                ),
             ),
             (
                 "进程树 RAM（MiB）",

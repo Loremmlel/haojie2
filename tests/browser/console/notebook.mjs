@@ -125,9 +125,7 @@ try {
   await page.getByText('开始请求已接收', { exact: true }).waitFor();
   await page.getByLabel('并发环境（1–128）', { exact: true }).fill('3');
   await page.getByLabel('并发环境（1–128）', { exact: true }).press('Enter');
-  await page
-    .getByText('服务已确认并发目标 3；实际进程在下一采样窗口切换', { exact: true })
-    .waitFor();
+  await page.getByText('服务已确认并发目标 3；原局保留，缩容等待终局', { exact: true }).waitFor();
   assert.equal(calls.filter((action) => action === 'concurrency').length, 1);
   await page.waitForFunction(() =>
     document.querySelector('.metrics').textContent.includes('3 / 3'),

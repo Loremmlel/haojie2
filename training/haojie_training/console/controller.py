@@ -148,7 +148,7 @@ class Controller:
         with self.lock:
             updates = self.trainer.updates if self.trainer else self.saved_step
             pool = self.pool
-            actual_environments = len(pool.clients) if pool and not pool.closed else 0
+            actual_environments = pool.environments if pool and not pool.closed else 0
             target_environments = self.config["environments"]
             if not (self.continuous_selfplay and self.config["method"] == METHOD):
                 target_environments = min(target_environments, self.config["games_per_round"])
@@ -421,7 +421,12 @@ class Controller:
                 config = {**self.config, **values}
                 validate(config)
                 self.config = config
-                self.log(f"并发目标已设为 {config['environments']}，下一采样窗口生效")
+                if self.pool and not self.pool.closed:
+                    target = config["environments"]
+                    if not (self.continuous_selfplay and config["method"] == METHOD):
+                        target = min(target, config["games_per_round"])
+                    self.pool.set_target(target)
+                self.log(f"并发目标已设为 {config['environments']}；保留在途局，缩容等待终局")
             elif action == "settings":
                 if self.state not in ("idle", "paused", "error"):
                     raise ValueError("请先暂停再修改设置")
@@ -677,15 +682,11 @@ class Controller:
     def _sample(self):
         self.state = "sampling"
         continuous = self.continuous_selfplay and self.config["method"] == METHOD
-        # 仅训练线程在窗口边界重建；已完成样本和学习状态保留，未终局按原取消协议记账。
         count = self.config["environments"]
         count = count if continuous else min(count, self.config["games_per_round"])
-        if self.pool and len(self.pool.clients) != count:
-            discarded = len(self.pool.slots)
-            self._close_pool()
-            self.log(f"并发切换为 {count}；取消 {discarded} 个在途局，已完成样本保留")
         if self.pool is None:
             self.pool = self._new_pool(count)
+        self.pool.set_target(count)
         self.pool.model_hash = self.version
         jobs = self.sampling_jobs if continuous else None
         historical = self._historical(jobs)
@@ -729,7 +730,7 @@ class Controller:
                     "retained_samples": self.counts["retained_samples"] - samples,
                     "mean_batch": delta["inference_requests"] / max(1, delta["forwards"]),
                     "requests_per_second": delta["requests"] / max(0.001, elapsed),
-                    "environments": len(self.pool.clients),
+                    "environments": self.pool.environments,
                     "completed_tasks": jobs.finished - finished,
                     "carried_games": len(self.pool.slots),
                     "mean_active_environments": (

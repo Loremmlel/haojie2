@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,6 +18,7 @@ from haojie_training.console.controller import Controller
 from haojie_training.console.evaluation import Evaluation
 from haojie_training.console.sampling import MemoryJobs
 from haojie_training.console.storage import Store
+from haojie_training.native.pool import Pool
 
 
 class ManualController(Controller):
@@ -238,16 +240,44 @@ class StreamingTests(unittest.TestCase):
             self.assertIsNone(c.error)
             self.assertEqual(c.trainer.updates, 1)
 
-    def test_runtime_concurrency_rebuilds_only_at_window_boundary(self):
+    def test_runtime_concurrency_keeps_games_and_retires_only_after_terminal(self):
         with self.controller() as c:
             c._sample()
+            c._update()
             old_pool, trainer, optimizer = c.pool, c.trainer, c.trainer.optimizer
-            carried = len(old_pool.slots)
+            carried = {
+                task["id"]: (slot, old_pool.clients[slot].process.pid, task["began"])
+                for slot, task in old_pool.slots.items()
+            }
             discarded = c.counts["discarded"]
             updates = trainer.updates
             retained = c.counts["retained_samples"]
+            weights = [parameter.detach().clone() for parameter in trainer.model.parameters()]
+            states = {
+                parameter: {
+                    key: value.clone() if isinstance(value, torch.Tensor) else value
+                    for key, value in state.items()
+                }
+                for parameter, state in optimizer.state.items()
+            }
+            completed = {}
+            original = MemoryJobs.finish
+
+            def finish(jobs, task, message):
+                completed[task["id"]] = message["outcome"]
+                return original(jobs, task, message)
+
+            def settle(target):
+                for _ in range(40):
+                    c._sample()
+                    self.assertIs(c.pool, old_pool)
+                    self.assertEqual(c.counts["discarded"], discarded)
+                    if old_pool.environments == target:
+                        return
+                self.fail(f"并发没有收敛到 {target}")
+
             self.assertGreater(retained, 0)
-            self.assertGreater(carried, 0)
+            self.assertTrue(carried)
             c.command("concurrency", {"environments": 3})
             self.assertIs(c.pool, old_pool)
             self.assertEqual(
@@ -270,26 +300,53 @@ class StreamingTests(unittest.TestCase):
             c.state = "sampling"
             with self.assertRaisesRegex(ValueError, "先暂停"):
                 c.command("settings", {"batch_size": 1})
-            c._sample()
-            self.assertTrue(old_pool.closed)
+            with patch.object(MemoryJobs, "finish", finish):
+                settle(3)
+                active = {task["id"]: slot for slot, task in old_pool.slots.items()}
+                for task_id, (slot, pid, began) in carried.items():
+                    if task_id in active:
+                        self.assertEqual(active[task_id], slot)
+                        self.assertEqual(old_pool.clients[slot].process.pid, pid)
+                        self.assertEqual(old_pool.slots[slot]["began"], began)
+                    else:
+                        self.assertTrue(completed[task_id]["terminated"])
+                c.command("concurrency", {"environments": 1})
+                c._sample()
+                c.command("concurrency", {"environments": 4})
+                settle(4)
+                # 连续改目标只服从最新值，已有局仍由原池和原生进程承接。
+                for target in (1, 4, 3):
+                    c.command("concurrency", {"environments": target})
+                settle(3)
+                c.command("concurrency", {"environments": 1})
+                settle(1)
+            self.assertFalse(old_pool.closed)
             self.assertIs(c.trainer, trainer)
             self.assertIs(c.trainer.optimizer, optimizer)
             self.assertEqual(trainer.updates, updates)
-            self.assertEqual(c.counts["discarded"], discarded + carried)
+            self.assertEqual(c.counts["discarded"], discarded)
             self.assertGreaterEqual(c.counts["retained_samples"], retained)
+            for actual, expected in zip(trainer.model.parameters(), weights, strict=True):
+                torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+            for parameter, state in states.items():
+                for key, value in state.items():
+                    if isinstance(value, torch.Tensor):
+                        torch.testing.assert_close(
+                            optimizer.state[parameter][key], value, atol=0, rtol=0
+                        )
+                    else:
+                        self.assertEqual(optimizer.state[parameter][key], value)
             self.assertEqual(
                 c.status()["concurrency"],
                 {
-                    "requested": 3,
-                    "actual": 3,
+                    "requested": 1,
+                    "actual": 1,
                     "pending": False,
                 },
             )
             c._update()
             self.assertGreater(trainer.updates, updates)
-            c.command("concurrency", {"environments": 1})
-            c._sample()
-            self.assertEqual(len(c.pool.clients), 1)
+            self.assertEqual(c.pool.environments, 1)
             self.assertTrue(c.want_run)
             self.assertEqual(c.config["games_per_round"], 2)
             c._save()
@@ -298,6 +355,72 @@ class StreamingTests(unittest.TestCase):
                 weights_only=True,
             )
             self.assertEqual(recovery["config"]["environments"], 1)
+
+    def test_running_resize_does_not_wait_for_new_client_handshake(self):
+        with self.controller() as c:
+            started, proceed, creating, release = (threading.Event() for _ in range(4))
+            initial, errors = {}, []
+            progress, create = c._progress, Pool._start_client
+
+            def snapshot(metrics):
+                if not started.is_set():
+                    initial.update(
+                        (task["id"], c.pool.clients[slot].process.pid)
+                        for slot, task in c.pool.slots.items()
+                    )
+                    started.set()
+                    if not proceed.wait(10):
+                        raise TimeoutError("测试未发布新并发目标")
+                return progress(metrics)
+
+            def start_client(pool, slot):
+                client = create(pool, slot)
+                creating.set()
+                if not release.wait(10):
+                    client.close()
+                    raise TimeoutError("测试未解除新槽握手等待")
+                return client
+
+            def sample():
+                try:
+                    c._sample()
+                except BaseException as error:
+                    errors.append(error)
+
+            with (
+                patch.object(c, "_progress", snapshot),
+                patch.object(Pool, "_start_client", start_client),
+            ):
+                thread = threading.Thread(target=sample)
+                thread.start()
+                try:
+                    self.assertTrue(started.wait(10))
+                    c.command("concurrency", {"environments": 3})
+                    proceed.set()
+                    self.assertTrue(creating.wait(10))
+                    # 新槽尚未交付，已有两个真实 Rust 对局仍能完成首个学习窗口。
+                    thread.join(10)
+                    self.assertFalse(thread.is_alive())
+                    self.assertFalse(errors)
+                    self.assertGreater(c.counts["games"], 0)
+                    self.assertEqual(c.counts["discarded"], 0)
+                    self.assertIsNotNone(c.pool.starting)
+                    self.assertEqual(c.pool.environments, 2)
+                    for slot, task in c.pool.slots.items():
+                        self.assertEqual(c.pool.clients[slot].process.pid, initial[task["id"]])
+                    c.command("concurrency", {"environments": 1})
+                    release.set()
+                    for _ in range(40):
+                        c._sample()
+                        if c.pool.environments == 1 and c.pool.starting is None:
+                            break
+                    self.assertEqual(c.pool.environments, 1)
+                    self.assertIsNone(c.pool.starting)
+                    self.assertEqual(c.counts["discarded"], 0)
+                finally:
+                    proceed.set()
+                    release.set()
+                    thread.join(10)
 
     def test_fixed_weights_complete_identical_finite_task_set(self):
         summaries = []

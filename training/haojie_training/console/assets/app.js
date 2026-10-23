@@ -140,12 +140,38 @@ function controls() {
   });
   $('new-training').disabled = busy || !connected || active;
   $('experiment-choice').disabled = busy || !connected || active;
-  for (const field of $('settings').elements) field.disabled = busy || !connected || active;
+  for (const field of $('settings').elements) {
+    const concurrency = field.name === 'environments' || field.dataset.action === 'concurrency';
+    field.disabled =
+      busy ||
+      !connected ||
+      !current ||
+      (concurrency ? ['starting', 'pausing'].includes(current.state) : active);
+  }
   if (current?.version) $('settings').elements.method.disabled = true;
 }
 
 function render(s) {
   current = s;
+  const concurrency = s.concurrency ?? {
+    actual: 0,
+    requested: s.config.environments,
+    pending: false,
+  };
+  text(
+    'concurrency-help',
+    `实际 ${number(concurrency.actual)} / 目标 ${number(concurrency.requested)} · ${
+      concurrency.pending
+        ? concurrency.actual > concurrency.requested
+          ? '等待多余对局终局后退出'
+          : '正在增加环境'
+        : concurrency.actual
+          ? '目标已就绪'
+          : '启动后应用目标'
+    }。原局、已完成样本和学习状态保留。${
+      concurrency.pending && s.runtime.resize_error ? `最近扩容问题：${s.runtime.resize_error}` : ''
+    }`,
+  );
   const matchups = Object.entries(s.counts.matchups ?? {});
   const historical = matchups.reduce(
     (n, [key, count]) => n + (key.includes('/historical/') ? count : 0),
@@ -443,7 +469,9 @@ async function command(action, values) {
         ? '暂停请求已接受；正在取消在途计算。'
         : action === 'save'
           ? '保存请求已接受；以“上次保存”更新为完成依据。'
-          : '请求已接受。',
+          : action === 'concurrency'
+            ? '并发目标已确认；原局保留，缩容等待终局。'
+            : '请求已接受。',
     );
     if (action === 'settings') dirty = false;
     if (action === 'new-experiment') {
@@ -460,7 +488,7 @@ async function command(action, values) {
   }
 }
 document
-  .querySelectorAll('[data-action]')
+  .querySelectorAll('[data-action]:not([data-action="concurrency"])')
   .forEach((b) =>
     b.addEventListener('click', () =>
       command(
@@ -492,10 +520,12 @@ $('settings').addEventListener('input', () => {
 });
 $('settings').addEventListener('submit', (event) => {
   event.preventDefault();
+  if (busy || !connected) return;
+  const concurrency = event.submitter?.dataset.action === 'concurrency';
   const values = {};
   let invalid;
   for (const field of $('settings').elements)
-    if (field.name && !field.disabled) {
+    if (field.name && !field.disabled && (!concurrency || field.name === 'environments')) {
       field.setAttribute('aria-invalid', String(!field.validity.valid));
       if (!field.validity.valid) invalid ??= field;
       values[field.name] = ['method', 'sampling_precision'].includes(field.name)
@@ -507,7 +537,13 @@ $('settings').addEventListener('submit', (event) => {
     invalid.focus();
     return;
   }
-  command('settings', values);
+  command(concurrency ? 'concurrency' : 'settings', values);
+});
+$('settings').elements.environments.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.isComposing && !$('apply-concurrency').disabled) {
+    event.preventDefault();
+    $('settings').requestSubmit($('apply-concurrency'));
+  }
 });
 async function poll() {
   try {

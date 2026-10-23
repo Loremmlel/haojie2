@@ -3,6 +3,7 @@
 import os
 import queue
 import sys
+import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -53,8 +54,13 @@ class Pool:
             raise ValueError("CPU 输入进程数必须为 0 至 min(16, 环境数) 的整数")
         self.started = time.perf_counter()
         self.frame_limit = frame_limit
-        self.events = queue.Queue(maxsize=2 * environments)
+        self.events = queue.Queue(maxsize=256)
         self.executable, self.clients, self.slots = executable, [], {}
+        self.target_environments = self.resize_target = environments
+        self.resize_pending, self.retiring = False, set()
+        self.resize_error, self.resize_retry_at = None, 0.0
+        self.starter, self.starting = None, None
+        self.resize_cancel = threading.Event()
         self.generations = [0] * environments
         self.last_ids = [0] * environments
         self.device = resolve_device(str(device))
@@ -64,6 +70,7 @@ class Pool:
         self.queue_seconds = self.send_seconds = self.active_seconds = 0.0
         self.refill_seconds = self.refills = self.restarts = self.peak_queue = 0
         self.read_seconds = self.decode_seconds = self.tensor_bytes = 0
+        self.prepare_seconds = 0.0
         self.assigned = self.finished = self.requests = 0
         self.first_done = self.stop_at = None
         self.parked = {}
@@ -132,24 +139,97 @@ class Pool:
             arrays=True,
             defer_validation=self.defer_validation,
             read_loop=self.read_loop,
+            startup_cancel=self.resize_cancel,
         )
 
+    def _start_client(self, slot):
+        client = self.new_client(slot)
+        if client.ready != self.ready:
+            client.close()
+            raise RuntimeError("新增工作进程版本不一致")
+        return client
+
+    @property
+    def environments(self):
+        return sum(client is not None for client in self.clients)
+
+    def set_target(self, count):
+        """控制线程只发布目标，客户端的增减仍由采样线程执行。"""
+        if type(count) is not int or not 1 <= count <= 128:
+            raise ValueError("环境数须为1至128的整数")
+        self.target_environments = count
+
+    def _retire(self, slot):
+        client = self.clients[slot]
+        client.close()
+        self.read_seconds += client.read_seconds
+        self.decode_seconds += client.decode_seconds
+        self.tensor_bytes += client.tensor_bytes
+        self.prepare_seconds += getattr(client, "prepare_seconds", 0)
+        self.clients[slot] = None
+        self.generations[slot] += 1
+        self.last_ids[slot] = 0
+
+    def _resize(self, *, grow):
+        target = self.target_environments
+        if self.starting is not None:
+            slot, future = self.starting
+            if not future.done():
+                return
+            self.starting = None
+            try:
+                self.clients[slot] = future.result()
+                self.resize_error = None
+            except Exception as error:
+                self.generations[slot] += 1
+                self.resize_error = str(error)
+                self.resize_retry_at = time.perf_counter() + 2
+        if target == self.resize_target and not self.resize_pending:
+            return
+        live = [i for i, client in enumerate(self.clients) if client is not None]
+        self.retiring = set(live[target:])
+        # 只回收已经结案或尚未接局的槽；已有局不因目标变化而取消。
+        for slot in self.retiring:
+            if slot not in self.slots:
+                self._retire(slot)
+        if grow and len(live) < target and time.perf_counter() >= self.resize_retry_at:
+            slot = next(
+                (i for i, client in enumerate(self.clients) if client is None), len(self.clients)
+            )
+            if slot == len(self.clients):
+                self.clients.append(None)
+                self.generations.append(0)
+                self.last_ids.append(0)
+            if self.starter is None:
+                self.starter = ThreadPoolExecutor(1, thread_name_prefix="haojie-environments")
+            self.starting = (slot, self.starter.submit(self._start_client, slot))
+        self.retiring = {slot for slot in self.retiring if self.clients[slot] is not None}
+        self.resize_target = target
+        self.resize_pending = self.environments != target or self.starting is not None
+        if not self.resize_pending:
+            self.resize_error = None
+
     def close(self):
+        self.closed = True
+        if getattr(self, "resize_cancel", None) is not None:
+            self.resize_cancel.set()
         try:
             inference = getattr(self, "inference", None)
-            if inference is not None and hasattr(inference, "close"):
-                inference.close()
+            with ExitStack() as cleanup:
+                if self.read_loop is not None:
+                    cleanup.callback(self.read_loop.close)
+                cleanup.callback(self._finish_starting)
+                if self.input_processes is not None:
+                    cleanup.callback(self.input_processes.close)
+                else:
+                    for client in self.clients:
+                        if client is not None:
+                            cleanup.callback(client.close)
+                if self.launcher is not None:
+                    cleanup.callback(self.launcher.close)
+                if inference is not None and hasattr(inference, "close"):
+                    cleanup.callback(inference.close)
         finally:
-            if self.launcher is not None:
-                self.launcher.close()
-            if self.input_processes is not None:
-                self.input_processes.close()
-            else:
-                for client in self.clients:
-                    client.close()
-            if self.read_loop is not None:
-                self.read_loop.close()
-            self.closed = True
             self.slots.clear()
             self.parked.clear()
             # Reader 已停止，清空队列持有的帧；不把历史张量留到下一次运行。
@@ -159,8 +239,22 @@ class Pool:
                 except queue.Empty:
                     break
 
+    def _finish_starting(self):
+        if getattr(self, "starter", None) is not None:
+            self.starter.shutdown(wait=True, cancel_futures=True)
+        if getattr(self, "starting", None) is not None:
+            _, future = self.starting
+            try:
+                client = future.result()
+            except Exception:
+                pass
+            else:
+                client.close()
+            self.starting = None
+
     def metrics(self):
         responses = tuple(self.responses)
+        clients = [client for client in self.clients if client is not None]
         return {
             "model": self.model_hash,
             "device": str(self.device),
@@ -189,7 +283,11 @@ class Pool:
             "response_workers": int(self.async_replies),
             "launch_workers": self.launch_workers,
             "policy_layout": "compact-candidates" if self.defer_validation else "padded-candidates",
-            "environments": len(self.clients),
+            "environments": len(clients),
+            "target_environments": self.target_environments,
+            "retiring_environments": len(self.retiring),
+            "starting_environments": int(self.starting is not None),
+            "resize_error": self.resize_error,
             "host_workers": len(self.input_processes.workers) if self.input_processes else 0,
             "host_worker_pids": [p.pid for p in self.input_processes.workers]
             if self.input_processes
@@ -200,17 +298,17 @@ class Pool:
             "peak_shared_input_segments": self.input_processes.peak_segments
             if self.input_processes
             else 0,
-            "host_prepare_seconds": sum(getattr(c, "prepare_seconds", 0) for c in self.clients),
+            "host_prepare_seconds": self.prepare_seconds
+            + sum(getattr(c, "prepare_seconds", 0) for c in clients),
             "batch_wait_ms": self.wait * 1000,
             **self.inference.stats.snapshot(),
             "max_batch_size": self.max_batch_size,
             "requests": self.requests,
             "queue_seconds": self.queue_seconds,
             "send_seconds": self.send_seconds,
-            "tensor_read_seconds": self.read_seconds + sum(c.read_seconds for c in self.clients),
-            "decode_validate_seconds": self.decode_seconds
-            + sum(c.decode_seconds for c in self.clients),
-            "tensor_bytes": self.tensor_bytes + sum(c.tensor_bytes for c in self.clients),
+            "tensor_read_seconds": self.read_seconds + sum(c.read_seconds for c in clients),
+            "decode_validate_seconds": self.decode_seconds + sum(c.decode_seconds for c in clients),
+            "tensor_bytes": self.tensor_bytes + sum(c.tensor_bytes for c in clients),
             "response_p95_seconds": sorted(responses)[int((len(responses) - 1) * 0.95)]
             if responses
             else 0,
@@ -272,6 +370,12 @@ class Pool:
         self.parked = getattr(self, "parked", {})
         self.yield_count = getattr(self, "yield_count", 0)
         self.root_drain_seconds = getattr(self, "root_drain_seconds", 0.0)
+        self.target_environments = getattr(self, "target_environments", len(self.clients))
+        self.resize_target = getattr(self, "resize_target", len(self.clients))
+        self.resize_pending = getattr(self, "resize_pending", False)
+        self.retiring = getattr(self, "retiring", set())
+        self.starting = getattr(self, "starting", None)
+        self.prepare_seconds = getattr(self, "prepare_seconds", 0.0)
         self.sampling_seconds = getattr(self, "sampling_seconds", 0)
         if getattr(self, "paused_at", None) is not None:
             paused = previous - self.paused_at
@@ -395,6 +499,8 @@ class Pool:
                 last_activity=time.perf_counter(),
                 requests=0,
                 startup_model=self.model_hash,
+                slot=i,
+                pid=getattr(getattr(self.clients[i], "process", None), "pid", None),
             )
             self.slots[i] = task
             self.assigned += 1
@@ -471,7 +577,7 @@ class Pool:
         # 窗口退出前先排空推理，再清空缓存，下一次更新后的权重不会读到旧转换值。
         inference_cleanup.enter_context(torch.autocast(self.device.type, enabled=False))
         inference_cleanup.callback(torch.clear_autocast_cache)
-        if getattr(self, "defer_validation", False) and len(self.clients) >= 32:
+        if getattr(self, "defer_validation", False) and self.environments >= 32:
             # 高频管道线程会拖延 GPU 发射线程重新取得 GIL；仅在采样窗口收紧间隔。
             previous_interval = sys.getswitchinterval()
             self.python_switch_ms = min(previous_interval, 0.0005) * 1000
@@ -498,9 +604,14 @@ class Pool:
                     stopping = True
                     if self.stop_at is None:
                         self.stop_at = now - self.started
+                self._resize(grow=not stopping)
                 if not stopping:
                     for i in range(len(self.clients)):
-                        if i not in self.slots:
+                        if (
+                            self.clients[i] is not None
+                            and i not in self.slots
+                            and i not in self.retiring
+                        ):
                             before = time.perf_counter()
                             if assign(i) and self.finished:
                                 self.refills += 1

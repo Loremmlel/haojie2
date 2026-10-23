@@ -36,6 +36,7 @@ class Client:
         buffer_factory_async=None,
         defer_validation=False,
         read_loop=None,
+        startup_cancel=None,
     ):
         self.timeout = timeout
         self.frame_limit = frame_limit
@@ -67,7 +68,7 @@ class Client:
             self.reader.start()
         self.stderr_reader.start()
         try:
-            self.ready = self.receive()
+            self.ready = self.receive(cancel_event=startup_cancel)
             if self.ready.get("protocol") != "haojie-training-binary-v1":
                 raise ValueError("原生训练协议不匹配")
         except BaseException:
@@ -350,7 +351,19 @@ class Client:
                 raise error
             raise BrokenPipeError("原生进程已退出") from error
 
-    def receive(self):
+    def receive(self, *, cancel_event=None):
+        if cancel_event is not None:
+            until = time.monotonic() + self.timeout
+            while not cancel_event.is_set():
+                remaining = until - time.monotonic()
+                if remaining <= 0:
+                    self.close()
+                    raise TimeoutError("原生请求超过保护时间")
+                try:
+                    return self.checked(self.messages.get(timeout=min(0.1, remaining)))
+                except queue.Empty:
+                    pass
+            raise InterruptedError("原生进程启动已取消")
         try:
             value = self.messages.get(timeout=self.timeout)
         except queue.Empty:

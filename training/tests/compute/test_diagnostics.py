@@ -1,5 +1,6 @@
 """主线程与输入线程的计时分开，避免用跨线程时钟拼出无效累计时间。"""
 
+import argparse
 import threading
 import time
 import unittest
@@ -9,7 +10,7 @@ from types import SimpleNamespace
 
 from haojie_training.console.config.resources import _cpu_total
 from haojie_training.console.memory import SamplePool, Trajectory
-from haojie_training.diagnostics import MeasuredJobs, profiling, sample_fingerprint
+from haojie_training.diagnostics import MeasuredJobs, profiling, resize_point, sample_fingerprint
 from haojie_training.model import ModelConfig
 from haojie_training.native import client
 
@@ -17,6 +18,12 @@ from .test_packed import examples
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_resize_plan_rejects_nonfinite_time_and_invalid_targets(self):
+        self.assertEqual(resize_point("2.5:8"), (2.5, 8))
+        for value in ("nan:8", "inf:8", "0:8", "-1:8", "2:0", "2:129", "2:True", "2:1.5", "2"):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                resize_point(value)
+
     def test_cpu_work_transfers_from_live_children_to_reaped_parent_once(self):
         before = {
             1: dict(cpu=5, reaped_cpu=1),

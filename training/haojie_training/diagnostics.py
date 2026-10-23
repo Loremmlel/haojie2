@@ -4,6 +4,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import math
 import os
 import sys
 import threading
@@ -36,6 +37,8 @@ class MeasuredJobs(MemoryJobs):
         self.c.closed_tasks.append(
             {
                 "task": task["id"],
+                "slot": task.get("slot"),
+                "pid": task.get("pid"),
                 "rules": task["context"]["rules"],
                 "status": status,
                 "requests": task["requests"],
@@ -89,7 +92,14 @@ class MeasuredController(Controller):
                 "mean_entities": metrics.get("mean_entities", 0),
                 "cpu_cores": self.telemetry.get("cpu_cores"),
                 "gpu_utilization": self.telemetry.get("gpu_utilization"),
+                "environments": metrics.get("environments"),
+                "target_environments": metrics.get("target_environments"),
+                "retiring_environments": metrics.get("retiring_environments", 0),
+                "starting_environments": metrics.get("starting_environments", 0),
+                "discarded": self.counts["discarded"],
             }
+            if getattr(self, "trace_resize", False):
+                reading["active"] = metrics.get("active", [])
             self.measurements.append(reading)
             print(json.dumps(reading), flush=True)
         return super()._progress(metrics)
@@ -171,6 +181,18 @@ def profiling(mode, output, report, wait_batches=1):
             report["profile_stages_inclusive"] = stages
 
 
+def resize_point(value):
+    """诊断计划采用经过秒数:目标并发，生产并发校验仍由控制器执行。"""
+    try:
+        seconds, count = value.split(":")
+        seconds, count = float(seconds), int(count)
+    except ValueError:
+        raise argparse.ArgumentTypeError("并发计划须为秒数:环境数") from None
+    if not math.isfinite(seconds) or seconds <= 0 or not 1 <= count <= 128:
+        raise argparse.ArgumentTypeError("计划时间须为有限正数，环境数须为 1 至 128")
+    return seconds, count
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", type=Path, required=True)
@@ -193,6 +215,9 @@ def main():
     parser.add_argument("--start-indices", type=int, nargs="+", help="起点文件中的零基索引")
     parser.add_argument("--deadline", type=float, default=600)
     parser.add_argument("--seconds", type=float, help="固定时长测量，替代终局数量和超时时限")
+    parser.add_argument(
+        "--resize-at", type=resize_point, action="append", default=[], metavar="秒数:环境数"
+    )
     parser.add_argument("--switch-ms", type=float, help="当前进程的 Python 线程切换间隔")
     parser.add_argument("--profile", choices=("none", "cpu", "cuda"), default="none")
     parser.add_argument(
@@ -205,6 +230,12 @@ def main():
         parser.error("固定测量时长须为正数")
     if args.finite and args.seconds is not None:
         parser.error("固定任务批次与固定时长不能同时选择")
+    if args.resize_at and (
+        args.seconds is None
+        or any(at >= args.seconds for at, _ in args.resize_at)
+        or any(a[0] >= b[0] for a, b in zip(args.resize_at, args.resize_at[1:]))
+    ):
+        parser.error("并发计划须用于固定时长，按时间严格递增且早于测量终点")
     if args.profile_wait_batches < 0:
         parser.error("剖析前跳过的批数须非负")
     if not 0 <= args.history_percent <= 100:
@@ -236,6 +267,7 @@ def main():
     controller.continuous_selfplay = not args.finite
     controller.fixed_work, controller.completed_rows = args.finite, []
     controller.closed_tasks = []
+    controller.trace_resize = bool(args.resize_at)
     controller.config.update(
         environments=args.environments,
         inference_batch_size=args.inference_batch_size,
@@ -272,6 +304,8 @@ def main():
         },
     }
     timer = None
+    resize_timers, resize_events = [], []
+    report["resize_events"] = resize_events
     limit_reached = threading.Event()
     monitoring = None
     profile_scope = ExitStack()
@@ -309,6 +343,38 @@ def main():
 
         timer = threading.Timer(args.seconds or args.deadline, end_measurement)
         timer.start()
+
+        def apply_resize(at, target):
+            event = {
+                "planned_seconds": at,
+                "seconds": time.perf_counter() - began,
+                "target": target,
+                "discarded_before": controller.counts["discarded"],
+                "active_before": [
+                    {
+                        "slot": slot,
+                        **{
+                            key: task.get(key)
+                            for key in ("id", "pid", "requests", "commands", "ply")
+                        },
+                    }
+                    for slot, task in tuple(controller.pool.slots.items())
+                ],
+            }
+            try:
+                controller.command("concurrency", {"environments": target})
+                event["actual_after_request"] = controller.pool.environments
+            except Exception as error:
+                event["error"] = f"{type(error).__name__}: {error}"
+                controller.cancel.set()
+            resize_events.append(event)
+
+        for at, target in args.resize_at:
+            scheduled = threading.Timer(
+                max(0, began + at - time.perf_counter()), apply_resize, (at, target)
+            )
+            resize_timers.append(scheduled)
+            scheduled.start()
         windows = []
         while (
             args.seconds is not None or controller.counts["games"] < args.games
@@ -365,6 +431,11 @@ def main():
         )
         if args.finite:
             report["sample_sha256"] = sample_fingerprint(controller.completed_rows)
+        if len(resize_events) != len(args.resize_at) or any(
+            "error" in event for event in resize_events
+        ):
+            report["complete"] = False
+            raise RuntimeError("并发计划未完整执行，详见 resize_events")
     except BaseException as error:
         report["error"] = f"{type(error).__name__}: {error}"
         jobs = controller.sampling_jobs
@@ -380,6 +451,9 @@ def main():
     finally:
         if timer:
             timer.cancel()
+        for scheduled in resize_timers:
+            scheduled.cancel()
+            scheduled.join(timeout=2)
         controller._close_pool()
         report["counts_after_close"] = dict(controller.counts)
         controller.close()

@@ -94,6 +94,16 @@ try {
   await secondPage.goto(url);
   const trained = await wait(url, (s) => s.updates >= 2);
   assert.ok(trained.counts.retained_samples > 0);
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.locator('summary').click();
+  await page.locator('[name="environments"]').fill('3');
+  assert.equal(await page.locator('[name="batch_size"]').isDisabled(), true);
+  await page.locator('[name="environments"]').press('Enter');
+  await wait(url, (s) => s.concurrency.actual === 3 && s.concurrency.requested === 3);
+  await page.locator('[name="environments"]').fill('1');
+  await page.getByRole('button', { name: '应用并发量', exact: true }).click();
+  await wait(url, (s) => s.concurrency.actual === 1 && !s.concurrency.pending);
+  checks.push('运行中独立提交并发、回车扩容、按钮缩容收敛');
   await page.reload();
   await page.getByRole('button', { name: '暂停', exact: true }).click();
   const pauseAt = performance.now();
