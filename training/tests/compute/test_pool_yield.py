@@ -72,6 +72,19 @@ class PoolYieldTests(unittest.TestCase):
         self.assertFalse(f.pool.slots or f.pool.parked or f.sent)
         self.assertIn(("pool-close",), f.log)
 
+    def test_frozen_roots_yield_without_waiting_for_another_rust_request(self):
+        f = self.f
+        f.jobs.root_versions = {"a": (f.runner, 0, 0)}
+        f.jobs.bind = lambda task, message: None
+        f.pool.slots[1]["last_root"] = (0, 1)
+        f.pool.events.advance = lambda: self.fail("已有终局后仍在等待另一局到达根边界")
+        f.add(0, {"type": "done", "model": "a"})
+        f.pool.run(f.jobs, keep_open=True, yield_when=lambda: bool(f.committed))
+        self.assertEqual(f.committed, [10])
+        self.assertEqual(set(f.pool.slots), {1})
+        self.assertFalse(f.sent or f.unfinished or f.runner.active)
+        self.assertEqual(f.pool.yield_count, 1)
+
     def test_async_replies_drain_before_long_game_uses_updated_weights(self):
         self.f.pool.async_replies = True
         self.f.pool.events = queue.Queue()

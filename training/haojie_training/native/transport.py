@@ -275,8 +275,11 @@ def _worker(
             elif operation == "behavior":
                 behavior = value
             elif operation == "responses":
-                send_many([(clients[target], response) for target, response, _ in value])
-                for target, response, lease in value:
+                for target, _, _, root in value:
+                    if root is not None and collectors.get(target) is not None:
+                        collectors[target].bind(*root)
+                send_many([(clients[target], response) for target, response, _, _ in value])
+                for target, response, lease, _ in value:
                     buffers[target].release(lease)
             elif operation == "release":
                 buffers[slot].release(value)
@@ -493,7 +496,9 @@ class InputProcesses:
         """同一模型批次按 CPU 进程合并回传与归还，避免每条评分两次 IPC。"""
         groups = {}
         for slot, response, message in responses:
-            groups.setdefault(self.routes[slot], []).append((slot, response, message.pop("_lease")))
+            groups.setdefault(self.routes[slot], []).append(
+                (slot, response, message.pop("_lease"), message.get("_behavior"))
+            )
             message.pop("input", None)
         for index, values in groups.items():
             with self.locks[index]:

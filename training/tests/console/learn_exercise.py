@@ -3,13 +3,15 @@
 import argparse
 import json
 import random
+import time
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import torch
 
 from haojie_training.console.memory import SamplePool, Trajectory
 from haojie_training.data import collate_examples
-from haojie_training.model import ModelConfig, PolicyValueNet
+from haojie_training.model import NETWORK_VERSION, ModelConfig, PolicyValueNet
 from haojie_training.native.client import Client
 from haojie_training.native.execution import PolicyInference
 from haojie_training.runtime import Trainer, resolve_device
@@ -36,10 +38,11 @@ def episode(client, infer, rng, case, learning):
             return message, list(trajectory.terminal({"1": message["reward"]})) if learning else []
 
 
-def run(engine, seed, rounds=320, device="cpu"):
+def run(engine, seed, rounds=320, device="cpu", layers=2):
+    began = time.perf_counter()
     torch.manual_seed(seed)
     device = resolve_device(device)
-    model = PolicyValueNet(ModelConfig.tiny()).to(device)
+    model = PolicyValueNet(replace(ModelConfig.tiny(), layers=layers)).to(device)
     trainer = Trainer(model, device, objective="decomposed-mc-q-v2")
     infer = PolicyInference(model, device)
     rng = random.Random(seed)
@@ -79,12 +82,16 @@ def run(engine, seed, rounds=320, device="cpu"):
         "seed": seed,
         "device": str(device),
         "precision": "bf16",
+        "network": NETWORK_VERSION,
+        "config": asdict(model.config),
+        "parameters": sum(p.numel() for p in model.parameters()),
         "before": before,
         "after": after,
         "updates": trainer.updates,
         "consumption": pool.snapshot(),
         "backtracks": backtracks,
         "health": trainer.health(),
+        "seconds": time.perf_counter() - began,
         "reference_expected": (0.6 + 0.8 + 0.8) / 3,
     }
 
@@ -95,12 +102,15 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rounds", type=int, default=320)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--layers", type=int, default=2)
     parser.add_argument("--seeds", type=int, nargs="+", default=[17, 29, 43])
     args = parser.parse_args()
+    if args.layers < 1:
+        parser.error("层数须为正整数")
     torch.set_num_threads(1)
     results = []
     for seed in args.seeds:
-        result = run(args.engine, seed, args.rounds, args.device)
+        result = run(args.engine, seed, args.rounds, args.device, args.layers)
         results.append(result)
         print(json.dumps(result, ensure_ascii=False), flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)

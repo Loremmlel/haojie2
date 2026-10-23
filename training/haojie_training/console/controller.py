@@ -605,6 +605,7 @@ class Controller:
     def _progress(self, metrics):
         self.runtime = {
             **metrics,
+            **(self.sampling_jobs.publication_metrics() if self.sampling_jobs else {}),
             "inflight_bytes": sum(t["trajectory"].used for t in self.pool.slots.values()),
             "inflight_samples": sum(t["trajectory"].seen for t in self.pool.slots.values()),
             "historical_models": max(0, len(self.sampling_jobs.inferences) - 1)
@@ -636,6 +637,9 @@ class Controller:
     def _new_pool(self, count):
         from ..native.execution import PolicyInference
 
+        model = self.trainer.model
+        if self.continuous_selfplay and self.config["method"] == METHOD:
+            model = copy.deepcopy(model).eval().requires_grad_(False)
         return Pool(
             self.engine,
             count,
@@ -643,7 +647,7 @@ class Controller:
             batch_wait_ms=self.config["batch_wait_ms"],
             max_batch_size=self.config["inference_batch_size"],
             inference=(
-                PolicyInference(self.trainer.model, self.device),
+                PolicyInference(model, self.device),
                 self.version,
             ),
             frame_limit=min(32 * 2**20, max(4 * 2**20, available_memory() // (16 * count))),
@@ -684,7 +688,6 @@ class Controller:
         if self.pool is None:
             self.pool = self._new_pool(count)
         self.pool.set_target(count)
-        self.pool.model_hash = self.version
         jobs = self.sampling_jobs if continuous else None
         historical = self._historical(jobs)
         if jobs is None:
@@ -692,6 +695,7 @@ class Controller:
             self.sampling_jobs = jobs
         else:
             jobs.next_window(self.version, historical)
+        self.pool.model_hash = jobs.version
         before = self.pool.metrics()
         began = self.performance()["phase_seconds"]["sampling"]
         games, samples = self.counts["games"], self.counts["retained_samples"]
@@ -702,7 +706,7 @@ class Controller:
                 cancel_event=self.cancel,
                 keep_open=True,
                 snapshot=self._progress,
-                # 已有真实终局样本即可学习；其他局仍在下一决策根停驻并跨更新保留。
+                # 已有真实终局样本即可学习；其他局的当前根由独立快照跨更新保留。
                 # 完成数上限只负责让无样本的截断窗口也能归还控制，不再作为学习门槛。
                 yield_when=(
                     lambda: (
@@ -737,6 +741,7 @@ class Controller:
                 }
             self.runtime = {
                 **after,
+                **jobs.publication_metrics(),
                 "inflight_bytes": sum(t["trajectory"].used for t in self.pool.slots.values()),
                 "inflight_samples": sum(t["trajectory"].seen for t in self.pool.slots.values()),
                 "historical_models": max(0, len(jobs.inferences) - 1) if continuous else 0,
@@ -816,8 +821,7 @@ class Controller:
                 if self.sampling_jobs:
                     for task in self.pool.slots.values():
                         self.sampling_jobs.unfinished(task)
-                    for inference in self.sampling_jobs.inferences.values():
-                        inference.close()
+                    self.sampling_jobs.close()
             finally:
                 try:
                     self.pool.close()

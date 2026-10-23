@@ -118,9 +118,16 @@ class ExampleCollector:
         self.trajectory, self.models, self.current = trajectory, models, current
         self.mc_context, self.continuous = mc_context, continuous
         self.last_index, self.last_decision = -1, 0
+        self.root_lease = None
+
+    def bind(self, index, actor, version, generation):
+        self.root_lease = (index, actor, version, generation)
 
     def add(self, message, version, generation):
         actor = message["actor"]
+        lease = self.root_lease
+        if self.continuous and lease is not None and lease[:2] == (message["index"], actor):
+            version, generation = lease[2:]
         if actor not in (1, 2) or message["model"] != self.models[actor - 1]:
             raise ValueError("样本实际行动者与行为版本不一致")
         if message["index"] < self.last_index:

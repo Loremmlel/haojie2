@@ -83,6 +83,7 @@ class MeasuredController(Controller):
         self.last_sampling_snapshot = metrics
         if hasattr(self, "measurement_start"):
             reading = {
+                **(self.sampling_jobs.publication_metrics() if self.sampling_jobs else {}),
                 "seconds": time.perf_counter() - self.measurement_start,
                 "games": self.counts["games"],
                 "retained_samples": self.counts["retained_samples"],
@@ -434,7 +435,14 @@ def main():
             consumed_samples=controller.samples.consumed,
             terminal_samples_per_second=controller.counts["retained_samples"] / elapsed,
             terminal_games_per_second=controller.counts["games"] / elapsed,
-            runtime=controller.pool.metrics(),
+            runtime={
+                **controller.pool.metrics(),
+                **(
+                    controller.sampling_jobs.publication_metrics()
+                    if controller.sampling_jobs
+                    else {}
+                ),
+            },
             last_sampling_snapshot=getattr(controller, "last_sampling_snapshot", None),
         )
         if args.finite:

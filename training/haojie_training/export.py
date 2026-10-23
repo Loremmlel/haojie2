@@ -140,7 +140,7 @@ def main():
     # 导出数学图，避免把某一设备的私有 Flash 算子写入可移植文件。
     with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.MATH):
         torch.onnx.export(
-            ExportNet(model),
+            ExportNet(model).eval(),
             tuple(example[key] for key in INPUTS),
             str(path),
             input_names=list(INPUTS),

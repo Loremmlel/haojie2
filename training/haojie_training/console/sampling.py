@@ -3,6 +3,7 @@
 import hashlib
 import pickle
 import time
+from copy import deepcopy
 
 import torch
 
@@ -70,6 +71,12 @@ class MemoryJobs:
         inference = controller.pool.inference
         inference.model.eval()
         self.inferences = {self.current: inference}
+        self.root_versions = (
+            {current: (inference, controller.generation, controller.trainer.updates)}
+            if self.continuous
+            else {}
+        )
+        self.coalesced_publications = 0
         if historical:
             model, identity = historical
             self.inferences[identity] = PolicyInference(
@@ -77,8 +84,21 @@ class MemoryJobs:
             )
 
     def next_window(self, current, historical):
-        """所有在途局停在新决策根后发布权重；历史对手仍按整局冻结。"""
-        self.version, self.historical = current, historical
+        """发布独立推理快照；旧根继续持有原权重，历史对手仍按整局冻结。"""
+        self.release_unused()
+        if self.continuous and current != self.version:
+            if len(self.root_versions) < 4:
+                model = deepcopy(self.c.trainer.model).eval().requires_grad_(False)
+                inference = PolicyInference(model, self.c.device, stats=self.c.pool.inference.stats)
+                self.root_versions[current] = (inference, self.c.generation, self.c.trainer.updates)
+                self.inferences[self.current] = self.c.pool.inference = inference
+                self.version = current
+            else:
+                # 只合并尚未发布的更新，不覆盖仍被旧根引用的权重。
+                self.coalesced_publications += 1
+        elif not self.continuous:
+            self.version = current
+        self.historical = historical
         self.target = self.finished + self.c.config["games_per_round"]
         inference = self.inferences[self.current]
         inference.model.eval()
@@ -89,11 +109,56 @@ class MemoryJobs:
             )
 
     def release_unused(self):
-        """只释放没有在途对局引用的冻结历史版本。"""
+        """只释放没有在途对局或决策根引用的冻结版本。"""
         used = {model for task in self.c.pool.slots.values() for model in task["models"]}
         for version in list(self.inferences):
             if version != self.current and version not in used:
                 self.inferences.pop(version).close()
+        roots = {
+            task["root_lease"][2] for task in self.c.pool.slots.values() if "root_lease" in task
+        }
+        for version in list(self.root_versions):
+            if version != self.version and version not in roots:
+                self.root_versions.pop(version)[0].close()
+
+    def bind(self, task, message):
+        """第一次真实前向绑定根租约；同根的后续分解选择始终使用该版本。"""
+        if not self.continuous:
+            return
+        root = message["commandIndex"], message["actor"]
+        if message["model"] != self.current:
+            task.pop("root_lease", None)
+            return
+        lease = task.get("root_lease")
+        if lease is None or lease[:2] != root:
+            lease = task["root_lease"] = (*root, self.version)
+        version = message["_root_version"] = lease[2]
+        generation = self.root_versions[version][1]
+        message["_behavior"] = (*root, version, generation)
+        task["collector"].bind(*message["_behavior"])
+
+    def inference_for(self, message):
+        version = message.get("_root_version")
+        return self.root_versions[version][0] if version else self.inferences[message["model"]]
+
+    def publication_metrics(self):
+        return {
+            "published_model": self.version,
+            "root_snapshots": len(self.root_versions),
+            "coalesced_publications": self.coalesced_publications,
+            "oldest_root_update_lag": max(
+                (self.c.trainer.updates - value[2] for value in self.root_versions.values()),
+                default=0,
+            ),
+        }
+
+    def close(self):
+        for inference in set(self.inferences.values()) | {
+            value[0] for value in self.root_versions.values()
+        }:
+            inference.close()
+        self.inferences.clear()
+        self.root_versions.clear()
 
     def claim(self):
         if (self.finished if self.continuous else self.assigned) >= self.target:
@@ -175,7 +240,7 @@ class MemoryJobs:
 
     def infer(self, messages, *, completed=None):
         """同步或异步结果共享 MC 变换；已完成张量仅用于同一模型的一组请求。"""
-        identities = {m["model"] for m in messages}
+        identities = {m.get("_root_version", m["model"]) for m in messages}
         if completed is not None and (len(identities) != 1 or completed.shape[0] != len(messages)):
             raise ValueError("已完成推理必须对应同一模型和完整请求组")
         width = max(m["candidates"] for m in messages)
@@ -183,7 +248,7 @@ class MemoryJobs:
             output = (
                 completed
                 if completed is not None
-                else self.inferences[messages[0]["model"]]([m["input"] for m in messages])
+                else self.inference_for(messages[0])([m["input"] for m in messages])
             )
             output = (
                 output.tanh() / self.temperature
@@ -193,11 +258,15 @@ class MemoryJobs:
             return output
         result = torch.zeros((len(messages), width), dtype=torch.bfloat16)
         for identity in identities:
-            indices = [i for i, m in enumerate(messages) if m["model"] == identity]
+            indices = [
+                i for i, m in enumerate(messages) if m.get("_root_version", m["model"]) == identity
+            ]
             output = (
                 completed
                 if completed is not None
-                else self.inferences[identity]([messages[i]["input"] for i in indices])
+                else self.inference_for(messages[indices[0]])(
+                    [messages[i]["input"] for i in indices]
+                )
             )
             if self.c.config["method"].startswith("decomposed-mc-q-"):
                 # 同一候选评分头训练 tanh(Q)，并直接用 Q/温度控制后续 Gumbel 排序。

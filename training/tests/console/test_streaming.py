@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -18,6 +19,8 @@ from haojie_training.console.controller import Controller
 from haojie_training.console.evaluation import Evaluation
 from haojie_training.console.sampling import MemoryJobs
 from haojie_training.console.storage import Store
+from haojie_training.model import ModelConfig, PolicyValueNet
+from haojie_training.native.execution import PolicyInference
 from haojie_training.native.pool import Pool
 
 
@@ -58,7 +61,7 @@ class HistoryLeaseTests(unittest.TestCase):
             version="a" * 64,
             generation=0,
             device="cpu",
-            trainer=SimpleNamespace(model=Mock(config=object())),
+            trainer=SimpleNamespace(model=Mock(config=object()), updates=0),
             store=SimpleNamespace(names=Mock(return_value=["history/new.pt"]), root=Path("unused")),
         )
         with patch(
@@ -97,6 +100,69 @@ class HistoryLeaseTests(unittest.TestCase):
             self.assertIs(jobs.inferences["e" * 64].model, new_model)
             self.assertEqual(len(jobs.inferences), 5)
             self.assertIs(jobs.inferences[jobs.current], current)
+
+
+class RootLeaseTests(unittest.TestCase):
+    def test_root_snapshot_survives_update_and_publication_is_bounded(self):
+        torch.set_num_threads(1)
+        model = PolicyValueNet(ModelConfig.tiny())
+        first = PolicyInference(deepcopy(model).eval().requires_grad_(False), "cpu")
+        c = SimpleNamespace(
+            config={
+                "method": "decomposed-mc-q-v2",
+                "temperature": 0.25,
+                "max_commands": 20000,
+                "max_plies": 1000,
+                "games_per_round": 2,
+            },
+            pool=SimpleNamespace(inference=first, slots={}),
+            generation=0,
+            device="cpu",
+            trainer=SimpleNamespace(model=model, updates=0),
+        )
+        jobs = MemoryJobs(c, "a" * 64, continuous=True)
+        task = {"models": [jobs.current] * 2, "collector": Mock()}
+        c.pool.slots[0] = task
+        message = {"model": jobs.current, "commandIndex": 0, "actor": 1}
+        jobs.bind(task, message)
+        before = next(first.model.parameters()).clone()
+        try:
+            for index, version in enumerate("bcd", 1):
+                with torch.no_grad():
+                    next(model.parameters()).add_(0.25)
+                c.generation, c.trainer.updates = index, index * 32
+                jobs.next_window(version * 64, None)
+                following = {**message, "commandIndex": index}
+                slot = {"models": [jobs.current] * 2, "collector": Mock()}
+                c.pool.slots[index] = slot
+                jobs.bind(slot, following)
+                self.assertIsNot(jobs.inference_for(following), first)
+                self.assertFalse(
+                    any(p.requires_grad for p in jobs.inference_for(following).model.parameters())
+                )
+                continuation = {key: message[key] for key in ("model", "commandIndex", "actor")}
+                jobs.bind(task, continuation)
+                self.assertIs(jobs.inference_for(continuation), first)
+                self.assertEqual(continuation["_behavior"], (0, 1, "a" * 64, 0))
+                torch.testing.assert_close(next(first.model.parameters()), before, atol=0, rtol=0)
+            c.trainer.updates = 128
+            jobs.next_window("e" * 64, None)
+            self.assertEqual(jobs.version, "d" * 64)
+            self.assertEqual(
+                jobs.publication_metrics(),
+                {
+                    "published_model": "d" * 64,
+                    "root_snapshots": 4,
+                    "coalesced_publications": 1,
+                    "oldest_root_update_lag": 128,
+                },
+            )
+            c.pool.slots.clear()
+            jobs.next_window("e" * 64, None)
+            self.assertEqual(jobs.version, "e" * 64)
+            self.assertLessEqual(len(jobs.root_versions), 2)
+        finally:
+            jobs.close()
 
 
 @unittest.skipUnless(os.environ.get("HAOJIE_NATIVE"), "需要真实 Rust 引擎")

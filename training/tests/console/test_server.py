@@ -137,7 +137,7 @@ class ServerTests(unittest.TestCase):
         with (
             patch.object(torch, "get_num_threads", return_value=4),
             patch.object(torch, "set_num_threads") as set_threads,
-            patch.object(torch.cuda, "is_available", return_value=True),
+            patch("haojie_training.console.config.resources.resolve_device", return_value=c.device),
         ):
             c._initialize()
             set_threads.assert_called_once_with(1)
@@ -155,6 +155,7 @@ class ServerTests(unittest.TestCase):
 
         with (
             patch("haojie_training.console.controller.Client") as client,
+            patch("haojie_training.console.config.resources.resolve_device", return_value=c.device),
             patch("haojie_training.console.controller.metadata", return_value={}),
             patch("haojie_training.console.controller.PolicyValueNet"),
             patch(

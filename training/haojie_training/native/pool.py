@@ -357,10 +357,10 @@ class Pool:
         keep_open=False,
         yield_when=None,
     ):
-        """仅接纳真实终局；可在各槽下一决策根前让出，保留原生局面和未回复请求。
+        """仅接纳真实终局；快照执行器允许各局在根内让出并保留原生进度。
 
         yield_when 只在 keep_open 时可用；回调仅判断窗口是否结束。让出前排空
-        当前根的推理，调用者可更新权重，再以同一任务管理器继续。取消或错误
+        已提交的推理；独立权重快照可跨学习更新继续。取消或错误
         仍丢弃未结束局，逐项调用 unfinished 后关闭，不把暂停伪装成终局。
         """
         if yield_when is not None and not keep_open:
@@ -407,6 +407,8 @@ class Pool:
         discarded_slots = set()
         failed = True
         launcher = getattr(self, "launcher", None)
+        inference_for = getattr(jobs, "inference_for", lambda m: jobs.inferences[m["model"]])
+        leased_roots = bool(getattr(jobs, "root_versions", None))
 
         def flush_responses():
             while sending:
@@ -473,7 +475,7 @@ class Pool:
             del waiting[index]
             logits = inference.finish(ticket)
             if not cancelled():
-                if any(jobs.inferences[m["model"]] is not inference for _, _, m in group):
+                if any(inference_for(m) is not inference for _, _, m in group):
                     raise ValueError("模型执行器在推理未排空时被替换")
                 logits = jobs.infer([m for _, _, m in group], completed=logits)
             respond(group, logits, ticket.slots)
@@ -529,7 +531,9 @@ class Pool:
             by_model = {}
             for item in pending:
                 i, _, message = item
-                by_model.setdefault(message["model"], []).append(item)
+                if leased_roots:
+                    jobs.bind(self.slots[i], message)
+                by_model.setdefault(inference_for(message), []).append(item)
             groups = deque(by_model.values())
             for pending in groups:
                 pending.sort(key=lambda item: item[2]["entities"])
@@ -539,7 +543,7 @@ class Pool:
                 if len(waiting) == 2:
                     return [item for group in groups for item in group]
                 pending = groups.popleft()
-                inference = jobs.inferences[pending[0][2]["model"]]
+                inference = inference_for(pending[0][2])
                 count = _group_size(
                     pending, self.max_batch_size, packed=inference.supports_packed_batches
                 )
@@ -612,7 +616,10 @@ class Pool:
                             if assign(i) and self.finished:
                                 self.refills += 1
                                 self.refill_seconds += time.perf_counter() - before
-                if yielding and len(self.parked) == len(self.slots):
+                if yielding and (leased_roots or len(self.parked) == len(self.slots)):
+                    if leased_roots:
+                        self.parked.update((item[0], item) for item in ready)
+                        ready = []
                     drain()
                     yielded = True
                     break
@@ -756,7 +763,7 @@ class Pool:
                     continuing = []
                     for item in pending:
                         i, _, message = item
-                        if self.slots[i].get("last_root") == (
+                        if not leased_roots and self.slots[i].get("last_root") == (
                             message["commandIndex"],
                             message["actor"],
                         ):
