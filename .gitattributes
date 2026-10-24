@@ -1,4 +1,5 @@
-# 教师静态包按原始字节校验指纹，Windows 检出也必须保持构建产物的 LF。
-/training/haojie_training/console/assets/teacher.js text eol=lf
 # 发行页面与构建结果按字节核对，检出时保持生成器使用的 LF。
 /index.html text eol=lf
+# 跨平台构建入口保持 LF；实测原始 JSON 不做换行转换。
+/training/native/*.sh text eol=lf
+/training/native/results/** -text whitespace=cr-at-eol

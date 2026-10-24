@@ -2,12 +2,12 @@
 
 ## 运行入口
 
-| 入口              | 调用关系与职责                                                                 |
-| ----------------- | ------------------------------------------------------------------------------ |
-| 离线游戏          | React 提交 Command，TS 引擎原子结算；UI 观察新的局面、事件和战报               |
-| 联机组件          | 宿主保存权威 GameState，按玩家下发 PlayerView；组件提交命令和显示回执          |
-| 本地 AI / TS CLI  | 教师搜索仅接收公开 Observation，通过同一引擎执行命令                           |
-| Python 训练控制台 | Python 组织自对弈、模型学习、评测与恢复；Rust 持有环境、公开动作树和采样上下文 |
+| 入口             | 调用关系与职责                                                                  |
+| ---------------- | ------------------------------------------------------------------------------- |
+| 离线游戏         | React 提交 Command，TS 引擎原子结算；UI 观察新的局面、事件和战报                |
+| 联机组件         | 宿主保存权威 GameState，按玩家下发 PlayerView；组件提交命令和显示回执           |
+| 本地 AI / TS CLI | 教师搜索仅接收公开 Observation，通过同一引擎执行命令                            |
+| C++ 原生训练宿主 | LibTorch 完成模型、学习、调度与恢复；Rust 持有规则 actor、公开树和搜索 frontier |
 
 `src/engine/index.ts` 是纯规则入口，不依赖 React、DOM、存储、音频、网络或系统时钟。公开状态、命令、随机边界和规则数据在 TS / Rust 两端保持对应；语言内部所有权实现见[运行内核](ai/RUNTIME.md)。
 
@@ -23,7 +23,7 @@
 | `src/ai/training/`、`src/match/`                 | 公开编码、分步动作树、采样与轻量对局环境                         |
 | `src/ui/`                                        | 按 game、board、inspector、hand、library、session 等功能组织页面 |
 | `native/engine/src/`                             | Rust 类型、规则命令、训练宿主、动作树、编码和记录协议            |
-| `training/haojie_training/`                      | PyTorch 模型、训练器、数据、原生进程宿主与本地 Web 控制台        |
+| `training/native/`                               | 独立 C++ / LibTorch 模型、学习器、调度、控制与保存恢复           |
 | `scripts/training/`                              | CLI、记录转换和开发验证；运行组件独立于已完成实验                |
 
 ## 规则与状态
@@ -40,7 +40,7 @@
 
 React 的 opponent 控制层负责 Worker 调度、展示节奏和取消。标准构建将 Worker 内联为 Blob；宿主未注入 Worker 时使用相同搜索生成器分片运行。新局、载入、悔棋或卸载会取消旧任务，返回结果在执行前仍须检查当前局面。
 
-Rust 原生线程持有权威环境、公开动作树、编码缓冲和可保存的显式搜索状态；Python 单进程持有 BF16 模型、优化器、根缓存、连续短轨迹与冻结对手。唯一学习方法为 V-trace，根编码和轻量解码分别组批。安装与操作见[训练入口](../training/README.md)，恢复边界及待完成项见[验收记录](../training/online/VALIDATION.md)。
+Rust lane 持有权威环境、公开动作树、编码缓冲和可保存的路径及排除 frontier；独立 C++ / LibTorch 宿主持有 BF16 模型、补偿优化器、连续轨迹与调度。就绪环境进入全局 FIFO，推理结果独立回送，学习批一次前向、一次反向。根缓存按发布版本失效，不绑定长根租约。缩容序列化并释放规则 actor，恢复保留正式状态及两类 RNG。安装与操作见[训练入口](../training/README.md)，实测见[验收记录](../training/native/VALIDATION.md)。
 
 ## 页面、样式与表现
 

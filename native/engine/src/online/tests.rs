@@ -34,7 +34,7 @@ fn small_tree_failure_backtrack_and_retry_keep_probability_and_rng() {
             waiting: false,
         },
         tree: None,
-        announced: false,
+        sent_root: 0,
     };
     game.start_root(&cat).unwrap();
     let tree = game.tree.as_mut().unwrap();
@@ -90,7 +90,6 @@ fn small_tree_failure_backtrack_and_retry_keep_probability_and_rng() {
         game.saved.search.as_ref().unwrap().excluded[&vec![]],
         vec![0, 1]
     );
-    assert_eq!(game.saved.search.as_ref().unwrap().sent_events, 3);
     let mut random = Random::new(1);
     random.next();
     assert_eq!(game.saved.random, random.0);

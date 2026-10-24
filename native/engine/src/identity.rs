@@ -19,10 +19,10 @@ pub fn describe() -> Value {
         "encoding": "haojie-entities-factorized-v1",
         "record": crate::records::FORMAT,
         "auditor": crate::records::AUDITOR,
-        "protocols": {"training": "haojie-root-vtrace-v1", "development": crate::model::PROTOCOL},
-        "capabilities": ["create", "observe", "query", "preflight", "execute", "public-encoding", "record-audit", "native-thread-runtime", "root-vtrace", "inflight-resume"],
+        "protocols": {"training": "haojie-native-actor-v1", "development": crate::model::PROTOCOL},
+        "capabilities": ["create", "observe", "query", "preflight", "execute", "public-encoding", "record-audit", "native-actor", "typed-frontier", "inflight-resume"],
         "interfaces": {
-            "training": "batched-in-process-bf16-ffi",
+            "training": "single-game-typed-ffi",
             "development": "trusted-canonical-state-and-rule-package",
             "rust": "internal"
         },

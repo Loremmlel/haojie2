@@ -26,8 +26,8 @@ def main():
         timeout=30,
     )
     assert response.returncode != 0, "旧训练宿主不得继续可用"
-    assert identity["protocols"]["training"] == "haojie-root-vtrace-v1"
-    assert "native-thread-runtime" in identity["capabilities"]
+    assert identity["protocols"]["training"] == "haojie-native-actor-v1"
+    assert "native-actor" in identity["capabilities"]
     print(json.dumps(identity, indent=2))
 
 

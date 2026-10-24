@@ -140,6 +140,39 @@ pub struct Input {
 pub struct EntityRows {
     pub fixed: Option<Rc<Vec<[f64; 64]>>>,
     pub tail: Vec<[f64; 64]>,
+    pub typed_fixed: Option<Rc<Vec<TypedRow>>>,
+    pub typed_tail: Vec<TypedRow>,
+}
+#[derive(Clone)]
+pub struct TypedRow {
+    pub ids: [i64; 60],
+    pub present: u64,
+    pub integers: u64,
+    pub continuous: [u16; 52],
+}
+impl Default for TypedRow {
+    fn default() -> Self { Self { ids: [0; 60], present: 0, integers: 0, continuous: [0; 52] } }
+}
+impl TypedRow {
+    fn metadata(values: &[f64; 64]) -> Self {
+        let mut row = Self::default();
+        for (i, scale) in [32., 1., 256., 256., 256., 256., 256., 128.].into_iter().enumerate() {
+            row.ids[i] = (values[i] * scale).round() as i64;
+        }
+        row
+    }
+    fn number(&mut self, at: usize, raw: f64, encoded: f64) {
+        self.present |= 1 << at;
+        if raw.fract() == 0.0 && raw.abs() < i64::MAX as f64 {
+            self.integers |= 1 << at;
+            self.ids[8 + at] = raw as i64;
+        } else { self.continuous[at] = bf16_bits(encoded); }
+    }
+    pub fn write(&self, out: &mut Vec<u8>) {
+        for id in self.ids { out.extend(id.to_le_bytes()); }
+        out.extend(self.present.to_le_bytes());out.extend(self.integers.to_le_bytes());
+        for value in self.continuous { out.extend(value.to_le_bytes()); }
+    }
 }
 impl EntityRows {
     pub fn fixed_len(&self) -> usize {
@@ -154,8 +187,12 @@ impl EntityRows {
             .flat_map(|rows| rows.iter())
             .chain(&self.tail)
     }
-    fn push(&mut self, row: [f64; 64]) {
+    pub fn typed_iter(&self) -> impl Iterator<Item = &TypedRow> {
+        self.typed_fixed.iter().flat_map(|rows| rows.iter()).chain(&self.typed_tail)
+    }
+    fn push(&mut self, row: [f64; 64], typed: TypedRow) {
         self.tail.push(row);
+        self.typed_tail.push(typed);
     }
 }
 impl Serialize for EntityRows {
@@ -220,6 +257,7 @@ struct RowMeta<'a> {
 struct Row {
     values: [f64; 64],
     kind: usize,
+    typed: TypedRow,
 }
 impl Row {
     fn number(&mut self, at: usize, value: Option<f64>) -> Result<(), String> {
@@ -228,6 +266,7 @@ impl Row {
                 return Err("encoding expects finite number".into());
             }
             self.values[8 + at] = numeric(v);
+            self.typed.number(at, v, self.values[8 + at]);
             self.present(at);
         }
         Ok(())
@@ -235,6 +274,7 @@ impl Row {
     fn boolean(&mut self, at: usize, value: Option<bool>) {
         if let Some(v) = value {
             self.values[8 + at] = f64::from(v);
+            self.typed.number(at, f64::from(v), f64::from(v));
             self.present(at);
         }
     }
@@ -337,6 +377,7 @@ impl Encoder<'_> {
         }
         Ok(Row {
             values,
+            typed: TypedRow::metadata(&values),
             kind: if meta.kind.is_some() {
                 self.kind_code(meta.kind)?
             } else {
@@ -345,7 +386,7 @@ impl Encoder<'_> {
         })
     }
     fn push(&mut self, row: Row) {
-        self.entities.push(row.values);
+        self.entities.push(row.values, row.typed);
         self.kinds.push(row.kind);
     }
     fn vocab(&self, name: &str) -> &[Value] {
@@ -410,9 +451,11 @@ impl Encoder<'_> {
         })? as f64
             / 256.0;
         row[7] = o["order"].as_f64().unwrap_or(0.0) / 128.0;
+        let mut typed = TypedRow::metadata(&row);
         for (i, v) in fields.iter().enumerate() {
             if !v.is_null() {
                 row[8 + i] = num(v)?;
+                typed.number(i, v.as_f64().unwrap_or_else(|| f64::from(v.as_bool().unwrap())), row[8 + i]);
                 row[60 + i / 13] += (1u32 << (i % 13)) as f64 / 8191.0;
             }
         }
@@ -427,7 +470,7 @@ impl Encoder<'_> {
         } else {
             self.kind(&o["kind"])?
         });
-        self.entities.push(row);
+        self.entities.push(row, typed);
         Ok(())
     }
     fn effect(&mut self, e: &crate::model::Effect, parent: &str, i: usize) -> Result<(), String> {
@@ -770,6 +813,7 @@ impl Encoder<'_> {
 /// 只保存公开观察的固定编码，不保存前缀派生身份，也不跨树复用。
 pub struct BaseEncoding {
     entities: Rc<Vec<[f64; 64]>>,
+    typed: Rc<Vec<TypedRow>>,
     kinds: Vec<usize>,
     indices: HashMap<String, usize>,
     identities: HashMap<String, usize>,
@@ -1149,6 +1193,7 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
     ]);
     Ok(BaseEncoding {
         entities: Rc::new(e.entities.tail),
+        typed: Rc::new(e.entities.typed_tail),
         kinds: e.kinds,
         indices: e.indices.into_owned(),
         identities: e.identities,
@@ -1192,6 +1237,7 @@ fn encode_mode(
     let mut identities = std::mem::take(&mut workspace.identities);
     identities.clear();
     input.entities.tail.clear();
+    input.entities.typed_tail.clear();
     if initialized {
         input.kinds.truncate(base.kinds.len());
     } else {
@@ -1200,6 +1246,7 @@ fn encode_mode(
         } else {
             Rc::new((*base.entities).clone())
         });
+        input.entities.typed_fixed = Some(Rc::clone(&base.typed));
         input.kinds.clone_from(&base.kinds);
         input.globals.clone_from(&base.globals);
         if !borrow {

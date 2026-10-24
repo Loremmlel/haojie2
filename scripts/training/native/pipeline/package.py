@@ -1,4 +1,4 @@
-"""只打包训练所需 Python/Rust 源码与已提交规则数据；不收集 node_modules、TS 或本地产物。"""
+"""打包独立 C++/Rust 宿主源码、验证入口和规则数据，不收集本地产物。"""
 
 import argparse
 import hashlib
@@ -13,20 +13,20 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[4]
     files = [
-        *root.glob("training/haojie_training/**/*.py"),
-        root / "training/pyproject.toml",
+        *root.glob("training/native/src/*"),
+        *root.glob("training/native/*.ps1"),
+        *root.glob("training/native/*.sh"),
+        root / "training/native/CMakeLists.txt",
+        root / "training/native/.clang-format",
+        *root.glob("training/native/*.md"),
+        *root.glob("training/native/results/**/*.json"),
         root / "training/README.md",
-        *root.glob("training/online/*.md"),
-        *root.glob("training/notebooks/*.ipynb"),
         *root.glob("native/engine/src/**/*.rs"),
         *root.glob("native/engine/data/*"),
         root / "native/engine/Cargo.toml",
         root / "native/engine/Cargo.lock",
         root / "native/engine/build.rs",
         root / "native/engine/README.md",
-        *root.glob("training/tests/**/*.py"),
-        *root.glob("training/research/*.py"),
-        *root.glob("training/research/*.md"),
         *root.glob("scripts/training/native/ci/*.py"),
     ]
     args.output.parent.mkdir(parents=True, exist_ok=True)
