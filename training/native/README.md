@@ -63,7 +63,7 @@ actor 和 learner 共用分段 BF16 softmax。Rust 按实际 BF16 概率质量�
 
 `status.json` 是最新完整统计快照；`window.json` 在退出排空前冻结；`saved.json` 单列保存后的累计状态；`wall.json` 包含初始化、窗口、保存和收尾的整条管线耗时。恢复后窗口计数从恢复点重新起算。消费、产生、ready、partial、pending、learning 和活跃/停放局分别列出，`advancing_1s` 单列最近一秒实际推进的局，并检查 `累计产生 = 累计消费 + ready + partial + learning`。
 
-`--samples 4096` 精确限制本轮实际消费；需要时在真实后继处切分块。`--updates` 限制优化步，`--seconds` 限制测量窗口；排空不计入窗口消费。固定工作量短基准与剩余瓶颈见[本地验收](VALIDATION.md)。
+`--samples 4096` 精确限制本轮实际消费；需要时在真实后继处切分块。`--updates` 限制优化步，`--seconds` 限制测量窗口；排空不计入窗口消费。固定工作量短基准与剩余瓶颈见[本地验收](VALIDATION.md)，与 main 的最新实际运行对照见 [16 并发测量](MAIN-COMPARISON.md)。
 
 ## 验证
 

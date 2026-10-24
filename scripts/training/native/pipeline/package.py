@@ -20,6 +20,7 @@ def main():
         root / "training/native/.clang-format",
         *root.glob("training/native/**/*.md"),
         *root.glob("training/native/results/**/*.json"),
+        *root.glob("training/native/results/**/*.csv"),
         root / "training/README.md",
         *root.glob("native/engine/src/**/*.rs"),
         *root.glob("native/engine/data/*"),
@@ -28,6 +29,7 @@ def main():
         root / "native/engine/build.rs",
         root / "native/engine/README.md",
         *root.glob("scripts/training/native/ci/*.py"),
+        *root.glob("scripts/training/native/performance/*.py"),
     ]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with (
