@@ -2,7 +2,9 @@
 
 2026-10-24。保留宽 384、六层、六头、FFN 1536 的 Transformer，当前 15,184,130 参数。独立 C++ / LibTorch 宿主和 Rust 规则 actor 已贯通；**同并发已快于 main，近线性并发扩展仍未达到**。
 
-本机为 Ryzen 7 5800H、RTX 3060 Laptop 6 GiB、Windows、LibTorch 2.14.0+cu130、驱动 610.88。main 固定为 `d5760fc25d1283f8ada68abbe22becad9e1cdae4`，参数 11,695,874；启用其正式 C++ ATen 推理、紧凑候选及异步回送。原生源码尚未提交，各阶段均保留源码、二进制哈希与原始结果。
+本机为 Ryzen 7 5800H、RTX 3060 Laptop 6 GiB、Windows、LibTorch 2.14.0+cu130、驱动 610.88。main 固定为 `d5760fc25d1283f8ada68abbe22becad9e1cdae4`，参数 11,695,874；启用其正式 C++ ATen 推理、紧凑候选及异步回送。原生实现已提交至 `721d498`，各阶段保留冻结源码、二进制身份与精简实测结果。
+
+按作者后续清理要求，已删除四个已结束实验目录中的 240 份测试模型文件，以及重复程序、构建缓存、重复工作集、逐算子大时间线和调试日志，共约 40.08 GiB。正式存档与实验目录外的模型保持原样；冻结源码、现用程序、精简结果及一套参考工作集保留。下文大体积原始文件的路径与哈希记录测量当时来源，当前保留范围以此处为准。
 
 ## 最后一组 packed-handoff：整包回送、覆盖梯度与两遍更新
 
@@ -35,7 +37,7 @@
 
 窗口命令吞吐约为 main 的 **2.700 倍**，按完整进程约为 **3.130 倍**。当前原生平均活跃环境 12.000；窗口产生 48,541，ready 21,294、partial 79、learning 0，满足 `48,541 = 27,168 + 21,294 + 79`。积压单列，退出排空不计入窗口消费。设备全进程显存采样峰值 4,488 MiB。正常策略经过的局面随更新变化，同工作量收益采用上方固定工作集。
 
-原始 [曲线](../results/architecture/packed-handoff/curve.json)、[main 对照](../results/architecture/packed-handoff/normal.json)、[源码和二进制身份](../results/architecture/packed-handoff/normal-manifest.json)、[工作集验证](../results/architecture/packed-handoff/workset-identity.json)及 [Windows 控制验收](../results/architecture/packed-handoff/control.json)已保存；完整逐局文件、GPU CSV、日志及检查点保留在 `artifacts/architecture-audit-20261024/curve-packed-handoff-b32/` 和 `packed-handoff12-b32-short/`。
+原始 [曲线](../results/architecture/packed-handoff/curve.json)、[main 对照](../results/architecture/packed-handoff/normal.json)、[源码和二进制身份](../results/architecture/packed-handoff/normal-manifest.json)、[工作集验证](../results/architecture/packed-handoff/workset-identity.json)及 [Windows 控制验收](../results/architecture/packed-handoff/control.json)已保存。测试检查点与重复逐局文件已清理，保留 `artifacts/architecture-audit-20261024/scaling-workset/concurrency-1-repeat-1/workset/` 作为唯一参考工作集。
 
 冻结源码 `packed-handoff-final-source.tar.gz` SHA256 为 `23cc3f11b8c0e54c9f8e449a450a48d50615a9b72dc934a4e498039932915811`；Windows 可执行文件 SHA256 为 `05e28e8393aee6d08343f216ac3b7c4b108f63ec792231569d9f921812729adc`。Rust DLL SHA256 为 `adb0c3cad25804a9343f56ead1e5d64e8dc6e046680f2e63decce916c106d6f8`。
 
@@ -159,7 +161,7 @@ actor 在最后一次更新前冻结。网络照常前向和学习，参考档�
 
 1→2 的窗口吞吐提升 **44.2%**，对数斜率 **0.528**；五点拟合斜率 **0.443**。1→12 为 **2.876 倍**。绝对吞吐提高，近线性扩展目标仍未达到。窗口 GPU 均值按原生 UTC 起点及窗口长度截取 CSV，短窗口采样点有限，调查同时使用设备时间线。
 
-[原始曲线](../results/architecture/tensor-layout/scaling.json)、[二进制配置](../results/architecture/tensor-layout/scaling-executable.json)、[实际源码哈希](../results/architecture/tensor-layout/scaling-source-hashes.json)已保留。完整逐局文件和 GPU CSV 在 `artifacts/architecture-audit-20261024/curve-tensor-layout-b64/`，参考在 `scaling-workset/concurrency-1-repeat-1/workset/`。
+[原始曲线](../results/architecture/tensor-layout/scaling.json)、[二进制配置](../results/architecture/tensor-layout/scaling-executable.json)、[实际源码哈希](../results/architecture/tensor-layout/scaling-source-hashes.json)已保留。重复逐局文件已清理，参考工作集保留在 `artifacts/architecture-audit-20261024/scaling-workset/concurrency-1-repeat-1/workset/`。
 
 相同工作集、12 并发、batch 64 的 `owned-fixed` 为窗口 3.756 / 完整进程 6.075 秒，当前为 2.634 / 4.991 秒，消费吞吐分别提高约 **42.6% / 21.7%**。中间的 CPU 策略版本为 2.942 / 5.259 秒。三组均实际消费 4,096，执行 64 次更新及相同正式工作；这里直接比较完整测量。[早期原始结果](../results/architecture/owned-fixed/)及各次源码归档继续保留。
 
