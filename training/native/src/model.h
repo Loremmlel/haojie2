@@ -4,14 +4,25 @@
 #include <mutex>
 
 namespace hj {
+constexpr int64_t DefaultWidth = 384, EncoderLayers = 6;
+struct TransformerBlockImpl : torch::nn::Module {
+  int64_t heads;
+  torch::nn::LayerNorm attention_norm{nullptr}, ffn_norm{nullptr};
+  torch::nn::Linear qkv{nullptr}, output{nullptr}, up{nullptr}, down{nullptr};
+  explicit TransformerBlockImpl(int64_t width);
+  T forward(const T &tokens, const T &valid);
+};
+TORCH_MODULE(TransformerBlock);
 struct NetworkImpl : torch::nn::Module {
   int64_t width;
   std::atomic<uint64_t> revision{0};
   uint64_t encoded_roots = 0, cache_hits = 0;
-  torch::nn::Linear entity{nullptr}, action{nullptr}, globals{nullptr}, mix{nullptr},
-      context{nullptr}, policy{nullptr}, value{nullptr};
+  torch::nn::Linear entity{nullptr}, action{nullptr}, globals{nullptr}, context{nullptr};
+  torch::nn::Sequential policy{nullptr}, value{nullptr};
+  torch::nn::ModuleList blocks;
+  torch::nn::LayerNorm norm{nullptr};
   torch::nn::Embedding kinds{nullptr};
-  explicit NetworkImpl(int64_t width = 128);
+  explicit NetworkImpl(int64_t width = DefaultWidth);
   bool cache_valid(const Root &r) const {
     return r.cached_owner == this && r.cached_revision == revision.load() &&
            r.cached_tokens.defined();

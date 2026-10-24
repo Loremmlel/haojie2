@@ -18,7 +18,7 @@ def main():
         *root.glob("training/native/*.sh"),
         root / "training/native/CMakeLists.txt",
         root / "training/native/.clang-format",
-        *root.glob("training/native/*.md"),
+        *root.glob("training/native/**/*.md"),
         *root.glob("training/native/results/**/*.json"),
         root / "training/README.md",
         *root.glob("native/engine/src/**/*.rs"),

@@ -661,7 +661,8 @@ public:
     int64_t parameters = 0;
     for (auto &p : actor->parameters())
       parameters += p.numel();
-    o << parameters;
+    o << parameters
+      << ",\n  \"architecture\": \"entity-transformer-native\",\n  \"layers\": " << EncoderLayers;
     o << ",\n  \"width\": " << settings.width << ",\n  \"batch\": " << settings.batch
       << ",\n  \"chunk\": " << settings.chunk << "\n}\n";
     return o.str();

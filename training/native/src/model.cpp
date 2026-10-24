@@ -1,5 +1,6 @@
 #include "model.h"
 #include <ATen/Parallel.h>
+#include <ATen/ops/scaled_dot_product_attention.h>
 #include <cmath>
 #include <iostream>
 #include <map>
@@ -100,15 +101,42 @@ std::vector<std::vector<uint16_t>> cpu_masses(const PolicyTable &table) {
   return result;
 }
 } // namespace
+TransformerBlockImpl::TransformerBlockImpl(int64_t w) : heads(std::max<int64_t>(1, w / 64)) {
+  TORCH_CHECK(w % heads == 0, "Transformer width must divide attention heads");
+  attention_norm = register_module("attention_norm", torch::nn::LayerNorm(std::vector<int64_t>{w}));
+  ffn_norm = register_module("ffn_norm", torch::nn::LayerNorm(std::vector<int64_t>{w}));
+  qkv = register_module("qkv", torch::nn::Linear(w, w * 3));
+  output = register_module("output", torch::nn::Linear(w, w));
+  up = register_module("up", torch::nn::Linear(w, w * 4));
+  down = register_module("down", torch::nn::Linear(w * 4, w));
+}
+T TransformerBlockImpl::forward(const T &tokens, const T &valid) {
+  auto batch = tokens.size(0), length = tokens.size(1), width = tokens.size(2);
+  auto projected = qkv(attention_norm(tokens))
+                       .view({batch, length, 3, heads, width / heads})
+                       .permute({2, 0, 3, 1, 4});
+  auto attended = at::scaled_dot_product_attention(projected[0], projected[1], projected[2],
+                                                   valid.unsqueeze(1).unsqueeze(1));
+  auto x = tokens + output(attended.transpose(1, 2).contiguous().view({batch, length, width}));
+  return x + down(torch::gelu(up(ffn_norm(x))));
+}
 NetworkImpl::NetworkImpl(int64_t w) : width(w) {
   entity = register_module("entity", torch::nn::Linear(RowFeatures, w));
   action = register_module("action", torch::nn::Linear(ActionFeatures, w));
   globals = register_module("globals", torch::nn::Linear(32, w));
   kinds = register_module("kinds", torch::nn::Embedding(256, w));
-  mix = register_module("mix", torch::nn::Linear(w * 2, w));
+  blocks = register_module("blocks", torch::nn::ModuleList());
+  for (int64_t i = 0; i < EncoderLayers; ++i)
+    blocks->push_back(TransformerBlock(w));
+  norm = register_module("norm", torch::nn::LayerNorm(std::vector<int64_t>{w}));
   context = register_module("context", torch::nn::Linear(w * 2, w));
-  policy = register_module("policy", torch::nn::Linear(w * 4, 1));
-  value = register_module("value", torch::nn::Linear(w, 1));
+  policy =
+      register_module("policy", torch::nn::Sequential(torch::nn::Linear(w * 4, w),
+                                                      torch::nn::GELU(), torch::nn::Linear(w, w),
+                                                      torch::nn::GELU(), torch::nn::Linear(w, 1)));
+  value =
+      register_module("value", torch::nn::Sequential(torch::nn::Linear(w, w), torch::nn::GELU(),
+                                                     torch::nn::Linear(w, 1), torch::nn::Tanh()));
   to(torch::kBFloat16);
 }
 std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &nodes) {
@@ -117,7 +145,7 @@ std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &n
   auto device = parameters()[0].device();
   std::map<std::pair<uint64_t, uint64_t>, int64_t> root_ids;
   std::vector<std::shared_ptr<Root>> roots;
-  std::vector<int64_t> node_roots, entity_owner, kind_ids, offsets;
+  std::vector<int64_t> node_roots, kind_ids, offsets;
   for (auto &n : nodes) {
     auto key = std::make_pair(n->root->game, n->root->id);
     auto it = root_ids.find(key);
@@ -145,12 +173,10 @@ std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &n
       continue;
     }
     missing_offsets.push_back(kind_ids.size());
-    auto missing_id = missing.size();
     missing.push_back(i);
     for (size_t j = 0; j < roots[i]->rows.size(); ++j) {
       er.push_back(roots[i]->rows[j]);
       kind_ids.push_back(roots[i]->kinds[j]);
-      entity_owner.push_back(missing_id);
     }
     for (auto b : roots[i]->globals) {
       BF v;
@@ -159,20 +185,48 @@ std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &n
     }
   }
   if (!missing.empty()) {
-    auto e = torch::gelu(entity(row_features(er, device)) + kinds(indices(kind_ids, device)));
-    auto r = mean_table(e, entity_owner, missing.size()) + globals(bf_tensor(gf, 32, device));
-    auto m =
-        torch::gelu(mix(torch::cat({e, r.index_select(0, indices(entity_owner, device))}, -1)));
-    r = r + mean_table(m, entity_owner, missing.size());
+    auto e = er.empty() ? torch::empty({0, width}, parameters()[0].options())
+                        : entity(row_features(er, device)) + kinds(indices(kind_ids, device));
+    auto table = torch::cat({globals(bf_tensor(gf, 32, device)), e}, 0);
+    std::map<size_t, std::vector<size_t>> buckets;
     for (size_t j = 0; j < missing.size(); ++j) {
-      auto i = missing[j];
-      root_tokens[i] = m.narrow(0, missing_offsets[j], roots[i]->rows.size());
-      root_context[i] = r[j];
-      if (caching) {
-        roots[i]->cached_tokens = root_tokens[i].clone();
-        roots[i]->cached_context = root_context[i].clone();
-        roots[i]->cached_owner = this;
-        roots[i]->cached_revision = revision.load();
+      size_t capacity = 1;
+      while (capacity < roots[missing[j]]->rows.size() + 1)
+        capacity *= 2;
+      buckets[capacity].push_back(j);
+    }
+    // 同长度区间合批注意力；完整根均参与六层交互，补齐位置只在桶内存在。
+    for (auto &[capacity, members] : buckets) {
+      std::vector<int64_t> gather;
+      std::vector<uint8_t> valid;
+      for (auto j : members) {
+        auto length = roots[missing[j]]->rows.size();
+        gather.push_back(j);
+        valid.push_back(1);
+        for (size_t k = 0; k < capacity - 1; ++k) {
+          gather.push_back(k < length ? missing.size() + missing_offsets[j] + k : 0);
+          valid.push_back(k < length);
+        }
+      }
+      auto mask = torch::from_blob(valid.data(), {int64_t(members.size()), int64_t(capacity)},
+                                   torch::kUInt8)
+                      .clone()
+                      .to(device, torch::kBool);
+      auto x = table.index_select(0, indices(gather, device))
+                   .view({int64_t(members.size()), int64_t(capacity), width});
+      for (auto &block : *blocks)
+        x = block->as<TransformerBlock>()->forward(x, mask);
+      x = norm(x);
+      for (size_t k = 0; k < members.size(); ++k) {
+        auto i = missing[members[k]];
+        root_tokens[i] = x[k].narrow(0, 1, roots[i]->rows.size());
+        root_context[i] = x[k][0];
+        if (caching) {
+          roots[i]->cached_tokens = root_tokens[i].clone();
+          roots[i]->cached_context = root_context[i].clone();
+          roots[i]->cached_owner = this;
+          roots[i]->cached_revision = revision.load();
+        }
       }
     }
     encoded_roots += missing.size();
@@ -241,13 +295,14 @@ std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &n
     ++i;
   for (auto &i : target)
     ++i;
-  auto logits = policy(torch::cat({ctx.index_select(0, indices(owners, device)),
-                                   projected.index_select(0, indices(candidates, device)),
-                                   entity_table.index_select(0, indices(source, device)),
-                                   entity_table.index_select(0, indices(target, device))},
-                                  -1))
+  auto logits = policy
+                    ->forward<T>(torch::cat({ctx.index_select(0, indices(owners, device)),
+                                             projected.index_select(0, indices(candidates, device)),
+                                             entity_table.index_select(0, indices(source, device)),
+                                             entity_table.index_select(0, indices(target, device))},
+                                            -1))
                     .squeeze(-1);
-  return {logits, value(ctx).squeeze(-1)};
+  return {logits, value->forward<T>(ctx).squeeze(-1)};
 }
 
 std::vector<double> canonical_logps(const std::vector<uint16_t> &bits) {
@@ -448,6 +503,34 @@ void model_checks(const torch::Device &device) {
   TORCH_CHECK(probs[0] == probs[1] && probs[0][2] == 0);
   auto logs = canonical_logps(probs[0]);
   TORCH_CHECK(std::abs(std::exp(logs[0]) + std::exp(logs[1]) - 1) < 1e-12);
+  TORCH_CHECK(model->blocks->size() == EncoderLayers);
+  {
+    // 相同实体引用下，候选差分必须反传到上下文和注意力，防止共享偏置被 softmax 消掉。
+    auto probe = std::make_shared<Node>(*n);
+    probe->sources.assign(3, -1);
+    probe->targets.assign(3, -1);
+    probe->cursor = {2, 5, 1};
+    auto logits = model->forward({probe}).first;
+    (logits[0] - logits[1]).backward();
+    auto context_gradient = model->context->weight.grad();
+    auto attention_gradient = model->blocks[0]->as<TransformerBlock>()->qkv->weight.grad();
+    TORCH_CHECK(context_gradient.scalar_type() == torch::kBFloat16 &&
+                    context_gradient.abs().sum().item<double>() > 0,
+                "candidate relative scores do not depend on context");
+    TORCH_CHECK(attention_gradient.scalar_type() == torch::kBFloat16 &&
+                    attention_gradient.abs().sum().item<double>() > 0,
+                "policy gradient does not reach Transformer attention");
+    model->zero_grad();
+    auto other = std::make_shared<Node>(*n);
+    other->root = std::make_shared<Root>(*n->root);
+    other->root->id = 2;
+    other->root->rows.push_back(row);
+    other->root->kinds.push_back(129);
+    auto alone = model->forward({n});
+    auto together = model->forward({n, other});
+    TORCH_CHECK(torch::allclose(alone.first, together.first.narrow(0, 0, 3), 0.02, 0.002),
+                "attention padding or another root changed isolated scores");
+  }
   {
     torch::NoGradGuard guard;
     auto cold = model->forward({n});
@@ -518,7 +601,8 @@ void model_checks(const torch::Device &device) {
   after = restored->parameters();
   for (size_t i = 0; i < before.size(); ++i)
     TORCH_CHECK(torch::equal(before[i], after[i]), "resumed BF16 update differs");
-  std::cout << "BF16 forward/backward/compensated optimizer, masked behavior probability and "
+  std::cout << "six-layer Transformer, contextual candidate interaction, BF16 "
+               "forward/backward/compensated optimizer, masked behavior probability and "
                "failure atomicity: passed\n";
 }
 } // namespace hj

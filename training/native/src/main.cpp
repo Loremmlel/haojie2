@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
     s.chunk = number("--chunk", 16);
     s.batch = number("--batch", 512);
     s.inference_batch = number("--inference-batch", 256);
-    s.width = number("--width", 128);
+    s.width = number("--width", hj::DefaultWidth);
     s.publish = number("--publish", 8);
     s.memory_mb = number("--memory-mb", 4096);
     s.updates = number("--updates", 0);
