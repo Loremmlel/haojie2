@@ -1,0 +1,663 @@
+{
+  "trace": "artifacts\\architecture-audit-20261024\\ready-tables-timeline-c2-b32.json",
+  "sha256": "8ee1d4b336a5e8abb853e770dcb20e140be965c92e2f1090ce737765725a538d",
+  "profile_ms": 1966.9336,
+  "device_activity_union_ms": 1733.7495651855468,
+  "device_activity_fraction": 0.8814479376352851,
+  "stream_activity_union_ms": {
+    "17": 1572.883237060547,
+    "16": 108.95736157226563,
+    "20": 64.82590087890625
+  },
+  "categories": {
+    "cpu_op": [
+      {
+        "name": "hj.training_graph",
+        "calls": 90,
+        "inclusive_ms": 1715.8533840000002
+      },
+      {
+        "name": "haojie::cpu_policy",
+        "calls": 3522,
+        "inclusive_ms": 679.2160999999995
+      },
+      {
+        "name": "haojie::rust_actor",
+        "calls": 3522,
+        "inclusive_ms": 417.9139999999998
+      },
+      {
+        "name": "haojie::prepare_roots",
+        "calls": 225,
+        "inclusive_ms": 75.1658
+      },
+      {
+        "name": "aten::copy_",
+        "calls": 596,
+        "inclusive_ms": 30.648000000000003
+      },
+      {
+        "name": "aten::empty",
+        "calls": 976,
+        "inclusive_ms": 11.59159999999999
+      },
+      {
+        "name": "haojie::collect",
+        "calls": 937,
+        "inclusive_ms": 4.589599999999999
+      },
+      {
+        "name": "haojie::managed",
+        "calls": 2841,
+        "inclusive_ms": 2.449199999999976
+      },
+      {
+        "name": "aten::narrow",
+        "calls": 204,
+        "inclusive_ms": 1.6224
+      },
+      {
+        "name": "haojie::train",
+        "calls": 936,
+        "inclusive_ms": 1.482399999999988
+      },
+      {
+        "name": "aten::slice",
+        "calls": 204,
+        "inclusive_ms": 1.0282
+      },
+      {
+        "name": "aten::reshape",
+        "calls": 204,
+        "inclusive_ms": 1.0163999999999995
+      },
+      {
+        "name": "aten::cat",
+        "calls": 12,
+        "inclusive_ms": 0.7754
+      },
+      {
+        "name": "aten::view",
+        "calls": 408,
+        "inclusive_ms": 0.6994000000000011
+      },
+      {
+        "name": "haojie::resize",
+        "calls": 937,
+        "inclusive_ms": 0.36230000000000245
+      },
+      {
+        "name": "aten::as_strided",
+        "calls": 204,
+        "inclusive_ms": 0.14619999999999997
+      }
+    ],
+    "kernel": [
+      {
+        "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nn",
+        "calls": 2340,
+        "inclusive_ms": 200.8113790000002
+      },
+      {
+        "name": "update",
+        "calls": 90,
+        "inclusive_ms": 133.051628
+      },
+      {
+        "name": "graph_commit",
+        "calls": 90,
+        "inclusive_ms": 119.91505100000002
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_128x128_ldg8_f2f_stages_32x5_nt",
+        "calls": 1080,
+        "inclusive_ms": 117.757565
+      },
+      {
+        "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_relu_f2f_stages_32x1_tn",
+        "calls": 1710,
+        "inclusive_ms": 115.21936999999973
+      },
+      {
+        "name": "ampere_bf16_s1688gemm_bf16_128x256_ldg8_f2f_stages_32x1_nt",
+        "calls": 540,
+        "inclusive_ms": 76.0415839999999
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIN3c108BFloat16EEESt5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 15930,
+        "inclusive_ms": 74.56084100000066
+      },
+      {
+        "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_relu_f2f_tn",
+        "calls": 540,
+        "inclusive_ms": 61.60976799999997
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_relu_f2f_stages_32x6_tn",
+        "calls": 2790,
+        "inclusive_ms": 54.660591000000096
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIhEESt5arrayIPcLy1EELb0EEEviT0_T1_",
+        "calls": 540,
+        "inclusive_ms": 49.50335699999999
+      },
+      {
+        "name": "_ZN2at6native49_GLOBAL__N__255dbdec_16_SegmentReduce_cu_37a07f9b30segment_reduce_backward_kernelIN3c108BFloat16ExEEvNS0_13ReductionTypeEPT_PKS6_S9_S9_PKT0_SC_xxS6_xxxxxxx",
+        "calls": 270,
+        "inclusive_ms": 41.951764999999995
+      },
+      {
+        "name": "_ZN2at6native13reduce_kernelILi128ELi4ENS0_8ReduceOpIN3c108BFloat16ENS0_14func_wrapper_tIS4_ZNS0_11sum_functorIS4_fS4_EclERNS_14TensorIteratorEEUlffE_EEjS4_Li4ELi8EEEEEvT1_",
+        "calls": 2880,
+        "inclusive_ms": 40.345833
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_26GeluBackwardCUDAKernelImplERNS_18TensorIteratorBaseENS0_8GeluTypeEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16ES8_E_St5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 1080,
+        "inclusive_ms": 39.55966999999991
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_256x128_ldg8_f2f_stages_32x3_nt",
+        "calls": 90,
+        "inclusive_ms": 37.952804
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_18GeluCUDAKernelImplERNS_18TensorIteratorBaseENS0_8GeluTypeEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 2430,
+        "inclusive_ms": 32.60794600000028
+      },
+      {
+        "name": "_Z41fmha_cutlassB_bf16_aligned_64x64_k64_sm80N22PyTorchMemEffAttention23AttentionBackwardKernelIN7cutlass4arch4Sm80ENS1_10bfloat16_tELb1ELb0ELb1ELi64ELi64ELi64ELb0EE6ParamsE",
+        "calls": 540,
+        "inclusive_ms": 31.284585999999987
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_stages_32x6_nt",
+        "calls": 1350,
+        "inclusive_ms": 30.186777000000024
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_64x64_ldg8_relu_f2f_stages_64x5_tn",
+        "calls": 2508,
+        "inclusive_ms": 29.44776799999995
+      },
+      {
+        "name": "_ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f28vectorized_layer_norm_kernelIN3c108BFloat16EfLb0EEEviT0_PKT_S8_S8_PS5_S9_PS6_",
+        "calls": 4095,
+        "inclusive_ms": 29.027796999999886
+      },
+      {
+        "name": "_Z40fmha_cutlassF_bf16_aligned_64x64_rf_sm80N22PyTorchMemEffAttention15AttentionKernelIN7cutlass10bfloat16_tENS1_4arch4Sm80ELb1ELi64ELi64ELi64ELb1ELb1EE6ParamsE",
+        "calls": 1890,
+        "inclusive_ms": 26.468661000000004
+      },
+      {
+        "name": "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_44_GLOBAL__N__99c14716_11_Indexing_cu_2a2c434e18masked_fill_kernelERNS_14TensorIteratorERKN3c106ScalarEENKUlvE_clEvENKUlvE10_clEvEUlNS6_8BFloat16EbE_EEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+        "calls": 3510,
+        "inclusive_ms": 20.95036200000002
+      },
+      {
+        "name": "memcpy128",
+        "calls": 2160,
+        "inclusive_ms": 20.94809299999999
+      },
+      {
+        "name": "_ZN2at6native34_scatter_gather_elementwise_kernelILi128ELi8EZNS0_36_cuda_scatter_gather_internal_kernelILb1EN3c108BFloat16ExEclINS0_9ReduceAddEEEvRNS_14TensorIteratorExxxRKT_EUliE_EEviT1_",
+        "calls": 270,
+        "inclusive_ms": 20.66866900000001
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_50_GLOBAL__N__7dd5f103_12_PowKernel_cu_a55ca738_108029pow_tensor_scalar_kernel_implIN3c108BFloat16ES5_EEvRNS_18TensorIteratorBaseET0_EUlS5_E_St5arrayIPcLy2EELb0EEEviS8_T1_",
+        "calls": 180,
+        "inclusive_ms": 20.092637000000007
+      },
+      {
+        "name": "binary",
+        "calls": 180,
+        "inclusive_ms": 19.459365000000005
+      },
+      {
+        "name": "_ZN2at6native40_GLOBAL__N__27eda9f4_8_Shape_cu_85d9f36c30CatArrayBatchedCopy_vectorizedINS1_10OpaqueTypeILj2EEEjLi2ELi128ELi1ELi16ELi8EEEvPcNS1_25CatArrInputTensorMetadataIT_T0_XT2_EXT3_EEENS1_16TensorSizeStrideIS8_Lj4EEEiS8_",
+        "calls": 855,
+        "inclusive_ms": 19.365693999999987
+      },
+      {
+        "name": "_ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f35GammaBetaBackwardCUDAKernelTemplateIN3c108BFloat16EfLj32ELj32ELj256ELb0ELb1ELb0EEEvxxPKT_S7_PKT0_SA_PS5_SB_",
+        "calls": 1170,
+        "inclusive_ms": 18.65766400000002
+      },
+      {
+        "name": "reduce",
+        "calls": 1080,
+        "inclusive_ms": 18.130407999999996
+      },
+      {
+        "name": "_ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f39layer_norm_grad_input_kernel_vectorizedIN3c108BFloat16EfLb0EEEvPKT_S7_PKT0_SA_S7_PS5_i",
+        "calls": 1170,
+        "inclusive_ms": 17.92001899999996
+      },
+      {
+        "name": "_ZN2at6native13reduce_kernelILi512ELi1ENS0_8ReduceOpIN3c108BFloat16ENS0_14func_wrapper_tIS4_ZNS0_11sum_functorIS4_fS4_EclERNS_14TensorIteratorEEUlffE_EEjS4_Li4ELi8EEEEEvT1_",
+        "calls": 540,
+        "inclusive_ms": 13.57031399999999
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIN3c108BFloat16EEESt5arrayIPcLy1EELb0EEEviT0_T1_",
+        "calls": 1980,
+        "inclusive_ms": 12.240809999999904
+      },
+      {
+        "name": "project",
+        "calls": 225,
+        "inclusive_ms": 11.264312999999998
+      },
+      {
+        "name": "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_13BinaryFunctorIN3c108BFloat16ES5_S5_NS0_15binary_internal10MulFunctorIfEEEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+        "calls": 450,
+        "inclusive_ms": 10.611010999999998
+      },
+      {
+        "name": "_ZN2at6native45_GLOBAL__N__4fc6ee71_12_Embedding_cu_a90d51c333embedding_backward_feature_kernelIN3c108BFloat16EfxEEvPKT1_PKT_PS8_ixi",
+        "calls": 90,
+        "inclusive_ms": 9.148913
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_stages_32x6_nn",
+        "calls": 360,
+        "inclusive_ms": 8.98132999999998
+      },
+      {
+        "name": "_ZN2at6native24vectorized_gather_kernelILi16ExEEvPcS2_PT0_ixxxxb",
+        "calls": 1575,
+        "inclusive_ms": 8.72865
+      },
+      {
+        "name": "_ZN2at6native27unrolled_elementwise_kernelIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE5_clEvEUlfE_St5arrayIPcLy2EELi4E23TrivialOffsetCalculatorILi1EjESB_NS0_6memory12LoadWithCastILi1EEENSC_13StoreWithCastILi1EEEEEviT_T0_T2_T3_T4_T5_",
+        "calls": 2880,
+        "inclusive_ms": 8.438598000000036
+      },
+      {
+        "name": "targets",
+        "calls": 90,
+        "inclusive_ms": 7.220229
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x128_32x4_tn_align8EEvNT_6ParamsE",
+        "calls": 192,
+        "inclusive_ms": 6.933244999999999
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13BinaryFunctorIN3c108BFloat16ES4_S4_NS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 900,
+        "inclusive_ms": 6.840896000000073
+      },
+      {
+        "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nt",
+        "calls": 90,
+        "inclusive_ms": 6.424520999999997
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi2ENS0_11FillFunctorIxEESt5arrayIPcLy1EELb0EEEviT0_T1_",
+        "calls": 4410,
+        "inclusive_ms": 4.041652999999922
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_25bfloat16_copy_kernel_cudaERNS_18TensorIteratorBaseEEUlfE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 2880,
+        "inclusive_ms": 3.819039000000008
+      },
+      {
+        "name": "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_50_GLOBAL__N__2ac0fdad_17_CompareKernels_cu_8f1b29aa14CompareFunctorIiEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+        "calls": 2430,
+        "inclusive_ms": 3.780591999999863
+      },
+      {
+        "name": "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE10_clEvEUlN3c108BFloat16EE_EEvS4_RKT_EUliE_EEviT1_",
+        "calls": 810,
+        "inclusive_ms": 3.767379999999998
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn",
+        "calls": 418,
+        "inclusive_ms": 2.661496999999995
+      },
+      {
+        "name": "memcpy32_post",
+        "calls": 1890,
+        "inclusive_ms": 2.5033770000000226
+      },
+      {
+        "name": "_ZN50_GLOBAL__N__35dbd4de_17_RangeFactories_cu_4cc9e74429elementwise_kernel_with_indexIiZZZN2at6native15arange_cuda_outERKN3c106ScalarES6_S6_RNS1_6TensorEENKUlvE_clEvENKUlvE1_clEvEUlxE_EEvT_T0_PN15function_traitsISD_E11result_typeE",
+        "calls": 2430,
+        "inclusive_ms": 2.276945999999986
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_stages_32x6_tn",
+        "calls": 212,
+        "inclusive_ms": 2.1157580000000005
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I67cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_tn_align2EEvNT_6ParamsE",
+        "calls": 315,
+        "inclusive_ms": 2.1018059999999994
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_nn_align8EEvNT_6ParamsE",
+        "calls": 360,
+        "inclusive_ms": 1.9427169999999996
+      },
+      {
+        "name": "store",
+        "calls": 225,
+        "inclusive_ms": 1.795179000000002
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13BinaryFunctorIN3c108BFloat16ES4_S4_NS0_15binary_internal10DivFunctorIS4_EEEESt5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 720,
+        "inclusive_ms": 1.657795000000007
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I55cutlass_75_tensorop_bf16_s1688gemm_bf16_64x64_tn_align1EEvNT_6ParamsE",
+        "calls": 90,
+        "inclusive_ms": 1.6546830000000001
+      },
+      {
+        "name": "_ZN2at6native34_scatter_gather_elementwise_kernelILi128ELi8EZNS0_36_cuda_scatter_gather_internal_kernelILb0ENS0_10OpaqueTypeILi2EEExEclINS0_12TensorAssignEEEvRNS_14TensorIteratorExxxRKT_EUliE_EEviT1_",
+        "calls": 450,
+        "inclusive_ms": 1.46291
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I56cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8EEvNT_6ParamsE",
+        "calls": 270,
+        "inclusive_ms": 1.2180880000000007
+      },
+      {
+        "name": "_ZN2at6native40_GLOBAL__N__27eda9f4_8_Shape_cu_85d9f36c30CatArrayBatchedCopy_vectorizedINS1_10OpaqueTypeILj2EEEjLi1ELi128ELi1ELi16ELi8EEEvPcNS1_25CatArrInputTensorMetadataIT_T0_XT2_EXT3_EEENS1_16TensorSizeStrideIS8_Lj4EEEiS8_",
+        "calls": 315,
+        "inclusive_ms": 1.110095000000001
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I56cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_nt_align2EEvNT_6ParamsE",
+        "calls": 90,
+        "inclusive_ms": 1.08439
+      },
+      {
+        "name": "scatter",
+        "calls": 225,
+        "inclusive_ms": 0.9497590000000001
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail4scan16DeviceScanKernelINS2_10policy_hubIxxxjSt4plusIxEE10Policy1000EPKxPxNS0_13ScanTileStateIxLb1EEES6_NS0_8NullTypeEjxLb0ESE_EEvT0_T1_T2_iT3_T4_T5_",
+        "calls": 630,
+        "inclusive_ms": 0.9153940000000006
+      },
+      {
+        "name": "_ZN8internal5gemvx6kernelIii13__nv_bfloat16S2_S2_fLb0ELb1ELb0ELb0ELi9ELb0E18cublasGemvParamsExIi30cublasGemvTensorStridedBatchedIKS2_ES6_S4_IS2_EfEEENSt9enable_ifIXntT5_EvE4typeET11_",
+        "calls": 180,
+        "inclusive_ms": 0.8857290000000009
+      },
+      {
+        "name": "_ZN8internal5gemvx6kernelIii13__nv_bfloat16S2_S2_fLb0ELb1ELb1ELb0ELi7ELb0E18cublasGemvParamsExIi30cublasGemvTensorStridedBatchedIKS2_ES6_S4_IS2_EfEEENSt9enable_ifIXntT5_EvE4typeET11_",
+        "calls": 209,
+        "inclusive_ms": 0.7624920000000002
+      },
+      {
+        "name": "_ZN2at6native40_GLOBAL__N__27eda9f4_8_Shape_cu_85d9f36c35CatArrayBatchedCopy_alignedK_contigINS1_10OpaqueTypeILj2EEEjLi1ELi128ELi1ELi8EEEvPT_NS1_25CatArrInputTensorMetadataIS5_T0_XT2_EXT3_EEENS1_16TensorSizeStrideIS8_Lj4EEEiS8_",
+        "calls": 12,
+        "inclusive_ms": 0.7549069999999999
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_15neg_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE7_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 630,
+        "inclusive_ms": 0.7484370000000005
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x1_tn_align8EEvNT_6ParamsE",
+        "calls": 90,
+        "inclusive_ms": 0.74755
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I55cutlass_75_tensorop_bf16_s1688gemm_bf16_64x64_nn_align1EEvNT_6ParamsE",
+        "calls": 90,
+        "inclusive_ms": 0.7059429999999999
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_44_GLOBAL__N__99c14716_11_Indexing_cu_2a2c434e18masked_fill_kernelERNS_14TensorIteratorERKN3c106ScalarEENKUlvE_clEvENKUlvE10_clEvEUlNS5_8BFloat16EbE_St5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 360,
+        "inclusive_ms": 0.6766239999999993
+      },
+      {
+        "name": "_ZN2at6native44_GLOBAL__N__99c14716_11_Indexing_cu_2a2c434e21indexSelectSmallIndexIN3c108BFloat16ExjLi2ELi2ELin2EEEvNS_4cuda6detail10TensorInfoIT_T1_EENS7_IKS8_S9_EENS7_IKT0_S9_EEiiS9_x",
+        "calls": 450,
+        "inclusive_ms": 0.6695989999999996
+      },
+      {
+        "name": "_ZN2at6native40_GLOBAL__N__27eda9f4_8_Shape_cu_85d9f36c35CatArrayBatchedCopy_alignedK_contigINS1_10OpaqueTypeILj8EEEjLi1ELi128ELi1ELi16EEEvPT_NS1_25CatArrInputTensorMetadataIS5_T0_XT2_EXT3_EEENS1_16TensorSizeStrideIS8_Lj4EEEiS8_",
+        "calls": 630,
+        "inclusive_ms": 0.6620390000000044
+      },
+      {
+        "name": "_ZN2at6native27unrolled_elementwise_kernelIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE10_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELi4E23TrivialOffsetCalculatorILi1EjESD_NS0_6memory12LoadWithCastILi1EEENSE_13StoreWithCastILi1EEEEEviT_T0_T2_T3_T4_T5_",
+        "calls": 270,
+        "inclusive_ms": 0.6419669999999997
+      },
+      {
+        "name": "_ZN8cublasLt19splitKreduce_kernelILi32ELi16Eif13__nv_bfloat16fS1_Lb0ES1_S1_S1_Lb1ELb1ELb0ELb0EEEvNS_18cublasSplitKParamsIT4_EEPKT2_PKT8_PT7_PT3_PKS3_SG_PKT9_S7_PSH_PvxPS3_PiSM_SM_SG_SG_SG_SG_SG_",
+        "calls": 270,
+        "inclusive_ms": 0.612499
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail6reduce27DeviceSegmentedReduceKernelINS2_10policy_hubIN3c108BFloat16ExN2at6native49_GLOBAL__N__255dbdec_16_SegmentReduce_cu_37a07f9b9CustomSumEE10Policy1000EPKS6_PS6_PKxSH_xSA_S6_S6_EEvT0_T1_T2_T3_T5_T6_",
+        "calls": 270,
+        "inclusive_ms": 0.5778790000000004
+      },
+      {
+        "name": "_ZN2at6native27unrolled_elementwise_kernelINS0_15CUDAFunctor_addIN3c108BFloat16EEESt5arrayIPcLy3EELi4E23TrivialOffsetCalculatorILi2EjES9_ILi1EjENS0_6memory15LoadWithoutCastENSC_16StoreWithoutCastEEEviT_T0_T2_T3_T4_T5_",
+        "calls": 360,
+        "inclusive_ms": 0.5645730000000003
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I66cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_tn_align8EEvNT_6ParamsE",
+        "calls": 90,
+        "inclusive_ms": 0.5335210000000002
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail6reduce27DeviceSegmentedReduceKernelINS2_10policy_hubIN3c108BFloat16ExN2at6native49_GLOBAL__N__255dbdec_16_SegmentReduce_cu_37a07f9b9CustomMaxEE10Policy1000EPKS6_PS6_PKxSH_xSA_S6_S6_EEvT0_T1_T2_T3_T5_T6_",
+        "calls": 90,
+        "inclusive_ms": 0.5289139999999999
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail4scan20DeviceScanInitKernelINS0_13ScanTileStateIxLb1EEEEEvT_i",
+        "calls": 630,
+        "inclusive_ms": 0.5125290000000032
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIN3c108BFloat16ES4_S4_NS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 450,
+        "inclusive_ms": 0.465167
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I50cutlass_75_tensorop_s1688gemm_bf16_64x64_nn_align1EEvNT_6ParamsE",
+        "calls": 90,
+        "inclusive_ms": 0.4449429999999999
+      },
+      {
+        "name": "_ZN8cublasLt19splitKreduce_kernelILi32ELi16Eif13__nv_bfloat16fS1_Lb0ES1_S1_S1_Lb1ELb0ELb0ELb0EEEvNS_18cublasSplitKParamsIT4_EEPKT2_PKT8_PT7_PT3_PKS3_SG_PKT9_S7_PSH_PvxPS3_PiSM_SM_SG_SG_SG_SG_SG_",
+        "calls": 180,
+        "inclusive_ms": 0.38132999999999984
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIN3c108BFloat16ES4_bNS0_51_GLOBAL__N__e3604c96_18_CompareEQKernel_cu_d8008c9616CompareEqFunctorIS4_EEEESt5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 90,
+        "inclusive_ms": 0.3716020000000004
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_25tanh_backward_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16ES7_E_St5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 90,
+        "inclusive_ms": 0.3038770000000002
+      },
+      {
+        "name": "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16EEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+        "calls": 90,
+        "inclusive_ms": 0.3020909999999999
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_49_GLOBAL__N__a62a4dcd_16_TensorCompare_cu_71e06f4e17where_kernel_implERNS_14TensorIteratorEENKUlvE_clEvENKUlvE0_clEvEUlbttE_St5arrayIPcLy4EELb0EEEviT0_T1_",
+        "calls": 90,
+        "inclusive_ms": 0.3002019999999999
+      },
+      {
+        "name": "_ZN2at6native27unrolled_elementwise_kernelIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE1_clEvEUliE_St5arrayIPcLy2EELi4E23TrivialOffsetCalculatorILi1EjESB_NS0_6memory12LoadWithCastILi1EEENSC_13StoreWithCastILi1EEEEEviT_T0_T2_T3_T4_T5_",
+        "calls": 180,
+        "inclusive_ms": 0.2944019999999999
+      },
+      {
+        "name": "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_49_GLOBAL__N__a62a4dcd_16_TensorCompare_cu_71e06f4e17where_kernel_implERNS_14TensorIteratorEENKUlvE_clEvENKUlvE0_clEvEUlbttE_EEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+        "calls": 180,
+        "inclusive_ms": 0.28394400000000025
+      },
+      {
+        "name": "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_13BinaryFunctorIN3c108BFloat16ES5_S5_NS0_15binary_internal10DivFunctorIS5_EEEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+        "calls": 90,
+        "inclusive_ms": 0.28285900000000014
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIxxbNS0_51_GLOBAL__N__e3604c96_18_CompareEQKernel_cu_d8008c9616CompareEqFunctorIxEEEESt5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 180,
+        "inclusive_ms": 0.25377199999999983
+      },
+      {
+        "name": "_Z13gemmk1_kernelIifLi256ELi5ELb0ELb0ELb0ELb0E30cublasGemvTensorStridedBatchedIK13__nv_bfloat16ES3_S0_IS1_EfLi0EEv18cublasGemmk1ParamsIT0_T7_T8_T9_T10_N8biasTypeINS9_10value_typeESA_E4typeEE",
+        "calls": 90,
+        "inclusive_ms": 0.22182999999999992
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_15log_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 180,
+        "inclusive_ms": 0.21008800000000005
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13BUnaryFunctorIN3c108BFloat16ES4_S4_NS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 180,
+        "inclusive_ms": 0.19837200000000016
+      },
+      {
+        "name": "_Z17gemv2T_kernel_valIii13__nv_bfloat16S0_S0_fLi128ELi16ELi4ELi4ELb0ELb0E18cublasGemvParamsExIi30cublasGemvTensorStridedBatchedIKS0_ES4_S2_IS0_EfEEvT11_T4_S8_",
+        "calls": 90,
+        "inclusive_ms": 0.17924200000000018
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_21compare_scalar_kernelIN3c108BFloat16EEEvRNS_18TensorIteratorBaseENS0_50_GLOBAL__N__2ac0fdad_17_CompareKernels_cu_8f1b29aa6OpTypeET_EUlS4_E_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 90,
+        "inclusive_ms": 0.148388
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_16sqrt_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 90,
+        "inclusive_ms": 0.144746
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_16tanh_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 90,
+        "inclusive_ms": 0.11638999999999997
+      },
+      {
+        "name": "_ZN2at6native27unrolled_elementwise_kernelINS0_15CUDAFunctor_addIxEESt5arrayIPcLy3EELi4E23TrivialOffsetCalculatorILi2EjES7_ILi1EjENS0_6memory15LoadWithoutCastENSA_16StoreWithoutCastEEEviT_T0_T2_T3_T4_T5_",
+        "calls": 90,
+        "inclusive_ms": 0.10329699999999997
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi2EZZZNS0_49_GLOBAL__N__a62a4dcd_16_TensorCompare_cu_71e06f4e19launch_clamp_scalarERNS_18TensorIteratorBaseEN3c106ScalarES6_NS0_6detail11ClampLimitsEENKUlvE_clEvENKUlvE2_clEvEUlxE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 90,
+        "inclusive_ms": 0.09987800000000004
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_49_GLOBAL__N__a62a4dcd_16_TensorCompare_cu_71e06f4e19launch_clamp_scalarERNS_18TensorIteratorBaseEN3c106ScalarES6_NS0_6detail11ClampLimitsEENKUlvE_clEvENKUlvE7_clEvEUlNS5_8BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 90,
+        "inclusive_ms": 0.09881700000000013
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_23bitwise_not_kernel_cudaERNS_18TensorIteratorBaseEEUlbE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 90,
+        "inclusive_ms": 0.0943370000000002
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_15exp_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 90,
+        "inclusive_ms": 0.0925799999999999
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8EEvNT_6ParamsE",
+        "calls": 16,
+        "inclusive_ms": 0.077475
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEESt5arrayIPcLy1EELb0EEEviT0_T1_",
+        "calls": 90,
+        "inclusive_ms": 0.07638899999999996
+      }
+    ],
+    "cuda_runtime": [
+      {
+        "name": "cudaStreamSynchronize",
+        "calls": 114,
+        "inclusive_ms": 1516.9267
+      },
+      {
+        "name": "cudaGraphLaunch",
+        "calls": 315,
+        "inclusive_ms": 208.98579999999998
+      },
+      {
+        "name": "cudaMemcpyAsync",
+        "calls": 911,
+        "inclusive_ms": 47.5965
+      },
+      {
+        "name": "cudaEventRecordWithFlags",
+        "calls": 494,
+        "inclusive_ms": 27.211100000000076
+      },
+      {
+        "name": "cudaLaunchHostFunc",
+        "calls": 225,
+        "inclusive_ms": 12.375699999999997
+      },
+      {
+        "name": "cudaStreamIsCapturing",
+        "calls": 1078,
+        "inclusive_ms": 1.5472999999999877
+      },
+      {
+        "name": "cudaEventQuery",
+        "calls": 569,
+        "inclusive_ms": 1.0044999999999984
+      },
+      {
+        "name": "cudaLaunchKernel",
+        "calls": 12,
+        "inclusive_ms": 0.24240000000000003
+      }
+    ],
+    "gpu_memcpy": [
+      {
+        "name": "Memcpy HtoD (Pinned -> Device)",
+        "calls": 315,
+        "inclusive_ms": 37.32007599999999
+      },
+      {
+        "name": "Memcpy DtoH (Device -> Pinned)",
+        "calls": 584,
+        "inclusive_ms": 25.951824000000034
+      },
+      {
+        "name": "Memcpy DtoD (Device -> Device)",
+        "calls": 12,
+        "inclusive_ms": 2.819944
+      }
+    ]
+  },
+  "note": "诊断包含 profiler 开销；CPU 包含子调用，设备活动并集不表示 SM 占用率。"
+}

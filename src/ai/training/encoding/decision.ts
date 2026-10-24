@@ -1,10 +1,9 @@
-import { HEIGHT, WIDTH } from '../../../engine/core/geometry';
 import { ensure } from '../../../engine/core/state';
 import { SYNTHESIS_RECIPES } from '../../../engine/setup/synthesis';
 import type { Player } from '../../../engine/types';
 import type { Observation } from '../../types';
 import type { ActionNode } from '../action-tree';
-import { COMMANDS, DIRECTIONS, kindIndex, MODES } from './schema';
+import { ActionRow, FeatureRow, COMMANDS, DIRECTIONS, kindIndex, MODES } from './schema';
 import { createPositionEncoder, createSamplingPositionEncoder } from './state';
 
 export const DECISION_STAGES = [
@@ -20,11 +19,11 @@ export const DECISION_STAGES = [
   'path',
 ];
 export interface EncodedDecision {
-  entities: number[][];
+  entities: FeatureRow[];
   kinds: number[];
   entity_mask: boolean[];
-  globals: number[];
-  candidates: number[][];
+  globals: FeatureRow;
+  candidates: ActionRow[];
   sources: number[];
   targets: number[];
   candidate_mask: boolean[];
@@ -64,9 +63,9 @@ function decisionEncoder(
   reuseBuffers = false,
 ) {
   // 仅内部同步前向显式启用；默认出口仍独立拥有，不能把借用张量留给异步消费者。
-  const storage: number[][] = [];
+  const storage: ActionRow[] = [];
   const workspace = {
-    candidates: [] as number[][],
+    candidates: [] as ActionRow[],
     sources: [] as number[],
     targets: [] as number[],
     entity_mask: [] as boolean[],
@@ -87,52 +86,51 @@ function decisionEncoder(
     sources.length = targetIndices.length = candidates.length = node.choices.length;
     node.choices.forEach((choice, i) => {
       const c = choice.command;
-      const row = reuseBuffers
-        ? (storage[i] ??= Array<number>(64)).fill(0)
-        : Array<number>(64).fill(0);
-      row[COMMANDS.indexOf(c.type)] = 1;
+      const action = reuseBuffers ? (storage[i] ??= new ActionRow()).reset() : new ActionRow();
+      const row = action.ids;
+      row[COMMANDS.indexOf(c.type)] = 1n;
       if (c.mode !== undefined) {
         const mode = MODES.indexOf(c.mode);
         if (mode < 0) ensure(false, `候选模式未编码：${c.mode}。`);
-        row[23 + mode] = 1;
+        row[23 + mode] = 1n;
       }
-      row[36] = (c.x ?? 0) / WIDTH;
-      row[37] = (c.y ?? 0) / HEIGHT;
-      row[38] = (c.row ?? 0) / HEIGHT;
-      row[39] = (c.column ?? 0) / WIDTH;
-      row[40] = c.ultimate === undefined ? -1 : Number(c.ultimate);
-      row[41] = c.charge === undefined ? -1 : Number(c.charge);
-      row[42] = c.direction === undefined ? 0 : (DIRECTIONS.indexOf(c.direction) + 1) / 4;
-      row[43] = kindIndex(c.ability) / 128;
-      row[44] = kindIndex(c.chosenKind) / 128;
-      row[45] = kindIndex(c.shrineKind) / 128;
+      row[36] = BigInt(c.x ?? 0);
+      row[37] = BigInt(c.y ?? 0);
+      row[38] = BigInt(c.row ?? 0);
+      row[39] = BigInt(c.column ?? 0);
+      row[40] = BigInt(c.ultimate === undefined ? -1 : Number(c.ultimate));
+      row[41] = BigInt(c.charge === undefined ? -1 : Number(c.charge));
+      row[42] = BigInt(c.direction === undefined ? 0 : DIRECTIONS.indexOf(c.direction) + 1);
+      row[43] = BigInt(kindIndex(c.ability));
+      row[44] = BigInt(kindIndex(c.chosenKind));
+      row[45] = BigInt(kindIndex(c.shrineKind));
       row[46] =
         c.recipeId === undefined
-          ? 0
-          : (SYNTHESIS_RECIPES.findIndex((r) => r.id === c.recipeId) + 1) / 8;
-      row[47] = c.parity === undefined ? 0 : c.parity === 'odd' ? 1 : -1;
-      row[48] = (DECISION_STAGES.indexOf(node.stage) + 1) / 16;
-      row[49] = Number(choice.status !== 'parameter');
-      row[50] = Number(choice.status === 'uncertain');
-      row[51] = c.offerIndices?.[0] === undefined ? -1 : c.offerIndices[0] / 16;
-      row[52] = c.offerIndices?.[1] === undefined ? -1 : c.offerIndices[1] / 16;
-      row[53] = (c.materialIds?.length ?? 0) / 3;
-      row[54] = (c.sacrificeIds?.length ?? 0) / 2;
-      row[55] = (c.path?.length ?? 0) / 117;
-      row[56] = state.reference(c.secondId) / 256;
-      row[57] = state.reference(c.deathId) / 256;
-      row[58] = Number(choice.key === 'commit-path');
-      row[59] = c.player === undefined ? 0 : c.player === viewer ? 1 : -1;
+          ? 0n
+          : BigInt(SYNTHESIS_RECIPES.findIndex((r) => r.id === c.recipeId) + 1);
+      row[47] = BigInt(c.parity === undefined ? 0 : c.parity === 'odd' ? 1 : -1);
+      row[48] = BigInt(DECISION_STAGES.indexOf(node.stage) + 1);
+      row[49] = BigInt(Number(choice.status !== 'parameter'));
+      row[50] = BigInt(Number(choice.status === 'uncertain'));
+      row[51] = BigInt(c.offerIndices?.[0] ?? -1);
+      row[52] = BigInt(c.offerIndices?.[1] ?? -1);
+      row[53] = BigInt(c.materialIds?.length ?? 0);
+      row[54] = BigInt(c.sacrificeIds?.length ?? 0);
+      row[55] = BigInt(c.path?.length ?? 0);
+      row[56] = BigInt(state.reference(c.secondId));
+      row[57] = BigInt(state.reference(c.deathId));
+      row[58] = BigInt(Number(choice.key === 'commit-path'));
+      row[59] = BigInt(c.player === undefined ? 0 : c.player === viewer ? 1 : -1);
       const point = c.path?.at(-1);
-      row[60] = (point?.x ?? 0) / WIDTH;
-      row[61] = (point?.y ?? 0) / HEIGHT;
+      row[60] = BigInt(point?.x ?? 0);
+      row[61] = BigInt(point?.y ?? 0);
       sources[i] = index(
         c.unitId ??
           c.cardId ??
           (c.type === 'react' ? observation.pending[0]?.source.id : undefined),
       );
       targetIndices[i] = index(choice.subject ?? c.targetId ?? c.deathId);
-      candidates[i] = row;
+      candidates[i] = action;
     });
     const entity_mask = reuseBuffers ? workspace.entity_mask : [];
     const candidate_mask = reuseBuffers ? workspace.candidate_mask : [];

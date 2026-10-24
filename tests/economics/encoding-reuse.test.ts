@@ -8,11 +8,11 @@ import {
   encodeDecision,
 } from '../../src/ai/training/encoding/decision';
 import { createPositionEncoder, encodePosition } from '../../src/ai/training/encoding/state';
-import { numeric } from '../../src/ai/training/encoding/schema';
+import { numeric, FeatureRow, ActionRow } from '../../src/ai/training/encoding/schema';
 import type { Command } from '../../src/engine/types';
 import { add, fixture } from '../helpers';
 
-test('预编译标量保留边界、非整数与负零的逐位结果', () => {
+test('连续标量缩放保留边界、非整数与负零的逐位结果', () => {
   for (const n of [
     ...Array.from({ length: 400 }, (_, i) => i - 90),
     -0,
@@ -58,10 +58,10 @@ test('固定编码复用隔离前缀新增身份、返回张量、引用表和�
     const { reference: b, ...expectedData } = expected;
     assert.deepEqual(data, expectedData);
     assert.equal(a('candidate-only'), b('candidate-only'));
-    actual.entities[0][0] = 999;
-    actual.entities.push([999]);
+    actual.entities[0].ids[0] = 999n;
+    actual.entities.push(new FeatureRow());
     actual.kinds[0] = 999;
-    actual.globals[0] = 999;
+    actual.globals.ids[0] = 999n;
     actual.indices.set('bad-output', 999);
     a('pollution');
   }
@@ -109,18 +109,20 @@ test('同步编码工作区复用容量但清理前缀与掩码，拥有型出�
   ];
   const snapshots = [];
   const stable = owned(root);
-  const stableBefore = structuredClone(stable);
+  const stableBefore = JSON.stringify(stable);
   for (const node of [...nodes, ...[...nodes].reverse()]) {
     const expected = owned(node);
     const input = encode(node);
     assert.deepEqual(input, expected);
-    snapshots.push({ actual: structuredClone(input), expected });
+    snapshots.push({ actual: JSON.stringify(input), expected: JSON.stringify(expected) });
     // 上层可追加回合外候选；下一节点必须清掉追加项和被使用的掩码。
     input.candidate_mask[0] = false;
-    input.candidates.push(Array(64).fill(1));
+    const appended = new ActionRow();
+    appended.ids.fill(1n);
+    input.candidates.push(appended);
     input.sources.push(-1);
     input.targets.push(-1);
   }
-  assert.deepEqual(stable, stableBefore);
+  assert.equal(JSON.stringify(stable), stableBefore);
   for (const saved of snapshots) assert.deepEqual(saved.actual, saved.expected);
 });

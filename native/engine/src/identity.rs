@@ -16,10 +16,10 @@ pub fn describe() -> Value {
         "ruleset": crate::model::RULESET,
         "rulesPackage": "haojie-rules-package-v1",
         "rulesHash": crate::catalog::rules_hash(),
-        "encoding": "haojie-entities-factorized-v1",
+        "encoding": "haojie-public-tables-v3",
         "record": crate::records::FORMAT,
         "auditor": crate::records::AUDITOR,
-        "protocols": {"training": "haojie-native-actor-v1", "development": crate::model::PROTOCOL},
+        "protocols": {"training": "haojie-native-actor-v3", "development": crate::model::PROTOCOL},
         "capabilities": ["create", "observe", "query", "preflight", "execute", "public-encoding", "record-audit", "native-actor", "typed-frontier", "inflight-resume"],
         "interfaces": {
             "training": "single-game-typed-ffi",

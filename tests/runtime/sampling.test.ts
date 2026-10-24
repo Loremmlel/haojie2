@@ -352,8 +352,8 @@ test('决策编码的固定行与拥有型张量一致，前缀、掩码和新�
       assert.deepEqual(b, a);
       b.entity_mask[0] = false;
       assert.equal(borrowed(node).entity_mask[0], true, '重新编码必须恢复有效实体掩码');
-      a.entities[0][0] = 999;
-      assert.notEqual(borrowed(node).entities[0][0], 999, '拥有型张量不能污染只读行');
+      a.entities[0].ids[0] = 999n;
+      assert.notEqual(borrowed(node).entities[0].ids[0], 999n, '拥有型张量不能污染只读行');
     }
     s.units[0].hp--;
   }

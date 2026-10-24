@@ -68,12 +68,12 @@ impl Actor {
                 }
                 let game = self.games.get_mut(&id).ok_or("unknown actor")?;
                 let frame = game.advance((count != 0).then_some(probabilities), cat)?;
-                let mut output = frame[..84].to_vec();
+                let mut output = frame;
                 if game.saved.waiting {
                     let search = game.saved.search.as_ref().unwrap();
                     let tree = game.tree.as_mut().unwrap();
                     let node = tree.node(&search.cursor)?;
-                    let mut encoded = (*encoding::encode_sampling(tree, &node)?).clone();
+                    let mut encoded = encoding::encode_sampling(tree, &node)?;
                     if search.optional && search.cursor.is_empty() {
                         crate::records::add_pass(&mut encoded);
                     }
@@ -93,7 +93,7 @@ impl Actor {
                     ] {
                         output.extend((n as u32).to_le_bytes());
                     }
-                    for row in encoded.entities.typed_iter().skip(if has_root {
+                    for row in encoded.entities.iter().skip(if has_root {
                         0
                     } else {
                         encoded.entities.fixed_len()
@@ -104,42 +104,12 @@ impl Actor {
                         for &kind in encoded.kinds.iter().take(encoded.entities.fixed_len()) {
                             output.extend((kind as u32).to_le_bytes());
                         }
-                        for (i, &value) in encoded.globals.iter().enumerate() {
-                            output.extend(
-                                encoding::bf16_bits(if i == 31 { 0.0 } else { value })
-                                    .to_le_bytes(),
-                            );
-                        }
+                        encoded.globals.write(&mut output);
                     }
                     game.sent_root = game.saved.root_id;
                     for row in &encoded.candidates {
-                        // 参数域全为离散选择；从尚未舍入的规范行恢复精确整数。
-                        let mut scales = [1.0; 64];
-                        for (i, scale) in [
-                            (36, 9.),
-                            (37, 13.),
-                            (38, 13.),
-                            (39, 9.),
-                            (42, 4.),
-                            (43, 128.),
-                            (44, 128.),
-                            (45, 128.),
-                            (46, 8.),
-                            (48, 16.),
-                            (51, 16.),
-                            (52, 16.),
-                            (53, 3.),
-                            (54, 2.),
-                            (55, 117.),
-                            (56, 256.),
-                            (57, 256.),
-                            (60, 9.),
-                            (61, 13.),
-                        ] {
-                            scales[i] = scale;
-                        }
-                        for (i, value) in row.iter().enumerate() {
-                            output.extend(((value * scales[i]).round() as i64).to_le_bytes());
+                        for value in row {
+                            output.extend(value.to_le_bytes());
                         }
                     }
                     for &index in encoded.sources.iter().chain(&encoded.targets) {

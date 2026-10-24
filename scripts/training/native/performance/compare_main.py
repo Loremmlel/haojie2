@@ -63,7 +63,7 @@ def main_window(args):
     c.closed_commands = 0
     c.config.update(
         environments=args.concurrency,
-        inference_batch_size=64,
+        inference_batch_size=args.inference_batch,
         history_percent=0,
         classic_percent=100 if args.rules == "classic" else 0,
         seed=1,
@@ -193,7 +193,8 @@ def run(args):
         "repeats": args.repeats,
         "rules": args.rules,
         "seed": 1,
-        "inference_batch": 64,
+        "inference_batch": args.inference_batch,
+        "native_learning_batch": args.native_batch,
         "game_seed": "(1 + game_id * 2654435761) mod 2^32",
         "main_source_hashes": {
             str(p.relative_to(source)): sha(p)
@@ -202,14 +203,19 @@ def run(args):
         },
         "native_source_hashes": {
             str(p.relative_to(root)): sha(p)
-            for p in sorted((root / "training/native/src").iterdir())
+            for p in sorted((root / "training/native/src").rglob("*"))
+            if p.is_file()
         },
     }
     write(output / "manifest.json", manifest)
     hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
     results = []
     for repeat in range(1, args.repeats + 1):
-        order = ("main", "native") if repeat % 2 else ("native", "main")
+        order = [
+            name
+            for name in (("main", "native") if repeat % 2 else ("native", "main"))
+            if name in args.implementations
+        ]
         for count in args.counts:
             for implementation in order:
                 name = f"{implementation}-{count}-{repeat}"
@@ -237,6 +243,8 @@ def run(args):
                         str(args.seconds),
                         "--rules",
                         args.rules,
+                        "--inference-batch",
+                        str(args.inference_batch),
                     ]
                 else:
                     command = [
@@ -253,7 +261,9 @@ def run(args):
                         "--seconds",
                         str(args.seconds),
                         "--inference-batch",
-                        "64",
+                        str(args.inference_batch),
+                        "--batch",
+                        str(args.native_batch),
                         "--save-seconds",
                         "0",
                     ]
@@ -266,6 +276,7 @@ def run(args):
                         + os.pathsep
                         + env["PATH"]
                     )
+                gpu_output = (directory / "gpu.csv").open("w", encoding="utf-8")
                 gpu = subprocess.Popen(
                     [
                         "nvidia-smi",
@@ -273,11 +284,9 @@ def run(args):
                         "--format=csv,noheader,nounits",
                         "-lms",
                         "200",
-                        "-f",
-                        str(directory / "gpu.csv"),
                     ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stdout=gpu_output,
+                    stderr=subprocess.STDOUT,
                     **hidden,
                 )
                 observed, peak = {}, 0
@@ -317,6 +326,7 @@ def run(args):
                     finally:
                         gpu.terminate()
                         gpu.wait(timeout=10)
+                        gpu_output.close()
                 if process.returncode:
                     raise RuntimeError(f"{name} 失败，见 {directory / 'stderr.log'}")
                 window_path = directory / (
@@ -381,9 +391,17 @@ if __name__ == "__main__":
         "--output", type=Path, default=Path("artifacts/main-comparison-20261024")
     )
     parser.add_argument("--setup", type=Path)
-    parser.add_argument("--seconds", type=float, default=60)
-    parser.add_argument("--counts", type=int, nargs="+", default=[16])
+    parser.add_argument("--seconds", type=float, default=20)
+    parser.add_argument("--native-batch", type=int, default=32)
+    parser.add_argument("--inference-batch", type=int, default=12)
+    parser.add_argument("--counts", type=int, nargs="+", default=[12])
     parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument(
+        "--implementations",
+        nargs="+",
+        choices=["main", "native"],
+        default=["main", "native"],
+    )
     parser.add_argument("--rules", choices=["classic", "shrine"], default="shrine")
     parser.add_argument("--engine", type=Path)
     parser.add_argument("--directory", type=Path)

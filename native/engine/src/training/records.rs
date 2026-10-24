@@ -118,8 +118,8 @@ pub fn outcome(s: &State, commands: usize, reason: &str) -> Value {
         "returns":if terminated {json!({"1":if winner=="draw"{0}else if winner==1{1}else{-1},"2":if winner=="draw"{0}else if winner==2{1}else{-1}})}else{Value::Null}})
 }
 pub fn add_pass(input: &mut encoding::Input) {
-    let mut row = [0.0; 64];
-    row[63] = 1.0;
+    let mut row = [0; 64];
+    row[63] = 1;
     input.candidates.push(row);
     input.candidate_mask.push(true);
     input.sources.push(-1);

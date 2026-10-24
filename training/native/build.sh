@@ -3,5 +3,5 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 : "${LIBTORCH:?Set LIBTORCH to an extracted LibTorch directory}"
 cargo build --locked --release --lib --manifest-path "$repo_root/native/engine/Cargo.toml" --target-dir "$repo_root/artifacts/native-target"
-cmake -S "$repo_root/training/native" -B "$repo_root/artifacts/cpp-training-build" -DLIBTORCH="$LIBTORCH" -DCMAKE_BUILD_TYPE=Release
+cmake -S "$repo_root/training/native" -B "$repo_root/artifacts/cpp-training-build" -DLIBTORCH="$LIBTORCH" -DCMAKE_BUILD_TYPE=Release -DCUDA_RUNTIME_ROOT="${CUDA_RUNTIME_ROOT:-}" -DCUDA_CRT_ROOT="${CUDA_CRT_ROOT:-}"
 cmake --build "$repo_root/artifacts/cpp-training-build" -j "${BUILD_JOBS:-2}"

@@ -1,4 +1,4 @@
-//! 保留 factorized-v1 的实体顺序、引用重编号和存在掩码；词表及印刷值由 TS 注入。
+//! 公开状态使用类型化张量表；实体顺序、引用绑定和存在位与 TS 保持一致。
 use crate::actions::{array, text};
 use crate::model::{Catalog, Kind, State};
 use crate::tree::{Node, Tree};
@@ -10,10 +10,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 pub fn validate_schema(s: &Value) -> Result<(), String> {
-    if s["encoding"] != "haojie-entities-factorized-v1"
-        || s["entity_features"] != 64
-        || s["global_features"] != 32
-        || s["action_features"] != 64
+    if s["encoding"] != "haojie-public-tables-v3"
+        || s["row_ids"] != 60
+        || s["row_values"] != 52
+        || s["action_ids"] != 64
+        || s["global_role"] != 32
         || s["kind_count"] != 256
     {
         return Err("unsupported encoding schema".into());
@@ -58,21 +59,7 @@ fn cat(v: &Value, words: &[&str]) -> Result<Value, String> {
         .ok_or_else(|| format!("unknown encoding category {v}"))
 }
 fn numeric(n: f64) -> f64 {
-    // 与 TS 相同的有限整数表；负零、非整数和范围外数值保留原运算。
-    static SMALL: std::sync::OnceLock<[f64; 321]> = std::sync::OnceLock::new();
-    if (-64.0..=256.0).contains(&n) && n.fract() == 0.0 {
-        if n == 0.0 {
-            return n;
-        }
-        SMALL.get_or_init(|| {
-            std::array::from_fn(|i| {
-                let n = i as f64 - 64.0;
-                n.signum() * n.abs().ln_1p() / 8.0
-            })
-        })[(n + 64.0) as usize]
-    } else {
-        n.signum() * n.abs().ln_1p() / 8.0
-    }
+    n.signum() * n.abs().ln_1p() / 8.0
 }
 fn num(v: &Value) -> Result<f64, String> {
     if let Some(b) = v.as_bool() {
@@ -82,7 +69,7 @@ fn num(v: &Value) -> Result<f64, String> {
         .as_f64()
         .filter(|n| n.is_finite())
         .ok_or("encoding expects finite number")?;
-    Ok(numeric(n))
+    Ok(n)
 }
 fn no_null(v: &Value) -> Result<(), String> {
     match v {
@@ -127,9 +114,9 @@ fn js_key_order(mut keys: Vec<String>) -> Vec<String> {
 pub struct Input {
     pub entities: EntityRows,
     pub kinds: Vec<usize>,
-    pub globals: Vec<f64>,
+    pub globals: TypedRow,
     #[serde(serialize_with = "serialize_rows")]
-    pub candidates: Vec<[f64; 64]>,
+    pub candidates: Vec<[i64; 64]>,
     pub entity_mask: Vec<bool>,
     pub candidate_mask: Vec<bool>,
     pub sources: Vec<i32>,
@@ -138,10 +125,8 @@ pub struct Input {
 /// 固定区一次连续生成；节点追加区复用容量。两区都直接写最终数值行，不逐行装箱。
 #[derive(Clone, Default)]
 pub struct EntityRows {
-    pub fixed: Option<Rc<Vec<[f64; 64]>>>,
-    pub tail: Vec<[f64; 64]>,
-    pub typed_fixed: Option<Rc<Vec<TypedRow>>>,
-    pub typed_tail: Vec<TypedRow>,
+    pub fixed: Option<Rc<Vec<TypedRow>>>,
+    pub tail: Vec<TypedRow>,
 }
 #[derive(Clone)]
 pub struct TypedRow {
@@ -154,19 +139,15 @@ impl Default for TypedRow {
     fn default() -> Self { Self { ids: [0; 60], present: 0, integers: 0, continuous: [0; 52] } }
 }
 impl TypedRow {
-    fn metadata(values: &[f64; 64]) -> Self {
-        let mut row = Self::default();
-        for (i, scale) in [32., 1., 256., 256., 256., 256., 256., 128.].into_iter().enumerate() {
-            row.ids[i] = (values[i] * scale).round() as i64;
-        }
-        row
-    }
-    fn number(&mut self, at: usize, raw: f64, encoded: f64) {
+    fn number(&mut self, at: usize, raw: f64) {
         self.present |= 1 << at;
-        if raw.fract() == 0.0 && raw.abs() < i64::MAX as f64 {
+        self.integers &= !(1 << at);
+        self.ids[8 + at] = 0;
+        self.continuous[at] = 0;
+        if raw.fract() == 0.0 && raw >= i64::MIN as f64 && raw < -(i64::MIN as f64) {
             self.integers |= 1 << at;
             self.ids[8 + at] = raw as i64;
-        } else { self.continuous[at] = bf16_bits(encoded); }
+        } else { self.continuous[at] = bf16_bits(numeric(raw)); }
     }
     pub fn write(&self, out: &mut Vec<u8>) {
         for id in self.ids { out.extend(id.to_le_bytes()); }
@@ -181,33 +162,40 @@ impl EntityRows {
     pub fn len(&self) -> usize {
         self.fixed_len() + self.tail.len()
     }
-    pub fn iter(&self) -> impl Iterator<Item = &[f64; 64]> {
+    pub fn iter(&self) -> impl Iterator<Item = &TypedRow> {
         self.fixed
             .iter()
             .flat_map(|rows| rows.iter())
             .chain(&self.tail)
     }
-    pub fn typed_iter(&self) -> impl Iterator<Item = &TypedRow> {
-        self.typed_fixed.iter().flat_map(|rows| rows.iter()).chain(&self.typed_tail)
-    }
-    fn push(&mut self, row: [f64; 64], typed: TypedRow) {
+    fn push(&mut self, row: TypedRow) {
         self.tail.push(row);
-        self.typed_tail.push(typed);
     }
 }
 impl Serialize for EntityRows {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq(self.iter().map(|row| row.as_slice()))
+        serializer.collect_seq(self.iter())
+    }
+}
+impl Serialize for TypedRow {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut row = serializer.serialize_struct("TypedRow", 4)?;
+        row.serialize_field("ids", &self.ids.map(|id| id.to_string()).as_slice())?;
+        row.serialize_field("present", &self.present.to_string())?;
+        row.serialize_field("integers", &self.integers.to_string())?;
+        row.serialize_field("continuous", self.continuous.as_slice())?;
+        row.end()
     }
 }
 fn serialize_rows<S: serde::Serializer>(
-    rows: &[[f64; 64]],
+    rows: &[[i64; 64]],
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     use serde::ser::SerializeSeq;
     let mut sequence = serializer.serialize_seq(Some(rows.len()))?;
     for row in rows {
-        sequence.serialize_element(row.as_slice())?;
+        sequence.serialize_element(row.map(|id| id.to_string()).as_slice())?;
     }
     sequence.end()
 }
@@ -255,7 +243,6 @@ struct RowMeta<'a> {
     selectable: bool,
 }
 struct Row {
-    values: [f64; 64],
     kind: usize,
     typed: TypedRow,
 }
@@ -265,17 +252,13 @@ impl Row {
             if !v.is_finite() {
                 return Err("encoding expects finite number".into());
             }
-            self.values[8 + at] = numeric(v);
-            self.typed.number(at, v, self.values[8 + at]);
-            self.present(at);
+            self.typed.number(at, v);
         }
         Ok(())
     }
     fn boolean(&mut self, at: usize, value: Option<bool>) {
         if let Some(v) = value {
-            self.values[8 + at] = f64::from(v);
-            self.typed.number(at, f64::from(v), f64::from(v));
-            self.present(at);
+            self.typed.number(at, f64::from(v));
         }
     }
     fn value(&mut self, at: usize, value: &Value) -> Result<(), String> {
@@ -290,9 +273,6 @@ impl Row {
                 Some(value.as_f64().ok_or("encoding expects finite number")?),
             ),
         }
-    }
-    fn present(&mut self, at: usize) {
-        self.values[60 + at / 13] += (1u32 << (at % 13)) as f64 / 8191.0;
     }
 }
 impl Encoder<'_> {
@@ -350,23 +330,22 @@ impl Encoder<'_> {
             .copied()
             .ok_or("unknown role")?
             - 1;
-        let mut values = [0.0; 64];
-        values[0] = (role + 1) as f64 / 32.0;
-        values[1] = match meta.owner {
-            None => 0.0,
-            Some(p) if p == self.viewer => 1.0,
-            Some(1 | 2) => -1.0,
+        let mut typed = TypedRow::default();
+        typed.ids[0] = (role + 1) as i64;
+        typed.ids[1] = match meta.owner {
+            None => 0,
+            Some(p) if p == self.viewer => 1,
+            Some(1 | 2) => -1,
             _ => return Err("invalid encoding owner".into()),
         };
         for (i, id) in [meta.id, meta.parent, meta.source, meta.target]
             .into_iter()
             .enumerate()
         {
-            values[2 + i] = self.reference_id(id)? as f64 / 256.0;
+            typed.ids[2 + i] = self.reference_id(id)? as i64;
         }
-        values[6] =
-            self.reference_id(meta.group.map(|g| format!("group:{g}")).as_deref())? as f64 / 256.0;
-        values[7] = meta.order as f64 / 128.0;
+        typed.ids[6] = self.reference_id(meta.group.map(|g| format!("group:{g}")).as_deref())? as i64;
+        typed.ids[7] = meta.order as i64;
         if meta.selectable
             && let Some(id) = meta.id
         {
@@ -376,8 +355,7 @@ impl Encoder<'_> {
                 .or_insert(self.entities.len());
         }
         Ok(Row {
-            values,
-            typed: TypedRow::metadata(&values),
+            typed,
             kind: if meta.kind.is_some() {
                 self.kind_code(meta.kind)?
             } else {
@@ -386,7 +364,7 @@ impl Encoder<'_> {
         })
     }
     fn push(&mut self, row: Row) {
-        self.entities.push(row.values, row.typed);
+        self.entities.push(row.typed);
         self.kinds.push(row.kind);
     }
     fn vocab(&self, name: &str) -> &[Value] {
@@ -438,25 +416,21 @@ impl Encoder<'_> {
         if fields.len() > 52 {
             return Err("too many entity fields".into());
         }
-        let mut row = [0.0; 64];
-        row[0] = (role + 1) as f64 / 32.0;
-        row[1] = self.owner(&o["owner"])?;
+        let mut row = TypedRow::default();
+        row.ids[0] = (role + 1) as i64;
+        row.ids[1] = self.owner(&o["owner"])? as i64;
         for (i, key) in ["id", "parent", "source", "target"].iter().enumerate() {
-            row[2 + i] = self.reference(&o[*key])? as f64 / 256.0;
+            row.ids[2 + i] = self.reference(&o[*key])? as i64;
         }
-        row[6] = self.reference(&if o["group"].is_null() {
+        row.ids[6] = self.reference(&if o["group"].is_null() {
             Value::Null
         } else {
             json!(format!("group:{}", text(&o["group"])))
-        })? as f64
-            / 256.0;
-        row[7] = o["order"].as_f64().unwrap_or(0.0) / 128.0;
-        let mut typed = TypedRow::metadata(&row);
+        })? as i64;
+        row.ids[7] = o["order"].as_i64().unwrap_or(0);
         for (i, v) in fields.iter().enumerate() {
             if !v.is_null() {
-                row[8 + i] = num(v)?;
-                typed.number(i, v.as_f64().unwrap_or_else(|| f64::from(v.as_bool().unwrap())), row[8 + i]);
-                row[60 + i / 13] += (1u32 << (i % 13)) as f64 / 8191.0;
+                row.number(i, num(v)?);
             }
         }
         if o["selectable"] == true
@@ -470,7 +444,7 @@ impl Encoder<'_> {
         } else {
             self.kind(&o["kind"])?
         });
-        self.entities.push(row, typed);
+        self.entities.push(row);
         Ok(())
     }
     fn effect(&mut self, e: &crate::model::Effect, parent: &str, i: usize) -> Result<(), String> {
@@ -738,24 +712,23 @@ impl Encoder<'_> {
     }
     fn printed_into(&self, row: &mut Row, offset: usize, k: &Kind) -> Result<(), String> {
         let d = self.catalog.get_kind(k).ok_or("missing printed kind")?;
-        let values = d.encoded_printed.get_or_init(|| {
+        let values = d.printed_features.get_or_init(|| {
             [
-                Some(numeric(d.attack)),
-                Some(numeric(d.health)),
-                Some(numeric(d.range)),
-                Some(numeric(d.actions)),
-                Some(numeric(d.movement)),
-                Some(numeric(d.size.unwrap_or(1.0))),
+                Some(d.attack),
+                Some(d.health),
+                Some(d.range),
+                Some(d.actions),
+                Some(d.movement),
+                Some(d.size.unwrap_or(1.0)),
                 d.printed_mage.map(f64::from),
-                d.spell.map(numeric),
-                d.weapon.map(numeric),
+                d.spell,
+                d.weapon,
                 d.printed_aura.map(f64::from),
             ]
         });
         for (i, value) in values.iter().enumerate() {
             if let Some(n) = value {
-                row.values[8 + offset + i] = *n;
-                row.present(offset + i);
+                row.typed.number(offset + i, *n);
             }
         }
         Ok(())
@@ -812,12 +785,11 @@ impl Encoder<'_> {
 
 /// 只保存公开观察的固定编码，不保存前缀派生身份，也不跨树复用。
 pub struct BaseEncoding {
-    entities: Rc<Vec<[f64; 64]>>,
-    typed: Rc<Vec<TypedRow>>,
+    entities: Rc<Vec<TypedRow>>,
     kinds: Vec<usize>,
     indices: HashMap<String, usize>,
     identities: HashMap<String, usize>,
-    globals: Vec<f64>,
+    globals: TypedRow,
 }
 fn optional_text(v: &Value) -> Result<Option<&str>, String> {
     if v.is_null() {
@@ -1129,18 +1101,12 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
             }
         }
     }
-    let mut globals = vec![
-        viewer as f64 / 2.0,
+    let mut fields = vec![
+        viewer as f64,
         if s.active == viewer { 1.0 } else { -1.0 },
+        e.category_code(Some(s.phase.as_str()), "phases")?.unwrap(),
+        if v("mode") == "shrine" { 1.0 } else { 0.0 },
     ];
-    globals.extend(e.vocab("phases").iter().map(|p| {
-        if p.as_str() == Some(s.phase.as_str()) {
-            1.0
-        } else {
-            0.0
-        }
-    }));
-    globals.push(if v("mode") == "shrine" { 1.0 } else { 0.0 });
     for value in [
         s.ply,
         s.summon_slots,
@@ -1154,9 +1120,9 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
         crate::model::number(&v("bonus")[&sidekeys[1]]),
         crate::model::number(v("regularSummons")),
     ] {
-        globals.push(value.signum() * value.abs().ln_1p() / 8.0);
+        fields.push(value);
     }
-    globals.extend([
+    fields.extend([
         if v("winner").is_null() || v("winner") == "draw" {
             0.0
         } else {
@@ -1167,33 +1133,37 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
         } else {
             0.0
         },
-        (s.pending.len() as f64).ln_1p() / 8.0,
+        s.pending.len() as f64,
         num(&json!(array(&v("hands")[&sidekeys[0]]).len()))?,
         num(&json!(array(&v("hands")[&sidekeys[1]]).len()))?,
     ]);
     for p in sides {
-        globals.push(if array(v("shrineSetupDone")).contains(&json!(p)) {
+        fields.push(if array(v("shrineSetupDone")).contains(&json!(p)) {
             1.0
         } else {
             0.0
         });
     }
     for key in &sidekeys {
-        globals.push(if draft["committed"][key] == true {
+        fields.push(if draft["committed"][key] == true {
             1.0
         } else {
             0.0
         });
     }
-    globals.extend([
+    fields.extend([
         if draft["revealed"] == true { 1.0 } else { 0.0 },
         num(v("summonOffer").get("count").unwrap_or(&json!(0)))?,
         e.owner(&v("summonOffer")["owner"])?,
-        0.0,
     ]);
+    let mut globals = TypedRow::default();
+    globals.ids[0] = 32;
+    globals.ids[1] = 1;
+    for (i, value) in fields.into_iter().enumerate() {
+        globals.number(i, value);
+    }
     Ok(BaseEncoding {
         entities: Rc::new(e.entities.tail),
-        typed: Rc::new(e.entities.typed_tail),
         kinds: e.kinds,
         indices: e.indices.into_owned(),
         identities: e.identities,
@@ -1237,7 +1207,6 @@ fn encode_mode(
     let mut identities = std::mem::take(&mut workspace.identities);
     identities.clear();
     input.entities.tail.clear();
-    input.entities.typed_tail.clear();
     if initialized {
         input.kinds.truncate(base.kinds.len());
     } else {
@@ -1246,7 +1215,6 @@ fn encode_mode(
         } else {
             Rc::new((*base.entities).clone())
         });
-        input.entities.typed_fixed = Some(Rc::clone(&base.typed));
         input.kinds.clone_from(&base.kinds);
         input.globals.clone_from(&base.globals);
         if !borrow {
@@ -1391,64 +1359,62 @@ fn encode_mode(
             e.push(row);
         }
     }
-    let mut globals = input.globals;
-    globals[31] = f64::from(node.prefix.is_some());
+    let globals = input.globals;
     let mut candidates = input.candidates;
-    candidates.resize(node.choices.len(), [0.0; 64]);
+    candidates.resize(node.choices.len(), [0; 64]);
     let mut sources = input.sources;
     let mut targets = input.targets;
     sources.clear();
     targets.clear();
     let stage = e
         .category_code(Some(node.stage), "decision_stages")?
-        .unwrap()
-        / 16.0;
+        .unwrap() as i64;
     for (choice, row) in node.choices.iter().zip(&mut candidates) {
         let c = &choice.command;
-        row.fill(0.0);
-        row[e.category_code(Some(&c.kind), "commands")?.unwrap() as usize - 1] = 1.0;
+        row.fill(0);
+        row[e.category_code(Some(&c.kind), "commands")?.unwrap() as usize - 1] = 1;
         if let Some(n) = e.category_code(c.mode.as_deref(), "modes")? {
-            row[23 + n as usize - 1] = 1.0;
+            row[23 + n as usize - 1] = 1;
         }
-        row[36] = c.x.unwrap_or(0.0) / 9.0;
-        row[37] = c.y.unwrap_or(0.0) / 13.0;
-        row[38] = c.row.unwrap_or(0.0) / 13.0;
-        row[39] = c.column.unwrap_or(0.0) / 9.0;
-        row[40] = c.ultimate.map_or(-1.0, f64::from);
-        row[41] = c.charge.map_or(-1.0, f64::from);
-        row[42] = direction(c.direction.as_deref())?.unwrap_or(0.0) / 4.0;
-        row[43] = e.kind_code(c.ability.as_ref())? as f64 / 128.0;
-        row[44] = e.kind_code(c.chosen_kind.as_ref())? as f64 / 128.0;
-        row[45] = e.kind_code(c.shrine_kind.as_ref())? as f64 / 128.0;
-        row[46] = recipe(c.recipe_id.as_deref())?.unwrap_or(0.0) / 8.0;
+        row[36] = c.x.unwrap_or(0.0) as i64;
+        row[37] = c.y.unwrap_or(0.0) as i64;
+        row[38] = c.row.unwrap_or(0.0) as i64;
+        row[39] = c.column.unwrap_or(0.0) as i64;
+        row[40] = c.ultimate.map_or(-1, i64::from);
+        row[41] = c.charge.map_or(-1, i64::from);
+        row[42] = direction(c.direction.as_deref())?.unwrap_or(0.0) as i64;
+        row[43] = e.kind_code(c.ability.as_ref())? as i64;
+        row[44] = e.kind_code(c.chosen_kind.as_ref())? as i64;
+        row[45] = e.kind_code(c.shrine_kind.as_ref())? as i64;
+        row[46] = recipe(c.recipe_id.as_deref())?.unwrap_or(0.0) as i64;
         row[47] = match parity(c.parity.as_deref())? {
-            Some(1.0) => 1.0,
-            Some(_) => -1.0,
-            None => 0.0,
+            Some(1.0) => 1,
+            Some(_) => -1,
+            None => 0,
         };
         row[48] = stage;
-        row[49] = f64::from(choice.status != "parameter");
-        row[50] = f64::from(choice.status == "uncertain");
+        row[49] = i64::from(choice.status != "parameter");
+        row[50] = i64::from(choice.status == "uncertain");
         for i in 0..2 {
             row[51 + i] = c
                 .offer_indices
                 .as_deref()
                 .unwrap_or(&[])
                 .get(i)
-                .map_or(-1.0, |n| n / 16.0);
+                .map_or(-1, |n| *n as i64);
         }
-        row[53] = c.material_ids.as_deref().unwrap_or(&[]).len() as f64 / 3.0;
-        row[54] = c.sacrifice_ids.as_deref().unwrap_or(&[]).len() as f64 / 2.0;
-        row[55] = c.path.as_deref().unwrap_or(&[]).len() as f64 / 117.0;
-        row[56] = e.reference_id(c.second_id.as_deref())? as f64 / 256.0;
-        row[57] = e.reference_id(c.death_id.as_deref())? as f64 / 256.0;
-        row[58] = f64::from(choice.key.is_commit_path());
+        row[53] = c.material_ids.as_deref().unwrap_or(&[]).len() as i64;
+        row[54] = c.sacrifice_ids.as_deref().unwrap_or(&[]).len() as i64;
+        row[55] = c.path.as_deref().unwrap_or(&[]).len() as i64;
+        row[56] = e.reference_id(c.second_id.as_deref())? as i64;
+        row[57] = e.reference_id(c.death_id.as_deref())? as i64;
+        row[58] = i64::from(choice.key.is_commit_path());
         row[59] = c
             .player
-            .map_or(0.0, |p| if p == viewer { 1.0 } else { -1.0 });
+            .map_or(0, |p| if p == viewer { 1 } else { -1 });
         if let Some(p) = c.path.as_deref().unwrap_or(&[]).last() {
-            row[60] = p.x / 9.0;
-            row[61] = p.y / 13.0;
+            row[60] = p.x as i64;
+            row[61] = p.y as i64;
         }
         let source = c.unit_id.as_deref().or(c.card_id.as_deref()).or_else(|| {
             if c.kind == "react" {
@@ -1546,7 +1512,7 @@ mod buffer_tests {
     }
 
     #[test]
-    fn scalar_table_preserves_exact_bits_and_negative_zero() {
+    fn continuous_scaling_preserves_exact_bits_and_negative_zero() {
         for n in (-90..310)
             .map(f64::from)
             .chain([-0.0, 0.5, -0.25, f64::MIN_POSITIVE, f64::MAX])

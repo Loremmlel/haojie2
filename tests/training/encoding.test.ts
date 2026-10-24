@@ -49,7 +49,11 @@ test('79条当前正式回放命令均能分解并恢复，实际随机结果保
       for (const id of [...encoded.sources, ...encoded.targets])
         assert.ok(id === -1 || encoded.entity_mask[id]);
       assert.equal(encoded.entities.length, encoded.kinds.length);
-      assert.ok(encoded.entities.flat().every(Number.isFinite));
+      for (const row of [...encoded.entities, encoded.globals]) {
+        assert.equal(row.ids.length, 60);
+        assert.ok(row.ids.every((id) => typeof id === 'bigint'));
+        assert.ok(row.continuous.every((bits) => (bits & 0x7f80) !== 0x7f80));
+      }
     }
     assert.deepEqual(encodeDecision(o, row.owner, tree.node()), root, '标签不能改变输入或候选');
     const last = trace.at(-1)!;
@@ -98,9 +102,9 @@ test('时钟快照的附属效果保持独立，较大公开局面不截断', ()
     s.deaths.push({ id: `dead-${i}`, kind: 1, owner: 2, ply: i, revived: false });
   const first = encodePosition(observe(s), 1);
   assert.ok(first.entities.length > 80);
-  const effects = first.entities.filter((r) => r[0] === (ROLES.indexOf('effect') + 1) / 32);
+  const effects = first.entities.filter((r) => r.ids[0] === BigInt(ROLES.indexOf('effect') + 1));
   assert.equal(effects.length, 2);
-  assert.notEqual(effects[0][3], effects[1][3], '当前实例与旧快照必须有不同的附属状态归属');
+  assert.notEqual(effects[0].ids[3], effects[1].ids[3], '当前实例与旧快照必须有不同的附属状态归属');
   s.clockFrames[1].previous!.units[0].effects[0].amount = 5;
   assert.notDeepEqual(encodePosition(observe(s), 1).entities, first.entities);
   s.clockFrames[1].previous!.units[0].effects[0].amount = 2;

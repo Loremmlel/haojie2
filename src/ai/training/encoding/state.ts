@@ -14,7 +14,8 @@ import {
   kindIndex,
   knownKeys,
   MODES,
-  numeric,
+  FeatureRow,
+  GLOBAL_ROLE,
   PHASES,
   REACTIONS,
   ROLES,
@@ -39,16 +40,15 @@ const printedValues = new Map(
       d.spell,
       d.weapon,
       d.aura,
-    ].map((value) => (value === undefined ? undefined : numeric(value))),
+    ],
   ]),
 );
-function printedInto(row: number[], offset: number, kind: Kind) {
+function printedInto(row: FeatureRow, offset: number, kind: Kind) {
   const values = printedValues.get(kind)!;
   for (let i = 0; i < values.length; i++) {
     if (values[i] === undefined) continue;
     const at = offset + i;
-    row[8 + at] = values[i]!;
-    row[60 + Math.floor(at / 13)] += 2 ** (at % 13) / 8191;
+    valueInto(row, at, values[i]);
   }
 }
 
@@ -125,7 +125,7 @@ interface RecordOptions {
 }
 
 interface PositionRows {
-  entities: number[][];
+  entities: FeatureRow[];
   kinds: number[];
   indices: Map<string, number>;
   identities: Map<string, number>;
@@ -136,7 +136,7 @@ function positionRows(viewer: Player, base?: PositionRows, borrowFixed = false) 
   const entities = base
     ? borrowFixed
       ? [...base.entities]
-      : base.entities.map((row) => [...row])
+      : base.entities.map((row) => row.clone())
     : [];
   const kinds: number[] = base ? [...base.kinds] : [];
   const indices = borrowFixed && base ? base.indices : new Map<string, number>(base?.indices);
@@ -155,16 +155,16 @@ function positionRows(viewer: Player, base?: PositionRows, borrowFixed = false) 
     return p === undefined ? 0 : p === viewer ? 1 : -1;
   };
   const add = (role: EntityRole, o: RecordOptions = {}) => {
-    const row = Array<number>(64).fill(0);
+    const row = new FeatureRow();
     const roleIndex = roleIndices.get(role)!;
-    row[0] = (roleIndex + 1) / 32;
-    row[1] = owner(o.owner);
-    row[2] = reference(o.id) / 256;
-    row[3] = reference(o.parent) / 256;
-    row[4] = reference(o.source) / 256;
-    row[5] = reference(o.target) / 256;
-    row[6] = reference(o.group === undefined ? undefined : `group:${o.group}`) / 256;
-    row[7] = (o.order ?? 0) / 128;
+    row.ids[0] = BigInt(roleIndex + 1);
+    row.ids[1] = BigInt(owner(o.owner));
+    row.ids[2] = BigInt(reference(o.id));
+    row.ids[3] = BigInt(reference(o.parent));
+    row.ids[4] = BigInt(reference(o.source));
+    row.ids[5] = BigInt(reference(o.target));
+    row.ids[6] = BigInt(reference(o.group === undefined ? undefined : `group:${o.group}`));
+    row.ids[7] = BigInt(o.order ?? 0);
     valuesInto(row, o.fields ?? []);
     if (o.selectable && o.id && !indices.has(o.id)) indices.set(o.id, entities.length);
     entities.push(row);
@@ -490,37 +490,38 @@ function encodeBasePosition(observation: Observation, viewer: Player) {
     for (const [i, group] of s.summonOffer.groups.entries())
       group.forEach((c, j) => card(c, s.summonOffer!.owner, 'summon-offer', `offer:${i}`, j));
   }
-  const globals = [
-    viewer / 2,
+  const globals = new FeatureRow();
+  globals.ids[0] = BigInt(GLOBAL_ROLE);
+  globals.ids[1] = 1n;
+  valuesInto(globals, [
+    viewer,
     owner(s.active),
-    ...PHASES.map((phase) => Number(s.phase === phase)),
-    Number(s.mode === 'shrine'),
-    numeric(s.ply),
-    numeric(s.summonSlots),
-    numeric(s.turns[viewer]),
-    numeric(s.turns[other(viewer)]),
-    numeric(s.bases[viewer]),
-    numeric(s.bases[other(viewer)]),
-    numeric(s.heads[viewer]),
-    numeric(s.heads[other(viewer)]),
-    numeric(s.bonus[viewer]),
-    numeric(s.bonus[other(viewer)]),
-    numeric(s.regularSummons ?? 0),
+    category(s.phase, PHASES),
+    s.mode === 'shrine',
+    s.ply,
+    s.summonSlots,
+    s.turns[viewer],
+    s.turns[other(viewer)],
+    s.bases[viewer],
+    s.bases[other(viewer)],
+    s.heads[viewer],
+    s.heads[other(viewer)],
+    s.bonus[viewer],
+    s.bonus[other(viewer)],
+    s.regularSummons ?? 0,
     s.winner === undefined || s.winner === 'draw' ? 0 : owner(s.winner),
-    Number(s.winner !== undefined),
-    numeric(s.pending.length),
-    numeric(s.hands[viewer].length),
-    numeric(s.hands[other(viewer)].length),
-    Number(s.shrineSetupDone?.includes(viewer) ?? false),
-    Number(s.shrineSetupDone?.includes(other(viewer)) ?? false),
-    Number(draft?.committed[viewer] ?? false),
-    Number(draft?.committed[other(viewer)] ?? false),
-    Number(draft?.revealed ?? false),
-    numeric(s.summonOffer?.count ?? 0),
+    s.winner !== undefined,
+    s.pending.length,
+    s.hands[viewer].length,
+    s.hands[other(viewer)].length,
+    s.shrineSetupDone?.includes(viewer) ?? false,
+    s.shrineSetupDone?.includes(other(viewer)) ?? false,
+    draft?.committed[viewer] ?? false,
+    draft?.committed[other(viewer)] ?? false,
+    draft?.revealed ?? false,
+    s.summonOffer?.count ?? 0,
     s.summonOffer ? owner(s.summonOffer.owner) : 0,
-    0,
-  ];
-  ensure(globals.length === 32, '全局编码长度发生变化。');
+  ]);
   return { ...rows, globals };
 }
 
@@ -552,7 +553,7 @@ function positionEncoder(
 ) {
   let base: ReturnType<typeof encodeBasePosition> | undefined;
   let workspace: ReturnType<typeof positionRows> | undefined;
-  let globalBuffer: number[] | undefined;
+  let globalBuffer: FeatureRow | undefined;
   return (prefix?: Command) => {
     base ??= encodeBasePosition(observation, viewer);
     const rows = reuseBuffers
@@ -613,8 +614,7 @@ function positionEncoder(
         add('argument', { parent: 'prefix', order: i, fields: [6, n] }),
       );
     }
-    const globals = reuseBuffers ? (globalBuffer ??= [...base.globals]) : [...base.globals];
-    globals[31] = Number(prefix !== undefined);
+    const globals = reuseBuffers ? (globalBuffer ??= base.globals.clone()) : base.globals.clone();
     return { entities, kinds, globals, indices, reference };
   };
 }

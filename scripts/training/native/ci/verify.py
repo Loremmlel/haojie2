@@ -17,7 +17,7 @@ def main():
     assert identity["build"]["kernelProfile"] is False
     assert len(identity["build"]["sourceSha256"]) == 64
     assert identity["record"] == "haojie-native-record-v1"
-    assert identity["encoding"] == "haojie-entities-factorized-v1"
+    assert identity["encoding"] == "haojie-public-tables-v3"
     assert "record-audit" in identity["capabilities"]
     response = subprocess.run(
         [engine, "--training"],
@@ -26,7 +26,7 @@ def main():
         timeout=30,
     )
     assert response.returncode != 0, "旧训练宿主不得继续可用"
-    assert identity["protocols"]["training"] == "haojie-native-actor-v1"
+    assert identity["protocols"]["training"] == "haojie-native-actor-v3"
     assert "native-actor" in identity["capabilities"]
     print(json.dumps(identity, indent=2))
 

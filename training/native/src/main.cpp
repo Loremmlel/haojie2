@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
     if (command == "resize" || command == "budget" || command == "save" || command == "stop") {
       if (directory.empty() || !std::filesystem::exists(directory))
         throw std::runtime_error("run directory required");
-      auto payload = command == "resize"   ? std::to_string(number("--concurrency", 64))
+      auto payload = command == "resize"   ? std::to_string(number("--concurrency", 12))
                      : command == "budget" ? std::to_string(number("--memory-mb", 4096))
                                            : "1";
       hj::atomic_text(directory / command, payload);
@@ -58,34 +58,47 @@ int main(int argc, char **argv) {
     }
     if (command == "help") {
       std::cout << "haojie-train run --directory PATH [--resume CHECKPOINT] [--device cuda|cpu] "
-                   "[--concurrency 64] [--workers 8] [--batch 512] [--chunk 16] [--updates N] "
+                   "[--concurrency 12] [--workers 8] [--batch 512] [--chunk 16] [--updates N] "
                    "[--seconds N]\nhaojie-train status|resize|budget|save|stop --directory "
-                   "PATH\nhaojie-train check [--device cpu|cuda]\n";
+                   "PATH\nhaojie-train check [--device cpu|cuda]\n"
+                   "haojie-train workset --directory PATH [--games 16] [--game-samples 256] "
+                   "[--concurrency 12] [--replay REFERENCE_DIRECTORY]\n";
       return 0;
     }
     at::set_num_threads(int(number("--threads", 1)));
     at::set_num_interop_threads(1);
+    at::globalContext().setAllowBF16ReductionCuBLAS(false);
     c10::set_default_dtype(c10::scalarTypeToTypeMeta(torch::kBFloat16));
     torch::manual_seed(number("--seed", 1));
     if (command == "check") {
       hj::model_checks(torch::Device(text("--device", "cpu")));
+      hj::inference_checks(torch::Device(text("--device", "cpu")));
+      hj::learning_checks(torch::Device(text("--device", "cpu")));
       hj::runtime_checks();
       return 0;
     }
-    if (command != "run" || directory.empty())
+    if ((command != "run" && command != "workset") || directory.empty())
       throw std::runtime_error("use run --directory PATH");
     hj::Settings s;
     for (auto &option : options)
       s.supplied.insert(option.first);
     s.directory = directory;
     s.resume = text("--resume");
+    s.profile = text("--profile");
+    if (command == "workset") {
+      s.workset_games = number("--games", 16);
+      s.game_samples = number("--game-samples", 256);
+      s.replay = text("--replay");
+      if (!s.resume.empty() || !s.workset_games || !s.game_samples || !text("--samples").empty())
+        throw std::runtime_error("workset requires a fresh session and per-game sample quota");
+    }
     s.device = text("--device", "cuda");
-    s.concurrency = number("--concurrency", 64);
+    s.concurrency = number("--concurrency", 12);
     s.workers = number("--workers", 8);
     s.seed = number("--seed", 1);
     s.chunk = number("--chunk", 16);
     s.batch = number("--batch", 512);
-    s.inference_batch = number("--inference-batch", 256);
+    s.inference_batch = number("--inference-batch", 64);
     s.width = number("--width", hj::DefaultWidth);
     s.publish = number("--publish", 8);
     s.memory_mb = number("--memory-mb", 4096);

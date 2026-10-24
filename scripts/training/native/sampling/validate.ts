@@ -99,7 +99,7 @@ try {
             return;
           }
           const encoded = encode(n);
-          near(got.encoded[i], encoded, `${name}:encoded-${i}`, 2e-15);
+          near(got.encoded[i], canonical(encoded), `${name}:encoded-${i}`, 0);
         });
       } catch (error) {
         save('failure.json', { name, observation, cursors, got, expected: expected.map(wire) });

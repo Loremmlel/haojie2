@@ -1,0 +1,1578 @@
+{
+  "trace": "artifacts\\architecture-audit-20261024\\learner-timeline-c2-b32.json",
+  "sha256": "e5677abb367858d9449805eb61bf20b3f72c849ab5e4933e5a605b59725608d7",
+  "profile_ms": 1976.1055,
+  "device_activity_union_ms": 384.17583227539063,
+  "device_activity_fraction": 0.19441058803560368,
+  "stream_activity_union_ms": {
+    "13": 299.58389208984374,
+    "16": 86.69079956054688,
+    "20": 8.72497607421875
+  },
+  "categories": {
+    "cpu_op": [
+      {
+        "name": "haojie::cpu_policy",
+        "calls": 3062,
+        "inclusive_ms": 3470.4962960000066
+      },
+      {
+        "name": "hj.learn",
+        "calls": 40,
+        "inclusive_ms": 2455.466996
+      },
+      {
+        "name": "hj.optimizer",
+        "calls": 40,
+        "inclusive_ms": 792.754496
+      },
+      {
+        "name": "aten::item",
+        "calls": 119,
+        "inclusive_ms": 756.444196
+      },
+      {
+        "name": "aten::_local_scalar_dense",
+        "calls": 119,
+        "inclusive_ms": 755.6319960000001
+      },
+      {
+        "name": "hj.forward",
+        "calls": 40,
+        "inclusive_ms": 455.5802000000001
+      },
+      {
+        "name": "haojie::rust_actor",
+        "calls": 3061,
+        "inclusive_ms": 320.41000000000065
+      },
+      {
+        "name": "autograd::engine::evaluate_function: AddmmBackward0",
+        "calls": 1280,
+        "inclusive_ms": 286.01269999999994
+      },
+      {
+        "name": "AddmmBackward0",
+        "calls": 1280,
+        "inclusive_ms": 201.22470000000015
+      },
+      {
+        "name": "aten::mm",
+        "calls": 2960,
+        "inclusive_ms": 157.9368999999997
+      },
+      {
+        "name": "haojie::collect",
+        "calls": 3175,
+        "inclusive_ms": 103.22230000000019
+      },
+      {
+        "name": "aten::empty",
+        "calls": 11312,
+        "inclusive_ms": 85.32749999999949
+      },
+      {
+        "name": "aten::t",
+        "calls": 6880,
+        "inclusive_ms": 81.93519999999991
+      },
+      {
+        "name": "aten::addmm",
+        "calls": 1280,
+        "inclusive_ms": 81.63170000000002
+      },
+      {
+        "name": "aten::copy_",
+        "calls": 1525,
+        "inclusive_ms": 77.51640000000002
+      },
+      {
+        "name": "autograd::engine::evaluate_function: struct torch::autograd::CppNode<class hj::`anonymous namespace'::RaggedAttention>",
+        "calls": 240,
+        "inclusive_ms": 69.37789999999998
+      },
+      {
+        "name": "autograd::engine::evaluate_function: NativeLayerNormBackward0",
+        "calls": 520,
+        "inclusive_ms": 69.36550000000003
+      },
+      {
+        "name": "aten::zeros",
+        "calls": 1480,
+        "inclusive_ms": 64.86370000000007
+      },
+      {
+        "name": "struct torch::autograd::CppNode<class hj::`anonymous namespace'::RaggedAttention>",
+        "calls": 240,
+        "inclusive_ms": 64.20130000000002
+      },
+      {
+        "name": "aten::to",
+        "calls": 985,
+        "inclusive_ms": 63.456300000000034
+      },
+      {
+        "name": "autograd::engine::evaluate_function: torch::autograd::AccumulateGrad",
+        "calls": 3760,
+        "inclusive_ms": 61.57320000000006
+      },
+      {
+        "name": "aten::_to_copy",
+        "calls": 505,
+        "inclusive_ms": 61.17569999999993
+      },
+      {
+        "name": "autograd::engine::evaluate_function: EmbeddingBagBackward0",
+        "calls": 120,
+        "inclusive_ms": 58.312
+      },
+      {
+        "name": "aten::zero_",
+        "calls": 2000,
+        "inclusive_ms": 56.99199999999985
+      },
+      {
+        "name": "EmbeddingBagBackward0",
+        "calls": 120,
+        "inclusive_ms": 56.23480000000001
+      },
+      {
+        "name": "aten::_embedding_bag_backward",
+        "calls": 120,
+        "inclusive_ms": 55.18340000000003
+      },
+      {
+        "name": "aten::sum",
+        "calls": 1400,
+        "inclusive_ms": 53.67180000000001
+      },
+      {
+        "name": "aten::_embedding_bag_dense_backward",
+        "calls": 120,
+        "inclusive_ms": 53.186600000000006
+      },
+      {
+        "name": "autograd::engine::evaluate_function: SliceBackward0",
+        "calls": 400,
+        "inclusive_ms": 50.7012
+      },
+      {
+        "name": "aten::index_select",
+        "calls": 600,
+        "inclusive_ms": 49.93929999999999
+      },
+      {
+        "name": "aten::fill_",
+        "calls": 2160,
+        "inclusive_ms": 48.163499999999935
+      },
+      {
+        "name": "haojie::prepare_roots",
+        "calls": 121,
+        "inclusive_ms": 44.434700000000014
+      },
+      {
+        "name": "aten::transpose",
+        "calls": 6880,
+        "inclusive_ms": 42.25700000000019
+      },
+      {
+        "name": "NativeLayerNormBackward0",
+        "calls": 520,
+        "inclusive_ms": 40.968399999999995
+      },
+      {
+        "name": "aten::layer_norm",
+        "calls": 520,
+        "inclusive_ms": 39.8651
+      },
+      {
+        "name": "SliceBackward0",
+        "calls": 400,
+        "inclusive_ms": 39.02569999999999
+      },
+      {
+        "name": "autograd::engine::evaluate_function: IndexSelectBackward0",
+        "calls": 240,
+        "inclusive_ms": 37.991299999999995
+      },
+      {
+        "name": "aten::_efficient_attention_forward",
+        "calls": 240,
+        "inclusive_ms": 37.448200000000014
+      },
+      {
+        "name": "aten::native_layer_norm",
+        "calls": 520,
+        "inclusive_ms": 37.2131
+      },
+      {
+        "name": "aten::slice_backward",
+        "calls": 400,
+        "inclusive_ms": 36.72569999999998
+      },
+      {
+        "name": "aten::native_layer_norm_backward",
+        "calls": 520,
+        "inclusive_ms": 35.46140000000001
+      },
+      {
+        "name": "torch::autograd::AccumulateGrad",
+        "calls": 3760,
+        "inclusive_ms": 34.42459999999999
+      },
+      {
+        "name": "aten::embedding_bag",
+        "calls": 400,
+        "inclusive_ms": 33.956199999999995
+      },
+      {
+        "name": "IndexSelectBackward0",
+        "calls": 240,
+        "inclusive_ms": 33.59550000000001
+      },
+      {
+        "name": "aten::_efficient_attention_backward",
+        "calls": 240,
+        "inclusive_ms": 33.5715
+      },
+      {
+        "name": "autograd::engine::evaluate_function: TBackward0",
+        "calls": 1440,
+        "inclusive_ms": 32.43429999999998
+      },
+      {
+        "name": "aten::index_select_backward",
+        "calls": 240,
+        "inclusive_ms": 32.0274
+      },
+      {
+        "name": "autograd::engine::evaluate_function: SegmentReduceBackward0",
+        "calls": 120,
+        "inclusive_ms": 30.919599999999996
+      },
+      {
+        "name": "aten::segment_reduce",
+        "calls": 160,
+        "inclusive_ms": 30.0331
+      },
+      {
+        "name": "aten::cat",
+        "calls": 680,
+        "inclusive_ms": 29.97409999999997
+      },
+      {
+        "name": "autograd::engine::evaluate_function: struct torch::autograd::CppNode<class hj::`anonymous namespace'::GroupedGather>",
+        "calls": 280,
+        "inclusive_ms": 29.0646
+      },
+      {
+        "name": "autograd::engine::evaluate_function: MmBackward0",
+        "calls": 160,
+        "inclusive_ms": 27.515300000000007
+      },
+      {
+        "name": "aten::add",
+        "calls": 840,
+        "inclusive_ms": 27.065499999999993
+      },
+      {
+        "name": "SegmentReduceBackward0",
+        "calls": 120,
+        "inclusive_ms": 26.90470000000001
+      },
+      {
+        "name": "aten::add_",
+        "calls": 1000,
+        "inclusive_ms": 26.003500000000017
+      },
+      {
+        "name": "autograd::engine::evaluate_function: GeluBackward0",
+        "calls": 480,
+        "inclusive_ms": 25.986099999999997
+      },
+      {
+        "name": "aten::_segment_reduce_backward",
+        "calls": 120,
+        "inclusive_ms": 25.556900000000006
+      },
+      {
+        "name": "aten::narrow",
+        "calls": 2120,
+        "inclusive_ms": 25.4291
+      },
+      {
+        "name": "struct torch::autograd::CppNode<class hj::`anonymous namespace'::GroupedGather>",
+        "calls": 280,
+        "inclusive_ms": 24.536000000000016
+      },
+      {
+        "name": "MmBackward0",
+        "calls": 160,
+        "inclusive_ms": 23.880200000000002
+      },
+      {
+        "name": "aten::reshape",
+        "calls": 4480,
+        "inclusive_ms": 22.90519999999997
+      },
+      {
+        "name": "aten::linear",
+        "calls": 240,
+        "inclusive_ms": 22.343599999999984
+      },
+      {
+        "name": "aten::mul",
+        "calls": 760,
+        "inclusive_ms": 21.63909999999998
+      },
+      {
+        "name": "TBackward0",
+        "calls": 1440,
+        "inclusive_ms": 20.8113
+      },
+      {
+        "name": "GeluBackward0",
+        "calls": 480,
+        "inclusive_ms": 20.085699999999992
+      },
+      {
+        "name": "aten::gather",
+        "calls": 555,
+        "inclusive_ms": 19.975700000000014
+      },
+      {
+        "name": "aten::slice",
+        "calls": 2520,
+        "inclusive_ms": 19.331600000000037
+      },
+      {
+        "name": "aten::_embedding_bag_forward_only",
+        "calls": 280,
+        "inclusive_ms": 18.637399999999996
+      },
+      {
+        "name": "aten::detach",
+        "calls": 3945,
+        "inclusive_ms": 18.20969999999997
+      },
+      {
+        "name": "aten::index_add_",
+        "calls": 240,
+        "inclusive_ms": 17.527199999999993
+      },
+      {
+        "name": "aten::as_strided",
+        "calls": 15139,
+        "inclusive_ms": 17.39600000000035
+      },
+      {
+        "name": "aten::view",
+        "calls": 8235,
+        "inclusive_ms": 16.945399999999882
+      },
+      {
+        "name": "aten::gelu_backward",
+        "calls": 480,
+        "inclusive_ms": 16.11720000000002
+      },
+      {
+        "name": "aten::cumsum_",
+        "calls": 280,
+        "inclusive_ms": 15.528900000000009
+      },
+      {
+        "name": "aten::gelu",
+        "calls": 480,
+        "inclusive_ms": 15.027199999999999
+      },
+      {
+        "name": "aten::masked_fill",
+        "calls": 160,
+        "inclusive_ms": 14.329000000000002
+      },
+      {
+        "name": "aten::stack",
+        "calls": 240,
+        "inclusive_ms": 14.247799999999996
+      },
+      {
+        "name": "aten::_embedding_bag",
+        "calls": 120,
+        "inclusive_ms": 12.642300000000004
+      },
+      {
+        "name": "aten::where",
+        "calls": 160,
+        "inclusive_ms": 12.1913
+      },
+      {
+        "name": "aten::div",
+        "calls": 320,
+        "inclusive_ms": 12.021099999999995
+      },
+      {
+        "name": "aten::matmul",
+        "calls": 160,
+        "inclusive_ms": 11.924500000000002
+      },
+      {
+        "name": "aten::new_zeros",
+        "calls": 240,
+        "inclusive_ms": 11.859500000000006
+      },
+      {
+        "name": "aten::arange",
+        "calls": 240,
+        "inclusive_ms": 10.571299999999994
+      },
+      {
+        "name": "aten::clone",
+        "calls": 280,
+        "inclusive_ms": 10.51130000000001
+      },
+      {
+        "name": "autograd::engine::evaluate_function: AddBackward0",
+        "calls": 840,
+        "inclusive_ms": 9.844399999999995
+      },
+      {
+        "name": "autograd::engine::evaluate_function: ViewBackward0",
+        "calls": 480,
+        "inclusive_ms": 9.389100000000003
+      },
+      {
+        "name": "aten::squeeze",
+        "calls": 1160,
+        "inclusive_ms": 9.13060000000001
+      },
+      {
+        "name": "aten::scatter_add_",
+        "calls": 240,
+        "inclusive_ms": 8.806000000000003
+      },
+      {
+        "name": "autograd::engine::evaluate_function: MaskedFillBackward0",
+        "calls": 80,
+        "inclusive_ms": 8.5659
+      },
+      {
+        "name": "aten::empty_strided",
+        "calls": 665,
+        "inclusive_ms": 7.898299999999996
+      },
+      {
+        "name": "MaskedFillBackward0",
+        "calls": 80,
+        "inclusive_ms": 7.560399999999996
+      },
+      {
+        "name": "autograd::engine::evaluate_function: ClampMinBackward0",
+        "calls": 40,
+        "inclusive_ms": 7.256500000000001
+      },
+      {
+        "name": "aten::neg",
+        "calls": 280,
+        "inclusive_ms": 7.1716999999999995
+      },
+      {
+        "name": "aten::unsqueeze",
+        "calls": 1040,
+        "inclusive_ms": 7.128499999999993
+      },
+      {
+        "name": "aten::select",
+        "calls": 954,
+        "inclusive_ms": 7.045699999999994
+      },
+      {
+        "name": "autograd::engine::evaluate_function: MulBackward0",
+        "calls": 80,
+        "inclusive_ms": 6.791800000000002
+      },
+      {
+        "name": "autograd::engine::evaluate_function: DivBackward0",
+        "calls": 40,
+        "inclusive_ms": 6.635700000000001
+      },
+      {
+        "name": "aten::isfinite",
+        "calls": 40,
+        "inclusive_ms": 6.157100000000001
+      },
+      {
+        "name": "autograd::engine::evaluate_function: WhereBackward0",
+        "calls": 40,
+        "inclusive_ms": 6.0426
+      },
+      {
+        "name": "aten::empty_like",
+        "calls": 480,
+        "inclusive_ms": 6.0055000000000085
+      },
+      {
+        "name": "DivBackward0",
+        "calls": 40,
+        "inclusive_ms": 5.989499999999998
+      },
+      {
+        "name": "ClampMinBackward0",
+        "calls": 40,
+        "inclusive_ms": 5.8524
+      },
+      {
+        "name": "aten::ne",
+        "calls": 120,
+        "inclusive_ms": 5.800000000000001
+      },
+      {
+        "name": "aten::sub",
+        "calls": 200,
+        "inclusive_ms": 5.767200000000004
+      },
+      {
+        "name": "aten::expand",
+        "calls": 915,
+        "inclusive_ms": 5.7528
+      },
+      {
+        "name": "detach",
+        "calls": 3945,
+        "inclusive_ms": 5.741699999999961
+      },
+      {
+        "name": "ViewBackward0",
+        "calls": 480,
+        "inclusive_ms": 5.687599999999997
+      },
+      {
+        "name": "aten::pow",
+        "calls": 120,
+        "inclusive_ms": 5.675299999999999
+      },
+      {
+        "name": "autograd::engine::evaluate_function: CatBackward0",
+        "calls": 120,
+        "inclusive_ms": 5.611299999999999
+      },
+      {
+        "name": "aten::resize_",
+        "calls": 880,
+        "inclusive_ms": 5.580599999999999
+      },
+      {
+        "name": "WhereBackward0",
+        "calls": 40,
+        "inclusive_ms": 5.484300000000002
+      },
+      {
+        "name": "autograd::engine::evaluate_function: PowBackward0",
+        "calls": 40,
+        "inclusive_ms": 5.3626000000000005
+      },
+      {
+        "name": "PowBackward0",
+        "calls": 40,
+        "inclusive_ms": 4.879200000000001
+      },
+      {
+        "name": "autograd::engine::evaluate_function: MeanBackward0",
+        "calls": 40,
+        "inclusive_ms": 4.813000000000001
+      },
+      {
+        "name": "CatBackward0",
+        "calls": 120,
+        "inclusive_ms": 4.2945
+      },
+      {
+        "name": "autograd::engine::evaluate_function: EmbeddingBackward0",
+        "calls": 40,
+        "inclusive_ms": 4.239900000000001
+      },
+      {
+        "name": "autograd::engine::evaluate_function: SubBackward0",
+        "calls": 160,
+        "inclusive_ms": 4.228800000000003
+      },
+      {
+        "name": "MeanBackward0",
+        "calls": 40,
+        "inclusive_ms": 4.184100000000001
+      },
+      {
+        "name": "autograd::engine::evaluate_function: MulBackward1",
+        "calls": 80,
+        "inclusive_ms": 4.110699999999999
+      },
+      {
+        "name": "aten::embedding",
+        "calls": 40,
+        "inclusive_ms": 4.0824
+      },
+      {
+        "name": "aten::square",
+        "calls": 80,
+        "inclusive_ms": 3.917599999999998
+      },
+      {
+        "name": "EmbeddingBackward0",
+        "calls": 40,
+        "inclusive_ms": 3.8398000000000003
+      },
+      {
+        "name": "aten::mean",
+        "calls": 80,
+        "inclusive_ms": 3.8176999999999994
+      },
+      {
+        "name": "MulBackward0",
+        "calls": 80,
+        "inclusive_ms": 3.6488000000000005
+      },
+      {
+        "name": "haojie::managed",
+        "calls": 9517,
+        "inclusive_ms": 3.602700000000094
+      },
+      {
+        "name": "aten::embedding_backward",
+        "calls": 40,
+        "inclusive_ms": 3.5909
+      },
+      {
+        "name": "aten::masked_fill_",
+        "calls": 160,
+        "inclusive_ms": 3.5240999999999993
+      },
+      {
+        "name": "autograd::engine::evaluate_function: LogBackward0",
+        "calls": 80,
+        "inclusive_ms": 3.466
+      },
+      {
+        "name": "aten::scalar_tensor",
+        "calls": 80,
+        "inclusive_ms": 3.4457
+      },
+      {
+        "name": "aten::new_empty",
+        "calls": 240,
+        "inclusive_ms": 3.2221999999999995
+      },
+      {
+        "name": "aten::embedding_dense_backward",
+        "calls": 40,
+        "inclusive_ms": 3.2188999999999997
+      },
+      {
+        "name": "MulBackward1",
+        "calls": 80,
+        "inclusive_ms": 3.1648999999999994
+      },
+      {
+        "name": "autograd::engine::evaluate_function: NegBackward0",
+        "calls": 80,
+        "inclusive_ms": 3.1363000000000008
+      },
+      {
+        "name": "aten::abs",
+        "calls": 80,
+        "inclusive_ms": 2.9113000000000007
+      },
+      {
+        "name": "aten::expand_as",
+        "calls": 240,
+        "inclusive_ms": 2.739600000000001
+      },
+      {
+        "name": "SubBackward0",
+        "calls": 160,
+        "inclusive_ms": 2.7345999999999995
+      },
+      {
+        "name": "LogBackward0",
+        "calls": 80,
+        "inclusive_ms": 2.571299999999999
+      },
+      {
+        "name": "aten::bitwise_not",
+        "calls": 80,
+        "inclusive_ms": 2.337099999999999
+      },
+      {
+        "name": "NegBackward0",
+        "calls": 80,
+        "inclusive_ms": 2.3018999999999994
+      },
+      {
+        "name": "aten::log",
+        "calls": 80,
+        "inclusive_ms": 2.1805
+      },
+      {
+        "name": "aten::clamp_min",
+        "calls": 40,
+        "inclusive_ms": 2.0159000000000002
+      },
+      {
+        "name": "autograd::engine::evaluate_function: TanhBackward0",
+        "calls": 40,
+        "inclusive_ms": 1.9781999999999995
+      },
+      {
+        "name": "autograd::engine::evaluate_function: ExpBackward0",
+        "calls": 40,
+        "inclusive_ms": 1.9506999999999997
+      },
+      {
+        "name": "aten::zeros_like",
+        "calls": 40,
+        "inclusive_ms": 1.9498999999999997
+      },
+      {
+        "name": "aten::ones_like",
+        "calls": 40,
+        "inclusive_ms": 1.8146
+      },
+      {
+        "name": "autograd::engine::evaluate_function: SqueezeBackward1",
+        "calls": 80,
+        "inclusive_ms": 1.7448000000000004
+      },
+      {
+        "name": "TanhBackward0",
+        "calls": 40,
+        "inclusive_ms": 1.5297000000000003
+      },
+      {
+        "name": "haojie::train",
+        "calls": 3175,
+        "inclusive_ms": 1.5224999999999242
+      },
+      {
+        "name": "aten::ones",
+        "calls": 40,
+        "inclusive_ms": 1.4092
+      },
+      {
+        "name": "aten::tanh",
+        "calls": 40,
+        "inclusive_ms": 1.3791000000000002
+      },
+      {
+        "name": "ExpBackward0",
+        "calls": 40,
+        "inclusive_ms": 1.3417000000000003
+      },
+      {
+        "name": "aten::gt",
+        "calls": 40,
+        "inclusive_ms": 1.3370000000000002
+      },
+      {
+        "name": "aten::tanh_backward",
+        "calls": 40,
+        "inclusive_ms": 1.2296000000000002
+      },
+      {
+        "name": "aten::exp",
+        "calls": 40,
+        "inclusive_ms": 1.2101000000000004
+      },
+      {
+        "name": "SqueezeBackward1",
+        "calls": 80,
+        "inclusive_ms": 1.1150999999999995
+      },
+      {
+        "name": "aten::sqrt",
+        "calls": 40,
+        "inclusive_ms": 1.1009
+      },
+      {
+        "name": "AddBackward0",
+        "calls": 840,
+        "inclusive_ms": 1.0339999999999978
+      },
+      {
+        "name": "haojie::resize",
+        "calls": 3175,
+        "inclusive_ms": 0.9344999999999617
+      },
+      {
+        "name": "aten::eq",
+        "calls": 40,
+        "inclusive_ms": 0.8574
+      },
+      {
+        "name": "aten::result_type",
+        "calls": 120,
+        "inclusive_ms": 0.0673
+      }
+    ],
+    "kernel": [
+      {
+        "name": "update",
+        "calls": 40,
+        "inclusive_ms": 90.27628100000001
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_relu_f2f_stages_32x6_tn",
+        "calls": 1739,
+        "inclusive_ms": 33.38328599999997
+      },
+      {
+        "name": "_ZN2at6native48_GLOBAL__N__bb02b7b5_15_EmbeddingBag_cu_2708711340EmbeddingBag_updateOutputKernel_sum_meanIN3c108BFloat16ExEEvPKT0_S7_PKT_PS8_PS5_xxxxxiSC_SA_xS5_x",
+        "calls": 400,
+        "inclusive_ms": 19.309440999999982
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_64x64_ldg8_relu_f2f_stages_64x5_tn",
+        "calls": 1058,
+        "inclusive_ms": 13.656820000000021
+      },
+      {
+        "name": "_Z40fmha_cutlassF_bf16_aligned_64x64_rf_sm80N22PyTorchMemEffAttention15AttentionKernelIN7cutlass10bfloat16_tENS1_4arch4Sm80ELb1ELi64ELi64ELi64ELb1ELb1EE6ParamsE",
+        "calls": 966,
+        "inclusive_ms": 12.83128600000004
+      },
+      {
+        "name": "_ZN2at6native40_GLOBAL__N__27eda9f4_8_Shape_cu_85d9f36c35CatArrayBatchedCopy_alignedK_contigINS1_10OpaqueTypeILj2EEEjLi1ELi128ELi1ELi8EEEvPT_NS1_25CatArrInputTensorMetadataIS5_T0_XT2_EXT3_EEENS1_16TensorSizeStrideIS8_Lj4EEEiS8_",
+        "calls": 40,
+        "inclusive_ms": 11.415386000000003
+      },
+      {
+        "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nt",
+        "calls": 528,
+        "inclusive_ms": 11.019674999999996
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_50_GLOBAL__N__7dd5f103_12_PowKernel_cu_a55ca738_108029pow_tensor_scalar_kernel_implIN3c108BFloat16ES5_EEvRNS_18TensorIteratorBaseET0_EUlS5_E_St5arrayIPcLy2EELb0EEEviS8_T1_",
+        "calls": 80,
+        "inclusive_ms": 10.990279999999998
+      },
+      {
+        "name": "project",
+        "calls": 121,
+        "inclusive_ms": 10.271824000000002
+      },
+      {
+        "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nn",
+        "calls": 189,
+        "inclusive_ms": 9.063539000000006
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIN3c108BFloat16EEESt5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 3694,
+        "inclusive_ms": 8.961097999999883
+      },
+      {
+        "name": "_Z41fmha_cutlassB_bf16_aligned_64x64_k64_sm80N22PyTorchMemEffAttention23AttentionBackwardKernelIN7cutlass4arch4Sm80ENS1_10bfloat16_tELb1ELb0ELb1ELi64ELi64ELi64ELb0EE6ParamsE",
+        "calls": 240,
+        "inclusive_ms": 8.581589999999998
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8EEvNT_6ParamsE",
+        "calls": 785,
+        "inclusive_ms": 8.306330999999997
+      },
+      {
+        "name": "_ZN2at6native13reduce_kernelILi128ELi4ENS0_8ReduceOpIN3c108BFloat16ENS0_14func_wrapper_tIS4_ZNS0_11sum_functorIS4_fS4_EclERNS_14TensorIteratorEEUlffE_EEjS4_Li4ELi8EEEEEvT1_",
+        "calls": 1240,
+        "inclusive_ms": 8.246063
+      },
+      {
+        "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_relu_f2f_stages_32x1_tn",
+        "calls": 163,
+        "inclusive_ms": 7.855863999999998
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_stages_32x6_nt",
+        "calls": 578,
+        "inclusive_ms": 7.540911000000003
+      },
+      {
+        "name": "_ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f28vectorized_layer_norm_kernelIN3c108BFloat16EfLb0EEEviT0_PKT_S8_S8_PS5_S9_PS6_",
+        "calls": 2093,
+        "inclusive_ms": 7.2939660000001085
+      },
+      {
+        "name": "_ZN2at6native34_scatter_gather_elementwise_kernelILi128ELi8EZNS0_36_cuda_scatter_gather_internal_kernelILb1EN3c108BFloat16ExEclINS0_9ReduceAddEEEvRNS_14TensorIteratorExxxRKT_EUliE_EEviT1_",
+        "calls": 138,
+        "inclusive_ms": 7.054785999999997
+      },
+      {
+        "name": "_ZN2at6native13reduce_kernelILi512ELi1ENS0_8ReduceOpIN3c108BFloat16ENS0_14func_wrapper_tIS4_ZNS0_11sum_functorIS4_fS4_EclERNS_14TensorIteratorEEUlffE_EEjS4_Li4ELi8EEEEEvT1_",
+        "calls": 120,
+        "inclusive_ms": 6.480196999999992
+      },
+      {
+        "name": "_ZN2at6native59_GLOBAL__N__37144284_26_EmbeddingBackwardKernel_cu_5202261824compute_grad_weight_bagsIN3c108BFloat16ExEEvPKT0_PKT_S7_S7_xxiS7_SA_xS7_PKxPNS_14AccumulateTypeIS8_Lb1EE4typeEx",
+        "calls": 120,
+        "inclusive_ms": 5.991190000000002
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_18GeluCUDAKernelImplERNS_18TensorIteratorBaseENS0_8GeluTypeEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 1206,
+        "inclusive_ms": 5.46453699999999
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_26GeluBackwardCUDAKernelImplERNS_18TensorIteratorBaseENS0_8GeluTypeEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16ES8_E_St5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 480,
+        "inclusive_ms": 3.6000649999999994
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x128_32x4_tn_align8EEvNT_6ParamsE",
+        "calls": 84,
+        "inclusive_ms": 3.006381
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_stages_32x6_nn",
+        "calls": 212,
+        "inclusive_ms": 2.901897999999999
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIN3c108BFloat16EEESt5arrayIPcLy1EELb0EEEviT0_T1_",
+        "calls": 1120,
+        "inclusive_ms": 2.4265740000000036
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_nn",
+        "calls": 156,
+        "inclusive_ms": 2.2996010000000013
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi2ENS0_11FillFunctorIxEESt5arrayIPcLy1EELb0EEEviT0_T1_",
+        "calls": 2212,
+        "inclusive_ms": 2.1757449999999805
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I67cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x64_32x6_nn_align8EEvNT_6ParamsE",
+        "calls": 218,
+        "inclusive_ms": 2.150384000000001
+      },
+      {
+        "name": "_ZN2at6native59_GLOBAL__N__37144284_26_EmbeddingBackwardKernel_cu_5202261815sum_and_scatterIN3c108BFloat16ExEEvPKT0_PT_xS7_PKxPKNS_14AccumulateTypeIS8_Lb1EE4typeES7_SB_xx",
+        "calls": 120,
+        "inclusive_ms": 2.126796
+      },
+      {
+        "name": "_ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f39layer_norm_grad_input_kernel_vectorizedIN3c108BFloat16EfLb0EEEvPKT_S7_PKT0_SA_S7_PS5_i",
+        "calls": 520,
+        "inclusive_ms": 2.0687829999999994
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I67cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_nt_align8EEvNT_6ParamsE",
+        "calls": 130,
+        "inclusive_ms": 1.9427519999999998
+      },
+      {
+        "name": "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE10_clEvEUlN3c108BFloat16EE_EEvS4_RKT_EUliE_EEviT1_",
+        "calls": 400,
+        "inclusive_ms": 1.7932759999999996
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_nn_align8EEvNT_6ParamsE",
+        "calls": 302,
+        "inclusive_ms": 1.7845210000000002
+      },
+      {
+        "name": "_ZN2at6native24vectorized_gather_kernelILi16ExEEvPcS2_PT0_ixxxxb",
+        "calls": 758,
+        "inclusive_ms": 1.7483339999999998
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_256x128_ldg8_relu_f2f_stages_32x3_tn",
+        "calls": 37,
+        "inclusive_ms": 1.7382040000000005
+      },
+      {
+        "name": "_ZN2at6native40_GLOBAL__N__27eda9f4_8_Shape_cu_85d9f36c30CatArrayBatchedCopy_vectorizedINS1_10OpaqueTypeILj2EEEjLi2ELi128ELi1ELi16ELi8EEEvPcNS1_25CatArrInputTensorMetadataIT_T0_XT2_EXT3_EEENS1_16TensorSizeStrideIS8_Lj4EEEiS8_",
+        "calls": 401,
+        "inclusive_ms": 1.6573399999999987
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn",
+        "calls": 108,
+        "inclusive_ms": 1.4642770000000007
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I66cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nt_align8EEvNT_6ParamsE",
+        "calls": 36,
+        "inclusive_ms": 1.269265
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I66cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_tn_align8EEvNT_6ParamsE",
+        "calls": 112,
+        "inclusive_ms": 1.24708
+      },
+      {
+        "name": "store",
+        "calls": 121,
+        "inclusive_ms": 1.1657400000000004
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x128_32x3_nn_align8EEvNT_6ParamsE",
+        "calls": 12,
+        "inclusive_ms": 1.15089
+      },
+      {
+        "name": "_ZN8internal5gemvx6kernelIii13__nv_bfloat16S2_S2_fLb0ELb1ELb1ELb0ELi7ELb0E18cublasGemvParamsExIi30cublasGemvTensorStridedBatchedIKS2_ES6_S4_IS2_EfEEENSt9enable_ifIXntT5_EvE4typeET11_",
+        "calls": 312,
+        "inclusive_ms": 0.9509490000000003
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail10radix_sort29DeviceRadixSortOnesweepKernelINS1_5radix10policy_hubIxN2at4cuda3cub6detail10OpaqueTypeILi8EEEyE10Policy1000ELNS0_9SortOrderE0ExSB_yiiNS1_21identity_decomposer_tEEEvPT5_SH_PT3_PKSI_PT1_PKSM_PT2_PKSQ_T4_iiT6_",
+        "calls": 132,
+        "inclusive_ms": 0.9378910000000003
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn",
+        "calls": 152,
+        "inclusive_ms": 0.9047360000000001
+      },
+      {
+        "name": "_ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f35GammaBetaBackwardCUDAKernelTemplateIN3c108BFloat16EfLj32ELj32ELj256ELb0ELb0ELb0EEEvxxPKT_S7_PKT0_SA_PS5_SB_",
+        "calls": 117,
+        "inclusive_ms": 0.8472609999999997
+      },
+      {
+        "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_relu_f2f_tn",
+        "calls": 12,
+        "inclusive_ms": 0.795547
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I67cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_tn_align2EEvNT_6ParamsE",
+        "calls": 159,
+        "inclusive_ms": 0.7191889999999997
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13BinaryFunctorIN3c108BFloat16ES4_S4_NS0_15binary_internal10DivFunctorIS4_EEEESt5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 240,
+        "inclusive_ms": 0.6178819999999999
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align2EEvNT_6ParamsE",
+        "calls": 99,
+        "inclusive_ms": 0.587222
+      },
+      {
+        "name": "_ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f35GammaBetaBackwardCUDAKernelTemplateIN3c108BFloat16EfLj32ELj8ELj64ELb0ELb0ELb0EEEvxxPKT_S7_PKT0_SA_PS5_SB_",
+        "calls": 234,
+        "inclusive_ms": 0.5844330000000001
+      },
+      {
+        "name": "scatter",
+        "calls": 121,
+        "inclusive_ms": 0.5556360000000001
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIhEESt5arrayIPcLy1EELb0EEEviT0_T1_",
+        "calls": 240,
+        "inclusive_ms": 0.5379120000000004
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_nn",
+        "calls": 82,
+        "inclusive_ms": 0.5297999999999999
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x128_32x4_nt_align8EEvNT_6ParamsE",
+        "calls": 6,
+        "inclusive_ms": 0.521012
+      },
+      {
+        "name": "_ZN2at6native29vectorized_scatter_add_kernelILi16EN3c108BFloat16ExEEvPT0_PKS4_PKT1_ixxxxii",
+        "calls": 102,
+        "inclusive_ms": 0.5013329999999999
+      },
+      {
+        "name": "_ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f35GammaBetaBackwardCUDAKernelTemplateIN3c108BFloat16EfLj32ELj16ELj128ELb0ELb0ELb0EEEvxxPKT_S7_PKT0_SA_PS5_SB_",
+        "calls": 169,
+        "inclusive_ms": 0.4995710000000002
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_128x128_ldg8_f2f_stages_32x5_nt",
+        "calls": 6,
+        "inclusive_ms": 0.4870570000000001
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail4scan16DeviceScanKernelINS2_10policy_hubIxxxjSt4plusIxEE10Policy1000EPKxPxNS0_13ScanTileStateIxLb1EEES6_NS0_8NullTypeEjxLb0ESE_EEvT0_T1_T2_iT3_T4_T5_",
+        "calls": 280,
+        "inclusive_ms": 0.4825109999999997
+      },
+      {
+        "name": "_ZN8cublasLt19splitKreduce_kernelILi32ELi16Ei13__nv_bfloat16S1_fS1_Lb0ES1_S1_S1_Lb1ELb0ELb0ELb0EEEvNS_18cublasSplitKParamsIT4_EEPKT2_PKT8_PT7_PT3_PKS3_SG_PKT9_S7_PSH_PvxPS3_PiSM_SM_SG_SG_SG_SG_SG_",
+        "calls": 257,
+        "inclusive_ms": 0.4579029999999998
+      },
+      {
+        "name": "_ZN2at6native49_GLOBAL__N__255dbdec_16_SegmentReduce_cu_37a07f9b30segment_reduce_backward_kernelIN3c108BFloat16ExEEvNS0_13ReductionTypeEPT_PKS6_S9_S9_PKT0_SC_xxS6_xxxxxxx",
+        "calls": 120,
+        "inclusive_ms": 0.4491060000000001
+      },
+      {
+        "name": "_ZN2at6native34_scatter_gather_elementwise_kernelILi128ELi8EZNS0_36_cuda_scatter_gather_internal_kernelILb0ENS0_10OpaqueTypeILi2EEExEclINS0_12TensorAssignEEEvRNS_14TensorIteratorExxxRKT_EUliE_EEviT1_",
+        "calls": 160,
+        "inclusive_ms": 0.4458059999999998
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13BinaryFunctorIN3c108BFloat16ES4_S4_NS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 320,
+        "inclusive_ms": 0.40941400000000094
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail13unique_by_key28DeviceUniqueByKeySweepKernelINS2_10policy_hubIxxE10Policy1000EPKxN6thrust45THRUST_300001_SM_750_800_860_900_1000_1200_NS17counting_iteratorIxNSA_11use_defaultESC_SC_EEPxSE_SE_NS0_13ScanTileStateIyLb1EEEN4cuda3std3__48equal_toIvEEyNS2_11VSMemHelperEEEvT0_T1_T2_T3_T4_T5_T6_T7_iNS1_7vsmem_tE",
+        "calls": 120,
+        "inclusive_ms": 0.38596299999999995
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail4scan20DeviceScanInitKernelINS0_13ScanTileStateIxLb1EEEEEvT_i",
+        "calls": 400,
+        "inclusive_ms": 0.35975599999999913
+      },
+      {
+        "name": "_ZN2at6native45_GLOBAL__N__4fc6ee71_12_Embedding_cu_a90d51c333embedding_backward_feature_kernelIN3c108BFloat16EfxEEvPKT1_PKT_PS8_ixi",
+        "calls": 40,
+        "inclusive_ms": 0.3563950000000001
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I55cutlass_75_tensorop_bf16_s1688gemm_bf16_64x64_nn_align1EEvNT_6ParamsE",
+        "calls": 58,
+        "inclusive_ms": 0.339085
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_15neg_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE7_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 280,
+        "inclusive_ms": 0.33585299999999974
+      },
+      {
+        "name": "_ZN2at6native40_GLOBAL__N__27eda9f4_8_Shape_cu_85d9f36c30CatArrayBatchedCopy_vectorizedINS1_10OpaqueTypeILj2EEEjLi1ELi128ELi1ELi16ELi8EEEvPcNS1_25CatArrInputTensorMetadataIT_T0_XT2_EXT3_EEENS1_16TensorSizeStrideIS8_Lj4EEEiS8_",
+        "calls": 201,
+        "inclusive_ms": 0.33405399999999996
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_128x128_ldg8_relu_f2f_stages_32x5_tn",
+        "calls": 6,
+        "inclusive_ms": 0.328012
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I67cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x64_32x4_nn_align8EEvNT_6ParamsE",
+        "calls": 6,
+        "inclusive_ms": 0.320044
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail10radix_sort31DeviceRadixSortSingleTileKernelINS1_5radix10policy_hubIxN2at4cuda3cub6detail10OpaqueTypeILi8EEEyE10Policy1000ELNS0_9SortOrderE0ExSB_yNS1_21identity_decomposer_tEEEvPKT1_PSG_PKT2_PSK_T3_iiT4_",
+        "calls": 53,
+        "inclusive_ms": 0.302027
+      },
+      {
+        "name": "_ZN2at6native44_GLOBAL__N__99c14716_11_Indexing_cu_2a2c434e21indexSelectSmallIndexIN3c108BFloat16ExjLi2ELi2ELin2EEEvNS_4cuda6detail10TensorInfoIT_T1_EENS7_IKS8_S9_EENS7_IKT0_S9_EEiiS9_x",
+        "calls": 166,
+        "inclusive_ms": 0.298765
+      },
+      {
+        "name": "_ZN8internal5gemvx6kernelIii13__nv_bfloat16S2_S2_fLb0ELb1ELb0ELb0ELi9ELb0E18cublasGemvParamsExIi30cublasGemvTensorStridedBatchedIKS2_ES6_S4_IS2_EfEEENSt9enable_ifIXntT5_EvE4typeET11_",
+        "calls": 53,
+        "inclusive_ms": 0.290091
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail4scan16DeviceScanKernelINS2_10policy_hubIxxxjN2at4cuda3cub38_GLOBAL__N__b177c9e5_6_cub_cu_be78ccc35SumOpIxEEE10Policy1000EPKxPxNS0_13ScanTileStateIxLb1EEESA_NS1_10InputValueIxSF_EEjxLb0ExEEvT0_T1_T2_iT3_T4_T5_",
+        "calls": 120,
+        "inclusive_ms": 0.278094
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I55cutlass_75_tensorop_bf16_s1688gemm_bf16_64x64_tn_align1EEvNT_6ParamsE",
+        "calls": 40,
+        "inclusive_ms": 0.25988200000000006
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_44_GLOBAL__N__99c14716_11_Indexing_cu_2a2c434e18masked_fill_kernelERNS_14TensorIteratorERKN3c106ScalarEENKUlvE_clEvENKUlvE10_clEvEUlNS5_8BFloat16EbE_St5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 160,
+        "inclusive_ms": 0.2560050000000002
+      },
+      {
+        "name": "_ZN2at6native40_GLOBAL__N__27eda9f4_8_Shape_cu_85d9f36c35CatArrayBatchedCopy_alignedK_contigINS1_10OpaqueTypeILj8EEEjLi1ELi128ELi1ELi16EEEvPT_NS1_25CatArrInputTensorMetadataIS5_T0_XT2_EXT3_EEENS1_16TensorSizeStrideIS8_Lj4EEEiS8_",
+        "calls": 161,
+        "inclusive_ms": 0.24342800000000023
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIN3c108BFloat16ES4_S4_NS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 200,
+        "inclusive_ms": 0.21709600000000034
+      },
+      {
+        "name": "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_f2f_nn",
+        "calls": 12,
+        "inclusive_ms": 0.21456599999999998
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail6reduce27DeviceSegmentedReduceKernelINS2_10policy_hubIN3c108BFloat16ExN2at6native49_GLOBAL__N__255dbdec_16_SegmentReduce_cu_37a07f9b9CustomSumEE10Policy1000EPKS6_PS6_PKxSH_xSA_S6_S6_EEvT0_T1_T2_T3_T5_T6_",
+        "calls": 120,
+        "inclusive_ms": 0.212774
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail10radix_sort30DeviceRadixSortHistogramKernelINS1_5radix10policy_hubIxN2at4cuda3cub6detail10OpaqueTypeILi8EEEyE10Policy1000ELNS0_9SortOrderE0ExyNS1_21identity_decomposer_tEEEvPT2_PKT1_SG_iiT3_",
+        "calls": 67,
+        "inclusive_ms": 0.2012200000000001
+      },
+      {
+        "name": "_ZN2at6native59_GLOBAL__N__37144284_26_EmbeddingBackwardKernel_cu_5202261826krn_partial_segment_offsetIxEEvPT_PKS3_S6_S6_PKx",
+        "calls": 120,
+        "inclusive_ms": 0.18657000000000012
+      },
+      {
+        "name": "_ZN2at6native40_GLOBAL__N__27eda9f4_8_Shape_cu_85d9f36c26CatArrayBatchedCopy_contigINS1_10OpaqueTypeILj8EEEjLi1ELi128ELi1EEEvPT_NS1_25CatArrInputTensorMetadataIS5_T0_XT2_EXT3_EEENS1_16TensorSizeStrideIS8_Lj4EEEiS8_",
+        "calls": 119,
+        "inclusive_ms": 0.18092900000000017
+      },
+      {
+        "name": "_ZN2at6native59_GLOBAL__N__37144284_26_EmbeddingBackwardKernel_cu_5202261824krn_partials_per_segmentIxEEvPT_PKS3_PKxx",
+        "calls": 120,
+        "inclusive_ms": 0.161638
+      },
+      {
+        "name": "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_49_GLOBAL__N__a62a4dcd_16_TensorCompare_cu_71e06f4e17where_kernel_implERNS_14TensorIteratorEENKUlvE_clEvENKUlvE0_clEvEUlbttE_EEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+        "calls": 80,
+        "inclusive_ms": 0.15975200000000006
+      },
+      {
+        "name": "_Z13gemmk1_kernelIifLi256ELi5ELb0ELb0ELb0ELb0E30cublasGemvTensorStridedBatchedIK13__nv_bfloat16ES3_S0_IS1_EfLi0EEv18cublasGemmk1ParamsIT0_T7_T8_T9_T10_N8biasTypeINS9_10value_typeESA_E4typeEE",
+        "calls": 80,
+        "inclusive_ms": 0.15082700000000002
+      },
+      {
+        "name": "_ZN2at6native59_GLOBAL__N__37144284_26_EmbeddingBackwardKernel_cu_5202261831compute_num_of_partial_segmentsIxEEvPKT_S5_PKxPx",
+        "calls": 120,
+        "inclusive_ms": 0.14080900000000007
+      },
+      {
+        "name": "_ZN50_GLOBAL__N__35dbd4de_17_RangeFactories_cu_4cc9e74429elementwise_kernel_with_indexIiZZZN2at6native15arange_cuda_outERKN3c106ScalarES6_S6_RNS1_6TensorEENKUlvE_clEvENKUlvE2_clEvEUlxE_EEvT_T0_PN15function_traitsISD_E11result_typeE",
+        "calls": 120,
+        "inclusive_ms": 0.13504300000000002
+      },
+      {
+        "name": "ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_stages_32x6_tn",
+        "calls": 14,
+        "inclusive_ms": 0.13142800000000002
+      },
+      {
+        "name": "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16EEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+        "calls": 40,
+        "inclusive_ms": 0.128196
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_15log_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 80,
+        "inclusive_ms": 0.127688
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x1_nt_align2EEvNT_6ParamsE",
+        "calls": 26,
+        "inclusive_ms": 0.125666
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail4scan23DeviceCompactInitKernelINS0_13ScanTileStateIyLb1EEEPxEEvT_iT0_",
+        "calls": 120,
+        "inclusive_ms": 0.12156799999999993
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_nn_align2EEvNT_6ParamsE",
+        "calls": 19,
+        "inclusive_ms": 0.11853199999999998
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_23bitwise_not_kernel_cudaERNS_18TensorIteratorBaseEEUlbE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 80,
+        "inclusive_ms": 0.117662
+      },
+      {
+        "name": "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_nn",
+        "calls": 6,
+        "inclusive_ms": 0.103619
+      },
+      {
+        "name": "_ZN2at6native13reduce_kernelILi512ELi1ENS0_8ReduceOpIN3c108BFloat16ENS0_7MeanOpsIS4_ffS4_EEjS4_Li4ELi8EEEEEvT1_",
+        "calls": 40,
+        "inclusive_ms": 0.09939799999999999
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIN3c108BFloat16ES4_bNS0_51_GLOBAL__N__e3604c96_18_CompareEQKernel_cu_d8008c9616CompareEqFunctorIS4_EEEESt5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 80,
+        "inclusive_ms": 0.09661000000000002
+      },
+      {
+        "name": "_ZN8internal5gemvx6kernelIii13__nv_bfloat16S2_S2_fLb0ELb1ELb0ELb0ELi6ELb0E18cublasGemvParamsExIi30cublasGemvTensorStridedBatchedIKS2_ES6_S4_IS2_EfEEENSt9enable_ifIXntT5_EvE4typeET11_",
+        "calls": 40,
+        "inclusive_ms": 0.08976
+      },
+      {
+        "name": "_Z17gemv2T_kernel_valIii13__nv_bfloat16S0_S0_fLi128ELi16ELi2ELi2ELb0ELb0E18cublasGemvParamsExIi30cublasGemvTensorStridedBatchedIKS0_ES4_S2_IS0_EfEEvT11_T4_S8_",
+        "calls": 18,
+        "inclusive_ms": 0.08886600000000001
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail10radix_sort33DeviceRadixSortExclusiveSumKernelINS1_5radix10policy_hubIxN2at4cuda3cub6detail10OpaqueTypeILi8EEEyE10Policy1000EyEEvPT0_",
+        "calls": 67,
+        "inclusive_ms": 0.08288399999999999
+      },
+      {
+        "name": "_ZN14at_cuda_detail3cub6detail6reduce27DeviceSegmentedReduceKernelINS2_10policy_hubIN3c108BFloat16ExN2at6native49_GLOBAL__N__255dbdec_16_SegmentReduce_cu_37a07f9b9CustomMaxEE10Policy1000EPKS6_PS6_PKxSH_xSA_S6_S6_EEvT0_T1_T2_T3_T5_T6_",
+        "calls": 40,
+        "inclusive_ms": 0.080037
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_16sqrt_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 40,
+        "inclusive_ms": 0.07190400000000001
+      },
+      {
+        "name": "_ZN8cublasLt19splitKreduce_kernelILi32ELi16Ei13__nv_bfloat16S1_fS1_Lb0ES1_S1_S1_Lb1ELb1ELb0ELb0EEEvNS_18cublasSplitKParamsIT4_EEPKT2_PKT8_PT7_PT3_PKS3_SG_PKT9_S7_PSH_PvxPS3_PiSM_SM_SG_SG_SG_SG_SG_",
+        "calls": 40,
+        "inclusive_ms": 0.071299
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_nt_align2EEvNT_6ParamsE",
+        "calls": 12,
+        "inclusive_ms": 0.071046
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I67cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_64x1_tn_align8EEvNT_6ParamsE",
+        "calls": 29,
+        "inclusive_ms": 0.06854799999999998
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_15exp_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 40,
+        "inclusive_ms": 0.06425900000000002
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_25tanh_backward_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16ES7_E_St5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 40,
+        "inclusive_ms": 0.06105900000000001
+      },
+      {
+        "name": "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_13BUnaryFunctorIN3c108BFloat16ES5_S5_NS0_15binary_internal10MulFunctorIfEEEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+        "calls": 40,
+        "inclusive_ms": 0.06028800000000001
+      },
+      {
+        "name": "_ZN2at6native27unrolled_elementwise_kernelIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE1_clEvEUliE_St5arrayIPcLy2EELi4E23TrivialOffsetCalculatorILi1EjESB_NS0_6memory12LoadWithCastILi1EEENSC_13StoreWithCastILi1EEEEEviT_T0_T2_T3_T4_T5_",
+        "calls": 40,
+        "inclusive_ms": 0.059779999999999986
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_49_GLOBAL__N__a62a4dcd_16_TensorCompare_cu_71e06f4e19launch_clamp_scalarERNS_18TensorIteratorBaseEN3c106ScalarES6_NS0_6detail11ClampLimitsEENKUlvE_clEvENKUlvE7_clEvEUlNS5_8BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 40,
+        "inclusive_ms": 0.05920199999999999
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_21compare_scalar_kernelIN3c108BFloat16EEEvRNS_18TensorIteratorBaseENS0_50_GLOBAL__N__2ac0fdad_17_CompareKernels_cu_8f1b29aa6OpTypeET_EUlS4_E_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 40,
+        "inclusive_ms": 0.05626099999999998
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_16tanh_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 40,
+        "inclusive_ms": 0.05308800000000002
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13BinaryFunctorIbbbNS0_15binary_internal10MulFunctorIbEEEESt5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 40,
+        "inclusive_ms": 0.051328000000000006
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_49_GLOBAL__N__a62a4dcd_16_TensorCompare_cu_71e06f4e17where_kernel_implERNS_14TensorIteratorEENKUlvE_clEvENKUlvE0_clEvEUlbttE_St5arrayIPcLy4EELb0EEEviT0_T1_",
+        "calls": 40,
+        "inclusive_ms": 0.051232
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_10AbsFunctorIN3c108BFloat16EEESt5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 40,
+        "inclusive_ms": 0.05027299999999999
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I67cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_nn_align8EEvNT_6ParamsE",
+        "calls": 6,
+        "inclusive_ms": 0.045952999999999994
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13BinaryFunctorIN3c108BFloat16ES4_bNS0_51_GLOBAL__N__e3604c96_18_CompareEQKernel_cu_d8008c9616CompareEqFunctorIS4_EEEESt5arrayIPcLy3EELb0EEEviT0_T1_",
+        "calls": 40,
+        "inclusive_ms": 0.04563100000000001
+      },
+      {
+        "name": "_Z17gemv2T_kernel_valIii13__nv_bfloat16S0_S0_fLi128ELi16ELi4ELi4ELb0ELb0E18cublasGemvParamsExIi30cublasGemvTensorStridedBatchedIKS0_ES4_S2_IS0_EfEEvT11_T4_S8_",
+        "calls": 14,
+        "inclusive_ms": 0.044515
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I68cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x128_32x4_nn_align8EEvNT_6ParamsE",
+        "calls": 2,
+        "inclusive_ms": 0.041505
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I67cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8EEvNT_6ParamsE",
+        "calls": 6,
+        "inclusive_ms": 0.040288
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I67cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_nn_align1EEvNT_6ParamsE",
+        "calls": 18,
+        "inclusive_ms": 0.037279999999999994
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEESt5arrayIPcLy1EELb0EEEviT0_T1_",
+        "calls": 40,
+        "inclusive_ms": 0.03709099999999998
+      },
+      {
+        "name": "_ZN8internal5gemvx6kernelIii13__nv_bfloat16S2_S2_fLb0ELb1ELb0ELb0ELi8ELb0E18cublasGemvParamsExIi30cublasGemvTensorStridedBatchedIKS2_ES6_S4_IS2_EfEEENSt9enable_ifIXntT5_EvE4typeET11_",
+        "calls": 4,
+        "inclusive_ms": 0.028768000000000002
+      },
+      {
+        "name": "_ZN2at6native27unrolled_elementwise_kernelINS0_13AUnaryFunctorIxxbNS0_51_GLOBAL__N__e3604c96_18_CompareEQKernel_cu_d8008c9616CompareEqFunctorIxEEEESt5arrayIPcLy2EELi4E23TrivialOffsetCalculatorILi1EjESB_NS0_6memory15LoadWithoutCastENSC_16StoreWithoutCastEEEviT_T0_T2_T3_T4_T5_",
+        "calls": 17,
+        "inclusive_ms": 0.020992999999999998
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIxxbNS0_51_GLOBAL__N__e3604c96_18_CompareEQKernel_cu_d8008c9616CompareEqFunctorIxEEEESt5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 13,
+        "inclusive_ms": 0.020062999999999998
+      },
+      {
+        "name": "_ZN2at6native29vectorized_elementwise_kernelILi2ENS0_13AUnaryFunctorIxxbNS0_51_GLOBAL__N__e3604c96_18_CompareEQKernel_cu_d8008c9616CompareEqFunctorIxEEEESt5arrayIPcLy2EELb0EEEviT0_T1_",
+        "calls": 10,
+        "inclusive_ms": 0.019042999999999997
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I62cutlass_80_tensorop_bf16_s16816gemm_bf16_128x64_64x3_tn_align2EEvNT_6ParamsE",
+        "calls": 2,
+        "inclusive_ms": 0.011039999999999998
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I61cutlass_80_tensorop_bf16_s16816gemm_bf16_64x64_32x6_nt_align2EEvNT_6ParamsE",
+        "calls": 1,
+        "inclusive_ms": 0.0044480000000000006
+      },
+      {
+        "name": "_ZN7cutlass7Kernel2I67cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_nt_align2EEvNT_6ParamsE",
+        "calls": 1,
+        "inclusive_ms": 0.00432
+      },
+      {
+        "name": "_Z14gemvNSP_kernelI13__nv_bfloat16S0_S0_fLi1ELi32ELi4ELi1024ELb0E18cublasGemvParamsExIi30cublasGemvTensorStridedBatchedIKS0_ES4_S2_IS0_EfEEvT8_",
+        "calls": 1,
+        "inclusive_ms": 0.0037440000000000004
+      }
+    ],
+    "cuda_runtime": [
+      {
+        "name": "cudaLaunchKernel",
+        "calls": 18586,
+        "inclusive_ms": 231.40050000000068
+      },
+      {
+        "name": "cudaStreamSynchronize",
+        "calls": 390,
+        "inclusive_ms": 168.6708999999998
+      },
+      {
+        "name": "cudaMemcpyAsync",
+        "calls": 1247,
+        "inclusive_ms": 52.55529999999993
+      },
+      {
+        "name": "cudaGraphLaunch",
+        "calls": 121,
+        "inclusive_ms": 23.098399999999998
+      },
+      {
+        "name": "cudaLaunchHostFunc",
+        "calls": 121,
+        "inclusive_ms": 11.2353
+      },
+      {
+        "name": "cudaMemsetAsync",
+        "calls": 1221,
+        "inclusive_ms": 8.714299999999989
+      },
+      {
+        "name": "cudaOccupancyMaxActiveBlocksPerMultiprocessor",
+        "calls": 1603,
+        "inclusive_ms": 6.051599999999994
+      },
+      {
+        "name": "cudaEventQuery",
+        "calls": 444,
+        "inclusive_ms": 2.7763000000000035
+      },
+      {
+        "name": "cudaDeviceGetAttribute",
+        "calls": 1977,
+        "inclusive_ms": 1.948299999999966
+      },
+      {
+        "name": "cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags",
+        "calls": 687,
+        "inclusive_ms": 1.9098999999999962
+      },
+      {
+        "name": "cudaEventRecordWithFlags",
+        "calls": 376,
+        "inclusive_ms": 1.859100000000001
+      },
+      {
+        "name": "cudaFuncGetAttributes",
+        "calls": 241,
+        "inclusive_ms": 1.7971000000000006
+      },
+      {
+        "name": "cudaStreamIsCapturing",
+        "calls": 1297,
+        "inclusive_ms": 1.4882999999999835
+      },
+      {
+        "name": "cudaHostAlloc",
+        "calls": 2,
+        "inclusive_ms": 0.5738000000000001
+      },
+      {
+        "name": "cudaPeekAtLastError",
+        "calls": 2550,
+        "inclusive_ms": 0.34909999999998786
+      }
+    ],
+    "gpu_memcpy": [
+      {
+        "name": "Memcpy DtoD (Device -> Device)",
+        "calls": 325,
+        "inclusive_ms": 9.955075999999934
+      },
+      {
+        "name": "Memcpy DtoH (Device -> Pageable)",
+        "calls": 145,
+        "inclusive_ms": 8.766108999999997
+      },
+      {
+        "name": "Memcpy DtoH (Device -> Pinned)",
+        "calls": 376,
+        "inclusive_ms": 5.106766999999999
+      },
+      {
+        "name": "Memcpy HtoD (Pinned -> Device)",
+        "calls": 241,
+        "inclusive_ms": 4.7073399999999985
+      },
+      {
+        "name": "Memcpy HtoD (Pageable -> Device)",
+        "calls": 160,
+        "inclusive_ms": 0.12038900000000012
+      }
+    ]
+  },
+  "note": "诊断包含 profiler 开销；CPU 包含子调用，设备活动并集不表示 SM 占用率。"
+}

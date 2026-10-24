@@ -13,7 +13,7 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[4]
     files = [
-        *root.glob("training/native/src/*"),
+        *root.glob("training/native/src/**/*"),
         *root.glob("training/native/*.ps1"),
         *root.glob("training/native/*.sh"),
         root / "training/native/CMakeLists.txt",
@@ -31,6 +31,7 @@ def main():
         *root.glob("scripts/training/native/ci/*.py"),
         *root.glob("scripts/training/native/performance/*.py"),
     ]
+    files = sorted({path for path in files if path.is_file()})
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with (
         args.output.open("xb") as destination,

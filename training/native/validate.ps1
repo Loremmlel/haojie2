@@ -1,7 +1,7 @@
-param([string]$Output = 'artifacts/native-rewrite/control', [string]$Device = 'cuda')
+param([string]$Output = 'artifacts/native-rewrite/control', [string]$Device = 'cuda', [int]$Concurrency = 12)
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-$targetRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot $Output))
+$targetRoot = [IO.Path]::GetFullPath($Output, $repoRoot)
 if (Test-Path -LiteralPath $targetRoot) { throw '验收输出目录必须不存在。' }
 New-Item -ItemType Directory -Path $targetRoot | Out-Null
 $env:LIBTORCH = if ($env:LIBTORCH) { $env:LIBTORCH } else { [IO.File]::ReadAllText((Join-Path $repoRoot 'artifacts/cpp-training-build/libtorch-path.txt')).Trim() }
@@ -10,7 +10,7 @@ $exe = Join-Path $repoRoot 'artifacts/cpp-training-build/Release/haojie-train.ex
 & $exe check --device $Device
 if ($LASTEXITCODE) { throw '数值和原生状态检查失败。' }
 $live = Join-Path $targetRoot 'live'
-$process = Start-Process -FilePath $exe -ArgumentList @('run','--directory',$live,'--device',$Device,'--concurrency','16','--workers','4','--batch','128','--chunk','16','--save-seconds','0','--seconds','60') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $targetRoot 'live.stdout') -RedirectStandardError (Join-Path $targetRoot 'live.stderr')
+$process = Start-Process -FilePath $exe -ArgumentList @('run','--directory',$live,'--device',$Device,'--concurrency',$Concurrency,'--workers','4','--batch','32','--inference-batch','12','--chunk','16','--publish','1','--save-seconds','0','--seconds','20') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $targetRoot 'live.stdout') -RedirectStandardError (Join-Path $targetRoot 'live.stderr')
 $readings = [Collections.Generic.List[object]]::new()
 function Wait-State([scriptblock]$Predicate) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -26,21 +26,21 @@ function Wait-State([scriptblock]$Predicate) {
     throw '等待训练状态超过 30 秒。'
 }
 try {
-    $null = Wait-State { param($s) $s.active -eq 16 -and $s.consumed -ge 128 }
+    $null = Wait-State { param($s) $s.active -eq $Concurrency -and $s.consumed -ge 128 }
     & $exe resize --directory $live --concurrency 1
-    $null = Wait-State { param($s) $s.active -eq 1 -and $s.parked -eq 15 }
+    $null = Wait-State { param($s) $s.active -eq 1 -and $s.parked -eq ($Concurrency - 1) }
     & $exe resize --directory $live --concurrency 0
-    $null = Wait-State { param($s) $s.active -eq 0 -and $s.parked -eq 16 }
+    $null = Wait-State { param($s) $s.active -eq 0 -and $s.parked -eq $Concurrency }
     & $exe save --directory $live
     $null = Wait-State { param($s) (Test-Path -LiteralPath (Join-Path $live 'checkpoint.pt')) }
-    & $exe resize --directory $live --concurrency 16
-    $null = Wait-State { param($s) $s.active -eq 16 -and $s.parked -eq 0 }
+    & $exe resize --directory $live --concurrency $Concurrency
+    $null = Wait-State { param($s) $s.active -eq $Concurrency -and $s.parked -eq 0 }
     & $exe stop --directory $live
     if (-not $process.WaitForExit(30000) -or $process.ExitCode -ne 0) { throw '停止保存失败。' }
     $saved = Get-Content -LiteralPath (Join-Path $live 'saved.json') -Raw | ConvertFrom-Json
-    if ($saved.admitted_total -ne (16 + $saved.completed_games)) { throw '缩放重开了在途对局。' }
+    if ($saved.admitted_total -ne ($Concurrency + $saved.completed_games)) { throw '缩放重开了在途对局。' }
     $restored = Join-Path $targetRoot 'restored'
-    & $exe run --directory $restored --resume (Join-Path $live 'checkpoint.pt') --device $Device --concurrency 16 --workers 4 --samples 128 --save-seconds 0
+    & $exe run --directory $restored --resume (Join-Path $live 'checkpoint.pt') --device $Device --concurrency $Concurrency --workers 4 --samples 128 --save-seconds 0
     if ($LASTEXITCODE) { throw '恢复后的实际训练失败。' }
     $window = Get-Content -LiteralPath (Join-Path $restored 'window.json') -Raw | ConvertFrom-Json
     $continued = Get-Content -LiteralPath (Join-Path $restored 'saved.json') -Raw | ConvertFrom-Json

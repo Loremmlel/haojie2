@@ -1,89 +1,162 @@
 #include "model.h"
 #include <ATen/Parallel.h>
+#include <ATen/ops/_efficient_attention_backward.h>
+#include <ATen/ops/_efficient_attention_forward.h>
+#include <ATen/ops/_flash_attention_backward.h>
+#include <ATen/ops/_flash_attention_forward.h>
+#include <ATen/ops/embedding_bag.h>
+#include <ATen/ops/native_layer_norm.h>
+#include <ATen/ops/native_layer_norm_backward.h>
 #include <ATen/ops/scaled_dot_product_attention.h>
+#ifdef HJ_CUDA
+#include <ATen/native/transformers/cuda/sdp_utils.h>
+#endif
+#include <bit>
 #include <cmath>
 #include <iostream>
 #include <map>
+#include <span>
 #include <sstream>
+#include <torch/csrc/autograd/custom_function.h>
 #include <unordered_map>
 
 namespace hj {
+using namespace packing;
 namespace {
-using BF = c10::BFloat16;
-auto bfopts() {
-  return torch::TensorOptions().dtype(torch::kBFloat16);
-}
-T bf_tensor(const std::vector<BF> &v, int64_t columns, const torch::Device &device) {
-  return torch::from_blob(const_cast<BF *>(v.data()), {int64_t(v.size() / columns), columns},
-                          bfopts())
-      .clone()
-      .to(device);
-}
-T indices(const std::vector<int64_t> &v, const torch::Device &d) {
-  return torch::tensor(v, torch::kInt64).to(d);
-}
-T bit_features(const T &integers, int64_t width) {
-  auto shifts = torch::arange(width, integers.options());
-  return torch::bitwise_and(torch::bitwise_right_shift(integers.unsqueeze(-1), shifts), 1)
-      .to(torch::kBFloat16)
-      .flatten(1);
-}
-T row_features(std::vector<Row> &rows, const torch::Device &d) {
-  static_assert(sizeof(Row) == 600);
-  int64_t count = rows.size();
-  auto ids =
-      torch::from_blob(rows[0].ids.data(), {count, 60}, {75, 1}, torch::kInt64).clone().to(d);
-  auto present =
-      torch::from_blob(&rows[0].present, {count, 1}, {75, 1}, torch::kInt64).clone().to(d);
-  auto types =
-      torch::from_blob(&rows[0].integers, {count, 1}, {75, 1}, torch::kInt64).clone().to(d);
-  auto values =
-      torch::from_blob(rows[0].values.data(), {count, 52}, {300, 1}, bfopts()).clone().to(d);
-  // 原始整数直接搬到设备后展开为精确的 0/1 激活，避免宿主逐位扩容和大量拷贝。
-  return torch::cat(
-      {bit_features(ids, 64), values, bit_features(present, 52), bit_features(types, 52)}, 1);
-}
-T mean_table(const T &rows, const std::vector<int64_t> &owner, int64_t count) {
-  std::vector<int64_t> lengths(count, 0);
-  for (auto i : owner)
-    ++lengths[i];
-  return at::segment_reduce(rows, "mean", indices(lengths, rows.device()));
-}
-struct ArrayHash {
-  size_t operator()(const std::array<int64_t, 64> &a) const {
-    size_t h = 1469598103934665603ull;
-    for (auto v : a) {
-      h ^= size_t(v);
-      h *= 1099511628211ull;
+// 使用 LibTorch 自带的变长内核；Windows 发行库可能只提供 efficient 后端。
+class RaggedAttention : public torch::autograd::Function<RaggedAttention> {
+public:
+  static T forward(torch::autograd::AutogradContext *ctx, T projected, T cumulative,
+                   int64_t maximum, std::optional<T> key_lengths, std::optional<T> key_cumulative) {
+    auto q = projected.select(1, 0), k = projected.select(1, 1), v = projected.select(1, 2);
+    auto used = key_lengths;
+    auto keys = key_cumulative.value_or(cumulative);
+    bool record = projected.requires_grad();
+    bool flash = false;
+#ifdef HJ_CUDA
+    flash = sdp::is_flash_attention_available();
+#endif
+    T out, lse, rng, unused;
+    if (flash)
+      std::tie(out, lse, rng, unused, std::ignore) = at::_flash_attention_forward(
+          q, k, v, cumulative, keys, maximum, maximum, 0, false, false, {}, {}, {}, used);
+    else {
+      q = q.unsqueeze(0);
+      k = k.unsqueeze(0);
+      v = v.unsqueeze(0);
+      std::tie(out, lse, rng, unused, std::ignore, std::ignore) = at::_efficient_attention_forward(
+          q, k, v, {}, cumulative, keys, maximum, maximum, 0, 0, record, {}, used);
     }
-    return h;
+    auto result = flash ? out : out.squeeze(0);
+    if (key_cumulative || key_lengths) {
+      auto padding = torch::arange(projected.size(0), cumulative.options())
+                         .ge(cumulative.select(0, -1))
+                         .view({-1, 1, 1});
+      result = result.masked_fill(padding, 0);
+      out = flash ? result : result.unsqueeze(0);
+    }
+    if (record) {
+      ctx->saved_data["lse_type"] = int64_t(lse.scalar_type());
+      ctx->saved_data["padded"] = key_cumulative.has_value();
+      ctx->save_for_backward(
+          {q, k, v, cumulative, out, lse.to(torch::kBFloat16), rng, unused, keys});
+      ctx->saved_data["maximum"] = maximum;
+      ctx->saved_data["flash"] = flash;
+    }
+    return result;
+  }
+  static torch::autograd::variable_list backward(torch::autograd::AutogradContext *ctx,
+                                                 torch::autograd::variable_list grad) {
+    auto t = ctx->get_saved_variables();
+    auto maximum = ctx->saved_data["maximum"].toInt();
+    auto lse = t[5].to(torch::ScalarType(ctx->saved_data["lse_type"].toInt()));
+    T dq, dk, dv;
+    if (ctx->saved_data["flash"].toBool())
+      std::tie(dq, dk, dv) =
+          at::_flash_attention_backward(grad[0].contiguous(), t[0], t[1], t[2], t[4], lse, t[3],
+                                        t[8], maximum, maximum, 0, false, t[6], t[7]);
+    else {
+      std::tie(dq, dk, dv, std::ignore) = at::_efficient_attention_backward(
+          grad[0].unsqueeze(0).contiguous(), t[0], t[1], t[2], {}, t[4], t[3], t[8], maximum,
+          maximum, lse, 0, t[6], t[7], 0, false);
+      dq = dq.squeeze(0);
+      dk = dk.squeeze(0);
+      dv = dv.squeeze(0);
+    }
+    if (ctx->saved_data["padded"].toBool()) {
+      auto padding =
+          torch::arange(dq.size(0), t[8].options()).ge(t[8].select(0, -1)).view({-1, 1, 1});
+      dq = dq.masked_fill(padding, 0);
+      dk = dk.masked_fill(padding, 0);
+      dv = dv.masked_fill(padding, 0);
+    }
+    // Q/K/V 属于同一投影表，反向一次拼回；不为三次 select 分别清零整张梯度表。
+    return {torch::stack({dq, dk, dv}, 1), T(), T(), T(), T()};
+  }
+};
+// 算子寄存器可累加到 FP32；跨前后向保存的归一化统计同样量化为 BF16。
+class BF16Norm : public torch::autograd::Function<BF16Norm> {
+public:
+  static T forward(torch::autograd::AutogradContext *ctx, T x, T weight, T bias, double eps) {
+    auto [out, mean, inverse] = at::native_layer_norm(x, {x.size(-1)}, weight, bias, eps);
+    ctx->saved_data["stat_type"] = int64_t(mean.scalar_type());
+    ctx->save_for_backward(
+        {x, weight, bias, mean.to(torch::kBFloat16), inverse.to(torch::kBFloat16)});
+    return out;
+  }
+  static torch::autograd::variable_list backward(torch::autograd::AutogradContext *ctx,
+                                                 torch::autograd::variable_list gradients) {
+    auto t = ctx->get_saved_variables();
+    auto type = torch::ScalarType(ctx->saved_data["stat_type"].toInt());
+    auto [dx, dw, db] = at::native_layer_norm_backward(
+        gradients[0].contiguous(), t[0], {t[0].size(-1)}, t[3].to(type), t[4].to(type), t[1], t[2],
+        {true, true, true});
+    return {dx, dw, db, T()};
+  }
+};
+class GroupedGather : public torch::autograd::Function<GroupedGather> {
+public:
+  static T forward(torch::autograd::AutogradContext *ctx, T x, T ids, T positions, T offsets) {
+    ctx->save_for_backward({positions, offsets});
+    return x.index_select(0, ids);
+  }
+  static torch::autograd::variable_list backward(torch::autograd::AutogradContext *ctx,
+                                                 torch::autograd::variable_list gradients) {
+    auto saved = ctx->get_saved_variables();
+    // 反向按输入行顺序归约，不在热门引用上执行大量 BF16 原子加法。
+    auto gradient = segmented_table(gradients[0].contiguous(), saved[0], saved[1], false);
+    return {gradient, T(), T(), T()};
   }
 };
 struct PolicyTable {
   T mass, logp, entropy;
   std::vector<int64_t> lengths;
 };
-PolicyTable policy_table(const T &logits, const std::vector<std::shared_ptr<Node>> &nodes) {
-  std::vector<int64_t> owner, lengths;
-  std::vector<uint8_t> mask;
+PolicyTable policy_table(const T &logits, std::span<const std::shared_ptr<Node>> nodes,
+                         bool statistics = true, Inputs *provided = nullptr) {
+  std::vector<int64_t> owner, lengths, mask;
   for (size_t i = 0; i < nodes.size(); ++i) {
     auto n = nodes[i]->mask.size();
+    TORCH_CHECK(n && std::any_of(nodes[i]->mask.begin(), nodes[i]->mask.end(),
+                                 [](auto v) { return v != 0; }),
+                "empty policy support");
     lengths.push_back(n);
     owner.insert(owner.end(), n, i);
     mask.insert(mask.end(), nodes[i]->mask.begin(), nodes[i]->mask.end());
   }
-  auto d = logits.device();
-  auto index = indices(owner, d), length = indices(lengths, d);
-  auto valid = torch::from_blob(mask.data(), {int64_t(mask.size())}, torch::kUInt8)
-                   .clone()
-                   .to(d, torch::kBool);
-  auto masked = logits.masked_fill(~valid, -INFINITY);
-  auto maximum = at::segment_reduce(masked.detach(), "max", length);
-  auto mass = (masked - maximum.index_select(0, index)).exp();
-  mass = mass / at::segment_reduce(mass, "sum", length).index_select(0, index);
-  auto logp = mass.clamp_min(1e-38).log() -
-              at::segment_reduce(mass, "sum", length).log().index_select(0, index);
-  auto entropy = at::segment_reduce(-(mass * logp).masked_fill(~valid, 0), "sum", length);
+  TORCH_CHECK(int64_t(mask.size()) == logits.numel(), "policy segment lengths differ");
+  Inputs local;
+  auto &input = provided ? *provided : local;
+  auto owners = input.add(owner), sizes = input.add(lengths), masks = input.add(mask);
+  input.upload(logits.device());
+  auto index = input.get(owners), length = input.get(sizes);
+  auto valid = input.get(masks).ne(0);
+  auto mass = policy_mass(logits, index, length, valid);
+  if (!statistics)
+    return {mass, {}, {}, lengths};
+  auto logp =
+      mass.clamp_min(1e-38).log() - segments(mass, "sum", length).log().index_select(0, index);
+  auto entropy = segments(-(mass * logp).masked_fill(~valid, 0), "sum", length);
   return {mass, logp, entropy, lengths};
 }
 std::vector<std::vector<uint16_t>> cpu_masses(const PolicyTable &table) {
@@ -101,6 +174,44 @@ std::vector<std::vector<uint16_t>> cpu_masses(const PolicyTable &table) {
   return result;
 }
 } // namespace
+T bf16_norm(const T &x, torch::nn::LayerNorm &norm) {
+  if (!torch::GradMode::is_enabled())
+    return norm(x);
+  return BF16Norm::apply(x, norm->weight, norm->bias, norm->options.eps());
+}
+T packing::grouped_gather(const T &x, const T &ids, const T &positions, const T &offsets) {
+  return GroupedGather::apply(x, ids, positions, offsets);
+}
+T policy_mass(const T &logits, const T &owner, const T &lengths, const T &valid) {
+  auto masked = logits.masked_fill(~valid, -INFINITY);
+  auto maximum = segments(masked.detach(), "max", lengths);
+  auto mass = (masked - maximum.index_select(0, owner)).exp();
+  return mass / segments(mass, "sum", lengths).index_select(0, owner);
+}
+TypedProjectionImpl::TypedProjectionImpl(int64_t w, bool rows) {
+  auto features = rows ? RowFeatures : ActionFeatures;
+  bits =
+      register_module("bits", torch::nn::EmbeddingBag(torch::nn::EmbeddingBagOptions(
+                                                          rows ? 60 * 64 + 104 : ActionFeatures, w)
+                                                          .mode(torch::kSum)
+                                                          .include_last_offset(true)));
+  if (rows)
+    continuous = register_module("continuous", torch::nn::Linear(52, w));
+  else
+    bias = register_parameter("bias", torch::empty({w}, bfopts()));
+  torch::NoGradGuard no_grad;
+  auto bound = 1 / std::sqrt(double(features));
+  bits->weight.uniform_(-bound, bound);
+  if (rows) {
+    continuous->weight.uniform_(-bound, bound);
+    continuous->bias.uniform_(-bound, bound);
+  } else
+    bias.uniform_(-bound, bound);
+}
+T TypedProjectionImpl::forward(const T &ids, const T &offsets, const T &values) {
+  auto x = bits(ids, offsets);
+  return continuous ? x + continuous(values) : x + bias;
+}
 TransformerBlockImpl::TransformerBlockImpl(int64_t w) : heads(std::max<int64_t>(1, w / 64)) {
   TORCH_CHECK(w % heads == 0, "Transformer width must divide attention heads");
   attention_norm = register_module("attention_norm", torch::nn::LayerNorm(std::vector<int64_t>{w}));
@@ -110,38 +221,169 @@ TransformerBlockImpl::TransformerBlockImpl(int64_t w) : heads(std::max<int64_t>(
   up = register_module("up", torch::nn::Linear(w, w * 4));
   down = register_module("down", torch::nn::Linear(w * 4, w));
 }
-T TransformerBlockImpl::forward(const T &tokens, const T &valid) {
-  auto batch = tokens.size(0), length = tokens.size(1), width = tokens.size(2);
-  auto projected = qkv(attention_norm(tokens))
-                       .view({batch, length, 3, heads, width / heads})
-                       .permute({2, 0, 3, 1, 4});
-  auto attended = at::scaled_dot_product_attention(projected[0], projected[1], projected[2],
-                                                   valid.unsqueeze(1).unsqueeze(1));
-  auto x = tokens + output(attended.transpose(1, 2).contiguous().view({batch, length, width}));
-  return x + down(torch::gelu(up(ffn_norm(x))));
+T TransformerBlockImpl::forward(const T &tokens, const T &cumulative,
+                                const std::vector<int64_t> &lengths, const T &key_lengths,
+                                const T &key_cumulative) {
+  TORCH_CHECK(!key_lengths.defined() || (tokens.is_cuda() && !torch::GradMode::is_enabled()),
+              "padded attention is CUDA inference-only");
+  auto width = tokens.size(1);
+  auto projected = qkv(bf16_norm(tokens, attention_norm)).view({-1, 3, heads, width / heads});
+  T attended;
+  if (tokens.is_cuda())
+    attended = RaggedAttention::apply(
+        projected, cumulative, *std::max_element(lengths.begin(), lengths.end()),
+        key_lengths.defined() ? std::make_optional(key_lengths) : std::nullopt,
+        key_cumulative.defined() ? std::make_optional(key_cumulative) : std::nullopt);
+  else {
+    auto q = projected.select(1, 0), k = projected.select(1, 1), v = projected.select(1, 2);
+    std::vector<T> parts;
+    int64_t offset = 0;
+    for (auto length : lengths) {
+      auto view = [&](const T &t) {
+        return t.narrow(0, offset, length).transpose(0, 1).unsqueeze(0);
+      };
+      auto weights =
+          (torch::matmul(view(q), view(k).transpose(-2, -1)) / std::sqrt(double(width / heads)))
+              .softmax(-1);
+      parts.push_back(torch::matmul(weights, view(v)).squeeze(0).transpose(0, 1));
+      offset += length;
+    }
+    attended = torch::cat(parts, 0);
+  }
+  auto x = tokens + output(attended.reshape({-1, width}));
+  return x + down(torch::gelu(up(bf16_norm(x, ffn_norm))));
 }
 NetworkImpl::NetworkImpl(int64_t w) : width(w) {
-  entity = register_module("entity", torch::nn::Linear(RowFeatures, w));
-  action = register_module("action", torch::nn::Linear(ActionFeatures, w));
-  globals = register_module("globals", torch::nn::Linear(32, w));
+  entity = register_module("entity", TypedProjection(w, true));
+  action = register_module("action", TypedProjection(w, false));
   kinds = register_module("kinds", torch::nn::Embedding(256, w));
   blocks = register_module("blocks", torch::nn::ModuleList());
   for (int64_t i = 0; i < EncoderLayers; ++i)
     blocks->push_back(TransformerBlock(w));
   norm = register_module("norm", torch::nn::LayerNorm(std::vector<int64_t>{w}));
   context = register_module("context", torch::nn::Linear(w * 2, w));
-  policy =
-      register_module("policy", torch::nn::Sequential(torch::nn::Linear(w * 4, w),
-                                                      torch::nn::GELU(), torch::nn::Linear(w, w),
-                                                      torch::nn::GELU(), torch::nn::Linear(w, 1)));
+  query = register_module("query", torch::nn::Sequential(torch::nn::Linear(w, w), torch::nn::GELU(),
+                                                         torch::nn::Linear(w, w)));
+  key = register_module("key", torch::nn::Sequential(torch::nn::Linear(w * 3, w), torch::nn::GELU(),
+                                                     torch::nn::Linear(w, w)));
+  prior = register_module("prior", torch::nn::Linear(w, 1));
   value =
       register_module("value", torch::nn::Sequential(torch::nn::Linear(w, w), torch::nn::GELU(),
                                                      torch::nn::Linear(w, 1), torch::nn::Tanh()));
   to(torch::kBFloat16);
 }
-std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &nodes) {
+void NetworkImpl::pack_weights() {
+  torch::NoGradGuard no_grad;
+  auto ps = parameters();
+  if (packed_weights.defined() && packed_weights.data_ptr() == ps.front().data_ptr())
+    return;
+  std::vector<T> flat;
+  for (auto &p : ps)
+    flat.push_back(p.detach().reshape({-1}));
+  packed_weights = torch::cat(flat);
+  int64_t offset = 0;
+  for (auto &p : ps) {
+    p.set_data(packed_weights.narrow(0, offset, p.numel()).view(p.sizes()));
+    offset += p.numel();
+  }
+}
+T NetworkImpl::encode_table(const T &entities, const T &global_values, const T &kind_ids,
+                            const T &gather, const T &cumulative,
+                            const std::vector<int64_t> &lengths, const T &key_lengths) {
+  auto e = entities + kinds(kind_ids);
+  auto x = torch::cat({global_values, e}, 0).index_select(0, gather);
+  for (auto &block : *blocks)
+    x = block->as<TransformerBlock>()->forward(x, cumulative, lengths, key_lengths);
+  return bf16_norm(x, norm);
+}
+T NetworkImpl::project_root_context(const T &x) {
+  return torch::linear(x, context->weight.narrow(1, 0, width));
+}
+T NetworkImpl::project_entities(const T &x) {
+  auto &first = key->at<torch::nn::LinearImpl>(0);
+  return torch::cat({torch::linear(x, first.weight.narrow(1, width, width)),
+                     torch::linear(x, first.weight.narrow(1, width * 2, width))},
+                    1);
+}
+std::pair<T, T> NetworkImpl::score_table(const ScoreTables &t) {
+  auto pc = t.prefix_context.defined()
+                ? t.prefix_context
+                : std::get<0>(at::embedding_bag(torch::gelu(t.row_embeddings), t.prefix_ids,
+                                                t.prefix_offsets, false, 1, false, {}, true));
+  auto ctx = torch::gelu(t.node_root(t.root_context) +
+                         torch::linear(pc, context->weight.narrow(1, width, width), context->bias));
+  auto &first = key->at<torch::nn::LinearImpl>(0);
+  auto candidate = torch::linear(t.actions, first.weight.narrow(1, 0, width), first.bias);
+  auto hidden = torch::gelu(t.candidate(candidate) + t.source(t.entity_affine.narrow(1, 0, width)) +
+                            t.target(t.entity_affine.narrow(1, width, width)));
+  auto keys = key->at<torch::nn::LinearImpl>(2).forward(hidden);
+  auto queries = query->forward<T>(ctx);
+  auto live = (t.owner(queries) * t.key(keys)).sum(-1) / std::sqrt(double(width)) +
+              t.key(prior(keys)).squeeze(-1);
+  auto logits =
+      t.live_positions.defined()
+          ? torch::zeros({t.full_candidates}, live.options()).index_copy(0, t.live_positions, live)
+          : live;
+  return {logits, value->forward<T>(ctx).squeeze(-1)};
+}
+void NetworkImpl::encode_roots(const std::vector<std::shared_ptr<Root>> &requested) {
+  TORCH_CHECK(!torch::GradMode::is_enabled(), "root cache requires inference mode");
+  std::vector<std::shared_ptr<Root>> roots;
+  for (auto &root : requested)
+    if (!cache_valid(*root))
+      roots.push_back(root);
+  if (roots.empty())
+    return;
+  Rows rows;
+  Inputs input;
+  std::vector<int64_t> row_ids, global_ids, kinds_, gather, cumulative{0}, lengths,
+      global_positions;
+  for (size_t i = 0; i < roots.size(); ++i) {
+    auto &root = *roots[i];
+    global_positions.push_back(cumulative.back());
+    gather.push_back(i);
+    for (size_t j = 0; j < root.rows.size(); ++j) {
+      gather.push_back(roots.size() + row_ids.size());
+      row_ids.push_back(rows.add(root.rows[j]));
+      kinds_.push_back(root.kinds[j]);
+    }
+    lengths.push_back(root.rows.size() + 1);
+    cumulative.push_back(cumulative.back() + lengths.back());
+    global_ids.push_back(rows.add(root.globals));
+  }
+  auto packed = rows.pack(input);
+  auto ids = input.add(row_ids), global = input.add(global_ids), kind = input.add(kinds_),
+       order = input.add(gather);
+  auto cu = input.add(cumulative), positions = input.add(global_positions);
+  auto device = parameters()[0].device();
+  input.upload(device);
+  auto projected = entity(input.get(packed[0]), input.get(packed[1]), input.bf(packed[2], 52));
+  auto encoded = encode_table(projected.index_select(0, input.get(ids)),
+                              projected.index_select(0, input.get(global)), input.get(kind),
+                              input.get(order), input.get(cu).to(torch::kInt32), lengths);
+  auto affine = project_entities(encoded);
+  auto context_part = project_root_context(encoded.index_select(0, input.get(positions)));
+  for (size_t i = 0; i < roots.size(); ++i) {
+    std::lock_guard lock(roots[i]->cache_mutex);
+    roots[i]->cached_tokens = affine.narrow(0, cumulative[i] + 1, lengths[i] - 1).clone();
+    roots[i]->cached_context = context_part[i].clone();
+    roots[i]->host_tokens = T();
+    roots[i]->host_context = T();
+    roots[i]->account_cache();
+    roots[i]->cached_owner = this;
+    roots[i]->cached_revision = revision.load();
+  }
+  encoded_roots += roots.size();
+}
+std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &nodes,
+                                     int64_t policy_nodes) {
+  RECORD_FUNCTION("hj.forward", std::vector<c10::IValue>());
   if (nodes.empty())
     throw std::runtime_error("empty model batch");
+  if (policy_nodes < 0)
+    policy_nodes = nodes.size();
+  TORCH_CHECK(policy_nodes > 0 && policy_nodes <= int64_t(nodes.size()),
+              "invalid policy node count");
   auto device = parameters()[0].device();
   std::map<std::pair<uint64_t, uint64_t>, int64_t> root_ids;
   std::vector<std::shared_ptr<Root>> roots;
@@ -157,152 +399,163 @@ std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &n
     } else
       node_roots.push_back(it->second);
   }
-  std::vector<Row> er;
-  std::vector<BF> gf;
+  Rows rows;
+  Inputs input;
+  std::vector<int64_t> er, global_rows;
   std::vector<int64_t> missing, missing_offsets;
   std::vector<T> root_tokens(roots.size()), root_context(roots.size());
   int64_t offset = 0;
   bool caching = !torch::GradMode::is_enabled();
+  std::vector<uint8_t> cold(roots.size(), 0);
+  if (caching) {
+    std::vector<std::shared_ptr<Root>> to_encode;
+    for (size_t i = 0; i < roots.size(); ++i)
+      if (!cache_valid(*roots[i])) {
+        cold[i] = 1;
+        to_encode.push_back(roots[i]);
+      }
+    encode_roots(to_encode);
+  }
   for (size_t i = 0; i < roots.size(); ++i) {
     offsets.push_back(offset);
     offset += roots[i]->rows.size();
-    if (caching && cache_valid(*roots[i])) {
-      root_tokens[i] = roots[i]->cached_tokens;
-      root_context[i] = roots[i]->cached_context;
-      ++cache_hits;
-      continue;
+    if (caching) {
+      std::lock_guard lock(roots[i]->cache_mutex);
+      if (roots[i]->cached_owner == this && roots[i]->cached_revision == revision.load() &&
+          roots[i]->cached_tokens.defined()) {
+        root_tokens[i] = roots[i]->cached_tokens;
+        root_context[i] = roots[i]->cached_context;
+        cache_hits += !cold[i];
+        continue;
+      }
     }
     missing_offsets.push_back(kind_ids.size());
     missing.push_back(i);
     for (size_t j = 0; j < roots[i]->rows.size(); ++j) {
-      er.push_back(roots[i]->rows[j]);
+      er.push_back(rows.add(roots[i]->rows[j]));
       kind_ids.push_back(roots[i]->kinds[j]);
     }
-    for (auto b : roots[i]->globals) {
-      BF v;
-      v.x = b;
-      gf.push_back(v);
-    }
+    global_rows.push_back(rows.add(roots[i]->globals));
   }
-  if (!missing.empty()) {
-    auto e = er.empty() ? torch::empty({0, width}, parameters()[0].options())
-                        : entity(row_features(er, device)) + kinds(indices(kind_ids, device));
-    auto table = torch::cat({globals(bf_tensor(gf, 32, device)), e}, 0);
-    std::map<size_t, std::vector<size_t>> buckets;
-    for (size_t j = 0; j < missing.size(); ++j) {
-      size_t capacity = 1;
-      while (capacity < roots[missing[j]]->rows.size() + 1)
-        capacity *= 2;
-      buckets[capacity].push_back(j);
-    }
-    // 同长度区间合批注意力；完整根均参与六层交互，补齐位置只在桶内存在。
-    for (auto &[capacity, members] : buckets) {
-      std::vector<int64_t> gather;
-      std::vector<uint8_t> valid;
-      for (auto j : members) {
-        auto length = roots[missing[j]]->rows.size();
-        gather.push_back(j);
-        valid.push_back(1);
-        for (size_t k = 0; k < capacity - 1; ++k) {
-          gather.push_back(k < length ? missing.size() + missing_offsets[j] + k : 0);
-          valid.push_back(k < length);
-        }
-      }
-      auto mask = torch::from_blob(valid.data(), {int64_t(members.size()), int64_t(capacity)},
-                                   torch::kUInt8)
-                      .clone()
-                      .to(device, torch::kBool);
-      auto x = table.index_select(0, indices(gather, device))
-                   .view({int64_t(members.size()), int64_t(capacity), width});
-      for (auto &block : *blocks)
-        x = block->as<TransformerBlock>()->forward(x, mask);
-      x = norm(x);
-      for (size_t k = 0; k < members.size(); ++k) {
-        auto i = missing[members[k]];
-        root_tokens[i] = x[k].narrow(0, 1, roots[i]->rows.size());
-        root_context[i] = x[k][0];
-        if (caching) {
-          roots[i]->cached_tokens = root_tokens[i].clone();
-          roots[i]->cached_context = root_context[i].clone();
-          roots[i]->cached_owner = this;
-          roots[i]->cached_revision = revision.load();
-        }
-      }
-    }
-    encoded_roots += missing.size();
-  }
-  auto mixed = torch::cat(root_tokens, 0), r = torch::stack(root_context, 0);
   // 参数行先非线性映射再聚合；顺序、所属参数和路径编号保留在整数位特征中。
-  std::vector<Row> pr;
-  std::vector<int64_t> prefix_owner;
+  std::vector<int64_t> pr, prefix_offsets{0};
   for (size_t i = 0; i < nodes.size(); ++i) {
-    for (auto &row : nodes[i]->prefix) {
-      pr.push_back(row);
-      prefix_owner.push_back(i);
-    }
-    auto path_row = [&](int64_t group, int64_t position, int64_t index, int64_t length,
-                        int64_t type) {
-      Row row;
-      row.ids[0] = type;
-      row.ids[2] = group;
-      row.ids[3] = position;
-      row.ids[4] = index;
-      row.ids[5] = length;
-      pr.push_back(row);
-      prefix_owner.push_back(i);
-    };
-    for (size_t j = 0; j < nodes[i]->cursor.size(); ++j)
-      path_row(0, j, nodes[i]->cursor[j], nodes[i]->cursor.size(), 25);
-    for (size_t k = 0; k < nodes[i]->excluded.size(); ++k) {
-      auto &p = nodes[i]->excluded[k];
-      for (size_t j = 0; j < p.path.size(); ++j)
-        path_row(k + 1, j, p.path[j], p.path.size(), 26);
-      for (auto child : p.children)
-        path_row(k + 1, p.path.size(), child, p.path.size(), 28);
-    }
-    // 空路径仍有一个显式节点，值网络不会把它与不存在的请求混合。
-    path_row(0, 0, 0, 0, 27);
+    append_context(*nodes[i], rows, pr);
+    prefix_offsets.push_back(pr.size());
   }
-  auto pc = mean_table(torch::gelu(entity(row_features(pr, device))), prefix_owner, nodes.size());
-  auto ctx =
-      torch::gelu(context(torch::cat({r.index_select(0, indices(node_roots, device)), pc}, -1)));
   std::unordered_map<std::array<int64_t, 64>, int64_t, ArrayHash> candidate_ids;
   std::vector<std::array<int64_t, 64>> actions;
-  std::vector<int64_t> candidates, owners, source, target;
-  for (size_t i = 0; i < nodes.size(); ++i) {
+  std::vector<int64_t> candidates, owners, source, target, key_ids, live_positions;
+  std::map<std::array<int64_t, 4>, int64_t> keys;
+  int64_t full_candidates = 0;
+  for (size_t i = 0; i < size_t(policy_nodes); ++i) {
     auto &n = *nodes[i];
     auto off = offsets[node_roots[i]];
     for (size_t j = 0; j < n.candidates.size(); ++j) {
-      auto it = candidate_ids.find(n.candidates[j]);
-      if (it == candidate_ids.end()) {
-        int64_t index = candidate_ids.size();
-        candidate_ids[n.candidates[j]] = index;
-        candidates.push_back(index);
-        actions.push_back(n.candidates[j]);
-      } else
+      auto position = full_candidates++;
+      if (!n.mask[j])
+        continue;
+      auto &candidate_row = n.candidates[j]->value;
+      auto [it, fresh] = candidate_ids.try_emplace(candidate_row, actions.size());
+      if (fresh)
+        actions.push_back(candidate_row);
+      auto from = n.sources[j] < 0 ? 0 : off + n.sources[j] + 1;
+      auto to = n.targets[j] < 0 ? 0 : off + n.targets[j] + 1;
+      std::array<int64_t, 4> binding{node_roots[i], it->second, from, to};
+      auto [bound, new_key] = keys.try_emplace(binding, keys.size());
+      if (new_key) {
         candidates.push_back(it->second);
+        source.push_back(from);
+        target.push_back(to);
+      }
+      key_ids.push_back(bound->second);
       owners.push_back(i);
-      source.push_back(n.sources[j] < 0 ? -1 : off + n.sources[j]);
-      target.push_back(n.targets[j] < 0 ? -1 : off + n.targets[j]);
+      live_positions.push_back(position);
     }
   }
-  auto raw_actions = torch::from_blob(actions.data(), {int64_t(actions.size()), 64}, torch::kInt64)
-                         .clone()
-                         .to(device);
-  auto projected = torch::gelu(action(bit_features(raw_actions, 64)));
-  auto entity_table = torch::cat({torch::zeros({1, width}, mixed.options()), mixed}, 0);
-  for (auto &i : source)
-    ++i;
-  for (auto &i : target)
-    ++i;
-  auto logits = policy
-                    ->forward<T>(torch::cat({ctx.index_select(0, indices(owners, device)),
-                                             projected.index_select(0, indices(candidates, device)),
-                                             entity_table.index_select(0, indices(source, device)),
-                                             entity_table.index_select(0, indices(target, device))},
-                                            -1))
-                    .squeeze(-1);
-  return {logits, value->forward<T>(ctx).squeeze(-1)};
+  std::vector<int64_t> action_bits, action_offsets{0};
+  for (auto &a : actions) {
+    for (size_t j = 0; j < a.size(); ++j)
+      set_bits(action_bits, integer_bits(a[j]), j * 64);
+    action_offsets.push_back(action_bits.size());
+  }
+  std::vector<int64_t> gather, cumulative{0}, lengths, encoded_entities, encoded_globals;
+  for (size_t j = 0; j < missing.size(); ++j) {
+    auto length = roots[missing[j]]->rows.size();
+    encoded_globals.push_back(cumulative.back());
+    gather.push_back(j);
+    for (size_t k = 0; k < length; ++k) {
+      gather.push_back(missing.size() + missing_offsets[j] + k);
+      encoded_entities.push_back(cumulative.back() + k + 1);
+    }
+    lengths.push_back(length + 1);
+    cumulative.push_back(cumulative.back() + length + 1);
+  }
+  auto row_input = rows.pack(input);
+  auto a_bits = input.add(action_bits), a_offsets = input.add(action_offsets);
+  GatherLayout er_ids(input, er, rows.rows.size(), !caching);
+  GatherLayout global_ids(input, global_rows, rows.rows.size(), !caching);
+  auto kind = input.add(kind_ids), root_gather = input.add(gather);
+  auto root_cumulative = input.add(cumulative), prefix_ids = input.add(pr);
+  auto prefix_offset = input.add(prefix_offsets);
+  GatherLayout node_root(input, node_roots, roots.size(), !caching);
+  auto encoded_entity = input.add(encoded_entities), encoded_global = input.add(encoded_globals);
+  std::vector<int64_t> references{0};
+  if (!caching) {
+    std::unordered_map<int64_t, int64_t> lookup{{0, 0}};
+    auto remap = [&](std::vector<int64_t> &ids) {
+      for (auto &id : ids) {
+        auto [it, inserted] = lookup.try_emplace(id, references.size());
+        if (inserted)
+          references.push_back(id);
+        id = it->second;
+      }
+    };
+    remap(source);
+    remap(target);
+  }
+  GatherLayout referenced(input, references, offset + 1, !caching);
+  GatherLayout owner(input, owners, nodes.size(), !caching);
+  GatherLayout candidate(input, candidates, actions.size(), !caching);
+  GatherLayout key_refs(input, key_ids, keys.size(), !caching);
+  auto live = input.add(live_positions);
+  auto entity_count = caching ? offset + 1 : int64_t(references.size());
+  GatherLayout src(input, source, entity_count, !caching),
+      dst(input, target, entity_count, !caching);
+  // 一份整数表和一份 BF16 表上传，后续算子只使用设备端视图。
+  input.upload(device);
+  auto row_embeddings =
+      entity(input.get(row_input[0]), input.get(row_input[1]), input.bf(row_input[2], 52));
+  T mixed, r;
+  if (!missing.empty()) {
+    auto cu = input.get(root_cumulative).to(torch::kInt32);
+    auto x =
+        encode_table(er_ids.bind(input)(row_embeddings), global_ids.bind(input)(row_embeddings),
+                     input.get(kind), input.get(root_gather), cu, lengths);
+    auto context_part = project_root_context(x.index_select(0, input.get(encoded_global)));
+    TORCH_CHECK(!caching, "root cache changed during inference");
+    // 学习只进行两次整表 gather；逐根取视图会在反向为每根重复分配整表梯度。
+    mixed = x.index_select(0, input.get(encoded_entity));
+    r = context_part;
+    encoded_roots += missing.size();
+    computed_tokens += cumulative.back();
+  }
+  if (!caching) {
+    scored_candidates += owners.size();
+    projected_candidates += actions.size();
+  }
+  if (caching) {
+    mixed = torch::cat(root_tokens, 0);
+    r = torch::stack(root_context, 0);
+  }
+  auto projected = torch::gelu(action(input.get(a_bits), input.get(a_offsets)));
+  auto entity_table = torch::cat({torch::zeros({1, mixed.size(1)}, mixed.options()), mixed}, 0);
+  if (!caching)
+    entity_table = project_entities(referenced.bind(input)(entity_table));
+  return score_table({row_embeddings, input.get(prefix_ids), input.get(prefix_offset), r,
+                      entity_table, projected, node_root.bind(input), owner.bind(input),
+                      candidate.bind(input), src.bind(input), dst.bind(input), key_refs.bind(input),
+                      input.get(live), full_candidates});
 }
 
 std::vector<double> canonical_logps(const std::vector<uint16_t> &bits) {
@@ -325,30 +578,37 @@ std::vector<double> canonical_logps(const std::vector<uint16_t> &bits) {
 std::vector<std::vector<uint16_t>> probabilities(const T &logits,
                                                  const std::vector<std::shared_ptr<Node>> &nodes) {
   // 支持集分段归约，跨角色和批次无需补零或拆批。
-  return cpu_masses(policy_table(logits, nodes));
+  return cpu_masses(policy_table(logits, nodes, false));
 }
 
 Optimizer::Optimizer(Network &model) {
+  model->pack_weights();
   int64_t count = 0;
   for (auto &p : model->parameters())
     count += p.numel();
   for (int i = 0; i < 5; ++i)
     state.push_back(torch::zeros({count}, model->parameters()[0].options()));
+  gradients = torch::zeros({count}, model->parameters()[0].options());
+  native_update = make_update_kernel(model->parameters()[0].device(), targets);
 }
-void Optimizer::step(Network &model) {
-  torch::NoGradGuard guard;
-  auto ps = model->parameters();
+void Optimizer::prepare_gradients(Network &model) {
+  for (auto &p : model->parameters())
+    p.mutable_grad() = T();
+}
+T Optimizer::collect_gradients(Network &model) {
+  torch::NoGradGuard no_grad;
   std::vector<T> grads;
-  std::vector<T> params;
-  for (auto &p : ps) {
-    if (!p.grad().defined())
-      p.mutable_grad() = torch::zeros_like(p);
-    grads.push_back(p.grad().reshape({-1}));
-    params.push_back(p.reshape({-1}));
-  }
-  auto g = torch::cat(grads), p = torch::cat(params);
-  auto norm = g.square().sum().sqrt();
-  g = g / (norm.clamp_min(1));
+  for (auto &p : model->parameters())
+    grads.push_back(p.grad().defined() ? p.grad().reshape({-1})
+                                       : torch::zeros_like(p).reshape({-1}));
+  // 每批完整反向覆盖梯度；整包写入固定存储，不逐参数执行零梯度累加。
+  torch::cat_out(gradients, grads);
+  return gradients;
+}
+namespace {
+T reference_update(T g, const T &p, const std::vector<T> &state, const T &norm, double lr,
+                   uint64_t step) {
+  g = g / norm.clamp_min(1);
   auto add = [](const T &x, const T &residual, const T &change) {
     auto r = residual + change;
     auto y = x + r;
@@ -356,8 +616,8 @@ void Optimizer::step(Network &model) {
   };
   auto m = add(state[0], state[2], (g - state[0]) * 0.1);
   auto v = add(state[1], state[3], (g.square() - state[1]) * 0.001);
-  auto change = -lr * (m.first / (1 - std::pow(0.9, double(steps + 1))) /
-                           ((v.first / (1 - std::pow(0.999, double(steps + 1)))).sqrt() + 1e-8) +
+  auto change = -lr * (m.first / (1 - std::pow(0.9, double(step))) /
+                           ((v.first / (1 - std::pow(0.999, double(step)))).sqrt() + 1e-8) +
                        0.01 * p);
   auto updated = add(p, state[4], change);
   auto valid = torch::stack({torch::isfinite(norm).all(), torch::isfinite(g).all(),
@@ -367,21 +627,37 @@ void Optimizer::step(Network &model) {
                    .all();
   if (!valid.item<bool>())
     throw std::runtime_error("non-finite BF16 update; parameters and optimizer not committed");
-  int64_t offset = 0;
-  for (auto &parameter : ps) {
-    parameter.copy_(updated.first.narrow(0, offset, parameter.numel()).view(parameter.sizes()));
-    offset += parameter.numel();
+  return torch::stack({updated.first, m.first, v.first, m.second, v.second, updated.second});
+}
+} // namespace
+double Optimizer::step(Network &model, const T &loss) {
+  RECORD_FUNCTION("hj.optimizer", std::vector<c10::IValue>());
+  torch::NoGradGuard no_grad;
+  auto g = collect_gradients(model), p = model->packed_weights;
+  auto norm = g.square().sum().sqrt();
+  UpdateResult result;
+  if (native_update) {
+    result = native_update(g, p, state, norm, lr, steps + 1, loss);
+    p.unsafeGetTensorImpl()->bump_version();
+  } else {
+    if (loss.defined() && !torch::isfinite(loss).item<bool>())
+      throw std::runtime_error("non-finite learning loss");
+    result = {reference_update(g, p, state, norm, lr, steps + 1),
+              loss.defined() ? loss.item<double>() : 0};
+    p.copy_(result.values[0]);
   }
-  state = {m.first, v.first, m.second, v.second, updated.second};
+  for (size_t i = 0; i < state.size(); ++i)
+    if (!result.states_committed)
+      state[i].copy_(result.values[i + 1]);
   ++steps;
   ++model->revision;
-  for (auto &parameter : ps)
-    parameter.mutable_grad() = T();
+  return result.loss;
 }
 void Optimizer::save(torch::serialize::OutputArchive &out) {
   out.write("steps", torch::tensor(int64_t(steps), torch::kInt64));
   for (size_t i = 0; i < state.size(); ++i)
-    out.write("state" + std::to_string(i), state[i].to(torch::kCPU));
+    out.write("state" + std::to_string(i),
+              state[i].to(state[i].options().device(torch::kCPU), false, true));
 }
 void Optimizer::load(torch::serialize::InputArchive &in, Network &model) {
   T s;
@@ -393,16 +669,48 @@ void Optimizer::load(torch::serialize::InputArchive &in, Network &model) {
     TORCH_CHECK(v.scalar_type() == torch::kBFloat16 && v.sizes() == state[i].sizes() &&
                     torch::isfinite(v).all().item<bool>(),
                 "invalid optimizer state");
-    state[i] = v.to(model->parameters()[0].device());
+    state[i].copy_(v.to(model->parameters()[0].device()));
   }
 }
+namespace {
+// CPU 路径也是设备端目标递推的数值参照；记录表仅用整数保存索引及行为概率的原始位。
+T reference_targets(const T &mass, const T &value_tensor, const T &record_tensor,
+                    const T &block_tensor) {
+  auto count = record_tensor.numel() / 6;
+  auto result = torch::empty({3, count}, value_tensor.options());
+  auto p = mass.data_ptr<BF>(), values = value_tensor.data_ptr<BF>(), out = result.data_ptr<BF>();
+  auto records = record_tensor.data_ptr<int64_t>(), blocks = block_tensor.data_ptr<int64_t>();
+  for (int64_t bi = 0; bi < block_tensor.numel() / 3; ++bi) {
+    auto begin = blocks[bi * 3], end = blocks[bi * 3 + 1], boot = blocks[bi * 3 + 2];
+    double correction = 0, following = boot < 0 ? 0 : float(values[boot]),
+           following_target = following;
+    for (auto i = end; i-- > begin;) {
+      auto s = records + i * 6;
+      double sum = 0;
+      for (int64_t j = 0; j < s[1]; ++j)
+        sum += float(p[s[0] + j]);
+      auto chosen = float(p[s[0] + s[2]]);
+      double logp = chosen > 0 ? std::log(double(chosen) / sum) : -INFINITY;
+      double value = float(values[i]), d = s[4] ? 0 : 1;
+      double ratio = std::min(1.0, std::exp(logp - std::bit_cast<double>(s[5])));
+      correction = ratio * (double(s[3]) + d * following - value) + d * ratio * correction;
+      double target = value + correction;
+      out[i] = BF(float(target));
+      out[count + i] = BF(float(ratio * (double(s[3]) + d * following_target - value)));
+      out[count * 2 + i] = BF(float(logp));
+      following = value;
+      following_target = target;
+    }
+  }
+  return result;
+}
+} // namespace
 TrainResult learn(Network &model, Optimizer &optimizer, const std::vector<Block> &blocks) {
+  RECORD_FUNCTION("hj.learn", std::vector<c10::IValue>());
   std::vector<std::shared_ptr<Node>> nodes;
-  std::vector<const Step *> steps;
   for (auto &b : blocks)
     for (auto &s : b.steps) {
       nodes.push_back(s.node);
-      steps.push_back(&s);
     }
   auto count = nodes.size();
   if (!count)
@@ -413,70 +721,134 @@ TrainResult learn(Network &model, Optimizer &optimizer, const std::vector<Block>
     if (b.bootstrap)
       nodes.push_back(b.bootstrap);
   }
-  auto output = model->forward(nodes); // 全部目标和损失使用这一次前向，保留同一张计算图。
-  auto table = policy_table(output.first, nodes);
-  auto masses = cpu_masses(table);
-  auto cpu_values = output.second.detach().to(torch::kCPU).contiguous();
-  auto values = cpu_values.data_ptr<BF>();
-  std::vector<double> logps;
-  for (size_t i = 0; i < count; ++i)
-    logps.push_back(canonical_logps(masses[i]).at(steps[i]->selected));
-  std::vector<BF> target(count), advantage(count), exact(count);
+  std::vector<int64_t> records, trajectories, selected;
   size_t offset = 0;
+  int64_t action_offset = 0;
   for (size_t bi = 0; bi < blocks.size(); ++bi) {
     auto &block = blocks[bi];
-    double correction = 0, following = boot[bi] < 0 ? 0 : float(values[boot[bi]]),
-           following_target = following;
-    for (size_t j = block.steps.size(); j-- > 0;) {
-      size_t i = offset + j;
-      auto &s = *steps[i];
-      double value = float(values[i]);
-      double d = s.terminal ? 0 : 1;
-      double ratio = std::min(1.0, std::exp(logps[i] - s.logp));
-      correction = ratio * (s.reward + d * following - value) + d * ratio * correction;
-      double t = value + correction;
-      target[i] = BF(float(t));
-      advantage[i] = BF(float(ratio * (s.reward + d * following_target - value)));
-      exact[i] = BF(float(logps[i]));
-      following = value;
-      following_target = t;
+    trajectories.insert(trajectories.end(),
+                        {int64_t(offset), int64_t(offset + block.steps.size()), boot[bi]});
+    for (auto &s : block.steps) {
+      auto n = int64_t(s.node->mask.size());
+      TORCH_CHECK(s.selected >= 0 && s.selected < n && s.node->mask[s.selected],
+                  "invalid learning action");
+      records.insert(records.end(), {action_offset, n, s.selected, s.reward, s.terminal,
+                                     std::bit_cast<int64_t>(s.logp)});
+      selected.push_back(action_offset + s.selected);
+      action_offset += n;
     }
     offset += block.steps.size();
   }
-  std::vector<int64_t> selected;
-  int64_t action_offset = 0;
-  for (size_t i = 0; i < count; ++i) {
-    auto &n = *nodes[i];
-    selected.push_back(action_offset + steps[i]->selected);
-    action_offset += n.mask.size();
-  }
-  auto device = output.first.device();
-  auto logp = table.logp.index_select(0, indices(selected, device));
-  auto corrected = logp + (bf_tensor(exact, 1, device).squeeze(1) - logp.detach());
-  auto targets = bf_tensor(target, 1, device).squeeze(1),
-       advantages = bf_tensor(advantage, 1, device).squeeze(1);
+  Inputs input;
+  auto record_slice = input.add(records), block_slice = input.add(trajectories),
+       selected_slice = input.add(selected);
+  // 全部价值、目标和损失共用这一次前向；bootstrap 节点不执行未使用的候选策略分支。
+  optimizer.prepare_gradients(model);
+  auto output = model->forward(nodes, count);
+  auto table = policy_table(output.first, std::span(nodes).first(count), true, &input);
+  auto target_table = optimizer.targets
+                          ? optimizer.targets(table.mass, output.second, input.get(record_slice),
+                                              input.get(block_slice))
+                          : reference_targets(table.mass, output.second, input.get(record_slice),
+                                              input.get(block_slice));
+  auto logp = table.logp.index_select(0, input.get(selected_slice));
+  auto corrected = logp + (target_table[2] - logp.detach());
+  auto targets = target_table[0], advantages = target_table[1];
+  // 新策略可将旧行为动作的质量舍入为零；V-trace 权重随之为零，策略项也应严格为零。
+  auto policy_logp = torch::where(advantages.ne(0), corrected, torch::zeros_like(corrected));
   auto loss =
-      (-corrected * advantages + 0.5 * (output.second.narrow(0, 0, count) - targets).square() -
+      (-policy_logp * advantages + 0.5 * (output.second.narrow(0, 0, count) - targets).square() -
        0.01 * table.entropy.narrow(0, 0, count))
           .mean();
-  if (!torch::isfinite(loss).item<bool>())
+  if (!optimizer.native_update && !torch::isfinite(loss).item<bool>())
     throw std::runtime_error("non-finite learning loss");
   loss.backward();
-  optimizer.step(model);
-  return {count, loss.item<double>()};
+  return {count, optimizer.step(model, loss)};
 }
 void copy_weights(Network &source, Network &destination) {
   torch::NoGradGuard guard;
-  auto a = source->parameters(), b = destination->parameters();
-  TORCH_CHECK(a.size() == b.size());
-  for (size_t i = 0; i < a.size(); ++i)
-    b[i].copy_(a[i]);
+  source->pack_weights();
+  destination->pack_weights();
+  destination->packed_weights.copy_(source->packed_weights);
   ++destination->revision;
 }
 void model_checks(const torch::Device &device) {
+  {
+    Inputs input;
+    GatherLayout gather(input, {2, 0, 2, 2, 3, 0}, 5, true);
+    input.upload(device);
+    auto x = torch::ones({5, 32}, bfopts().device(device)).requires_grad_(true);
+    auto weights = torch::arange(1, 7, x.options()).unsqueeze(1) / 8;
+    (gather.bind(input)(x) * weights).sum().backward();
+    std::vector<BF> expected(5 * 32, BF(0));
+    for (int j = 0; j < 32; ++j) {
+      expected[j] = BF(1);
+      expected[64 + j] = BF(1);
+      expected[96 + j] = BF(0.625f);
+    }
+    TORCH_CHECK(torch::equal(x.grad(), bf_tensor(expected, 32, device)),
+                "CSR gather transpose lost repeated or empty rows");
+  }
+  {
+    // 负整数、高位身份、存在位和连续字段均与显式零一矩阵的线性映射对照。
+    TypedProjection projection(32, true);
+    projection->to(device);
+    Rows rows;
+    Row a, b;
+    a.ids[2] = 4097;
+    a.ids[59] = -7;
+    a.present = (uint64_t(1) << 51) | 1;
+    a.integers = 1;
+    a.values[1] = BF(0.75f).x;
+    b = a;
+    b.ids[2] = 4096;
+    TORCH_CHECK(rows.add(a) == 0 && rows.add(b) == 1 && rows.add(a) == 0);
+    rows.add(Row{});
+    Inputs input;
+    auto packed = rows.pack(input);
+    input.upload(device);
+    auto sparse = projection(input.get(packed[0]), input.get(packed[1]), input.bf(packed[2], 52));
+    std::vector<BF> dense(rows.rows.size() * RowFeatures, BF(0));
+    for (size_t i = 0; i < rows.rows.size(); ++i) {
+      auto &r = rows.rows[i];
+      for (int64_t field = 0; field < 60; ++field)
+        for (int64_t bit = 0; bit < 64; ++bit)
+          dense[i * RowFeatures + field * 64 + bit] =
+              BF(float((integer_bits(r.ids[field]) >> bit) & 1));
+      for (int64_t j = 0; j < 52; ++j) {
+        dense[i * RowFeatures + 3840 + j] = BF(float((r.present >> j) & 1));
+        dense[i * RowFeatures + 3892 + j] = BF(float((r.integers >> j) & 1));
+        dense[i * RowFeatures + 3944 + j].x = r.values[j];
+      }
+    }
+    auto weight =
+        torch::cat({projection->bits->weight.transpose(0, 1), projection->continuous->weight}, 1);
+    auto reference =
+        torch::linear(bf_tensor(dense, RowFeatures, device), weight, projection->continuous->bias);
+    TORCH_CHECK(torch::allclose(sparse, reference, 0.04, 0.004),
+                "typed sparse projection changed the represented linear map");
+    sparse.sum().backward();
+    TORCH_CHECK(projection->bits->weight.grad().scalar_type() == torch::kBFloat16 &&
+                torch::isfinite(projection->bits->weight.grad()).all().item<bool>());
+  }
   Network model(32);
   model->to(device);
+  if (device.is_cuda()) {
+    torch::NoGradGuard no_grad;
+    auto options = model->parameters()[0].options();
+    auto entities = torch::randn({7, 32}, options), globals = torch::randn({1, 32}, options);
+    auto actual = model->encode_table(entities.narrow(0, 0, 2), globals, indices({0, 1}, device),
+                                      indices({0, 1, 2}, device),
+                                      indices({0, 3}, device).to(torch::kInt32), {3});
+    auto padded = model->encode_table(entities, globals, indices({0, 1, 2, 3, 4, 5, 6}, device),
+                                      indices({0, 1, 2, 3, 4, 5, 6, 7}, device),
+                                      indices({0, 8}, device).to(torch::kInt32), {8},
+                                      indices({3}, device).to(torch::kInt32));
+    TORCH_CHECK(torch::allclose(actual, padded.narrow(0, 0, 3), 0.02, 0.005),
+                "capacity padding changed real root attention");
+  }
   Optimizer optimizer(model);
+  InputPool inputs;
   auto n = std::make_shared<Node>();
   n->root = std::make_shared<Root>();
   n->root->game = 1;
@@ -487,15 +859,17 @@ void model_checks(const torch::Device &device) {
   row.present = 1;
   row.integers = 1;
   row.ids[8] = 7;
-  n->root->rows = {row};
+  n->root->rows = {inputs.rows.get(row)};
   n->root->kinds = {128};
   n->mask = {1, 1, 0};
   n->sources = {0, -1, 0};
   n->targets = {-1, 0, 0};
-  n->candidates.resize(3);
-  n->candidates[0][0] = 1;
-  n->candidates[1][1] = 1;
-  n->candidates[2][2] = 1;
+  for (size_t i = 0; i < 3; ++i) {
+    Action action{};
+    action[i] = 1;
+    n->candidates.push_back(inputs.actions.get(action));
+  }
+  n->context = make_context(inputs, {}, {}, {});
   auto outputs = model->forward({n, n});
   TORCH_CHECK(outputs.first.scalar_type() == torch::kBFloat16 &&
               outputs.second.scalar_type() == torch::kBFloat16);
@@ -509,7 +883,7 @@ void model_checks(const torch::Device &device) {
     auto probe = std::make_shared<Node>(*n);
     probe->sources.assign(3, -1);
     probe->targets.assign(3, -1);
-    probe->cursor = {2, 5, 1};
+    probe->context = make_context(inputs, {}, {2, 5, 1}, {});
     auto logits = model->forward({probe}).first;
     (logits[0] - logits[1]).backward();
     auto context_gradient = model->context->weight.grad();
@@ -524,7 +898,7 @@ void model_checks(const torch::Device &device) {
     auto other = std::make_shared<Node>(*n);
     other->root = std::make_shared<Root>(*n->root);
     other->root->id = 2;
-    other->root->rows.push_back(row);
+    other->root->rows.push_back(inputs.rows.get(row));
     other->root->kinds.push_back(129);
     auto alone = model->forward({n});
     auto together = model->forward({n, other});
@@ -534,7 +908,7 @@ void model_checks(const torch::Device &device) {
   {
     torch::NoGradGuard guard;
     auto cold = model->forward({n});
-    auto encoded = model->encoded_roots;
+    auto encoded = model->encoded_roots.load();
     auto warm = model->forward({n});
     TORCH_CHECK(model->encoded_roots == encoded && model->cache_hits > 0 &&
                 torch::equal(cold.first, warm.first) && torch::equal(cold.second, warm.second));
@@ -543,7 +917,78 @@ void model_checks(const torch::Device &device) {
     TORCH_CHECK(model->encoded_roots == encoded + 1,
                 "published parameters did not invalidate root cache");
   }
+  {
+    Network skew(32);
+    skew->to(device);
+    copy_weights(model, skew);
+    {
+      torch::NoGradGuard guard;
+      skew->prior->weight.mul_(1000000);
+    }
+    auto mass = probabilities(skew->forward({n}).first, {n})[0];
+    size_t zero = 0;
+    while (zero < mass.size() && (!n->mask[zero] || mass[zero] != 0))
+      ++zero;
+    TORCH_CHECK(zero < mass.size(), "zero-mass off-policy fixture has no zero action");
+    Optimizer skew_optimizer(skew);
+    Block old_behavior;
+    old_behavior.steps = {{n, int64_t(zero), std::log(0.5), 0, true, 1}};
+    auto update = learn(skew, skew_optimizer, {old_behavior});
+    TORCH_CHECK(update.consumed == 1 && std::isfinite(update.loss),
+                "zero-mass off-policy action produced a non-finite loss");
+    for (auto &p : skew->parameters())
+      TORCH_CHECK(torch::isfinite(p).all().item<bool>());
+  }
   Block block;
+  if (optimizer.native_update) {
+    torch::NoGradGuard guard;
+    auto full = model->forward({n, n}), pruned = model->forward({n, n}, 1);
+    TORCH_CHECK(torch::equal(full.first.narrow(0, 0, n->mask.size()), pruned.first) &&
+                    torch::equal(full.second, pruned.second),
+                "bootstrap pruning changed live policy or value outputs");
+    std::vector<BF> masses, values;
+    std::vector<int64_t> records, trajectories;
+    constexpr int64_t trajectories_count = 100, length = 17, count = trajectories_count * length;
+    for (int64_t i = 0; i < count + trajectories_count; ++i)
+      values.emplace_back(float(i % 11 - 5) / 8);
+    for (int64_t bi = 0; bi < trajectories_count; ++bi) {
+      trajectories.insert(trajectories.end(),
+                          {bi * length, (bi + 1) * length, bi % 3 ? count + bi : -1});
+      for (int64_t j = 0; j < length; ++j) {
+        auto i = bi * length + j, actions = 1 + i % 23;
+        records.insert(records.end(),
+                       {int64_t(masses.size()), actions, i % actions,
+                        j == length - 1 && bi % 3 == 0 ? (bi / 3) % 3 - 1 : 0,
+                        j == length - 1 && bi % 3 == 0,
+                        std::bit_cast<int64_t>(-std::log(double(actions)) + (i % 3 - 1) / 4.0)});
+        for (int64_t k = 0; k < actions; ++k)
+          masses.emplace_back(k % 7 == 0 && actions > 1 ? 0 : float(k % 5 + 1) / 64);
+      }
+    }
+    auto m = bf_tensor(masses, 1, torch::kCPU).squeeze(1),
+         v = bf_tensor(values, 1, torch::kCPU).squeeze(1);
+    auto r = indices(records, torch::kCPU), b = indices(trajectories, torch::kCPU);
+    auto expected = reference_targets(m, v, r, b);
+    auto actual = optimizer.targets(m.to(device), v.to(device), r.to(device), b.to(device));
+    TORCH_CHECK(torch::equal(expected.to(device), actual),
+                "device V-trace targets changed canonical probability or trajectory recursion");
+    auto p = torch::randn({4097}, model->parameters()[0].options());
+    std::vector<T> state{torch::randn_like(p) / 8, (torch::rand_like(p) + 0.5) / 8,
+                         torch::randn_like(p) / 4096, torch::randn_like(p) / 4096,
+                         torch::randn_like(p) / 4096};
+    for (uint64_t step : {1, 2, 64, 100000}) {
+      auto g = torch::randn_like(p) / (step == 1 ? 128 : 16);
+      auto norm = g.square().sum().sqrt();
+      auto reference = reference_update(g, p, state, norm, optimizer.lr, step);
+      optimizer.native_update(g, p, state, norm, optimizer.lr, step, {});
+      auto fused = torch::stack({p, state[0], state[1], state[2], state[3], state[4]});
+      TORCH_CHECK(torch::equal(reference, fused) && torch::equal(p, reference[0]),
+                  "fused BF16 compensated update differs");
+      p = reference[0];
+      for (size_t i = 0; i < state.size(); ++i)
+        state[i] = reference[i + 1];
+    }
+  }
   block.steps = {{n, 0, logs[0], 0, false, 0}, {n, 1, logs[1], 0, true, 1}};
   auto result = learn(model, optimizer, {block});
   TORCH_CHECK(result.consumed == 2 && optimizer.steps == 1);
@@ -553,6 +998,16 @@ void model_checks(const torch::Device &device) {
     TORCH_CHECK(p.scalar_type() == torch::kBFloat16);
   auto first = model->parameters()[0].detach().clone();
   auto state = optimizer.state[0].clone();
+  auto old_steps = optimizer.steps;
+  bool loss_rejected = false;
+  try {
+    optimizer.step(model, torch::full({}, NAN, first.options()));
+  } catch (const std::runtime_error &) {
+    loss_rejected = true;
+  }
+  TORCH_CHECK(loss_rejected && torch::equal(first, model->parameters()[0]) &&
+                  torch::equal(state, optimizer.state[0]) && optimizer.steps == old_steps,
+              "non-finite loss committed finite-gradient parameters");
   model->parameters()[0].mutable_grad() = torch::full_like(first, NAN);
   bool rejected = false;
   try {
@@ -578,8 +1033,16 @@ void model_checks(const torch::Device &device) {
   optimizer.save(opt);
   archive.write("model", weights);
   archive.write("optimizer", opt);
+  std::vector<T> frozen_states;
+  // 后台写盘期间学习可以继续；归档不得共享仍会原地更新的 CPU 状态。
+  for (auto &state : optimizer.state) {
+    frozen_states.push_back(state.clone());
+    state.add_(1);
+  }
   std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
   archive.save_to(stream);
+  for (size_t i = 0; i < optimizer.state.size(); ++i)
+    optimizer.state[i].copy_(frozen_states[i]);
   stream.seekg(0);
   torch::serialize::InputArchive restored_archive, restored_weights, restored_opt;
   restored_archive.load_from(stream, device);

@@ -5,6 +5,7 @@ import { parseCommand, actorCommandError } from '../../../../src/engine/online/a
 import { observe } from '../../../../src/ai/observation';
 import { TrainingActionTree } from '../../../../src/ai/training/action-tree';
 import { createDecisionEncoder } from '../../../../src/ai/training/encoding/decision';
+import { ActionRow } from '../../../../src/ai/training/encoding/schema';
 import type { GameState, Player } from '../../../../src/engine/types';
 import { cells } from '../../../../src/engine/core/geometry';
 import { RuleError } from '../../../../src/engine/core/state';
@@ -72,8 +73,8 @@ for await (const envelope of readRecordLines(input)) {
       if (summaryOnly) continue;
       const encoded = encode(node);
       if (row.optional && depth === 0) {
-        const pass = Array(64).fill(0);
-        pass[63] = 1;
+        const pass = new ActionRow();
+        pass.ids[63] = 1n;
         encoded.candidates.push(pass);
         encoded.candidate_mask.push(true);
         encoded.sources.push(-1);
