@@ -53,7 +53,7 @@ inline void cgroup_limits(Hardware &h, const std::filesystem::path &root,
     bool has_usage = bool(
         std::ifstream(current / (unified ? "memory.current" : "memory.usage_in_bytes")) >> used);
     if (!limit.empty() && limit != "max" && has_usage) {
-      auto maximum = std::stoull(limit);
+      uint64_t maximum = std::stoull(limit);
       uint64_t reclaimable = 0, dirty = 0, writeback = 0, value;
       std::string key;
       std::ifstream statistics(current / "memory.stat");
