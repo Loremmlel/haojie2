@@ -8,16 +8,28 @@
 
 ```powershell
 pwsh -File training/native/build.ps1
+pwsh -File training/native/run.ps1 configure
 pwsh -File training/native/run.ps1 run --directory E:/Training/haojie/run
 ```
 
 ```sh
 export LIBTORCH=/opt/libtorch
 bash training/native/build.sh
-artifacts/cpp-training-build/haojie-train run --directory /data/haojie/run
+bash training/native/run.sh configure
+bash training/native/run.sh run --directory /data/haojie/run
 ```
 
-运行目录必须不存在或为空。默认学习 batch 512、轨迹块 16、发布周期 8 次更新；可用 `--batch`、`--concurrency`、`--workers`、`--inference-batch`、`--memory-mb` 覆盖配置。`--samples`、`--updates`、`--seconds` 分别限制实际消费、更新次数和运行时间；不指定上限则持续运行。
+运行目录必须不存在或为空。正常训练默认 `--device auto`；按进程可用 CPU 核数、GPU 的 SM 数及空闲显存选配置。`configure` 只打印 JSON，不创建模型或开始训练；`run` 启动时再次检测并写入 `configuration.json`。可用 `--device`、`--batch`、`--concurrency`、`--workers`、`--inference-batch`、`--threads`、`--memory-mb` 覆盖对应项。
+
+GPU 空闲显存达到 4/6/10/18 GiB 时，起始学习 batch 分别为 64/128/256/512，推理上限为 8/16/32/64；低于 4 GiB 使用 batch 32。lane 至多 16 个且不超过物理核数，并发同时受 lane 数、SM 数和推理上限约束。宿主内存预算取可用内存的三分之一，最多 8 GiB。CPU 模式用 batch 32，线程数至多 8。它们是无需试训的起始档位；实际 token 长度及其他进程占用变化仍会影响峰值显存。
+
+轨迹块默认 16、发布周期默认 8 次更新。`--samples`、`--updates`、`--seconds` 分别限制实际消费、更新次数和运行时间；不指定上限则持续运行。
+
+## Colab
+
+打开 [训练笔记本](../colab/train.ipynb)，选择 L4、A100 或更新的原生 BF16 GPU，依次运行安装与配置单元。安装固定使用 PyTorch/LibTorch 2.14.0 cu126 及匹配的 CUDA 头文件；Python 仅用于安装和笔记本控制。T4/P100 会明确拒绝启动，保持 BF16 全链路。
+
+检查配置后把 `START_TRAINING` 改为 `True` 才会启动。训练与检查点直接写入 Google Drive，控制单元支持状态、保存、停止和调整并发。重连后填入 `RESUME`，恢复到新目录。源码和编译缓存留在 `/content`，运行时回收后可重新安装。`REVISION` 必须是已推送到远端的分支或提交。Colab 的 GPU 分配和运行时寿命由服务决定，见 [Colab FAQ](https://research.google.com/colaboratory/faq.html)。
 
 ## 控制与恢复
 
@@ -31,7 +43,7 @@ pwsh -File training/native/run.ps1 run --directory E:/Training/haojie/restored -
 
 默认每 300 秒保存，`--save-seconds 0` 关闭定时保存。保存先停在一致边界，冻结模型、五组 BF16 优化器状态、权威局面、两类 RNG、路径、排除 frontier、未决转换、部分轨迹和 ready 块，再后台原子写入。恢复沿用档内训练语义；并发、worker、推理上限、设备和宿主内存预算可以覆盖。
 
-缩容在当前规则操作完成后停放并释放规则树与缓存；扩容先恢复旧局。并发可调到零，停放局仍可保存。旧档的学习 batch 不随恢复硬件自动更改。
+缩容在当前规则操作完成后停放并释放规则树与缓存；扩容先恢复旧局。并发可调到零，停放局仍可保存。恢复保留档内学习 batch 和并发（包括零并发），设备、lane、线程、推理上限与宿主内存预算重新检测。保留并发可避免自动停放尚有未决后继的旧局；需要调整时显式指定 `--concurrency`。
 
 ## 训练与资源边界
 

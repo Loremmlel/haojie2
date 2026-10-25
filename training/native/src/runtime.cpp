@@ -3,6 +3,7 @@
 #include "diagnostics/gemm.h"
 #include "diagnostics/service.h"
 #include "engine.h"
+#include "host/hardware.h"
 #include "storage/checkpoint.h"
 #include "workset.h"
 #include <ATen/record_function.h>
@@ -435,7 +436,9 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
     throw std::runtime_error("resume rules mode differs");
   s.shrine = c[9] != 0;
   if (!s.supplied.count("--device"))
-    s.device = c[10] ? (c[11] < 0 ? "cuda" : "cuda:" + std::to_string(c[11])) : "cpu";
+    s.device = s.diagnostic.empty() && !s.workset_games ? "auto"
+               : c[10] ? (c[11] < 0 ? "cuda" : "cuda:" + std::to_string(c[11]))
+                       : "cpu";
   if (!s.supplied.count("--save-seconds"))
     s.save_seconds = double(c[12]) / 1000000;
   return {std::move(s), std::move(archive)};
@@ -491,7 +494,6 @@ class Session {
   std::unique_ptr<Workset> workset;
 
 public:
-  explicit Session(Settings s) : Session(resume_settings(std::move(s))) {}
   explicit Session(std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resumed)
       : settings(std::move(resumed.first)), device(settings.device), learner(settings.width),
         actor(settings.width), optimizer(learner) {
@@ -1738,6 +1740,12 @@ Frame parse(Reader r, std::shared_ptr<Root> &cached, InputPool &pool) {
   r.end();
   return f;
 }
+std::string describe_configuration(Settings settings) {
+  auto resumed = resume_settings(std::move(settings));
+  auto h = hardware(resumed.first.device);
+  select_configuration(resumed.first, h);
+  return configuration_json(resumed.first, h);
+}
 void run(const Settings &settings) {
   if (fs::exists(settings.directory) && !fs::is_empty(settings.directory))
     throw std::runtime_error("run directory must be new or empty");
@@ -1746,7 +1754,16 @@ void run(const Settings &settings) {
   diagnostic::enabled = !settings.diagnostic.empty();
   diagnostic::origin = Clock::now();
   try {
-    Session session(settings);
+    auto resumed = resume_settings(settings);
+    if (settings.diagnostic.empty() && !settings.workset_games) {
+      auto h = hardware(resumed.first.device);
+      select_configuration(resumed.first, h);
+      at::set_num_threads(int(resumed.first.threads));
+      auto description = configuration_json(resumed.first, h);
+      std::cout << description;
+      atomic_text(settings.directory / "configuration.json", description);
+    }
+    Session session(std::move(resumed));
     double init = elapsed(full_started);
     session.execute();
     std::ostringstream wall;

@@ -1,3 +1,4 @@
+#include "host/hardware.h"
 #include "runtime.h"
 #include <ATen/Context.h>
 #include <ATen/Parallel.h>
@@ -57,12 +58,14 @@ int main(int argc, char **argv) {
       return 0;
     }
     if (command == "help") {
-      std::cout << "haojie-train run --directory PATH [--resume CHECKPOINT] [--device cuda|cpu] "
-                   "[--concurrency 12] [--workers 8] [--batch 512] [--chunk 16] [--updates N] "
-                   "[--seconds N]\nhaojie-train status|resize|budget|save|stop --directory "
-                   "PATH\nhaojie-train check [--device cpu|cuda]\n"
-                   "haojie-train workset --directory PATH [--games 16] [--game-samples 256] "
-                   "[--concurrency 12] [--replay REFERENCE_DIRECTORY]\n";
+      std::cout
+          << "haojie-train run --directory PATH [--resume CHECKPOINT] [--device auto|cuda|cpu] "
+             "[--concurrency N] [--workers N] [--batch N] [--chunk 16] [--updates N] "
+             "[--seconds N]\nhaojie-train status|resize|budget|save|stop --directory "
+             "PATH\nhaojie-train check [--device cpu|cuda]\n"
+             "haojie-train configure [--device auto|cuda|cpu] [--resume CHECKPOINT]\n"
+             "haojie-train workset --directory PATH [--games 16] [--game-samples 256] "
+             "[--concurrency 12] [--replay REFERENCE_DIRECTORY]\n";
       return 0;
     }
     at::set_num_threads(int(number("--threads", 1)));
@@ -71,13 +74,16 @@ int main(int argc, char **argv) {
     c10::set_default_dtype(c10::scalarTypeToTypeMeta(torch::kBFloat16));
     torch::manual_seed(number("--seed", 1));
     if (command == "check") {
+      hj::hardware_checks();
       hj::model_checks(torch::Device(text("--device", "cpu")));
       hj::inference_checks(torch::Device(text("--device", "cpu")));
       hj::learning_checks(torch::Device(text("--device", "cpu")));
       hj::runtime_checks();
       return 0;
     }
-    if ((command != "run" && command != "workset" && command != "diagnose") || directory.empty())
+    if ((command != "run" && command != "workset" && command != "diagnose" &&
+         command != "configure") ||
+        (command != "configure" && directory.empty()))
       throw std::runtime_error("use run --directory PATH");
     hj::Settings s;
     if (command == "diagnose") {
@@ -106,7 +112,8 @@ int main(int argc, char **argv) {
       if (!s.resume.empty() || !s.workset_games || !s.game_samples || !text("--samples").empty())
         throw std::runtime_error("workset requires a fresh session and per-game sample quota");
     }
-    s.device = text("--device", "cuda");
+    s.device = text("--device", command == "run" || command == "configure" ? "auto" : "cuda");
+    s.threads = number("--threads", 1);
     s.concurrency = number("--concurrency", 12);
     s.workers = number("--workers", 8);
     s.seed = number("--seed", 1);
@@ -124,7 +131,10 @@ int main(int argc, char **argv) {
     if (!s.workers || !s.chunk || !s.batch || !s.inference_batch || !s.width || !s.publish ||
         s.memory_mb < 128 || s.seconds < 0 || s.save_seconds < 0)
       throw std::runtime_error("invalid training budget");
-    hj::run(s);
+    if (command == "configure")
+      std::cout << hj::describe_configuration(s);
+    else
+      hj::run(s);
     return 0;
   } catch (const std::exception &error) {
     std::cerr << error.what() << "\n";

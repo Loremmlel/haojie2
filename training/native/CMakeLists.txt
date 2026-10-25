@@ -30,8 +30,17 @@ if(EXISTS "${LIBTORCH}/lib/torch_cuda.lib" OR EXISTS "${LIBTORCH}/lib/libtorch_c
     elseif(NOT EXISTS "${CUDA_RUNTIME_ROOT}/include/crt/host_defines.h")
       message(FATAL_ERROR "CUDA Runtime redist also requires matching CRT headers: set CUDA_CRT_ROOT")
     endif()
-    target_link_directories(haojie-train PRIVATE "${CUDA_RUNTIME_ROOT}/lib/x64" "${CUDA_RUNTIME_ROOT}/lib64")
-    target_link_libraries(haojie-train PRIVATE cuda cudart)
+    if(WIN32)
+      target_link_directories(haojie-train PRIVATE "${CUDA_RUNTIME_ROOT}/lib/x64")
+      target_link_libraries(haojie-train PRIVATE cuda cudart)
+    else()
+      # NVIDIA 的 Python 分发包仅提供带版本号的共享库。
+      find_library(HJ_CUDART NAMES cudart libcudart.so.12 libcudart.so.13
+        PATHS "${CUDA_RUNTIME_ROOT}/lib" "${CUDA_RUNTIME_ROOT}/lib64" NO_DEFAULT_PATH REQUIRED)
+      find_library(HJ_CUDA_DRIVER NAMES cuda libcuda.so.1
+        HINTS /usr/local/nvidia/lib64 /usr/lib/wsl/lib REQUIRED)
+      target_link_libraries(haojie-train PRIVATE "${HJ_CUDA_DRIVER}" "${HJ_CUDART}")
+    endif()
   else()
     find_package(CUDAToolkit 12.4 REQUIRED)
     target_link_libraries(haojie-train PRIVATE CUDA::cuda_driver CUDA::cudart)
@@ -44,6 +53,8 @@ if(WIN32)
     target_link_options(haojie-train PRIVATE "/INCLUDE:?warp_size@cuda@at@@YAHXZ")
   endif()
 else()
+  set(TORCH_CXX11_ABI "1" CACHE STRING "LibTorch C++ ABI (0 or 1)")
+  target_compile_definitions(haojie-train PRIVATE _GLIBCXX_USE_CXX11_ABI=${TORCH_CXX11_ABI})
   target_compile_options(haojie-train PRIVATE -O3)
   if(EXISTS "${LIBTORCH}/lib/libtorch_cuda.so")
     # CUDA 后端依靠共享库初始化注册，保留它与 CPU 调度器之间的链接。
