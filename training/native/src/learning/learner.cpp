@@ -1,3 +1,4 @@
+#include "diagnostics/timing.h"
 #include "prepared.h"
 #include <ATen/record_function.h>
 #include <iostream>
@@ -53,6 +54,7 @@ struct LearningEngine::Impl {
   Optimizer &optimizer;
   std::atomic<uint64_t> replay_count{0}, fallback_count{0};
   std::array<std::atomic<uint64_t>, 4> work{};
+  diagnostic::GpuSpan timing;
 #ifdef HJ_CUDA
   struct Family {
     Prepared input;
@@ -158,7 +160,8 @@ struct LearningEngine::Impl {
     }
 #endif
   }
-  TrainResult step(const std::vector<Block> &blocks) {
+  TrainResult step(const std::vector<Block> &blocks, Forward prepared) {
+    auto started = diagnostic::now();
 #ifdef HJ_CUDA
     for (auto &family : families) {
       c10::cuda::CUDAGuard device_guard(model->parameters()[0].device());
@@ -166,13 +169,22 @@ struct LearningEngine::Impl {
       if (!input.pack(blocks, optimizer.steps + 1, optimizer.lr, true))
         continue;
       RECORD_FUNCTION("hj.training_graph", std::vector<c10::IValue>());
+      auto submitted = diagnostic::now();
+      timing.start();
       input.bank.upload();
       family->graph->replay();
+      timing.compute_end();
       auto stream = c10::cuda::getCurrentCUDAStream();
       TORCH_CHECK(cudaMemcpyAsync(host_receipt.data_ptr(), family->receipt.data_ptr(), 8,
                                   cudaMemcpyDeviceToHost, stream) == cudaSuccess,
                   "training receipt copy failed");
+      timing.return_end();
       TORCH_CHECK(cudaStreamSynchronize(stream) == cudaSuccess, "training graph execution failed");
+      auto callback = diagnostic::now();
+      timing.report("learn_gpu", optimizer.steps, submitted, callback, input.count,
+                    input.used_tokens);
+      diagnostic::record("learn_wall", optimizer.steps, callback - started, submitted - started,
+                         input.count, 1, timing.uncertainty_ms);
       auto bytes = host_receipt.data_ptr<uint8_t>();
       int accepted;
       std::memcpy(&accepted, bytes, 4);
@@ -196,14 +208,46 @@ struct LearningEngine::Impl {
     }
 #endif
     ++fallback_count;
-    return learn(model, optimizer, blocks);
+    auto tokens_before = model->computed_tokens.load();
+#ifdef HJ_CUDA
+    if (model->parameters()[0].is_cuda())
+      timing.start();
+#endif
+    auto result = learn(model, optimizer, blocks, std::move(prepared));
+#ifdef HJ_CUDA
+    if (model->parameters()[0].is_cuda() && diagnostic::enabled) {
+      timing.compute_end();
+      timing.return_end();
+      c10::cuda::getCurrentCUDAStream().synchronize();
+      timing.report("learn_gpu", optimizer.steps - 1, started, diagnostic::now(), result.consumed,
+                    model->computed_tokens.load() - tokens_before);
+    }
+#endif
+    diagnostic::record("learn_wall", optimizer.steps - 1, diagnostic::now() - started, 0,
+                       result.consumed, 0);
+    return result;
   }
 };
 LearningEngine::LearningEngine(Network &model, Optimizer &optimizer, uint64_t batch)
     : impl(std::make_unique<Impl>(model, optimizer, batch)) {}
 LearningEngine::~LearningEngine() = default;
-TrainResult LearningEngine::step(const std::vector<Block> &blocks) {
-  return impl->step(blocks);
+Forward LearningEngine::prepare(const std::vector<Block> &blocks) {
+#ifdef HJ_CUDA
+  if (!impl->families.empty())
+    return {};
+#endif
+  std::vector<std::shared_ptr<Node>> nodes;
+  for (auto &b : blocks)
+    for (auto &step : b.steps)
+      nodes.push_back(step.node);
+  auto count = nodes.size();
+  for (auto &b : blocks)
+    if (b.bootstrap)
+      nodes.push_back(b.bootstrap);
+  return impl->model->prepare_forward(nodes, count);
+}
+TrainResult LearningEngine::step(const std::vector<Block> &blocks, Forward prepared) {
+  return impl->step(blocks, std::move(prepared));
 }
 uint64_t LearningEngine::replays() const {
   return impl->replay_count;
@@ -354,6 +398,18 @@ void learning_checks(const torch::Device &device) {
   restored_engine.step({block});
   TORCH_CHECK(torch::equal(model->packed_weights, restored->packed_weights),
               "rejected graph update changed next valid update");
+  LearningEngine eager(model, optimizer, 128);
+  // 提前打包下一批后先更新权重；预取不得冻结旧权重或改变下一步更新。
+  auto prepared = eager.prepare({block});
+  eager.step({block});
+  learn(restored, restored_optimizer, {block});
+  eager.step({block}, std::move(prepared));
+  learn(restored, restored_optimizer, {block});
+  TORCH_CHECK(torch::equal(model->packed_weights, restored->packed_weights),
+              "prefetched input changed the next committed weights");
+  for (size_t i = 0; i < optimizer.state.size(); ++i)
+    TORCH_CHECK(torch::equal(optimizer.state[i], restored_optimizer.state[i]),
+                "prefetched input changed BF16 optimizer state");
   std::cout << "complete training graph, typed tables, masked support, bootstrap, A-B-A replay, "
                "BF16 atomic update and restored continuation: passed\n";
 }

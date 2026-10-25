@@ -6,6 +6,7 @@
 
 namespace hj {
 constexpr int64_t DefaultWidth = 384, EncoderLayers = 6;
+using Forward = std::function<std::pair<T, T>()>;
 // 整数位精确对应独立可学习向量；置位向量求和等价于零一矩阵的线性投影。
 struct TypedProjectionImpl : torch::nn::Module {
   torch::nn::EmbeddingBag bits{nullptr};
@@ -53,6 +54,7 @@ struct NetworkImpl : torch::nn::Module {
   // 根、节点、候选均为不补零的张量表，同一根/候选在一次前向内只投影一次。
   std::pair<T, T> forward(const std::vector<std::shared_ptr<Node>> &nodes,
                           int64_t policy_nodes = -1);
+  Forward prepare_forward(const std::vector<std::shared_ptr<Node>> &, int64_t policy_nodes = -1);
 };
 TORCH_MODULE(Network);
 struct CpuWeights {
@@ -91,6 +93,8 @@ CapturedUpdate make_captured_update(const torch::Device &);
 T typed_binary(const T &, bool rows);
 T segmented_table(const T &, const T &, const T &, bool mean);
 T bf16_norm(const T &, torch::nn::LayerNorm &);
+std::vector<T> residual_norm_cuda(const T &, const T &, const T &, const T &, double);
+T short_attention_cuda(const T &, const T &, const T &);
 struct Optimizer {
   UpdateKernel native_update;
   TargetKernel targets;
@@ -109,7 +113,7 @@ struct TrainResult {
   uint64_t consumed = 0;
   double loss = 0;
 };
-TrainResult learn(Network &, Optimizer &, const std::vector<Block> &);
+TrainResult learn(Network &, Optimizer &, const std::vector<Block> &, Forward prepared = {});
 class LearningEngine {
   struct Impl;
   std::unique_ptr<Impl> impl;
@@ -117,7 +121,8 @@ class LearningEngine {
 public:
   LearningEngine(Network &, Optimizer &, uint64_t batch);
   ~LearningEngine();
-  TrainResult step(const std::vector<Block> &);
+  Forward prepare(const std::vector<Block> &);
+  TrainResult step(const std::vector<Block> &, Forward prepared = {});
   uint64_t replays() const;
   uint64_t fallbacks() const;
   std::array<uint64_t, 4> workload() const;

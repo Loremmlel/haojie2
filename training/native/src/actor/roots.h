@@ -1,4 +1,5 @@
 #pragma once
+#include "diagnostics/timing.h"
 #include "flow.h"
 #include <shared_mutex>
 #include <thread>
@@ -27,11 +28,15 @@ class RootService {
   uint64_t batch_limit;
   std::function<void(Job)> send;
   std::unique_ptr<InferenceEngine> engine;
-  std::array<Slot, 2> slots;
+  std::vector<Slot> slots;
   std::atomic<uint64_t> nodes{0}, batches{0};
   std::atomic<double> seconds{0};
   std::thread thread;
   void deliver(Job job, const CpuSnapshot &snapshot) {
+    if (snapshot)
+      diagnostic::record("root", job.game, job.root_started_ms - job.root_queued_ms,
+                         diagnostic::now() - job.root_started_ms,
+                         diagnostic::now() - job.root_queued_ms);
     output.bytes -= job.bytes.capacity() + sizeof(Job);
     job.weights = snapshot;
     job.root_reply = bool(snapshot);
@@ -83,6 +88,21 @@ class RootService {
           size_t work = 0;
           {
             std::lock_guard queue_lock(mutex);
+            // 两槽都空闲时，较大的闭环工作集分开启动，覆盖另一槽的回送和回调。
+            // 已有工作在途或积压超过 16 根时仍取完整批；小表保留合批以摊薄启动开销。
+            auto limit = batch_limit;
+            auto free =
+                std::count_if(slots.begin(), slots.end(), [](auto &s) { return !s.flight; });
+            if (free > 1) {
+              size_t count = 0, tokens = 0;
+              for (auto &job : requests)
+                if (!*job.state->pause) {
+                  ++count;
+                  tokens += job.node->root->rows.size() + 1;
+                }
+              if (count <= 16 && tokens >= 1024)
+                limit = std::min<uint64_t>(limit, (count + free - 1) / free);
+            }
             while (!requests.empty()) {
               auto &next = requests.front();
               if (*next.state->pause) {
@@ -91,7 +111,7 @@ class RootService {
                 continue;
               }
               auto cost = next.node->root->rows.size() + 1;
-              if (!jobs.empty() && (jobs.size() >= batch_limit || work + cost > 8192))
+              if (!jobs.empty() && (jobs.size() >= limit || work + cost > 8192))
                 break;
               work += cost;
               inputs.push_back(next.node);
@@ -104,8 +124,10 @@ class RootService {
           if (jobs.empty())
             continue;
           slot.weights = weights.load();
-          for (auto &job : jobs)
+          for (auto &job : jobs) {
+            job.root_started_ms = diagnostic::now();
             job.state->flow->store(Flow::RootRunning);
+          }
           try {
             slot.flight = engine->submit(i, std::move(inputs), slot.weights->version);
             slot.jobs = std::move(jobs);
@@ -141,10 +163,12 @@ public:
   RootService(Network &actor, const torch::Device &device, std::atomic<bool> &paused,
               std::atomic<bool> &publishing, std::atomic<CpuSnapshot> &weights,
               std::shared_mutex &actor_weights, Mailbox &output, uint64_t batch_limit,
-              std::function<void(Job)> send)
+              std::function<void(Job)> send, size_t slot_count = 2)
       : paused(paused), publishing(publishing), weights(weights), actor_weights(actor_weights),
         output(output), batch_limit(batch_limit), send(std::move(send)),
-        engine(std::make_unique<InferenceEngine>(actor, device, [this] { wake(); })) {
+        engine(std::make_unique<InferenceEngine>(
+            actor, device, [this] { wake(); }, slot_count, batch_limit)),
+        slots(slot_count) {
     thread = std::thread([this] { loop(); });
   }
   bool submit(Job &job) {
@@ -154,6 +178,7 @@ public:
         return false;
       output.bytes += job.bytes.capacity() + sizeof(Job);
       job.weights.reset();
+      job.root_queued_ms = diagnostic::now();
       requests.push_back(std::move(job));
       ++revision;
     }
@@ -184,6 +209,9 @@ public:
   }
   RootStats progress() const {
     return {nodes.load(), batches.load(), seconds.load()};
+  }
+  bool queued() {
+    return pending();
   }
 };
 } // namespace hj

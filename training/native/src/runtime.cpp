@@ -1,5 +1,7 @@
 #include "runtime.h"
 #include "actor/roots.h"
+#include "diagnostics/gemm.h"
+#include "diagnostics/service.h"
 #include "engine.h"
 #include "storage/checkpoint.h"
 #include "workset.h"
@@ -20,6 +22,10 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
+#endif
+#ifdef HJ_CUDA
+#include <c10/core/AllocatorConfig.h>
+#include <c10/cuda/CUDACachingAllocator.h>
 #endif
 
 namespace hj {
@@ -158,6 +164,7 @@ class Lane {
   Mailbox &output;
   std::atomic<bool> &paused;
   std::atomic<CpuSnapshot> &weights;
+  Admission &admission;
   std::function<bool(Job &)> request_root;
   std::atomic<uint64_t> &cache_hits;
   std::thread thread;
@@ -186,9 +193,10 @@ class Lane {
 
 public:
   Lane(Mailbox &out, std::atomic<bool> &paused, std::atomic<CpuSnapshot> &weights,
-       std::function<bool(Job &)> request_root, std::atomic<uint64_t> &cache_hits)
+       std::function<bool(Job &)> request_root, std::atomic<uint64_t> &cache_hits,
+       Admission &admission)
       : output(out), paused(paused), weights(weights), request_root(std::move(request_root)),
-        cache_hits(cache_hits), thread([this] {
+        admission(admission), cache_hits(cache_hits), thread([this] {
           void *actor = hj_actor_create();
           CpuPolicy policy;
           InputPool inputs;
@@ -205,6 +213,9 @@ public:
               jobs.pop_front();
             }
             Event e{job.game, job.op, {}, {}};
+            auto lane_started = diagnostic::now();
+            double policy_ms = 0;
+            diagnostic::record("lane_queue", job.game, lane_started - job.queued_ms);
             if (job.op == 1 && (this->paused || *job.state->pause || closing)) {
               e.kind = job.node ? 0 : 2;
               output.bytes -= job.bytes.capacity();
@@ -218,6 +229,25 @@ public:
                 Bytes reply;
                 const Bytes *input = &job.bytes;
                 if (job.node) {
+                  if (this->admission.capacity) {
+                    auto &g = *job.state;
+                    std::lock_guard lock(*g.progress_mutex);
+                    if (g.actor == g.learner && !g.reserved) {
+                      if (!this->admission.acquire()) {
+                        if (!g.partial.empty()) {
+                          g.completed.push_back({std::move(g.partial), g.current});
+                          g.partial.clear();
+                        }
+                        e.kind = 0;
+                        output.bytes -= job.bytes.capacity();
+                        output.push(std::move(e));
+                        continue;
+                      }
+                      g.reserved = true;
+                      // 排队但尚未准入的行为不持旧轮快照；已预留的根在途仍保留原绑定。
+                      job.weights = this->weights.load();
+                    }
+                  }
                   if (!job.weights)
                     job.weights = this->weights.load();
                   if (!host_ready(*job.node->root, job.weights)) {
@@ -243,6 +273,8 @@ public:
                   job.root_reply = false;
                   auto start = Clock::now();
                   auto mass = policy.score(*job.node, job.weights);
+                  policy_ms = elapsed(start) * 1000;
+                  diagnostic::record("policy", job.game, policy_ms);
                   {
                     std::lock_guard lock(*job.state->progress_mutex);
                     job.state->policy_seconds += elapsed(start);
@@ -258,7 +290,9 @@ public:
                 const uint8_t *p = nullptr;
                 size_t n = 0;
                 RECORD_FUNCTION("haojie::rust_actor", std::vector<c10::IValue>());
+                auto rules_started = diagnostic::now();
                 int status = hj_actor_call(actor, job.op, input->data(), input->size(), &p, &n);
+                diagnostic::record("rules", job.game, diagnostic::now() - rules_started, job.op);
                 if (status)
                   e.error = std::string(reinterpret_cast<const char *>(p), n);
                 else {
@@ -286,6 +320,7 @@ public:
                         if (g.sent_training) {
                           TORCH_CHECK(!g.pending, "missing same-seat successor");
                           g.pending = Step{g.sent, f.selected, f.logp, g.sent_version, false, 0};
+                          g.reserved = false;
                         }
                         g.sent.reset();
                       }
@@ -348,6 +383,7 @@ public:
           hj_actor_close(actor);
         }) {}
   void submit(Job job) {
+    job.queued_ms = diagnostic::now();
     {
       std::lock_guard<std::mutex> lock(mutex);
       output.bytes += job.bytes.capacity();
@@ -384,7 +420,8 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
   fixed("--width", s.width, 0);
   fixed("--seed", s.seed, 1);
   fixed("--chunk", s.chunk, 2);
-  fixed("--batch", s.batch, 3);
+  if (s.diagnostic != "learner")
+    fixed("--batch", s.batch, 3);
   fixed("--publish", s.publish, 7);
   if (!s.supplied.count("--concurrency"))
     s.concurrency = c[4];
@@ -412,6 +449,11 @@ class Session {
   Mailbox mailbox;
   InputPool inputs;
   std::atomic<bool> sampling_paused{false};
+  bool ready_paused = false;
+  Admission admission;
+  uint64_t epoch_version = 0, lag_drains = 0;
+  static constexpr uint64_t LagLimit = 64, EpochUpdates = 48;
+  uint64_t consumed_within_lag = 0, consumed_lag_max = 0, peak_ready = 0;
   bool quiescing = false;
   std::vector<std::unique_ptr<Lane>> lanes;
   std::map<uint64_t, Game> games;
@@ -428,9 +470,13 @@ class Session {
     TrainResult result;
     uint64_t updates;
     double seconds;
+    double returned_ms;
+    uint64_t within_lag, lag_max;
   };
   std::optional<Commit> learning_commit;
   std::vector<Block> in_learning;
+  std::vector<Block> next_learning;
+  std::future<Forward> prepared_learning;
   std::future<void> writer;
   Clock::time_point start, last_status, last_save, activity_at;
   double active_game_seconds = 0;
@@ -439,6 +485,7 @@ class Session {
   double learning_seconds = 0, inference_seconds = 0;
   Clock::time_point learn_start;
   std::unique_ptr<Executor> learning_executor;
+  std::unique_ptr<Executor> preparation_executor;
   std::unique_ptr<RootService> roots;
   std::unique_ptr<LearningEngine> learning_engine;
   std::unique_ptr<Workset> workset;
@@ -449,6 +496,14 @@ public:
       : settings(std::move(resumed.first)), device(settings.device), learner(settings.width),
         actor(settings.width), optimizer(learner) {
     learner->to(device);
+#ifdef HJ_CUDA
+    if (device.is_cuda()) {
+      // 先建立明确设备预算，分配器才会按阈值回收空闲缓存；留出驱动和外部驻留余量。
+      c10::CachingAllocator::setAllocatorSettings("garbage_collection_threshold:0.7");
+      c10::cuda::CUDACachingAllocator::setMemoryFraction(0.9,
+                                                         device.index() < 0 ? 0 : device.index());
+    }
+#endif
     actor->to(device);
     // 优化器在设备迁移后重建，浮点参数及状态始终为 BF16。
     optimizer = Optimizer(learner);
@@ -460,21 +515,68 @@ public:
       workset =
           std::make_unique<Workset>(settings.workset_games, settings.game_samples, settings.replay);
     }
-    for (uint64_t i = 0; i < settings.workers; ++i)
+    if (!workset && settings.diagnostic != "actor" && settings.diagnostic != "learner" &&
+        settings.diagnostic != "inference" && settings.diagnostic != "service" &&
+        settings.diagnostic != "gemm")
+      admission.capacity = 8 * settings.batch;
+    for (uint64_t i = 0;
+         settings.diagnostic != "learner" && settings.diagnostic != "inference" &&
+         settings.diagnostic != "service" && settings.diagnostic != "gemm" && i < settings.workers;
+         ++i)
       lanes.push_back(std::make_unique<Lane>(
           mailbox, sampling_paused, cpu_weights, [this](Job &job) { return roots->submit(job); },
-          actor->cache_hits));
+          actor->cache_hits, admission));
+    auto diagnostic_batch = settings.batch;
     if (resumed.second)
       restore(*resumed.second);
+    if (settings.diagnostic == "learner")
+      settings.batch = diagnostic_batch;
+    epoch_version = actor_version;
+    if (admission.capacity) {
+      uint64_t outstanding = ready_steps();
+      auto include = [&](const Step &step) {
+        epoch_version = std::min(epoch_version, step.version);
+      };
+      for (auto &block : ready)
+        for (auto &step : block.steps)
+          include(step);
+      for (auto &[id, g] : games) {
+        outstanding += g.partial.size() + bool(g.pending);
+        for (auto &step : g.partial)
+          include(step);
+        if (g.pending)
+          include(*g.pending);
+      }
+      if (!outstanding && optimizer.steps - epoch_version >= EpochUpdates) {
+        copy_weights(learner, actor);
+        synchronize(device);
+        actor_version = published = epoch_version = optimizer.steps;
+      }
+      TORCH_CHECK(optimizer.steps - epoch_version +
+                          (outstanding + settings.batch - 1) / settings.batch <=
+                      LagLimit,
+                  "checkpoint backlog exceeds strict lag capacity; archive remains unchanged");
+      admission.outstanding = outstanding;
+      admission.draining =
+          outstanding > admission.capacity || optimizer.steps - epoch_version >= EpochUpdates;
+    }
     // 主线程的初始化完成后，持久流才可读取模型和优化器。
     synchronize(learner->parameters()[0].device());
     cpu_weights.store(CpuPolicy::snapshot(actor, actor_version.load()));
+    if (settings.diagnostic == "inference" || settings.diagnostic == "service" ||
+        settings.diagnostic == "gemm")
+      return;
     learning_engine = std::make_unique<LearningEngine>(learner, optimizer, settings.batch);
+    if (settings.diagnostic == "learner")
+      return;
     roots = std::make_unique<RootService>(
         actor, device, sampling_paused, publishing, cpu_weights, actor_weights, mailbox,
         settings.inference_batch,
-        [this](Job job) { lanes[job.game % lanes.size()]->submit(std::move(job)); });
+        [this](Job job) { lanes[job.game % lanes.size()]->submit(std::move(job)); },
+        settings.root_slots);
     learning_executor =
+        std::make_unique<Executor>(mailbox, learner->parameters()[0].device(), false);
+    preparation_executor =
         std::make_unique<Executor>(mailbox, learner->parameters()[0].device(), false);
     initial = counters;
     initial_updates = committed_updates = optimizer.steps;
@@ -484,7 +586,9 @@ public:
   ~Session() {
     sampling_paused = true;
     learning_executor.reset();
-    roots->stop();
+    preparation_executor.reset();
+    if (roots)
+      roots->stop();
     for (auto &lane : lanes)
       lane.reset();
     roots.reset();
@@ -503,6 +607,9 @@ public:
     lanes[g.id % lanes.size()]->submit(std::move(job));
   }
   void enqueue(Game &g) {
+    if (admission.capacity && g.actor == g.learner && !g.reserved &&
+        (admission.draining || admission.outstanding >= admission.capacity))
+      return;
     if (g.idle() && !g.parked && !g.parking && !sampling_paused && !*g.pause && g.current) {
       g.flow->store(Flow::Cpu);
       Job job{g.id, 1, {}};
@@ -556,6 +663,8 @@ public:
     for (auto &b : ready)
       bytes += sizeof(Block) + b.steps.capacity() * sizeof(Step);
     for (auto &b : in_learning)
+      bytes += sizeof(Block) + b.steps.capacity() * sizeof(Step);
+    for (auto &b : next_learning)
       bytes += sizeof(Block) + b.steps.capacity() * sizeof(Step);
     return bytes;
   }
@@ -619,6 +728,11 @@ public:
       if (e.op == 3) {
         g.parked = true;
         g.parking = false;
+        // 停放前已排空规则调用；尚未产生行为的预留可撤销，真实 pending 继续保留。
+        if (g.reserved) {
+          g.reserved = false;
+          --admission.outstanding;
+        }
         if (g.current && g.actor == g.learner && !g.partial.empty()) {
           ready.push_back({std::move(g.partial), g.current});
           g.partial.clear();
@@ -663,8 +777,14 @@ public:
       commit = std::exchange(learning_commit, std::nullopt);
     }
     if (commit) {
+      diagnostic::record("learn_callback", commit->updates,
+                         diagnostic::now() - commit->returned_ms);
       committed_updates = commit->updates;
       counters.consumed += commit->result.consumed;
+      if (admission.capacity)
+        admission.outstanding -= commit->result.consumed;
+      consumed_within_lag += commit->within_lag;
+      consumed_lag_max = std::max(consumed_lag_max, commit->lag_max);
       committed_graph_replays = learning_engine->replays();
       committed_graph_fallbacks = learning_engine->fallbacks();
       committed_graph_work = learning_engine->workload();
@@ -672,60 +792,115 @@ public:
       in_learning.clear();
     }
   }
+  void publish_weights() {
+    // 前向与反向不持推理锁。只在整批推理结束后发布，并等待拷贝完成再交权。
+    publishing = true;
+    std::unique_lock lock(actor_weights);
+    roots->wait_reads();
+    copy_weights(learner, actor);
+    synchronize(device);
+    cpu_weights.store(CpuPolicy::snapshot(actor, optimizer.steps));
+    actor_version = published = optimizer.steps;
+    publishing = false;
+    roots->wake();
+  }
   void train() {
     RECORD_FUNCTION("haojie::train", std::vector<c10::IValue>());
     collect_learning();
-    if (learning.valid() || ready.empty())
+    if (settings.diagnostic == "actor")
       return;
-    uint64_t desired = settings.batch;
-    if (settings.samples)
-      desired = std::min(desired, settings.samples - (counters.consumed - initial.consumed));
-    if (!desired)
+    if (settings.defer_learning && roots->queued())
       return;
-    uint64_t n = 0;
-    while (!ready.empty() && n < desired) {
-      auto &block = ready.front();
-      auto take = std::min<uint64_t>(block.steps.size(), desired - n);
-      if (take == block.steps.size()) {
-        n += take;
-        in_learning.push_back(std::move(block));
-        ready.pop_front();
-      } else {
-        Block head;
-        head.steps.assign(std::make_move_iterator(block.steps.begin()),
-                          std::make_move_iterator(block.steps.begin() + take));
-        head.bootstrap = block.steps[take].node;
-        block.steps.erase(block.steps.begin(), block.steps.begin() + take);
-        in_learning.push_back(std::move(head));
-        n += take;
+    if (admission.capacity && committed_updates - epoch_version >= EpochUpdates &&
+        !admission.draining) {
+      admission.draining = true;
+      ++lag_drains;
+      diagnostic::record("lag_drain_begin", committed_updates, admission.outstanding,
+                         ready_steps());
+    }
+    // 排空阶段先等旧行为取得真实同席位后继，再以至多八批提交整个有界存量。
+    uint64_t prepared_count = 0;
+    for (auto &b : next_learning)
+      prepared_count += b.steps.size();
+    if (admission.draining && admission.outstanding != ready_steps() + prepared_count &&
+        !learning.valid())
+      return;
+    if (next_learning.empty()) {
+      if (ready.empty())
+        return;
+      uint64_t desired = settings.batch;
+      if (settings.samples) {
+        uint64_t inflight = 0;
+        for (auto &b : in_learning)
+          inflight += b.steps.size();
+        desired =
+            std::min(desired, settings.samples - (counters.consumed - initial.consumed) - inflight);
       }
+      if (!desired)
+        return;
+      uint64_t n = 0;
+      while (!ready.empty() && n < desired) {
+        auto &block = ready.front();
+        auto take = std::min<uint64_t>(block.steps.size(), desired - n);
+        if (take == block.steps.size()) {
+          n += take;
+          next_learning.push_back(std::move(block));
+          ready.pop_front();
+        } else {
+          Block head;
+          head.steps.assign(std::make_move_iterator(block.steps.begin()),
+                            std::make_move_iterator(block.steps.begin() + take));
+          head.bootstrap = block.steps[take].node;
+          block.steps.erase(block.steps.begin(), block.steps.begin() + take);
+          next_learning.push_back(std::move(head));
+          n += take;
+        }
+      }
+      if (n < desired && !admission.draining && !(workset && workset->complete()) &&
+          managed() < settings.memory_mb * 1024 * 1024 / 2) {
+        for (auto it = next_learning.rbegin(); it != next_learning.rend(); ++it)
+          ready.push_front(std::move(*it));
+        next_learning.clear();
+        return;
+      }
+      prepared_learning = preparation_executor->submit([this, blocks = next_learning] {
+        auto started = diagnostic::now();
+        auto forward = learning_engine->prepare(blocks);
+        synchronize(device);
+        diagnostic::record("learn_pack", 0, diagnostic::now() - started);
+        return forward;
+      });
     }
-    if (n < desired && !(workset && workset->complete()) &&
-        managed() < settings.memory_mb * 1024 * 1024 / 2) {
-      for (auto it = in_learning.rbegin(); it != in_learning.rend(); ++it)
-        ready.push_front(std::move(*it));
-      in_learning.clear();
+    if (learning.valid())
       return;
-    }
+    in_learning = std::move(next_learning);
+    next_learning.clear();
     learn_start = Clock::now();
-    learning = learning_executor->submit([this] {
-      auto result = learning_engine->step(in_learning);
+    learning = learning_executor->submit([this, prepared = std::move(prepared_learning)]() mutable {
+      diagnostic::record("learn_queue", optimizer.steps, elapsed(learn_start) * 1000);
+      uint64_t count = 0, maximum = 0, total = 0, within = 0;
+      for (auto &block : in_learning)
+        for (auto &step : block.steps) {
+          auto lag = optimizer.steps - step.version;
+          TORCH_CHECK(!admission.capacity || lag <= LagLimit, "strict policy lag exceeded");
+          maximum = std::max(maximum, lag);
+          total += lag;
+          within += lag <= LagLimit;
+          ++count;
+        }
+      auto result = learning_engine->step(in_learning, prepared.get());
+      TORCH_CHECK(result.consumed == count, "learning receipt count differs");
+      const bool finish_drain = admission.draining && admission.outstanding == count;
+      diagnostic::record("learn_lag", optimizer.steps - 1, maximum, double(total) / count, count,
+                         within);
       {
         std::lock_guard lock(mailbox.mutex);
-        learning_commit = Commit{result, optimizer.steps, elapsed(learn_start)};
+        learning_commit = Commit{result, optimizer.steps, elapsed(learn_start), diagnostic::now(),
+                                 within, maximum};
       }
       mailbox.changed.notify_one();
-      if (optimizer.steps - published >= settings.publish) {
-        // 前向与反向不持推理锁。只在整批推理结束后发布，并等待拷贝完成再交权。
-        publishing = true;
-        std::unique_lock lock(actor_weights);
-        roots->wait_reads();
-        copy_weights(learner, actor);
-        synchronize(learner->parameters()[0].device());
-        cpu_weights.store(CpuPolicy::snapshot(actor, optimizer.steps));
-        actor_version = published = optimizer.steps;
-        publishing = false;
-        roots->wake();
+      if (optimizer.steps - published >= settings.publish || finish_drain) {
+        publish_weights();
       }
       return result;
     });
@@ -747,6 +922,8 @@ public:
         --running;
       }
     }
+    if (sampling_paused)
+      return;
     for (auto &p : games) {
       auto &g = p.second;
       if (running >= settings.concurrency || active() >= settings.concurrency)
@@ -784,9 +961,47 @@ public:
   }
   void sampling_budget() {
     uint64_t budget = settings.memory_mb * 1024 * 1024;
+    auto queued = ready_steps();
+    peak_ready = std::max(peak_ready, queued);
+    // 真实块达到四批时暂停 actor，两批以下恢复；在途操作完成后原样保留。
+    // actor-only 诊断没有消费者，显式跳过消费速率背压。
+    if (settings.diagnostic != "actor" && !admission.capacity) {
+      if (queued >= 4 * settings.batch)
+        ready_paused = true;
+      else if (queued <= 2 * settings.batch)
+        ready_paused = false;
+    }
+    if (admission.capacity) {
+      for (auto &[id, g] : games) {
+        std::lock_guard lock(*g.progress_mutex);
+        progress_locked(g);
+        if (g.idle() && g.current && g.actor == g.learner && !g.partial.empty() &&
+            (admission.draining || admission.outstanding >= admission.capacity)) {
+          ready.push_back({std::move(g.partial), g.current});
+          g.partial.clear();
+        }
+      }
+      if (admission.draining && !learning.valid() && !admission.outstanding) {
+        if (actor_version != committed_updates) {
+          // 恰好空队列跨过轮边界时也必须发布；不依赖常规发布周期整除轮长。
+          learning = learning_executor->submit([this] {
+            publish_weights();
+            return TrainResult{};
+          });
+        } else {
+          epoch_version = committed_updates;
+          admission.draining = false;
+          diagnostic::record("lag_drain_end", committed_updates);
+        }
+      }
+      if (!sampling_paused && !quiescing)
+        for (auto &[id, g] : games)
+          if (g.idle() && !g.parked && !g.parking && g.current)
+            enqueue(g);
+    }
     if (managed() > budget * 3 / 4)
       inputs.trim();
-    if (managed() > budget * 3 / 4) {
+    if (ready_paused || managed() > budget * 3 / 4) {
       sampling_paused = true;
       roots->wake();
       for (auto &p : games) {
@@ -854,11 +1069,13 @@ public:
     for (auto &entry : games)
       progress_locked(entry.second);
     auto delta = window ? initial : Counters{};
-    uint64_t partial = 0, pending = 0, busy = 0, parked = 0, advancing = 0, inference_waiting = 0,
-             inference_running = 0;
+    uint64_t partial = 0, pending = 0, reserved = 0, parked_pending = 0, busy = 0, parked = 0,
+             advancing = 0, inference_waiting = 0, inference_running = 0;
     for (auto &p : games) {
       partial += p.second.partial.size();
       pending += bool(p.second.pending);
+      reserved += p.second.reserved;
+      parked_pending += p.second.parked && bool(p.second.pending);
       auto phase = p.second.flow->load();
       busy += phase == Flow::Cpu;
       inference_running += phase == Flow::RootRunning;
@@ -903,10 +1120,37 @@ public:
     uint64_t learning_steps = 0;
     for (auto &b : in_learning)
       learning_steps += b.steps.size();
+    for (auto &b : next_learning)
+      learning_steps += b.steps.size();
     if (counters.consumed + ready_steps() + partial + learning_steps != counters.produced)
       throw std::runtime_error("trajectory accounting differs");
-    o << learning_steps << ",\n  \"inference_nodes\": " << infer_nodes
-      << ",\n  \"encoder_nodes\": " << encoder.nodes
+    TORCH_CHECK(!admission.capacity || admission.outstanding == counters.produced -
+                                                                    counters.consumed + pending +
+                                                                    reserved,
+                "behavior admission accounting differs");
+    o << learning_steps;
+    o << ",\n  \"lag_limit\": " << LagLimit
+      << ",\n  \"strict_lag\": " << (admission.capacity ? "true" : "false")
+      << ",\n  \"lag_drains\": " << lag_drains
+      << ",\n  \"admission_outstanding\": " << admission.outstanding
+      << ",\n  \"lag_waiting_parked\": " << (admission.draining ? parked_pending : 0)
+      << ",\n  \"consumed_within_lag\": " << consumed_within_lag
+      << ",\n  \"consumed_lag_max\": " << consumed_lag_max
+      << ",\n  \"peak_ready_steps\": " << peak_ready
+      << ",\n  \"ready_backpressure\": " << (ready_paused ? "true" : "false");
+    if (diagnostic::enabled) {
+      uint64_t maximum = 0, total = 0, count = 0;
+      for (auto &block : ready)
+        for (auto &step : block.steps) {
+          auto lag = committed_updates - step.version;
+          maximum = std::max(maximum, lag);
+          total += lag;
+          ++count;
+        }
+      o << ",\n  \"ready_lag_max\": " << maximum
+        << ",\n  \"ready_lag_mean\": " << (count ? double(total) / count : 0);
+    }
+    o << ",\n  \"inference_nodes\": " << infer_nodes << ",\n  \"encoder_nodes\": " << encoder.nodes
       << ",\n  \"encoder_batches\": " << encoder.batches
       << ",\n  \"policy_cpu_seconds\": " << inference_seconds
       << ",\n  \"encoder_seconds\": " << encoder.seconds
@@ -949,6 +1193,11 @@ public:
     roots->wake();
     settle();
     collect_learning(true);
+    if (prepared_learning.valid())
+      prepared_learning.get();
+    for (auto it = next_learning.rbegin(); it != next_learning.rend(); ++it)
+      ready.push_front(std::move(*it));
+    next_learning.clear();
     if (writer.valid())
       writer.get();
     for (auto &p : games)
@@ -1126,9 +1375,170 @@ public:
     if (optimizer.steps != steps)
       throw std::runtime_error("optimizer metadata differs");
   }
+  // 只读检查点里的真实 ready 块，固定顺序与转换配额；不保存诊断更新。
+  void replay_learning() {
+    TORCH_CHECK(!settings.resume.empty(), "learner diagnostic requires a checkpoint");
+    auto quota = settings.samples ? settings.samples : 4096;
+    TORCH_CHECK(quota % settings.batch == 0 && ready_steps() >= quota,
+                "learner diagnostic requires enough ready steps and complete batches");
+    std::vector<std::vector<Block>> batches;
+    uint64_t used = 0;
+    std::vector<Block> batch;
+    uint64_t size = 0;
+    for (auto &source : ready) {
+      for (size_t at = 0; at < source.steps.size() && used < quota;) {
+        auto take =
+            std::min<uint64_t>({source.steps.size() - at, settings.batch - size, quota - used});
+        Block part;
+        part.steps.assign(source.steps.begin() + at, source.steps.begin() + at + take);
+        part.bootstrap =
+            at + take < source.steps.size() ? source.steps[at + take].node : source.bootstrap;
+        batch.push_back(std::move(part));
+        at += take;
+        used += take;
+        size += take;
+        if (size == settings.batch) {
+          batches.push_back(std::move(batch));
+          batch.clear();
+          size = 0;
+        }
+      }
+      if (used == quota)
+        break;
+    }
+    auto original = learner->packed_weights.detach().clone();
+    std::vector<T> original_state;
+    for (auto &state : optimizer.state)
+      original_state.push_back(state.clone());
+    auto original_steps = optimizer.steps;
+    for (auto &b : batches)
+      learning_engine->step(b);
+    {
+      torch::NoGradGuard guard;
+      learner->packed_weights.copy_(original);
+      for (size_t i = 0; i < optimizer.state.size(); ++i)
+        optimizer.state[i].copy_(original_state[i]);
+      optimizer.steps = original_steps;
+      ++learner->revision;
+    }
+    synchronize(device);
+    diagnostic::record("window_begin", 0);
+    auto begin = Clock::now();
+    Executor preparation(mailbox, device, false);
+    auto prepare = [&](size_t i) {
+      return preparation.submit([&, i] {
+        auto started = diagnostic::now();
+        auto forward = learning_engine->prepare(batches[i]);
+        synchronize(device);
+        diagnostic::record("learn_pack", i, diagnostic::now() - started);
+        return forward;
+      });
+    };
+    auto prepared = prepare(0);
+    for (size_t i = 0; i < batches.size(); ++i) {
+      auto forward = prepared.get();
+      if (i + 1 < batches.size())
+        prepared = prepare(i + 1);
+      learning_engine->step(batches[i], std::move(forward));
+    }
+    auto wall = elapsed(begin);
+    diagnostic::record("window_end", 0);
+    diagnostic::memory(device);
+    diagnostic::save(settings.directory / "timing.csv");
+    std::ostringstream out;
+    out << std::setprecision(12) << "{\"seconds\":" << wall << ",\"consumed\":" << quota
+        << ",\"updates\":" << optimizer.steps - original_steps << ",\"batch\":" << settings.batch
+        << ",\"consumed_per_second\":" << quota / wall << "}\n";
+    atomic_text(settings.directory / "window.json", out.str());
+    std::cout << out.str();
+  }
+  std::vector<std::shared_ptr<Node>> inference_fixture() {
+    TORCH_CHECK(!settings.resume.empty(), "inference diagnostic requires a checkpoint");
+    std::vector<std::shared_ptr<Node>> fixture;
+    std::set<std::pair<uint64_t, uint64_t>> seen;
+    for (auto &b : ready) {
+      for (auto &s : b.steps)
+        if (seen.insert({s.node->root->game, s.node->root->id}).second)
+          fixture.push_back(s.node);
+      if (fixture.size() >= 32)
+        break;
+    }
+    TORCH_CHECK(fixture.size() >= 32, "inference diagnostic needs 32 distinct real roots");
+    fixture.resize(32);
+    return fixture;
+  }
+  void replay_inference() {
+    TORCH_CHECK(settings.inference_batch == 1 || settings.inference_batch == 32,
+                "inference diagnostic requires batch 1 or 32");
+    auto fixture = inference_fixture();
+    InferenceEngine engine(actor, device, [] {}, 1);
+    auto pass = [&] {
+      for (size_t i = 0; i < fixture.size(); i += settings.inference_batch) {
+        std::vector<std::shared_ptr<Node>> nodes(fixture.begin() + i,
+                                                 fixture.begin() + i + settings.inference_batch);
+        for (auto &n : nodes)
+          n->root->clear_cache();
+        auto flight = engine.submit(0, std::move(nodes), actor_version.load());
+        engine.wait_reads();
+        engine.finish(flight);
+      }
+    };
+    auto warm = Clock::now();
+    do {
+      pass();
+    } while (elapsed(warm) < settings.warmup);
+    auto count = settings.samples ? settings.samples : 4096;
+    TORCH_CHECK(count % 32 == 0, "inference sample count must be a multiple of 32");
+    if (!settings.profile.empty()) {
+      namespace pi = torch::profiler::impl;
+      pi::ExperimentalConfig experimental;
+      experimental.profile_all_threads = true;
+      pi::ProfilerConfig config(pi::ProfilerState::KINETO, false, false, false, false, false,
+                                experimental);
+      std::set<pi::ActivityType> activities{pi::ActivityType::CPU, pi::ActivityType::CUDA};
+      torch::autograd::profiler::prepareProfiler(config, activities);
+      torch::autograd::profiler::enableProfiler(config, activities);
+    }
+    diagnostic::record("window_begin", 0);
+    auto begin = Clock::now();
+    for (size_t i = 0; i < count / 32; ++i)
+      pass();
+    auto wall = elapsed(begin);
+    diagnostic::record("window_end", 0);
+    diagnostic::memory(device);
+    diagnostic::save(settings.directory / "timing.csv");
+    if (!settings.profile.empty()) {
+      auto trace = torch::autograd::profiler::disableProfiler();
+      trace->save(settings.profile.string());
+    }
+    std::ostringstream out;
+    out << std::setprecision(12) << "{\"seconds\":" << wall << ",\"root_forwards\":" << count
+        << ",\"batch\":" << settings.inference_batch
+        << ",\"root_forwards_per_second\":" << count / wall << "}\n";
+    atomic_text(settings.directory / "window.json", out.str());
+    std::cout << out.str();
+  }
   void execute() {
+    if (settings.diagnostic == "gemm") {
+      diagnostic::gemm(actor, settings);
+      return;
+    }
+    if (settings.diagnostic == "service") {
+      diagnostic::service(actor, device, settings, inference_fixture(), cpu_weights.load(),
+                          actor_version.load());
+      return;
+    }
+    if (settings.diagnostic == "inference") {
+      replay_inference();
+      return;
+    }
+    if (settings.diagnostic == "learner") {
+      replay_learning();
+      return;
+    }
     bool stopping = false;
     bool profiling = false, profiled = false;
+    bool warmed = settings.diagnostic.empty();
     auto last_control = start - std::chrono::seconds(1);
     while (!stopping) {
       auto observed_revision = mailbox.revision.load();
@@ -1153,6 +1563,11 @@ public:
       }
       collect();
       collect_learning();
+      if (!warmed && elapsed(start) >= settings.warmup) {
+        atomic_text(settings.directory / "warmup.json", metrics(true));
+        diagnostic::record("window_begin", 0);
+        warmed = true;
+      }
       // 控制文件只需毫秒级响应；规则和设备事件直接唤醒，不重复访问文件系统。
       bool control_tick = elapsed(last_control) >= 0.02;
       if (control_tick) {
@@ -1177,14 +1592,16 @@ public:
           fs::remove(budget_path);
         }
       }
-      if (settings.seconds > 0 && elapsed(start) >= settings.seconds)
+      if (settings.seconds > 0 &&
+          elapsed(start) >= settings.seconds + (settings.diagnostic.empty() ? 0 : settings.warmup))
         stopping = true;
       if (settings.updates > 0 && committed_updates - initial_updates >= settings.updates)
         stopping = true;
       if (settings.samples > 0 && counters.consumed - initial.consumed >= settings.samples)
         stopping = true;
-      if (workset && workset->complete() && !learning.valid() && ready.empty() &&
-          counters.consumed == counters.produced &&
+      if (workset && workset->complete() && !learning.valid() && next_learning.empty() &&
+          (settings.diagnostic == "actor" ||
+           (ready.empty() && counters.consumed == counters.produced)) &&
           std::none_of(games.begin(), games.end(), [](auto &p) { return !p.second.idle(); }))
         stopping = true;
       if (stopping)
@@ -1216,7 +1633,7 @@ public:
         return future.valid() &&
                future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
       };
-      if (learning.valid() || ready_steps() < settings.batch)
+      if (settings.diagnostic == "actor" || learning.valid() || ready_steps() < settings.batch)
         mailbox.changed.wait_for(lock, std::chrono::milliseconds(20), [&] {
           return !mailbox.events.empty() || mailbox.revision.load() != observed_revision ||
                  learning_commit.has_value() || completed(learning);
@@ -1230,6 +1647,11 @@ public:
     collect_learning();
     auto window = metrics(true);
     atomic_text(settings.directory / "window.json", window);
+    if (!settings.diagnostic.empty()) {
+      diagnostic::record("window_end", 0);
+      diagnostic::memory(device);
+      diagnostic::save(settings.directory / "timing.csv");
+    }
     checkpoint(false);
     save_workset();
     if (writer.valid())
@@ -1321,6 +1743,8 @@ void run(const Settings &settings) {
     throw std::runtime_error("run directory must be new or empty");
   fs::create_directories(settings.directory);
   auto full_started = Clock::now();
+  diagnostic::enabled = !settings.diagnostic.empty();
+  diagnostic::origin = Clock::now();
   try {
     Session session(settings);
     double init = elapsed(full_started);

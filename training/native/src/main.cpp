@@ -77,15 +77,29 @@ int main(int argc, char **argv) {
       hj::runtime_checks();
       return 0;
     }
-    if ((command != "run" && command != "workset") || directory.empty())
+    if ((command != "run" && command != "workset" && command != "diagnose") || directory.empty())
       throw std::runtime_error("use run --directory PATH");
     hj::Settings s;
+    if (command == "diagnose") {
+      s.diagnostic = text("--mode", "actor");
+      s.warmup = std::stod(text("--warmup", "5"));
+      s.root_slots = number("--root-slots", 2);
+      s.defer_learning = number("--defer-learning", 0) != 0;
+      if (s.diagnostic != "actor" && s.diagnostic != "learner" && s.diagnostic != "mixed" &&
+          s.diagnostic != "inference" && s.diagnostic != "service" && s.diagnostic != "gemm")
+        throw std::runtime_error(
+            "diagnose mode must be actor, learner, mixed, inference, service or gemm");
+      if (s.warmup < 0)
+        throw std::runtime_error("negative warmup");
+      if (s.root_slots < 1 || s.root_slots > 2)
+        throw std::runtime_error("diagnostic root slots must be 1 or 2");
+    }
     for (auto &option : options)
       s.supplied.insert(option.first);
     s.directory = directory;
     s.resume = text("--resume");
     s.profile = text("--profile");
-    if (command == "workset") {
+    if (command == "workset" || (s.diagnostic == "actor" && options.count("--games"))) {
       s.workset_games = number("--games", 16);
       s.game_samples = number("--game-samples", 256);
       s.replay = text("--replay");

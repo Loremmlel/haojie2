@@ -32,6 +32,10 @@ public:
     auto used = key_lengths;
     auto keys = key_cumulative.value_or(cumulative);
     bool record = projected.requires_grad();
+    // 小表避免通用注意力的启动开销；大表保留张量核心后端，按真实形状选择算法。
+    if (!record && projected.size(0) <= 32 && maximum <= 512 && projected.size(3) <= 64 &&
+        !key_cumulative)
+      return short_attention_cuda(projected, cumulative, key_lengths.value_or(T()));
     bool flash = false;
 #ifdef HJ_CUDA
     flash = sdp::is_flash_attention_available();
@@ -112,6 +116,24 @@ public:
         gradients[0].contiguous(), t[0], {t[0].size(-1)}, t[3].to(type), t[4].to(type), t[1], t[2],
         {true, true, true});
     return {dx, dw, db, T()};
+  }
+};
+class ResidualNorm : public torch::autograd::Function<ResidualNorm> {
+public:
+  static torch::autograd::variable_list forward(torch::autograd::AutogradContext *ctx, T a, T b,
+                                                T weight, T bias, double eps) {
+    auto result = residual_norm_cuda(a, b, weight, bias, eps);
+    ctx->save_for_backward({result[0], weight, bias, result[2], result[3]});
+    return {result[0], result[1]};
+  }
+  static torch::autograd::variable_list backward(torch::autograd::AutogradContext *ctx,
+                                                 torch::autograd::variable_list gradients) {
+    auto t = ctx->get_saved_variables();
+    auto [dx, dw, db] = at::native_layer_norm_backward(
+        gradients[1].contiguous(), t[0], {t[0].size(-1)}, t[3].to(torch::kFloat32),
+        t[4].to(torch::kFloat32), t[1], t[2], {true, true, true});
+    auto residual = dx + gradients[0];
+    return {residual, residual, dw, db, T()};
   }
 };
 class GroupedGather : public torch::autograd::Function<GroupedGather> {
@@ -250,7 +272,16 @@ T TransformerBlockImpl::forward(const T &tokens, const T &cumulative,
     }
     attended = torch::cat(parts, 0);
   }
-  auto x = tokens + output(attended.reshape({-1, width}));
+  auto attention = output(attended.reshape({-1, width}));
+  if (tokens.is_cuda()) {
+    auto fused = torch::GradMode::is_enabled()
+                     ? ResidualNorm::apply(tokens, attention, ffn_norm->weight, ffn_norm->bias,
+                                           ffn_norm->options.eps())
+                     : residual_norm_cuda(tokens, attention, ffn_norm->weight, ffn_norm->bias,
+                                          ffn_norm->options.eps());
+    return fused[0] + down(torch::gelu(up(fused[1])));
+  }
+  auto x = tokens + attention;
   return x + down(torch::gelu(up(bf16_norm(x, ffn_norm))));
 }
 NetworkImpl::NetworkImpl(int64_t w) : width(w) {
@@ -376,6 +407,10 @@ void NetworkImpl::encode_roots(const std::vector<std::shared_ptr<Root>> &request
   encoded_roots += roots.size();
 }
 std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &nodes,
+                                     int64_t policy_nodes) {
+  return prepare_forward(nodes, policy_nodes)();
+}
+Forward NetworkImpl::prepare_forward(const std::vector<std::shared_ptr<Node>> &nodes,
                                      int64_t policy_nodes) {
   RECORD_FUNCTION("hj.forward", std::vector<c10::IValue>());
   if (nodes.empty())
@@ -524,38 +559,41 @@ std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &n
       dst(input, target, entity_count, !caching);
   // 一份整数表和一份 BF16 表上传，后续算子只使用设备端视图。
   input.upload(device);
-  auto row_embeddings =
-      entity(input.get(row_input[0]), input.get(row_input[1]), input.bf(row_input[2], 52));
-  T mixed, r;
-  if (!missing.empty()) {
-    auto cu = input.get(root_cumulative).to(torch::kInt32);
-    auto x =
-        encode_table(er_ids.bind(input)(row_embeddings), global_ids.bind(input)(row_embeddings),
-                     input.get(kind), input.get(root_gather), cu, lengths);
-    auto context_part = project_root_context(x.index_select(0, input.get(encoded_global)));
-    TORCH_CHECK(!caching, "root cache changed during inference");
-    // 学习只进行两次整表 gather；逐根取视图会在反向为每根重复分配整表梯度。
-    mixed = x.index_select(0, input.get(encoded_entity));
-    r = context_part;
-    encoded_roots += missing.size();
-    computed_tokens += cumulative.back();
-  }
-  if (!caching) {
-    scored_candidates += owners.size();
-    projected_candidates += actions.size();
-  }
-  if (caching) {
-    mixed = torch::cat(root_tokens, 0);
-    r = torch::stack(root_context, 0);
-  }
-  auto projected = torch::gelu(action(input.get(a_bits), input.get(a_offsets)));
-  auto entity_table = torch::cat({torch::zeros({1, mixed.size(1)}, mixed.options()), mixed}, 0);
-  if (!caching)
-    entity_table = project_entities(referenced.bind(input)(entity_table));
-  return score_table({row_embeddings, input.get(prefix_ids), input.get(prefix_offset), r,
-                      entity_table, projected, node_root.bind(input), owner.bind(input),
-                      candidate.bind(input), src.bind(input), dst.bind(input), key_refs.bind(input),
-                      input.get(live), full_candidates});
+  // 返回的闭包只持本批输入；后台打包和上传不读取或更新浮点权重。
+  return [=, this, input = std::move(input)]() mutable -> std::pair<T, T> {
+    auto row_embeddings =
+        entity(input.get(row_input[0]), input.get(row_input[1]), input.bf(row_input[2], 52));
+    T mixed, r;
+    if (!missing.empty()) {
+      auto cu = input.get(root_cumulative).to(torch::kInt32);
+      auto x =
+          encode_table(er_ids.bind(input)(row_embeddings), global_ids.bind(input)(row_embeddings),
+                       input.get(kind), input.get(root_gather), cu, lengths);
+      auto context_part = project_root_context(x.index_select(0, input.get(encoded_global)));
+      TORCH_CHECK(!caching, "root cache changed during inference");
+      // 学习只进行两次整表 gather；逐根取视图会在反向为每根重复分配整表梯度。
+      mixed = x.index_select(0, input.get(encoded_entity));
+      r = context_part;
+      encoded_roots += missing.size();
+      computed_tokens += cumulative.back();
+    }
+    if (!caching) {
+      scored_candidates += owners.size();
+      projected_candidates += actions.size();
+    }
+    if (caching) {
+      mixed = torch::cat(root_tokens, 0);
+      r = torch::stack(root_context, 0);
+    }
+    auto projected = torch::gelu(action(input.get(a_bits), input.get(a_offsets)));
+    auto entity_table = torch::cat({torch::zeros({1, mixed.size(1)}, mixed.options()), mixed}, 0);
+    if (!caching)
+      entity_table = project_entities(referenced.bind(input)(entity_table));
+    return score_table({row_embeddings, input.get(prefix_ids), input.get(prefix_offset), r,
+                        entity_table, projected, node_root.bind(input), owner.bind(input),
+                        candidate.bind(input), src.bind(input), dst.bind(input),
+                        key_refs.bind(input), input.get(live), full_candidates});
+  };
 }
 
 std::vector<double> canonical_logps(const std::vector<uint16_t> &bits) {
@@ -705,7 +743,8 @@ T reference_targets(const T &mass, const T &value_tensor, const T &record_tensor
   return result;
 }
 } // namespace
-TrainResult learn(Network &model, Optimizer &optimizer, const std::vector<Block> &blocks) {
+TrainResult learn(Network &model, Optimizer &optimizer, const std::vector<Block> &blocks,
+                  Forward prepared) {
   RECORD_FUNCTION("hj.learn", std::vector<c10::IValue>());
   std::vector<std::shared_ptr<Node>> nodes;
   for (auto &b : blocks)
@@ -744,7 +783,7 @@ TrainResult learn(Network &model, Optimizer &optimizer, const std::vector<Block>
        selected_slice = input.add(selected);
   // 全部价值、目标和损失共用这一次前向；bootstrap 节点不执行未使用的候选策略分支。
   optimizer.prepare_gradients(model);
-  auto output = model->forward(nodes, count);
+  auto output = prepared ? prepared() : model->forward(nodes, count);
   auto table = policy_table(output.first, std::span(nodes).first(count), true, &input);
   auto target_table = optimizer.targets
                           ? optimizer.targets(table.mass, output.second, input.get(record_slice),
@@ -773,6 +812,43 @@ void copy_weights(Network &source, Network &destination) {
   ++destination->revision;
 }
 void model_checks(const torch::Device &device) {
+  if (device.is_cuda()) {
+    {
+      torch::NoGradGuard guard;
+      auto qkv = torch::randn({250, 3, 6, 64}, bfopts().device(device));
+      auto cu = torch::tensor({0, 3, 58, 250}, torch::kInt32).to(device);
+      auto used = torch::tensor({3, 55, 128}, torch::kInt32).to(device);
+      auto expected = std::get<0>(at::_efficient_attention_forward(
+                                      qkv.select(1, 0).unsqueeze(0), qkv.select(1, 1).unsqueeze(0),
+                                      qkv.select(1, 2).unsqueeze(0), {}, cu, cu, 192, 192, 0, 0,
+                                      false, {}, used))
+                          .squeeze(0);
+      auto actual = short_attention_cuda(qkv, cu, used);
+      TORCH_CHECK(
+          torch::allclose(actual.narrow(0, 0, 186), expected.narrow(0, 0, 186), 0.02, 0.016),
+          "short attention changed real variable-length outputs");
+      TORCH_CHECK(actual.narrow(0, 186, 64).count_nonzero().item<int64_t>() == 0,
+                  "short attention exposed padding");
+    }
+    for (auto rows : {1, 31, 32, 33, 55, 1760}) {
+      auto options = bfopts().device(device);
+      auto a = torch::randn({rows, 384}, options).requires_grad_(true);
+      auto b = torch::randn_like(a).requires_grad_(true);
+      torch::nn::LayerNorm norm(torch::nn::LayerNormOptions({384}));
+      norm->to(device, torch::kBFloat16);
+      auto fused = ResidualNorm::apply(a, b, norm->weight, norm->bias, norm->options.eps());
+      auto x = a + b, y = bf16_norm(x, norm);
+      TORCH_CHECK(torch::equal(fused[0], x) && torch::allclose(fused[1], y, 0.008, 0.008),
+                  "fused residual rounding or normalization differs");
+      auto gx = torch::randn_like(x), gy = torch::randn_like(y);
+      auto actual =
+          torch::autograd::grad({fused[0], fused[1]}, {a, b, norm->weight, norm->bias}, {gx, gy});
+      auto expected = torch::autograd::grad({x, y}, {a, b, norm->weight, norm->bias}, {gx, gy});
+      for (size_t i = 0; i < actual.size(); ++i)
+        TORCH_CHECK(torch::allclose(actual[i], expected[i], 0.02, 0.016),
+                    "fused residual normalization gradient differs: ", i);
+    }
+  }
   {
     Inputs input;
     GatherLayout gather(input, {2, 0, 2, 2, 3, 0}, 5, true);

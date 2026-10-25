@@ -13,4 +13,4 @@ pwsh -File training/native/run.ps1 run --directory artifacts/native/restored --r
 
 构建可复用本机已有的 LibTorch。零并发会停放全部在途局；扩容优先恢复原局。停止与定时保存都保留进度和未消费轨迹，恢复使用新的空目录。
 
-Linux 构建、模型、BF16 类型、轨迹、内存预算和验证命令见[运行说明](native/README.md)，本机结果与剩余瓶颈见[当前实测](native/architecture/MEASUREMENTS.md)。正式存档、源码与精简实测结果保留，已结束测试的检查点和重复产物已清理；旧 Python 包和训练格式不再提供入口。
+Linux 构建、模型、BF16 类型、轨迹、内存预算和恢复命令见[运行说明](native/README.md)，检查方法见[功能验证](native/VALIDATION.md)。旧 Python 包和训练格式不再提供入口。

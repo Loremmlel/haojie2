@@ -10,6 +10,23 @@ struct Counters {
            failures = 0;
 };
 enum class Flow : uint8_t { Idle, Cpu, RootQueued, RootRunning };
+// 容量在行为开始前预留，直到对应真实转换提交后归还；包含未决、部分块和设备在途。
+struct Admission {
+  uint64_t capacity = 0;
+  std::atomic<uint64_t> outstanding{0};
+  std::atomic<bool> draining{false};
+  bool acquire() {
+    auto n = outstanding.load();
+    while (!draining && n < capacity)
+      if (outstanding.compare_exchange_weak(n, n + 1)) {
+        if (!draining)
+          return true;
+        --outstanding;
+        return false;
+      }
+    return false;
+  }
+};
 struct Game {
   uint64_t id = 0, commands = 0, microsteps = 0, backtracks = 0, failures = 0;
   bool parked = false, parking = false, sent_training = false;
@@ -30,6 +47,7 @@ struct Game {
   uint64_t scored = 0;
   double policy_seconds = 0;
   bool workset_done = false;
+  bool reserved = false;
   bool idle() const {
     return flow->load() == Flow::Idle;
   }
@@ -44,6 +62,7 @@ struct Job {
   Game *state = nullptr;
   uint64_t chunk = 16, quota = 0;
   bool root_reply = false;
+  double queued_ms = 0, root_queued_ms = 0, root_started_ms = 0;
 };
 struct Event {
   uint64_t game;

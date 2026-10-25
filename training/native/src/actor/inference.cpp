@@ -1,3 +1,4 @@
+#include "diagnostics/timing.h"
 #include "runtime.h"
 // 根编码、设备搬运与 BF16 更新共用的原生加速器实现。
 #include <ATen/ops/embedding_bag.h>
@@ -51,7 +52,8 @@ void driver_check(CUresult e) {
 // 类型化投影与均值按真实长度计算；累加只在寄存器中，输出张量仍为 BF16。
 class DeviceKernels {
   CUmodule module = nullptr;
-  CUfunction scatter_, store_, project_, update_, targets_, binary_, reduce_;
+  CUfunction scatter_, store_, project_, update_, targets_, binary_, reduce_, residual_norm_,
+      attention_;
   T receipt;
 
 public:
@@ -92,6 +94,84 @@ __device__ B rounded(float x) {
   return (B)((u+0x7fff+((u>>16)&1))>>16);
 }
 __device__ float r(float x) { return value(rounded(x)); }
+extern "C" __global__ void attention(const B *qkv,const int *cu,const int *used,B *out,
+                                    int roots,int heads,int dim) {
+  __shared__ float scores[512], sums[256];
+  int q=blockIdx.x, h=blockIdx.y, t=threadIdx.x, group=t/4, lane=t%4;
+  int root=0, end=roots;
+  while(root+1<end) { int mid=(root+end)/2; if(q>=cu[mid]) root=mid; else end=mid; }
+  int start=cu[root], length=used?used[root]:cu[root+1]-start;
+  if(q>=start+length) { if(t<dim) out[(q*heads+h)*dim+t]=rounded(0); return; }
+  for(int base=0;base<length;base+=64) {
+    int key=base+group;
+    float sum=0;
+    if(key<length)
+      for(int d=lane;d<dim;d+=4)
+        sum+=value(qkv[(q*3*heads+h)*dim+d])*
+             value(qkv[(((start+key)*3+1)*heads+h)*dim+d]);
+    sum+=__shfl_down_sync(0xffffffff,sum,2,4);
+    sum+=__shfl_down_sync(0xffffffff,sum,1,4);
+    if(!lane && key<length) scores[key]=sum*rsqrtf((float)dim);
+  }
+  __syncthreads();
+  float maximum=-1.0f/0.0f;
+  for(int k=t;k<length;k+=256) maximum=fmaxf(maximum,scores[k]);
+  sums[t]=maximum;
+  __syncthreads();
+  for(int n=128;n;n/=2) { if(t<n) sums[t]=fmaxf(sums[t],sums[t+n]); __syncthreads(); }
+  maximum=sums[0];
+  __syncthreads();
+  float sum=0;
+  for(int k=t;k<length;k+=256) { float e=expf(scores[k]-maximum); scores[k]=e; sum+=e; }
+  sums[t]=sum;
+  __syncthreads();
+  for(int n=128;n;n/=2) { if(t<n) sums[t]+=sums[t+n]; __syncthreads(); }
+  if(t<dim) {
+    float v=0;
+    for(int k=0;k<length;++k)
+      v+=(scores[k]/sums[0])*value(qkv[(((start+k)*3+2)*heads+h)*dim+t]);
+    out[(q*heads+h)*dim+t]=rounded(v);
+  }
+}
+__device__ float row_sum(float sum,float *scratch,bool whole_block) {
+  for(int n=16;n;n/=2) sum+=__shfl_down_sync(0xffffffff,sum,n);
+  if(!whole_block) return __shfl_sync(0xffffffff,sum,0);
+  int lane=threadIdx.x%32, warp=threadIdx.x/32;
+  if(!lane) scratch[warp]=sum;
+  __syncthreads();
+  if(!warp) {
+    sum=lane<8?scratch[lane]:0;
+    for(int n=4;n;n/=2) sum+=__shfl_down_sync(0xffffffff,sum,n);
+    if(!lane) scratch[0]=sum;
+  }
+  __syncthreads();
+  float result=scratch[0];
+  __syncthreads();
+  return result;
+}
+// 大表每个 warp 独立处理一行；小表每行一块以保留 SM 并行度。残差和统计仍是 BF16。
+extern "C" __global__ void residual_norm(const B *a,const B *b,const B *w,const B *bias,
+                                        B *x,B *y,B *mean,B *inverse,int width,int rows,float eps) {
+  __shared__ float scratch[8];
+  bool whole_block=rows<=32;
+  int lane=whole_block?threadIdx.x:threadIdx.x%32;
+  int row=whole_block?blockIdx.x:blockIdx.x*4+threadIdx.x/32, base=row*width;
+  int stride=whole_block?256:32;
+  if(row>=rows) return;
+  float sum=0;
+  for(int j=lane;j<width;j+=stride) {
+    B v=rounded(value(a[base+j])+value(b[base+j]));
+    x[base+j]=v;
+    sum+=value(v);
+  }
+  float m=row_sum(sum,scratch,whole_block)/width;
+  sum=0;
+  for(int j=lane;j<width;j+=stride) { float d=value(x[base+j])-m; sum+=d*d; }
+  float inv=rsqrtf(row_sum(sum,scratch,whole_block)/width+eps);
+  if(!lane) { mean[row]=rounded(m); inverse[row]=rounded(inv); }
+  for(int j=lane;j<width;j+=stride)
+    y[base+j]=rounded(((value(x[base+j])-m)*inv)*value(w[j])+value(bias[j]));
+}
 // 每个显式中间结果仍按 BF16 舍入；只融合搬运，不改变补偿更新的算式。
 extern "C" __global__ void update(const B *g,B *p,B *m,B *v,B *mr,B *vr,B *pr,const B *norm,
                                   int *valid,const B *loss,U count,float lr,float bc1,float bc2,
@@ -211,19 +291,22 @@ extern "C" __global__ void scatter(const unsigned char *src, unsigned char *dst,
     ((B *)(dst + f[k].dst))[i] = i < f[k].count ? ((const B *)(src + f[k].src))[i] : (B)f[k].pad;
 }
 // 描述符为输出实体指针、输出上下文指针、实体数、根的 global token 位置。
-extern "C" __global__ void store(const U *r, const B *tokens, const B *context, int width, int capacity) {
+extern "C" __global__ void store(const U *r, const B *tokens, const B *context, int width, int capacity, int roots) {
   U i=(U)blockIdx.x*blockDim.x+threadIdx.x;
   U row=i/(width*2), col=i%(width*2);
   if (row<(U)capacity) {
-    for (int k=0;k<16;++k) {
+    int lo=0, hi=roots;
+    while(lo<hi) {
+      int mid=(lo+hi)/2;
+      if(r[mid*4+3]+1<=row) lo=mid+1; else hi=mid;
+    }
+    int k=lo-1;
+    if(k>=0) {
       U n=r[k*4+2], off=r[k*4+3]+1;
-      if (row>=off && row<off+n) {
-        ((B *)r[k*4])[(row-off)*width*2+col]=tokens[i];
-        break;
-      }
+      if(row<off+n) ((B *)r[k*4])[(row-off)*width*2+col]=tokens[i];
     }
   }
-  if (i<(U)16*width) {
+  if (i<(U)roots*width) {
     U k=i/width, c=i%width;
     if(r[k*4+1]) ((B *)r[k*4+1])[c]=context[i];
   }
@@ -260,12 +343,38 @@ extern "C" __global__ void store(const U *r, const B *tokens, const B *context, 
     driver_check(cuModuleGetFunction(&targets_, module, "targets"));
     driver_check(cuModuleGetFunction(&binary_, module, "binary"));
     driver_check(cuModuleGetFunction(&reduce_, module, "reduce"));
+    driver_check(cuModuleGetFunction(&residual_norm_, module, "residual_norm"));
+    driver_check(cuModuleGetFunction(&attention_, module, "attention"));
     receipt = torch::empty(
         {8}, torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCPU).pinned_memory(true));
   }
   ~DeviceKernels() {
     if (module)
       cuModuleUnload(module);
+  }
+  T attention(const T &qkv, const T &cu, const T &used) {
+    int roots = int(cu.numel() - 1), heads = int(qkv.size(2)), dim = int(qkv.size(3));
+    auto out = torch::empty({qkv.size(0), heads, dim}, qkv.options());
+    auto q = qkv.data_ptr(), c = cu.data_ptr(), o = out.data_ptr();
+    void *u = used.defined() ? used.data_ptr() : nullptr;
+    void *args[] = {&q, &c, &u, &o, &roots, &heads, &dim};
+    driver_check(cuLaunchKernel(attention_, unsigned(qkv.size(0)), heads, 1, 256, 1, 1, 0,
+                                c10::cuda::getCurrentCUDAStream(), args, nullptr));
+    return out;
+  }
+  std::vector<T> residual_norm(const T &a, const T &b, const T &weight, const T &bias,
+                               double epsilon) {
+    auto x = torch::empty_like(a), y = torch::empty_like(a);
+    auto mean = torch::empty({a.size(0), 1}, a.options()), inverse = torch::empty_like(mean);
+    auto ap = a.data_ptr(), bp = b.data_ptr(), wp = weight.data_ptr(), cp = bias.data_ptr(),
+         xp = x.data_ptr(), yp = y.data_ptr(), mp = mean.data_ptr(), ip = inverse.data_ptr();
+    int width = int(a.size(1)), rows = int(a.size(0));
+    float eps = float(epsilon);
+    void *args[] = {&ap, &bp, &wp, &cp, &xp, &yp, &mp, &ip, &width, &rows, &eps};
+    driver_check(cuLaunchKernel(residual_norm_, unsigned(rows <= 32 ? rows : (rows + 3) / 4), 1, 1,
+                                rows <= 32 ? 256 : 128, 1, 1, 0, c10::cuda::getCurrentCUDAStream(),
+                                args, nullptr));
+    return {x, y, mean, inverse};
   }
   T checked_update(const T &gradient, const T &parameters, const std::vector<T> &state,
                    const T &norm, double rate, uint64_t step, const T &loss, const T &control) {
@@ -346,8 +455,9 @@ extern "C" __global__ void store(const U *r, const B *tokens, const B *context, 
   }
   void cache(const T &descriptors, const T &tokens, const T &context, int width, int capacity) {
     auto r = descriptors.data_ptr(), t = tokens.data_ptr(), c = context.data_ptr();
-    void *args[] = {&r, &t, &c, &width, &capacity};
-    auto blocks = (std::max<int64_t>(int64_t(capacity) * width * 2, 16 * width) + 255) / 256;
+    int roots = int(descriptors.numel() / 4);
+    void *args[] = {&r, &t, &c, &width, &capacity, &roots};
+    auto blocks = (std::max<int64_t>(int64_t(capacity) * width * 2, roots * width) + 255) / 256;
     driver_check(cuLaunchKernel(store_, unsigned(blocks), 1, 1, 256, 1, 1, 0,
                                 c10::cuda::getCurrentCUDAStream(), args, nullptr));
   }
@@ -363,7 +473,7 @@ extern "C" __global__ void store(const U *r, const B *tokens, const B *context, 
     return out;
   }
 };
-constexpr size_t Header = 32 * 64, ArenaBytes = 4 * 1024 * 1024;
+constexpr size_t Header = 32 * 64, ArenaBytes = 8 * 1024 * 1024;
 struct Field {
   uint64_t src, count, dst, cap, pad, unit, begin, end;
 };
@@ -420,11 +530,11 @@ struct Bucket {
   int fields = 0, copy_blocks = 0;
   std::unique_ptr<at::cuda::CUDAGraph> graph;
   Bucket(int64_t n, int64_t c, const T &arena)
-      : nodes(n), candidates(c), rows(n), maximum(std::min<int64_t>(n, 256)) {
+      : nodes(n), candidates(c), rows(n), maximum(std::min<int64_t>(n, 1024)) {
     Layout l(arena);
     row_data = l.add(n * 75);
     row_values = l.add(n * 52, torch::kBFloat16);
-    descriptors = l.add(16 * 4);
+    descriptors = l.add(c * 4);
     global_ids = l.add(c);
     row_ids = l.add(n);
     kinds = l.add(n);
@@ -441,12 +551,15 @@ struct CacheWrite {
 struct Slot {
   c10::cuda::CUDAStream stream;
   T pinned, input, arena;
-  T output, host_output;
+  T output, host_output, graph_output;
   int64_t used = 0;
   std::map<std::pair<int64_t, int64_t>, std::unique_ptr<Bucket>> buckets;
   std::vector<CacheWrite> writes;
   std::shared_ptr<InferenceFlight> flight;
   Clock::time_point start;
+  diagnostic::GpuSpan timing;
+  double submitted_ms = 0;
+  uint64_t token_count = 0;
   size_t bytes = 0, capacity_bytes = 0;
   bool active = false;
   std::atomic<uint64_t> *pending = nullptr;
@@ -467,6 +580,7 @@ struct Slot {
   static void CUDART_CB complete(void *p) {
     auto &s = *static_cast<Slot *>(p);
     s.flight->seconds = seconds(s.start);
+    s.flight->callback_ms = diagnostic::now();
     s.flight->complete.store(true, std::memory_order_release);
     s.pending->fetch_sub(1, std::memory_order_acq_rel);
     s.pending->notify_all();
@@ -489,6 +603,11 @@ int64_t capacity(int64_t n) {
   while (c < n)
     c *= 2;
   return c;
+}
+// 根 token 已紧凑拼接；在较大图桶之间补半档，减少整段 Transformer 的容量填充。
+int64_t token_bucket(int64_t n) {
+  auto c = std::max<int64_t>(8, capacity(n));
+  return c >= 128 && n <= c * 3 / 4 ? c * 3 / 4 : c;
 }
 std::shared_ptr<DeviceKernels> device_kernels(const torch::Device &device) {
   static std::mutex mutex;
@@ -586,6 +705,20 @@ T typed_binary(const T &raw, bool rows) {
 #endif
   TORCH_CHECK(false, "raw binary projection requires CUDA");
 }
+std::vector<T> residual_norm_cuda(const T &a, const T &b, const T &w, const T &bias, double eps) {
+#ifdef HJ_CUDA
+  return device_kernels(a.device())->residual_norm(a, b, w, bias, eps);
+#else
+  TORCH_CHECK(false, "fused residual normalization requires CUDA");
+#endif
+}
+T short_attention_cuda(const T &qkv, const T &cu, const T &used) {
+#ifdef HJ_CUDA
+  return device_kernels(qkv.device())->attention(qkv, cu, used);
+#else
+  TORCH_CHECK(false, "short attention requires CUDA");
+#endif
+}
 T segmented_table(const T &data, const T &ids, const T &offsets, bool mean) {
 #ifdef HJ_CUDA
   if (data.is_cuda())
@@ -602,7 +735,7 @@ struct InferenceEngine::Impl {
       tokens{0}, token_capacity{0};
 #ifdef HJ_CUDA
   std::shared_ptr<DeviceKernels> copies;
-  std::array<std::unique_ptr<Slot>, 2> slots;
+  std::vector<std::unique_ptr<Slot>> slots;
   void compute(Slot &s, Bucket &b) {
     copies->scatter(s.input, s.arena, b.fields, b.copy_blocks);
     auto rows = copies->project(s.input, b.row_data.tensor, actor->entity->bits->weight,
@@ -620,9 +753,12 @@ struct InferenceEngine::Impl {
     Upload upload(s.pinned);
     Rows rows;
     auto roots = roots_of(batch);
-    if (roots.size() > 16)
+    if (roots.size() > size_t(b.candidates))
       return false;
-    std::vector<int64_t> descriptors(64), row_ids, global_ids, kinds, gather, positions;
+    std::vector<int64_t> descriptors(b.candidates * 4), row_ids, global_ids, kinds, gather,
+        positions;
+    for (size_t i = roots.size(); i < size_t(b.candidates); ++i)
+      descriptors[i * 4 + 3] = b.nodes;
     std::vector<int32_t> cumulative{0}, key_lengths;
     for (size_t i = 0; i < roots.size(); ++i) {
       auto &root = *roots[i];
@@ -684,23 +820,31 @@ struct InferenceEngine::Impl {
     s.stream.synchronize();
   }
 #endif
-  Impl(Network &actor, const torch::Device &device, std::function<void()> wake)
+  Impl(Network &actor, const torch::Device &device, std::function<void()> wake, size_t slot_count,
+       uint64_t max_roots)
       : actor(actor), device(device), wake(std::move(wake)) {
 #ifdef HJ_CUDA
     if (device.is_cuda()) {
       torch::NoGradGuard guard;
       c10::cuda::getCurrentCUDAStream().synchronize();
       copies = device_kernels(device);
+      auto root_capacity = capacity(std::min<uint64_t>(128, max_roots));
+      // 仅为配置可用的根批捕获图；低推理上限不再预留 128 根/8192 token 的私有池。
+      auto token_capacity = std::min<int64_t>(8192, root_capacity * 512);
+      slots.resize(slot_count);
       for (auto &slot : slots) {
         auto &s = *(slot = std::make_unique<Slot>(device));
         c10::cuda::CUDAStreamGuard stream(s.stream);
-        s.reserve((8192 * 2 + 16) * actor->width, actor->parameters()[0].options());
+        s.reserve((token_capacity * 2 + root_capacity) * actor->width,
+                  actor->parameters()[0].options());
+        s.graph_output = s.output;
         s.pending = &pending;
         s.wake = &this->wake;
         auto pool = at::cuda::graph_pool_handle();
-        for (int64_t n : {8, 16, 32, 64, 128, 256, 512, 1024, 2048})
-          for (int64_t c : {1, 2, 4, 8, 16})
-            if (c <= n) {
+        for (int64_t n : {8, 16, 32, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072,
+                          4096, 6144, 8192})
+          for (int64_t c : {1, 2, 4, 8, 16, 32, 64, 128})
+            if (c <= n && c <= root_capacity && n <= token_capacity) {
               auto b = std::make_unique<Bucket>(n, c, s.arena);
               capture(s, *b);
               b->graph = std::make_unique<at::cuda::CUDAGraph>();
@@ -717,8 +861,8 @@ struct InferenceEngine::Impl {
   }
 };
 InferenceEngine::InferenceEngine(Network &actor, const torch::Device &device,
-                                 std::function<void()> wake)
-    : impl(std::make_unique<Impl>(actor, device, std::move(wake))) {}
+                                 std::function<void()> wake, size_t slots, uint64_t max_roots)
+    : impl(std::make_unique<Impl>(actor, device, std::move(wake), slots, max_roots)) {}
 InferenceEngine::~InferenceEngine() {
   wait_reads();
 #ifdef HJ_CUDA
@@ -754,14 +898,21 @@ InferenceEngine::submit(size_t slot, std::vector<std::shared_ptr<Node>> nodes, u
     s.used = 0;
     auto roots = roots_of(flight->nodes);
     auto c = capacity(roots.size());
-    int64_t count = roots.size(), total = c;
+    int64_t count = roots.size(), total = c, longest = 0;
     for (auto &r : roots) {
       count += r->rows.size();
       total += r->rows.size();
+      longest = std::max<int64_t>(longest, r->rows.size() + 1);
     }
-    auto n = std::max<int64_t>(8, capacity(total));
-    s.reserve((count * 2 + roots.size()) * p.actor->width, p.actor->parameters()[0].options());
+    auto n = token_bucket(total);
     auto bucket = s.buckets.find({n, c});
+    // 普通回退可以扩容；图始终回到捕获时的存储，避免扩容后重放写入旧地址。
+    if (bucket != s.buckets.end())
+      s.output = s.graph_output;
+    s.reserve((count * 2 + roots.size()) * p.actor->width, p.actor->parameters()[0].options());
+    s.submitted_ms = diagnostic::now();
+    s.token_count = count;
+    s.timing.start();
     if (bucket != s.buckets.end() && p.prepare(s, *bucket->second, flight->nodes)) {
       cuda_check(cudaMemcpyAsync(s.input.data_ptr(), s.pinned.data_ptr(), s.bytes,
                                  cudaMemcpyHostToDevice, s.stream));
@@ -791,8 +942,11 @@ InferenceEngine::submit(size_t slot, std::vector<std::shared_ptr<Node>> nodes, u
       p.fallbacks++;
     }
     // 一个槽只回送一包 BF16 数据；完成后复制为根拥有的普通 CPU 缓存。
+    s.timing.compute_end();
     cuda_check(cudaMemcpyAsync(s.host_output.data_ptr(), s.output.data_ptr(), s.used * 2,
                                cudaMemcpyDeviceToHost, s.stream));
+    s.timing.return_end();
+    diagnostic::record("root_shape", roots.size(), count, n, longest, flight->graphed);
     p.tokens += count;
     p.pending.fetch_add(1, std::memory_order_acq_rel);
     auto status = cudaLaunchHostFunc(s.stream, &Slot::complete, &s);
@@ -826,6 +980,10 @@ void InferenceEngine::finish(const std::shared_ptr<InferenceFlight> &flight) {
       auto &s = *slot;
       if (s.flight != flight)
         continue;
+      s.timing.report("root_batch", 0, s.submitted_ms, flight->callback_ms, flight->nodes.size(),
+                      s.token_count);
+      diagnostic::record("root_callback", 0, diagnostic::now() - flight->callback_ms,
+                         s.timing.uncertainty_ms);
       for (auto &out : s.writes) {
         std::lock_guard lock(out.root->cache_mutex);
         auto width = impl->actor->width, count = (out.entities * 2 + 1) * width;
@@ -954,25 +1112,82 @@ void inference_checks(const torch::Device &device) {
     b.x = expected[0][j];
     TORCH_CHECK(std::abs(float(a) - float(b)) < 0.025f, "CPU policy retained stale projections");
   }
-  auto large = std::make_shared<Node>(*node);
-  large->root = std::make_shared<Root>(*root);
-  large->root->id = 3;
-  for (int i = 0; i < 300; ++i) {
-    large->root->rows.push_back(inputs.rows.get(row));
-    large->root->kinds.push_back(3);
+  // 跨过旧的 512 token 边界仍走完整图；超过新边界继续核对普通计算。
+  for (int extra : {600, 1100}) {
+    auto large = std::make_shared<Node>(*node);
+    large->root = std::make_shared<Root>(*root);
+    large->root->id = 3;
+    for (int i = 0; i < extra; ++i) {
+      large->root->rows.push_back(inputs.rows.get(row));
+      large->root->kinds.push_back(3);
+    }
+    expected = probabilities(actor->forward({large}).first, {large});
+    large->root->clear_cache();
+    auto flight = engine.submit(0, {large}, 3);
+    engine.wait_reads();
+    engine.finish(flight);
+    TORCH_CHECK(flight->graphed == (device.is_cuda() && extra == 600),
+                "long-root graph capacity or full fallback differs");
+    actual = policy.score(*large, next);
+    for (size_t j = 0; j < actual.size(); ++j) {
+      BF a, b;
+      a.x = actual[j];
+      b.x = expected[0][j];
+      TORCH_CHECK(std::abs(float(a) - float(b)) < 0.025f, "long-root calculation changed output");
+    }
   }
-  expected = probabilities(actor->forward({large}).first, {large});
-  large->root->clear_cache();
-  auto fallback = engine.submit(0, {large}, 3);
-  engine.wait_reads();
-  engine.finish(fallback);
-  TORCH_CHECK(!fallback->graphed, "oversized root did not execute full fallback");
-  actual = policy.score(*large, next);
-  for (size_t j = 0; j < actual.size(); ++j) {
-    BF a, b;
-    a.x = actual[j];
-    b.x = expected[0][j];
-    TORCH_CHECK(std::abs(float(a) - float(b)) < 0.025f, "packed fallback changed root output");
+  // 大批跨越旧的 16 根描述符边界，逐根核对输出，防止根之间串写。
+  for (size_t count : {size_t(31), size_t(32), size_t(33), size_t(128)}) {
+    std::vector<std::shared_ptr<Node>> many;
+    for (size_t i = 0; i < count; ++i) {
+      auto n = std::make_shared<Node>(*node);
+      n->root = std::make_shared<Root>(*root);
+      n->root->id = 1000 + i;
+      auto varied = row;
+      varied.ids[0] = int64_t(i + 1);
+      n->root->rows[0] = inputs.rows.get(varied);
+      many.push_back(std::move(n));
+    }
+    auto reference_mass = probabilities(actor->forward(many).first, many);
+    for (auto &n : many)
+      n->root->clear_cache();
+    auto flight = engine.submit(0, many, 3);
+    engine.wait_reads();
+    engine.finish(flight);
+    TORCH_CHECK(!device.is_cuda() || flight->graphed, "large root batch missed graph capacity");
+    for (size_t i = 0; i < count; ++i) {
+      auto mass = policy.score(*many[i], next);
+      for (size_t j = 0; j < mass.size(); ++j) {
+        BF a, b;
+        a.x = mass[j];
+        b.x = reference_mass[i][j];
+        TORCH_CHECK(std::abs(float(a) - float(b)) < 0.025f, "large graph batch mixed root output");
+      }
+    }
+  }
+  if (device.is_cuda()) {
+    InferenceEngine limited(actor, device, [] {}, 1, 1);
+    for (int extra : {0, 1100, 0}) {
+      auto n = std::make_shared<Node>(*node);
+      n->root = std::make_shared<Root>(*root);
+      n->root->rows.insert(n->root->rows.end(), extra, inputs.rows.get(row));
+      n->root->kinds.insert(n->root->kinds.end(), extra, 3);
+      n->root->clear_cache();
+      auto reference = probabilities(actor->forward({n}).first, {n});
+      n->root->clear_cache();
+      auto flight = limited.submit(0, {n}, 3);
+      limited.wait_reads();
+      limited.finish(flight);
+      TORCH_CHECK(flight->graphed == (extra == 0), "bounded inference graph capacity differs");
+      auto mass = policy.score(*n, next);
+      for (size_t j = 0; j < mass.size(); ++j) {
+        BF a, b;
+        a.x = mass[j];
+        b.x = reference[0][j];
+        TORCH_CHECK(std::abs(float(a) - float(b)) < 0.025f,
+                    "graph fallback growth invalidated captured output");
+      }
+    }
   }
   std::cout << "native root slots, BF16 CPU policy, graph/full calculation, late revision, "
                "cache ownership, publication and full candidate support: passed\n";

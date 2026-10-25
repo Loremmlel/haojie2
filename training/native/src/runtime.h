@@ -8,6 +8,10 @@
 namespace hj {
 struct Settings {
   std::filesystem::path directory, resume, profile, replay;
+  std::string diagnostic;
+  double warmup = 5;
+  uint64_t root_slots = 2;
+  bool defer_learning = false;
   std::string device = "cuda";
   uint64_t concurrency = 12, workers = 8, seed = 1, chunk = 16, batch = 512, inference_batch = 64,
            width = DefaultWidth, publish = 8;
@@ -23,6 +27,7 @@ struct InferenceFlight {
   uint64_t version = 0, revision = 0;
   bool graphed = false;
   double seconds = 0;
+  double callback_ms = 0;
   std::vector<std::shared_ptr<Node>> nodes;
 };
 struct InferenceStats {
@@ -34,7 +39,8 @@ class InferenceEngine {
   std::unique_ptr<Impl> impl;
 
 public:
-  InferenceEngine(Network &, const torch::Device &, std::function<void()>);
+  InferenceEngine(Network &, const torch::Device &, std::function<void()>, size_t slots = 2,
+                  uint64_t max_roots = 128);
   ~InferenceEngine();
   std::shared_ptr<InferenceFlight> submit(size_t slot, std::vector<std::shared_ptr<Node>>,
                                           uint64_t version);
