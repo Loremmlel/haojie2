@@ -26,9 +26,8 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
                 "invalid checkpoint metadata");
     Reader r(state.data_ptr<uint8_t>(), state.numel());
     TORCH_CHECK(r.get<uint64_t>() == 0x484a4e4154495633ull, "unsupported checkpoint");
-    auto identity = get_bytes(r);
-    TORCH_CHECK(std::string(identity.begin(), identity.end()) == hj_identity(),
-                "checkpoint rules fingerprint differs");
+    // 与训练恢复一致，构建身份不作为权重加载条件。
+    get_bytes(r);
     TORCH_CHECK(r.get<uint64_t>() == DefaultWidth, "checkpoint model width differs");
     for (int i = 0; i < 6; ++i)
       r.get<uint64_t>();
@@ -126,7 +125,8 @@ void evaluation_checks(const torch::Device &device) {
     fixture->pack_weights();
     Bytes metadata;
     put<uint64_t>(metadata, 0x484a4e4154495633ull);
-    std::string identity = hj_identity();
+    // 模拟旧构建标记，验证加载不再依赖当前源码指纹。
+    std::string identity = "legacy-native-build";
     put_bytes(metadata, Bytes(identity.begin(), identity.end()));
     for (uint64_t n : std::array<uint64_t, 8>{DefaultWidth, 1, 16, 512, 1, 40, 40, 42})
       put(metadata, n);

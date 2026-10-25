@@ -1320,9 +1320,8 @@ public:
     Reader r(s.data_ptr<uint8_t>(), s.numel());
     if (r.get<uint64_t>() != 0x484a4e4154495633ull)
       throw std::runtime_error("unsupported checkpoint");
-    auto identity = get_bytes(r);
-    if (std::string(identity.begin(), identity.end()) != hj_identity())
-      throw std::runtime_error("checkpoint rules fingerprint differs");
+    // 构建身份只记录来源；更新测评或控制代码不应阻止读取已有 v3 检查点。
+    get_bytes(r);
     auto width = r.get<uint64_t>();
     if (width != settings.width)
       throw std::runtime_error("resume width differs");
