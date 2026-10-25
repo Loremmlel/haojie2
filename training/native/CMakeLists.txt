@@ -37,8 +37,11 @@ if(EXISTS "${LIBTORCH}/lib/torch_cuda.lib" OR EXISTS "${LIBTORCH}/lib/libtorch_c
       # NVIDIA 的 Python 分发包仅提供带版本号的共享库。
       find_library(HJ_CUDART NAMES cudart libcudart.so.12 libcudart.so.13
         PATHS "${CUDA_RUNTIME_ROOT}/lib" "${CUDA_RUNTIME_ROOT}/lib64" NO_DEFAULT_PATH REQUIRED)
+      # 容器驱动由宿主注入，Colab 不一定把该目录加入编译器默认搜索路径。
       find_library(HJ_CUDA_DRIVER NAMES cuda libcuda.so.1
-        HINTS /usr/local/nvidia/lib64 /usr/lib/wsl/lib REQUIRED)
+        HINTS ENV LD_LIBRARY_PATH
+        PATHS /usr/lib64-nvidia /usr/local/nvidia/lib64 /usr/local/nvidia/lib /usr/lib/wsl/lib
+        REQUIRED)
       target_link_libraries(haojie-train PRIVATE "${HJ_CUDA_DRIVER}" "${HJ_CUDART}")
     endif()
   else()
