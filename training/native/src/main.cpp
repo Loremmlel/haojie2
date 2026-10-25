@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
       std::cout
           << "haojie-train run --directory PATH [--resume CHECKPOINT] [--device auto|cuda|cpu] "
              "[--concurrency N] [--workers N] [--batch N] [--chunk 16] [--updates N] "
-             "[--seconds N]\nhaojie-train status|resize|budget|save|stop --directory "
+             "[--seconds N] [--max-game-steps N]\nhaojie-train status|resize|budget|save|stop --directory "
              "PATH\nhaojie-train check [--device cpu|cuda]\n"
              "haojie-train configure [--device auto|cuda|cpu] [--resume CHECKPOINT]\n"
              "haojie-train workset --directory PATH [--games 16] [--game-samples 256] "
@@ -129,13 +129,15 @@ int main(int argc, char **argv) {
     s.width = number("--width", hj::DefaultWidth);
     s.publish = number("--publish", 8);
     s.memory_mb = number("--memory-mb", 4096);
+    s.max_game_steps = number("--max-game-steps", 262144);
     s.updates = number("--updates", 0);
     s.seconds = std::stod(text("--seconds", "0"));
     s.save_seconds = std::stod(text("--save-seconds", "300"));
     s.shrine = options.count("--shrine");
     s.samples = number("--samples", 0);
     if (!s.workers || (!s.chunk && !s.terminal_training()) || !s.batch || !s.inference_batch ||
-        !s.width || !s.publish || s.memory_mb < 128 || s.seconds < 0 || s.save_seconds < 0)
+        !s.width || !s.publish || !s.max_game_steps || s.memory_mb < 128 || s.seconds < 0 ||
+        s.save_seconds < 0)
       throw std::runtime_error("invalid training budget");
     if (command == "configure")
       std::cout << hj::describe_configuration(s);

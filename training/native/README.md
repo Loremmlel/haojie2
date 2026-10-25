@@ -19,11 +19,15 @@ bash training/native/run.sh configure
 bash training/native/run.sh run --directory /data/haojie/run
 ```
 
-运行目录必须不存在或为空。正常训练默认 `--device auto`；按进程可用 CPU 核数、GPU 的 SM 数及空闲显存选配置。`configure` 只打印 JSON，不创建模型或开始训练；`run` 启动时再次检测并写入 `configuration.json`。可用 `--device`、`--batch`、`--concurrency`、`--workers`、`--inference-batch`、`--threads`、`--memory-mb` 覆盖对应项。
+运行目录必须不存在或为空。正常训练默认 `--device auto`；按进程可用 CPU 核数、GPU 的 SM 数及空闲显存选配置。`configure` 只打印 JSON，不创建模型或开始训练；`run` 启动时再次检测并写入 `configuration.json`。可用 `--device`、`--batch`、`--concurrency`、`--workers`、`--inference-batch`、`--threads`、`--memory-mb`、`--max-game-steps` 覆盖对应项。
 
-GPU 空闲显存达到 4/6/10/18 GiB 时，起始学习 batch 分别为 64/128/256/512，推理上限为 8/16/32/64；低于 4 GiB 使用 batch 32。lane 至多 16 个且不超过物理核数，并发同时受 lane 数、SM 数和推理上限约束。宿主内存预算取可用内存的三分之一，最多 8 GiB。CPU 模式用 batch 32，线程数至多 8。它们是无需试训的起始档位；实际 token 长度及其他进程占用变化仍会影响峰值显存。
+GPU 空闲显存达到 4/6/10/18 GiB 时，起始学习 batch 分别为 64/128/256/512，推理上限为 8/16/32/64；低于 4 GiB 使用 batch 32。lane 至多 16 个且不超过物理核数，并发同时受 lane 数、SM 数和推理上限约束。宿主内存预算取进程实际可用内存的三分之一，不再封顶 8 GiB；容器仍受 cgroup 配额约束，余量留给系统、模型和检查点序列化。CPU 模式用 batch 32，线程数至多 8。它们是无需试训的起始档位；实际 token 长度及其他进程占用变化仍会影响峰值显存。
 
 正式训练只消费完整终局，`batch` 是计算小批的转换数，不是轨迹截断长度。一个完整对局批汇总梯度后提交一次更新并发布；`chunk=0` 表示保留整局。`--samples`、`--updates`、`--seconds` 分别限制实际消费、更新次数和运行时间；消费上限在整局更新后检查，可能越过样本配额，不截断对局。不指定上限则持续运行。
+
+`--max-game-steps` 默认 262144，按己方已完成转换计数；达到上限仍未终局就整局淘汰，完整终局超过该上限也不学习。未结束局最早行为版本超过 K=64 时提前淘汰。宿主管理内存达到预算 75% 后，在一致边界优先回收最长的未结束局，回到半预算后恢复准入；停放局同样参与回收。完整终局队列和在学习数据保留，若它们暂时独占预算则暂停采样，等学习释放内存再恢复。淘汰局不补胜负、不截取前后缀学习，后续新局正常补入。
+
+状态 JSON 的 `discarded_games` / `discarded_steps` 与 `discarded_long_games` / `discarded_stale_games` / `discarded_memory_games` 单独记录淘汰总量及原因；不计入 `completed_games` 或 `terminal_games_consumed`，已经真实终局但因长度上限被拒收的局仍属于 `completed_games`。`memory_backpressure` 标识完整终局占用导致的采样暂停。`produced = consumed + stale_steps + discarded_steps + ready_steps + partial_steps + learning_steps`，未决转换另计。
 
 ## Colab
 
@@ -49,7 +53,7 @@ pwsh -File training/native/run.ps1 stop --directory E:/Training/haojie/run
 pwsh -File training/native/run.ps1 run --directory E:/Training/haojie/restored --resume E:/Training/haojie/run/checkpoint.pt
 ```
 
-默认每 300 秒保存，`--save-seconds 0` 关闭定时保存。保存先停在一致边界，冻结模型、五组 BF16 优化器状态、权威局面、两类 RNG、路径、排除 frontier、未决转换、部分轨迹和 ready 块，再后台原子写入。恢复沿用档内训练语义；并发、worker、推理上限、设备和宿主内存预算可以覆盖。
+默认每 300 秒保存，`--save-seconds 0` 关闭定时保存。保存先停在一致边界，冻结模型、五组 BF16 优化器状态、权威局面、两类 RNG、路径、排除 frontier、未决转换、部分轨迹和 ready 块，再后台原子写入。恢复沿用档内训练语义；并发、worker、推理上限、设备和宿主内存预算可以覆盖。`v3` 指检查点及状态 JSON 的数据格式，不是 main 提交版本或训练方法；重构前的短块训练和当前完整终局训练都使用过这个标签。原始状态和配置布局保持不变，新增淘汰计数及长度上限使用可选字段；此前 `chunk=0` 的完整终局 v3 可直接恢复，默认使用新的长度上限，首次准入前回收过期或过长的旧局。短块 v3 仍拒绝正式续训。新检查点保留淘汰计数与长度上限，恢复时可用 `--max-game-steps` 覆盖。
 
 每次 `checkpoint.pt` 原子落盘后立即发布对应冻结状态的 `saved.json`，作为面板和后台测评的保存回执；运行中手动保存、定时保存与停止保存共用同一路径。
 

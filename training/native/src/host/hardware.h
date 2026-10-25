@@ -223,7 +223,7 @@ inline void select_configuration(Settings &s, const Hardware &h) {
   if (s.resume.empty())
     set("--batch", s.batch, batch);
   set("--memory-mb", s.memory_mb,
-      std::clamp<uint64_t>(h.ram_available / (3 * 1024 * 1024), 128, 8192));
+      std::max<uint64_t>(h.ram_available / (3 * 1024 * 1024), 128));
   set("--threads", s.threads, h.gpu_total ? 1 : std::min<uint64_t>(h.cores, 8));
 }
 inline std::string configuration_json(const Settings &s, const Hardware &h) {
@@ -237,6 +237,7 @@ inline std::string configuration_json(const Settings &s, const Hardware &h) {
       << ",\"workers\":" << s.workers << ",\"concurrency\":" << s.concurrency
       << ",\"batch\":" << s.batch << ",\"inference_batch\":" << s.inference_batch
       << ",\"threads\":" << s.threads << ",\"memory_mb\":" << s.memory_mb
+      << ",\"max_game_steps\":" << s.max_game_steps
       << ",\"training_method\":\"terminal-vtrace\",\"batch_unit\":\"memory-microbatch\""
       << ",\"checkpoint_batch_preserved\":" << (s.resume.empty() ? "false" : "true") << "}\n";
   return out.str();
@@ -313,5 +314,12 @@ inline void hardware_checks() {
   select_configuration(single, cpu);
   TORCH_CHECK(single.batch == 32 && single.workers == 1 && single.concurrency == 1 &&
               single.threads == 1);
+  cpu.ram_available = uint64_t(54) << 30;
+  select_configuration(single, cpu);
+  TORCH_CHECK(single.memory_mb == 18432, "large-memory host retained the old 8 GiB cap");
+  single.memory_mb = 24576;
+  single.supplied.insert("--memory-mb");
+  select_configuration(single, cpu);
+  TORCH_CHECK(single.memory_mb == 24576, "explicit memory budget was overwritten");
 }
 } // namespace hj

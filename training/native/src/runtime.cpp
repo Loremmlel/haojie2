@@ -99,11 +99,24 @@ Block read_block(Reader &r, const GraphReader &graph) {
 }
 
 constexpr uint64_t LagLimit = 64;
+enum class Discard { None, Long, Stale, Memory };
+Discard unfinished_limit(const Game &game, uint64_t version, uint64_t limit) {
+  if (game.partial.size() >= limit)
+    return Discard::Long;
+  const Step *oldest = !game.partial.empty() ? &game.partial.front()
+                       : game.pending      ? &*game.pending
+                                           : nullptr;
+  if (oldest) {
+    if (version >= oldest->version && version - oldest->version > LagLimit)
+      return Discard::Stale;
+  }
+  return Discard::None;
+}
 bool terminal_queue_full(size_t queued, uint64_t concurrency) {
   return queued >= std::max<uint64_t>(1, concurrency);
 }
 std::vector<Block> terminal_batch(std::deque<Block> &ready, uint64_t version, uint64_t batch,
-                                  Counters &counters) {
+                                  uint64_t max_game_steps, Counters &counters) {
   std::vector<Block> result;
   uint64_t count = 0;
   while (!ready.empty() && count < batch) {
@@ -115,7 +128,11 @@ std::vector<Block> terminal_batch(std::deque<Block> &ready, uint64_t version, ui
       TORCH_CHECK(step.version <= version, "behavior version exceeds learner version");
       stale |= version - step.version > LagLimit;
     }
-    if (stale) {
+    if (episode.steps.size() > max_game_steps) {
+      counters.discarded_steps += episode.steps.size();
+      ++counters.discarded_games;
+      ++counters.discarded_long_games;
+    } else if (stale) {
       counters.stale_steps += episode.steps.size();
       ++counters.stale_games;
     } else {
@@ -459,6 +476,14 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
                        : "cpu";
   if (!s.supplied.count("--save-seconds"))
     s.save_seconds = double(c[12]) / 1000000;
+  T limits;
+  if (archive->try_read("trajectory_limits", limits)) {
+    TORCH_CHECK(limits.scalar_type() == torch::kInt64 && limits.dim() == 1 &&
+                    limits.numel() == 1 && limits[0].item<int64_t>() > 0,
+                "invalid trajectory limit");
+    if (!s.supplied.count("--max-game-steps"))
+      s.max_game_steps = limits[0].item<int64_t>();
+  }
   return {std::move(s), std::move(archive)};
 }
 class Session {
@@ -472,6 +497,7 @@ class Session {
   InputPool inputs;
   std::atomic<bool> sampling_paused{false};
   bool ready_paused = false;
+  bool memory_paused = false;
   uint64_t consumed_within_lag = 0, consumed_lag_max = 0, peak_ready = 0;
   bool quiescing = false;
   std::vector<std::unique_ptr<Lane>> lanes;
@@ -891,7 +917,8 @@ public:
       return;
     // 完成局独立取走；长局、停放局与更新次数不参与就绪条件。
     // 批次达到计算小批大小即提交已有完整局，不把整个队列合成一次大更新。
-    in_learning = terminal_batch(ready, committed_updates, settings.batch, counters);
+    in_learning = terminal_batch(ready, committed_updates, settings.batch,
+                                 settings.max_game_steps, counters);
     if (in_learning.empty())
       return;
     learn_start = Clock::now();
@@ -915,6 +942,95 @@ public:
       publish_weights();
       return result;
     });
+  }
+  void resume_sampling() {
+    sampling_paused = quiescing || memory_paused;
+    roots->wake();
+    if (sampling_paused)
+      return;
+    for (auto &entry : games) {
+      auto &g = entry.second;
+      if (!g.parked && !g.parking && g.idle()) {
+        if (g.current)
+          enqueue(g);
+        else {
+          auto b = id_packet(g.id);
+          put<uint32_t>(b, 0);
+          submit(g, 1, std::move(b));
+        }
+      }
+    }
+  }
+  void discard_game(uint64_t id, Discard reason) {
+    auto found = games.find(id);
+    TORCH_CHECK(found != games.end() && found->second.idle() && sampling_paused,
+                "discard requires a settled actor boundary");
+    auto &g = found->second;
+    TORCH_CHECK(g.completed.empty(), "discard must collect real terminals first");
+    counters.discarded_steps += g.partial.size();
+    ++counters.discarded_games;
+    counters.discarded_long_games += reason == Discard::Long;
+    counters.discarded_stale_games += reason == Discard::Stale;
+    counters.discarded_memory_games += reason == Discard::Memory;
+    // 停放局已从 Rust lane 移出；活动局等待删除回执后再释放跨线程引用。
+    if (g.parked)
+      games.erase(found);
+    else {
+      submit(g, 5, id_packet(id));
+      settle();
+    }
+    inputs.trim();
+  }
+  void limit_trajectories() {
+    if (!settings.terminal_training())
+      return;
+    auto budget = settings.memory_mb * 1024 * 1024;
+    auto used = managed();
+    bool pressure = used >= budget * 3 / 4;
+    bool needed = pressure;
+    for (auto &entry : games) {
+      std::lock_guard lock(*entry.second.progress_mutex);
+      needed |= unfinished_limit(entry.second, committed_updates, settings.max_game_steps) !=
+                Discard::None;
+    }
+    if (!needed) {
+      if (memory_paused && used < budget / 2) {
+        memory_paused = false;
+        resume_sampling();
+      }
+      return;
+    }
+    // 先收回全部 lane 和设备槽的所有权，不能释放仍被在途推理引用的轨迹。
+    sampling_paused = true;
+    roots->wake();
+    settle();
+    collect_learning();
+    std::vector<std::pair<uint64_t, Discard>> rejected;
+    for (auto &entry : games) {
+      auto reason = unfinished_limit(entry.second, committed_updates, settings.max_game_steps);
+      if (reason != Discard::None)
+        rejected.emplace_back(entry.first, reason);
+    }
+    for (auto [id, reason] : rejected)
+      discard_game(id, reason);
+    inputs.trim();
+    pressure |= managed() >= budget * 3 / 4;
+    if (pressure) {
+      // 回到半预算后再准入；优先牺牲最长的未结束局，完整终局继续由 learner 消费。
+      while (managed() >= budget / 2 && !games.empty()) {
+        auto largest = std::max_element(games.begin(), games.end(), [](auto &a, auto &b) {
+          auto retained = [](const Game &g) {
+            return g.partial.capacity() * sizeof(Step) + g.snapshot.capacity();
+          };
+          return retained(a.second) < retained(b.second);
+        });
+        discard_game(largest->first, Discard::Memory);
+      }
+      // 就绪或在学习的完整对局暂时独占预算时，只暂停采样，不丢弃完整终局。
+      memory_paused = managed() >= budget / 2;
+    } else if (managed() < budget / 2)
+      memory_paused = false;
+    resume_sampling();
   }
   void resize() {
     RECORD_FUNCTION("haojie::resize", std::vector<c10::IValue>());
@@ -1112,22 +1228,33 @@ public:
       learning_steps += b.steps.size();
     for (auto &b : next_learning)
       learning_steps += b.steps.size();
-    if (counters.consumed + counters.stale_steps + ready_steps() + partial + learning_steps !=
-        counters.produced)
+    if (counters.consumed + counters.stale_steps + counters.discarded_steps + ready_steps() +
+            partial + learning_steps != counters.produced)
       throw std::runtime_error("trajectory accounting differs");
     o << learning_steps;
     o << ",\n  \"lag_limit\": " << LagLimit
       << ",\n  \"strict_lag\": " << (settings.terminal_training() ? "true" : "false")
       << ",\n  \"stale_steps\": " << counters.stale_steps - delta.stale_steps
       << ",\n  \"stale_games\": " << counters.stale_games - delta.stale_games
+      << ",\n  \"discarded_steps\": " << counters.discarded_steps - delta.discarded_steps
+      << ",\n  \"discarded_games\": " << counters.discarded_games - delta.discarded_games
+      << ",\n  \"discarded_long_games\": "
+      << counters.discarded_long_games - delta.discarded_long_games
+      << ",\n  \"discarded_stale_games\": "
+      << counters.discarded_stale_games - delta.discarded_stale_games
+      << ",\n  \"discarded_memory_games\": "
+      << counters.discarded_memory_games - delta.discarded_memory_games
       << ",\n  \"outstanding_steps\": "
-      << counters.produced - counters.consumed - counters.stale_steps + pending
+      << counters.produced - counters.consumed - counters.stale_steps - counters.discarded_steps +
+             pending
       << ",\n  \"ready_games\": " << ready.size()
       << ",\n  \"ready_game_limit\": " << std::max<uint64_t>(1, settings.concurrency)
       << ",\n  \"consumed_within_lag\": " << consumed_within_lag
       << ",\n  \"consumed_lag_max\": " << consumed_lag_max
       << ",\n  \"peak_ready_steps\": " << peak_ready
-      << ",\n  \"ready_backpressure\": " << (ready_paused ? "true" : "false");
+      << ",\n  \"ready_backpressure\": " << (ready_paused ? "true" : "false")
+      << ",\n  \"memory_backpressure\": " << (memory_paused ? "true" : "false")
+      << ",\n  \"max_game_steps\": " << settings.max_game_steps;
     if (diagnostic::enabled) {
       uint64_t maximum = 0, total = 0, count = 0;
       for (auto &block : ready)
@@ -1264,6 +1391,15 @@ public:
     archive->write("stale_counts",
                    torch::tensor({int64_t(counters.stale_steps), int64_t(counters.stale_games)},
                                  torch::kInt64));
+    // 新元数据为可选字段，旧 v3 的二进制状态和配置布局保持不变。
+    archive->write("discard_counts",
+                   torch::tensor({int64_t(counters.discarded_steps),
+                                  int64_t(counters.discarded_games),
+                                  int64_t(counters.discarded_long_games),
+                                  int64_t(counters.discarded_stale_games),
+                                  int64_t(counters.discarded_memory_games)}, torch::kInt64));
+    archive->write("trajectory_limits",
+                   torch::tensor({int64_t(settings.max_game_steps)}, torch::kInt64));
     auto state_owner = std::make_shared<Bytes>(std::move(state));
     archive->write("state", torch::from_blob(
                                 state_owner->data(), {int64_t(state_owner->size())},
@@ -1297,22 +1433,23 @@ public:
     });
     last_save = Clock::now();
     quiescing = !resume;
-    sampling_paused = !resume;
-    roots->wake();
-    for (auto &entry : games) {
-      auto &g = entry.second;
-      if (resume && !g.parked) {
-        if (g.current)
-          enqueue(g);
-        else {
-          auto b = id_packet(g.id);
-          put<uint32_t>(b, 0);
-          submit(g, 1, std::move(b));
-        }
-      }
-    }
+    resume_sampling();
   }
   void restore(torch::serialize::InputArchive &archive) {
+    T discard_counts;
+    if (archive.try_read("discard_counts", discard_counts)) {
+      TORCH_CHECK(discard_counts.scalar_type() == torch::kInt64 && discard_counts.dim() == 1 &&
+                      discard_counts.numel() == 5 && discard_counts.ge(0).all().item<bool>(),
+                  "invalid discarded trajectory counters");
+      counters.discarded_steps = discard_counts[0].item<int64_t>();
+      counters.discarded_games = discard_counts[1].item<int64_t>();
+      counters.discarded_long_games = discard_counts[2].item<int64_t>();
+      counters.discarded_stale_games = discard_counts[3].item<int64_t>();
+      counters.discarded_memory_games = discard_counts[4].item<int64_t>();
+      TORCH_CHECK(counters.discarded_games == counters.discarded_long_games +
+                      counters.discarded_stale_games + counters.discarded_memory_games,
+                  "discarded trajectory reasons differ");
+    }
     T stale_counts;
     if (archive.try_read("stale_counts", stale_counts)) {
       TORCH_CHECK(stale_counts.scalar_type() == torch::kInt64 && stale_counts.dim() == 1 &&
@@ -1649,6 +1786,8 @@ public:
         stopping = true;
       if (stopping)
         break;
+      if (control_tick)
+        limit_trajectories();
       resize();
       train();
       sampling_budget();
@@ -1664,7 +1803,11 @@ public:
         atomic_text(settings.directory / "status.json", metrics(true));
         last_status = Clock::now();
       }
-      if (managed() > settings.memory_mb * 1024 * 1024) {
+      auto budget = settings.memory_mb * 1024 * 1024;
+      if (settings.terminal_training() && managed() >= budget * 3 / 4)
+        limit_trajectories();
+      if (managed() > budget &&
+          (!settings.terminal_training() || (ready.empty() && !learning.valid()))) {
         checkpoint(false);
         if (writer.valid())
           writer.get();
@@ -1932,12 +2075,27 @@ void runtime_checks() {
     settings.width = 32;
     settings.workers = settings.inference_batch = settings.batch = settings.publish = 1;
     settings.concurrency = settings.chunk = 0;
+    settings.supplied.insert("--device");
     Session session({settings, {}});
     auto action =
         int64_t(std::find(f.node->mask.begin(), f.node->mask.end(), 1) - f.node->mask.begin());
     auto episode = [&](uint64_t version) {
       return Block{{Step{f.node, action, logps[action], version, true, 1}}, {}};
     };
+    {
+      auto boundary = episode(0), oversized = episode(0);
+      boundary.steps.assign(4, Step{f.node, action, logps[action], 0, false, 0});
+      boundary.steps.back().terminal = true;
+      oversized.steps = boundary.steps;
+      oversized.steps.insert(oversized.steps.begin(), boundary.steps.front());
+      std::deque<Block> queue{std::move(boundary), std::move(oversized)};
+      Counters rejected;
+      auto accepted = terminal_batch(queue, 0, 1, 4, rejected);
+      TORCH_CHECK(accepted.size() == 1 && accepted[0].steps.size() == 4 && queue.size() == 1);
+      TORCH_CHECK(terminal_batch(queue, 0, 1, 4, rejected).empty() && queue.empty() &&
+                      rejected.discarded_long_games == 1 && rejected.discarded_steps == 5,
+                  "length limit truncated a complete episode or learned an oversized prefix");
+    }
     Game parked;
     parked.id = 1;
     parked.actor = f.actor;
@@ -1996,10 +2154,142 @@ void runtime_checks() {
                 "asynchronous checkpoint lost counters or unfinished games");
     restored.metrics(false);
     TORCH_CHECK(fs::exists(directory / "saved.json"), "checkpoint did not publish its receipt");
+    // 构造不含新增字段的旧 v3，验证原始状态、优化器及未结束局仍可读。
+    torch::serialize::OutputArchive legacy, legacy_optimizer;
+    for (auto name : {"state", "config", "weights", "actor", "stale_counts"}) {
+      T tensor;
+      archive->read(name, tensor);
+      legacy.write(name, tensor);
+    }
+    session.optimizer.save(legacy_optimizer);
+    legacy.write("optimizer", legacy_optimizer);
+    legacy.save_to((directory / "legacy.pt").string());
+    settings.resume = directory / "legacy.pt";
+    Session compatible(resume_settings(settings));
+    TORCH_CHECK(compatible.counters.discarded_games == 0 &&
+                    compatible.games.at(1).partial.size() == 1 &&
+                    compatible.optimizer.steps == 66,
+                "legacy v3 checkpoint no longer restores");
+    // 正好 K=64 的未结束轨迹保留，K=65 即提前整局释放，不伪造终局。
+    restored.quiescing = true;
+    auto &old = restored.games.at(1);
+    old.partial.front().version = 2;
+    restored.limit_trajectories();
+    TORCH_CHECK(restored.games.count(1) && restored.counters.discarded_games == 0);
+    old.partial.front().version = 1;
+    restored.limit_trajectories();
+    TORCH_CHECK(!restored.games.count(1) && restored.counters.discarded_stale_games == 1 &&
+                    restored.counters.discarded_steps == 1 && restored.counters.finished == 0,
+                "stale unfinished game was retained or counted as terminal");
+    restored.settings.max_game_steps = 4;
+    Game long_game;
+    long_game.id = 900;
+    long_game.parked = true;
+    long_game.partial.assign(4, Step{f.node, action, logps[action], 66, false, 0});
+    long_game.pending = long_game.partial.front();
+    restored.games.emplace(900, std::move(long_game));
+    restored.counters.produced += 4;
+    restored.limit_trajectories();
+    TORCH_CHECK(!restored.games.count(900) && restored.counters.discarded_long_games == 1 &&
+                    restored.counters.discarded_steps == 5 && restored.ready.size() == 1,
+                "length rejection leaked pending input or discarded a complete game");
+    restored.settings.max_game_steps = 262144;
+    restored.settings.memory_mb = std::max<uint64_t>(4, restored.managed() / (1024 * 1024) * 4 + 4);
+    auto memory_budget = restored.settings.memory_mb * 1024 * 1024;
+    // 多轮制造真实计费内存，释放后必须回到半预算且允许重新准入。
+    for (int round = 0; round < 16; ++round) {
+      {
+        auto heavy = std::make_shared<Node>();
+        heavy->root = f.node->root;
+        heavy->context.assign(memory_budget / sizeof(RowRef), f.node->root->globals);
+        heavy->account_input();
+        Game pressure;
+        pressure.id = 901 + round;
+        pressure.parked = true;
+        pressure.partial.assign(4, Step{heavy, action, logps[action], 66, false, 0});
+        restored.games.emplace(pressure.id, std::move(pressure));
+      }
+      restored.counters.produced += 4;
+      restored.limit_trajectories();
+      TORCH_CHECK(restored.managed() < memory_budget / 2 && !restored.memory_paused &&
+                      !restored.games.count(901 + round) &&
+                      restored.counters.discarded_memory_games >= uint64_t(round + 1) &&
+                      restored.ready.size() == 1,
+                  "memory pressure did not reclaim unfinished inputs across repeated rounds");
+      restored.metrics(false);
+    }
+    // 完整终局独占预算时保留它并暂停采样，消费者释放后解除背压。
+    Block large_terminal;
+    large_terminal.steps.assign(memory_budget / sizeof(Step),
+                                Step{f.node, action, logps[action], 66, false, 0});
+    large_terminal.steps.back().terminal = true;
+    auto retained_steps = large_terminal.steps.size();
+    restored.settings.max_game_steps = std::max<uint64_t>(262144, retained_steps + 1);
+    restored.ready.push_back(std::move(large_terminal));
+    restored.counters.produced += retained_steps;
+    restored.limit_trajectories();
+    TORCH_CHECK(restored.memory_paused && restored.sampling_paused && restored.ready.size() == 2,
+                "memory pressure discarded complete terminal data instead of pausing sampling");
+    restored.ready.pop_back();
+    restored.counters.produced -= retained_steps;
+    restored.limit_trajectories();
+    TORCH_CHECK(!restored.memory_paused);
+    restored.metrics(false);
+    restored.settings.directory = directory;
+    restored.settings.max_game_steps = 4096;
+    restored.checkpoint(false);
+    restored.writer.get();
+    settings.resume = directory / "checkpoint.pt";
+    Session after_discard(resume_settings(settings));
+    TORCH_CHECK(after_discard.settings.max_game_steps == 4096 &&
+                    after_discard.counters.discarded_long_games == 1 &&
+                    after_discard.counters.discarded_stale_games == 1 &&
+                    after_discard.counters.discarded_memory_games >= 16 &&
+                    after_discard.optimizer.steps == 66 && after_discard.ready.size() == 1,
+                "checkpoint lost discard reasons, limit, optimizer or complete games");
+    after_discard.metrics(false);
+    // 恢复可显式覆盖长度上限，不改变模型或优化器配置。
+    settings.max_game_steps = 8192;
+    settings.supplied.insert("--max-game-steps");
+    TORCH_CHECK(resume_settings(settings).first.max_game_steps == 8192);
+    fs::remove(directory / "legacy.pt");
     fs::remove(directory / "checkpoint.pt");
     fs::remove(directory / "saved.json");
     fs::remove(directory);
   }
+  {
+    Settings settings;
+    settings.device = "cpu";
+    settings.width = 32;
+    settings.workers = settings.inference_batch = settings.batch = settings.publish = 1;
+    settings.concurrency = 2;
+    settings.supplied.insert("--device");
+    settings.chunk = 0;
+    settings.max_game_steps = 8;
+    settings.seconds = 3;
+    settings.save_seconds = 0;
+    settings.directory = fs::temp_directory_path() /
+                         ("haojie-discard-check-" +
+                          std::to_string(Clock::now().time_since_epoch().count()));
+    fs::create_directory(settings.directory);
+    {
+      Session live({settings, {}});
+      live.execute();
+      TORCH_CHECK(live.counters.discarded_long_games > 2 && live.next_id > 5 &&
+                      live.managed() < settings.memory_mb * 1024 * 1024,
+                  "live actor deletion failed to free inputs and admit replacement games");
+      live.metrics(false);
+    }
+    settings.resume = settings.directory / "checkpoint.pt";
+    Session continued(resume_settings(settings));
+    TORCH_CHECK(continued.counters.discarded_long_games > 2 &&
+                    continued.settings.max_game_steps == 8,
+                "live discard checkpoint did not resume");
+    continued.metrics(false);
+    fs::remove_all(settings.directory);
+  }
+  std::cout << "bounded unfinished trajectories, live discard/replacement, memory pressure and "
+               "legacy v3 recovery: passed\n";
   std::cout << "asynchronous terminal learning, parked long game, stale rejection and busy "
                "admission: passed\n";
   std::cout << "typed node roundtrip, actor parking, RNG/progress continuation and canonical "

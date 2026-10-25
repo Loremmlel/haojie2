@@ -16,6 +16,7 @@ struct Settings {
   uint64_t concurrency = 12, workers = 8, seed = 1, chunk = 16, batch = 512, inference_batch = 64,
            width = DefaultWidth, publish = 8;
   uint64_t memory_mb = 4096, updates = 0, samples = 0;
+  uint64_t max_game_steps = 262144;
   uint64_t threads = 1;
   uint64_t workset_games = 0, game_samples = 256;
   double seconds = 0, save_seconds = 300;
