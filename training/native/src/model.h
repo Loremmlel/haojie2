@@ -112,8 +112,11 @@ struct Optimizer {
 struct TrainResult {
   uint64_t consumed = 0;
   double loss = 0;
+  uint64_t terminal_games = 0;
+  double value_mse = 0, policy_entropy = 0, gradient_norm = 0;
 };
 TrainResult learn(Network &, Optimizer &, const std::vector<Block> &, Forward prepared = {});
+TrainResult learn_episodes(Network &, Optimizer &, const std::vector<Block> &, uint64_t batch);
 class LearningEngine {
   struct Impl;
   std::unique_ptr<Impl> impl;

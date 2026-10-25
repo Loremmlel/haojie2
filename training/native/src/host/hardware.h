@@ -153,6 +153,7 @@ inline std::string configuration_json(const Settings &s, const Hardware &h) {
       << ",\"workers\":" << s.workers << ",\"concurrency\":" << s.concurrency
       << ",\"batch\":" << s.batch << ",\"inference_batch\":" << s.inference_batch
       << ",\"threads\":" << s.threads << ",\"memory_mb\":" << s.memory_mb
+      << ",\"training_method\":\"terminal-vtrace\",\"batch_unit\":\"memory-microbatch\""
       << ",\"checkpoint_batch_preserved\":" << (s.resume.empty() ? "false" : "true") << "}\n";
   return out.str();
 }

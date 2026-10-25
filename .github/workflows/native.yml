@@ -74,12 +74,13 @@ jobs:
             $env:PATH = if ($IsWindows) { "$torchRoot/lib;$PWD/artifacts/native-target/release" } else { '' }
             & $binary check --device cpu
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
-            & $binary run --directory artifacts/native-ci/live --device cpu --concurrency 4 --workers 2 --batch 128 --samples 256 --save-seconds 0
+            & $binary run --directory artifacts/native-ci/live --device cpu --concurrency 4 --workers 2 --batch 128 --seconds 5 --save-seconds 0
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
-            & $binary run --directory artifacts/native-ci/restored --resume artifacts/native-ci/live/checkpoint.pt --device cpu --concurrency 4 --workers 2 --samples 128 --save-seconds 0
+            & $binary run --directory artifacts/native-ci/restored --resume artifacts/native-ci/live/checkpoint.pt --device cpu --concurrency 4 --workers 2 --seconds 5 --save-seconds 0
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             $window = Get-Content artifacts/native-ci/restored/window.json -Raw | ConvertFrom-Json
-            if ($window.consumed -ne 128) { throw 'Incorrect resumed window consumption' }
+            if ($window.produced -le 0 -or $window.training_method -ne 'terminal-vtrace') { throw 'Terminal trajectories did not continue after resume' }
+            if ($window.consumed -gt 0 -and $window.terminal_games_consumed -eq 0) { throw 'Unfinished trajectories entered learning' }
           } finally { $env:PATH = $previousPath }
       - name: Colab control and real AI evaluation bridge
         shell: pwsh

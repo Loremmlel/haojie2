@@ -10,7 +10,7 @@ $exe = Join-Path $repoRoot 'artifacts/cpp-training-build/Release/haojie-train.ex
 & $exe check --device $Device
 if ($LASTEXITCODE) { throw '数值和原生状态检查失败。' }
 $live = Join-Path $targetRoot 'live'
-$process = Start-Process -FilePath $exe -ArgumentList @('run','--directory',$live,'--device',$Device,'--concurrency',$Concurrency,'--workers','4','--batch','32','--inference-batch','12','--chunk','16','--publish','1','--save-seconds','0','--seconds','20') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $targetRoot 'live.stdout') -RedirectStandardError (Join-Path $targetRoot 'live.stderr')
+$process = Start-Process -FilePath $exe -ArgumentList @('run','--directory',$live,'--device',$Device,'--concurrency',$Concurrency,'--workers','4','--batch','32','--inference-batch','12','--save-seconds','0','--seconds','60') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $targetRoot 'live.stdout') -RedirectStandardError (Join-Path $targetRoot 'live.stderr')
 $readings = [Collections.Generic.List[object]]::new()
 function Wait-State([scriptblock]$Predicate) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -26,7 +26,7 @@ function Wait-State([scriptblock]$Predicate) {
     throw '等待训练状态超过 30 秒。'
 }
 try {
-    $null = Wait-State { param($s) $s.active -eq $Concurrency -and $s.consumed -ge 128 }
+    $null = Wait-State { param($s) $s.active -eq $Concurrency -and $s.partial_steps -ge 128 }
     & $exe resize --directory $live --concurrency 1
     $null = Wait-State { param($s) $s.active -eq 1 -and $s.parked -eq ($Concurrency - 1) }
     & $exe resize --directory $live --concurrency 0
@@ -40,11 +40,12 @@ try {
     $saved = Get-Content -LiteralPath (Join-Path $live 'saved.json') -Raw | ConvertFrom-Json
     if ($saved.admitted_total -ne ($Concurrency + $saved.completed_games)) { throw '缩放重开了在途对局。' }
     $restored = Join-Path $targetRoot 'restored'
-    & $exe run --directory $restored --resume (Join-Path $live 'checkpoint.pt') --device $Device --concurrency $Concurrency --workers 4 --samples 128 --save-seconds 0
+    & $exe run --directory $restored --resume (Join-Path $live 'checkpoint.pt') --device $Device --concurrency $Concurrency --workers 4 --seconds 10 --save-seconds 0
     if ($LASTEXITCODE) { throw '恢复后的实际训练失败。' }
     $window = Get-Content -LiteralPath (Join-Path $restored 'window.json') -Raw | ConvertFrom-Json
     $continued = Get-Content -LiteralPath (Join-Path $restored 'saved.json') -Raw | ConvertFrom-Json
-    if ($window.consumed -ne 128 -or $continued.consumed -lt ($saved.consumed + 128)) { throw '恢复消费或窗口计数错误。' }
+    if ($window.produced -le 0 -or $continued.produced -le $saved.produced) { throw '恢复后未继续采样原对局。' }
+    if ($continued.consumed -gt $saved.consumed -and $window.terminal_games_consumed -eq 0) { throw '未终局样本进入学习。' }
     if ($null -ne $continued.consumed_per_second) { throw '累计保存状态不得混入本轮速率。' }
     if ($continued.admitted_total -ne ($saved.admitted_total + $continued.completed_games - $saved.completed_games)) { throw '恢复重开了在途对局。' }
     @{ readings = $readings; saved = $saved; restored = $window } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $targetRoot 'validation.json') -Encoding utf8

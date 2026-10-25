@@ -124,7 +124,7 @@
     set('games', number(m.completed_games));
     set('ready', number(m.ready_steps));
     set('lag', number(m.consumed_lag_max));
-    set('batch', `学习 batch ${number(m.batch ?? c.batch)}`);
+    set('batch', `计算小批 ${number(m.batch ?? c.batch)} 条 · 整局提交更新`);
     set('lag_limit', `上限 ${number(m.lag_limit)} 次更新`);
     find('[data-state]').textContent = phases[reply.phase] || '状态未知';
     find('[data-updated]').textContent = `读取于 ${new Date().toLocaleTimeString('zh-CN')}`;
@@ -135,7 +135,7 @@
       : '尚未保存';
     const r = reply.resources;
     find('[data-summary]').textContent =
-      `${c.gpu || c.device || '等待设备'} · ${number(c.workers)} 个 lane · 活动 ${number(m.active)} / 目标 ${number(target)} 局 · 已停放 ${number(m.parked)} 局 · 显存 ${number(r.vram, 1)} / ${number(r.vram_total, 1)} GiB · GPU ${number(r.power, 1)} W · 最近保存：${saved}${reply.save_pending ? '（保存请求处理中）' : ''}`;
+      `${c.gpu || c.device || '等待设备'} · ${number(c.workers)} 个 lane · 活动 ${number(m.active)} / 目标 ${number(target)} 局 · 已停放 ${number(m.parked)} 局 · 显存 ${number(r.vram, 1)} / ${number(r.vram_total, 1)} GiB · GPU ${number(r.power, 1)} W · 最近保存：${saved}${reply.save_pending ? '（保存请求处理中）' : ''}${m.waiting_for_terminal_drain ? ' · 正在等待在途局自然结束后更新；停放局需恢复' : m.training_method === 'terminal-vtrace' && !m.updates ? ' · 正在收集完整终局，首次学习前消费为零' : ''}`;
     chart(
       'throughput',
       history,

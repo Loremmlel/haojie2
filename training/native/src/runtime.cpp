@@ -165,7 +165,6 @@ class Lane {
   Mailbox &output;
   std::atomic<bool> &paused;
   std::atomic<CpuSnapshot> &weights;
-  Admission &admission;
   std::function<bool(Job &)> request_root;
   std::atomic<uint64_t> &cache_hits;
   std::thread thread;
@@ -186,7 +185,8 @@ class Lane {
       if (job.record && ++job.record->steps >= job.quota)
         g.workset_done = true;
     }
-    if (!g.partial.empty() && (g.partial.size() >= job.chunk || reward || g.workset_done)) {
+    if (!g.partial.empty() &&
+        ((job.chunk && g.partial.size() >= job.chunk) || reward || g.workset_done)) {
       g.completed.push_back({std::move(g.partial), next});
       g.partial.clear();
     }
@@ -194,10 +194,9 @@ class Lane {
 
 public:
   Lane(Mailbox &out, std::atomic<bool> &paused, std::atomic<CpuSnapshot> &weights,
-       std::function<bool(Job &)> request_root, std::atomic<uint64_t> &cache_hits,
-       Admission &admission)
+       std::function<bool(Job &)> request_root, std::atomic<uint64_t> &cache_hits)
       : output(out), paused(paused), weights(weights), request_root(std::move(request_root)),
-        admission(admission), cache_hits(cache_hits), thread([this] {
+        cache_hits(cache_hits), thread([this] {
           void *actor = hj_actor_create();
           CpuPolicy policy;
           InputPool inputs;
@@ -230,25 +229,6 @@ public:
                 Bytes reply;
                 const Bytes *input = &job.bytes;
                 if (job.node) {
-                  if (this->admission.capacity) {
-                    auto &g = *job.state;
-                    std::lock_guard lock(*g.progress_mutex);
-                    if (g.actor == g.learner && !g.reserved) {
-                      if (!this->admission.acquire()) {
-                        if (!g.partial.empty()) {
-                          g.completed.push_back({std::move(g.partial), g.current});
-                          g.partial.clear();
-                        }
-                        e.kind = 0;
-                        output.bytes -= job.bytes.capacity();
-                        output.push(std::move(e));
-                        continue;
-                      }
-                      g.reserved = true;
-                      // 排队但尚未准入的行为不持旧轮快照；已预留的根在途仍保留原绑定。
-                      job.weights = this->weights.load();
-                    }
-                  }
                   if (!job.weights)
                     job.weights = this->weights.load();
                   if (!host_ready(*job.node->root, job.weights)) {
@@ -321,7 +301,6 @@ public:
                         if (g.sent_training) {
                           TORCH_CHECK(!g.pending, "missing same-seat successor");
                           g.pending = Step{g.sent, f.selected, f.logp, g.sent_version, false, 0};
-                          g.reserved = false;
                         }
                         g.sent.reset();
                       }
@@ -402,6 +381,14 @@ public:
   }
 };
 std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_settings(Settings s) {
+  if (s.terminal_training()) {
+    TORCH_CHECK(!s.supplied.count("--chunk") || s.chunk == 0,
+                "training retains full games; --chunk is diagnostic-only");
+    TORCH_CHECK(!s.supplied.count("--publish") || s.publish == 1,
+                "terminal updates publish once per committed episode batch");
+    s.chunk = 0;
+    s.publish = 1;
+  }
   if (s.resume.empty())
     return {std::move(s), {}};
   auto archive = std::make_shared<torch::serialize::InputArchive>();
@@ -412,6 +399,8 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
   TORCH_CHECK(config.scalar_type() == torch::kInt64 && config.dim() == 1 && config.numel() == 13,
               "invalid checkpoint configuration");
   auto c = config.data_ptr<int64_t>();
+  TORCH_CHECK(!s.terminal_training() || c[2] == 0,
+              "this checkpoint contains short-trajectory training; start a new terminal run");
   auto fixed = [&](const std::string &name, uint64_t &field, size_t index) {
     auto value = uint64_t(c[index]);
     if (s.supplied.count(name) && field != value)
@@ -421,7 +410,7 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
   fixed("--width", s.width, 0);
   fixed("--seed", s.seed, 1);
   fixed("--chunk", s.chunk, 2);
-  if (s.diagnostic != "learner")
+  if (s.diagnostic != "learner" && s.diagnostic != "episodes")
     fixed("--batch", s.batch, 3);
   fixed("--publish", s.publish, 7);
   if (!s.supplied.count("--concurrency"))
@@ -453,7 +442,7 @@ class Session {
   InputPool inputs;
   std::atomic<bool> sampling_paused{false};
   bool ready_paused = false;
-  Admission admission;
+  bool draining = false;
   uint64_t epoch_version = 0, lag_drains = 0;
   static constexpr uint64_t LagLimit = 64, EpochUpdates = 48;
   uint64_t consumed_within_lag = 0, consumed_lag_max = 0, peak_ready = 0;
@@ -487,6 +476,8 @@ class Session {
   uint64_t infer_nodes = 0, peak_active = 0, peak_managed = 0;
   double learning_seconds = 0, inference_seconds = 0;
   std::optional<double> latest_loss;
+  std::optional<TrainResult> latest_terminal;
+  uint64_t terminal_games_consumed = 0;
   Clock::time_point learn_start;
   std::unique_ptr<Executor> learning_executor;
   std::unique_ptr<Executor> preparation_executor;
@@ -518,58 +509,47 @@ public:
       workset =
           std::make_unique<Workset>(settings.workset_games, settings.game_samples, settings.replay);
     }
-    if (!workset && settings.diagnostic != "actor" && settings.diagnostic != "learner" &&
-        settings.diagnostic != "inference" && settings.diagnostic != "service" &&
-        settings.diagnostic != "gemm")
-      admission.capacity = 8 * settings.batch;
-    for (uint64_t i = 0;
-         settings.diagnostic != "learner" && settings.diagnostic != "inference" &&
-         settings.diagnostic != "service" && settings.diagnostic != "gemm" && i < settings.workers;
+    for (uint64_t i = 0; settings.diagnostic != "learner" && settings.diagnostic != "inference" &&
+                         settings.diagnostic != "service" && settings.diagnostic != "gemm" &&
+                         settings.diagnostic != "episodes" && i < settings.workers;
          ++i)
       lanes.push_back(std::make_unique<Lane>(
           mailbox, sampling_paused, cpu_weights, [this](Job &job) { return roots->submit(job); },
-          actor->cache_hits, admission));
+          actor->cache_hits));
     auto diagnostic_batch = settings.batch;
     if (resumed.second)
       restore(*resumed.second);
-    if (settings.diagnostic == "learner")
+    if (settings.diagnostic == "learner" || settings.diagnostic == "episodes")
       settings.batch = diagnostic_batch;
     epoch_version = actor_version;
-    if (admission.capacity) {
-      uint64_t outstanding = ready_steps();
+    if (settings.terminal_training()) {
       auto include = [&](const Step &step) {
         epoch_version = std::min(epoch_version, step.version);
       };
-      for (auto &block : ready)
+      for (auto &block : ready) {
+        TORCH_CHECK(!block.bootstrap && !block.steps.empty() && block.steps.back().terminal,
+                    "checkpoint contains unfinished ready trajectories");
         for (auto &step : block.steps)
           include(step);
+      }
       for (auto &[id, g] : games) {
-        outstanding += g.partial.size() + bool(g.pending);
         for (auto &step : g.partial)
           include(step);
         if (g.pending)
           include(*g.pending);
       }
-      if (!outstanding && optimizer.steps - epoch_version >= EpochUpdates) {
-        copy_weights(learner, actor);
-        synchronize(device);
-        actor_version = published = epoch_version = optimizer.steps;
-      }
-      TORCH_CHECK(optimizer.steps - epoch_version +
-                          (outstanding + settings.batch - 1) / settings.batch <=
-                      LagLimit,
+      TORCH_CHECK(optimizer.steps >= epoch_version && optimizer.steps - epoch_version <= LagLimit,
                   "checkpoint backlog exceeds strict lag capacity; archive remains unchanged");
-      admission.outstanding = outstanding;
-      admission.draining =
-          outstanding > admission.capacity || optimizer.steps - epoch_version >= EpochUpdates;
+      draining = optimizer.steps - epoch_version >= EpochUpdates;
     }
     // 主线程的初始化完成后，持久流才可读取模型和优化器。
     synchronize(learner->parameters()[0].device());
     cpu_weights.store(CpuPolicy::snapshot(actor, actor_version.load()));
     if (settings.diagnostic == "inference" || settings.diagnostic == "service" ||
-        settings.diagnostic == "gemm")
+        settings.diagnostic == "gemm" || settings.diagnostic == "episodes")
       return;
-    learning_engine = std::make_unique<LearningEngine>(learner, optimizer, settings.batch);
+    if (!settings.terminal_training())
+      learning_engine = std::make_unique<LearningEngine>(learner, optimizer, settings.batch);
     if (settings.diagnostic == "learner")
       return;
     roots = std::make_unique<RootService>(
@@ -610,9 +590,6 @@ public:
     lanes[g.id % lanes.size()]->submit(std::move(job));
   }
   void enqueue(Game &g) {
-    if (admission.capacity && g.actor == g.learner && !g.reserved &&
-        (admission.draining || admission.outstanding >= admission.capacity))
-      return;
     if (g.idle() && !g.parked && !g.parking && !sampling_paused && !*g.pause && g.current) {
       g.flow->store(Flow::Cpu);
       Job job{g.id, 1, {}};
@@ -731,12 +708,8 @@ public:
       if (e.op == 3) {
         g.parked = true;
         g.parking = false;
-        // 停放前已排空规则调用；尚未产生行为的预留可撤销，真实 pending 继续保留。
-        if (g.reserved) {
-          g.reserved = false;
-          --admission.outstanding;
-        }
-        if (g.current && g.actor == g.learner && !g.partial.empty()) {
+        if (!settings.terminal_training() && g.current && g.actor == g.learner &&
+            !g.partial.empty()) {
           ready.push_back({std::move(g.partial), g.current});
           g.partial.clear();
         }
@@ -785,13 +758,17 @@ public:
       committed_updates = commit->updates;
       latest_loss = commit->result.loss;
       counters.consumed += commit->result.consumed;
-      if (admission.capacity)
-        admission.outstanding -= commit->result.consumed;
       consumed_within_lag += commit->within_lag;
       consumed_lag_max = std::max(consumed_lag_max, commit->lag_max);
-      committed_graph_replays = learning_engine->replays();
-      committed_graph_fallbacks = learning_engine->fallbacks();
-      committed_graph_work = learning_engine->workload();
+      if (learning_engine) {
+        committed_graph_replays = learning_engine->replays();
+        committed_graph_fallbacks = learning_engine->fallbacks();
+        committed_graph_work = learning_engine->workload();
+      }
+      if (commit->result.terminal_games) {
+        latest_terminal = commit->result;
+        terminal_games_consumed += commit->result.terminal_games;
+      }
       learning_seconds += commit->seconds;
       in_learning.clear();
     }
@@ -813,21 +790,11 @@ public:
     collect_learning();
     if (settings.diagnostic == "actor")
       return;
-    if (settings.defer_learning && roots->queued())
+    if (settings.terminal_training()) {
+      train_terminal();
       return;
-    if (admission.capacity && committed_updates - epoch_version >= EpochUpdates &&
-        !admission.draining) {
-      admission.draining = true;
-      ++lag_drains;
-      diagnostic::record("lag_drain_begin", committed_updates, admission.outstanding,
-                         ready_steps());
     }
-    // 排空阶段先等旧行为取得真实同席位后继，再以至多八批提交整个有界存量。
-    uint64_t prepared_count = 0;
-    for (auto &b : next_learning)
-      prepared_count += b.steps.size();
-    if (admission.draining && admission.outstanding != ready_steps() + prepared_count &&
-        !learning.valid())
+    if (settings.defer_learning && roots->queued())
       return;
     if (next_learning.empty()) {
       if (ready.empty())
@@ -860,7 +827,7 @@ public:
           n += take;
         }
       }
-      if (n < desired && !admission.draining && !(workset && workset->complete()) &&
+      if (n < desired && !(workset && workset->complete()) &&
           managed() < settings.memory_mb * 1024 * 1024 / 2) {
         for (auto it = next_learning.rbegin(); it != next_learning.rend(); ++it)
           ready.push_front(std::move(*it));
@@ -886,7 +853,6 @@ public:
       for (auto &block : in_learning)
         for (auto &step : block.steps) {
           auto lag = optimizer.steps - step.version;
-          TORCH_CHECK(!admission.capacity || lag <= LagLimit, "strict policy lag exceeded");
           maximum = std::max(maximum, lag);
           total += lag;
           within += lag <= LagLimit;
@@ -894,7 +860,6 @@ public:
         }
       auto result = learning_engine->step(in_learning, prepared.get());
       TORCH_CHECK(result.consumed == count, "learning receipt count differs");
-      const bool finish_drain = admission.draining && admission.outstanding == count;
       diagnostic::record("learn_lag", optimizer.steps - 1, maximum, double(total) / count, count,
                          within);
       {
@@ -903,9 +868,53 @@ public:
                                  within, maximum};
       }
       mailbox.changed.notify_one();
-      if (optimizer.steps - published >= settings.publish || finish_drain) {
+      if (optimizer.steps - published >= settings.publish) {
         publish_weights();
       }
+      return result;
+    });
+  }
+  void train_terminal() {
+    if (learning.valid())
+      return;
+    if (committed_updates - epoch_version >= EpochUpdates && !draining) {
+      draining = true;
+      ++lag_drains;
+    }
+    // 到轮次边界只停开新局，已有局必须能继续采样到自然终局。
+    // 排空的所有完整轨迹合并为一次更新，长局不会被切成超出 K 的更新队列。
+    if (draining && !games.empty())
+      return;
+    if (ready.empty()) {
+      if (draining) {
+        epoch_version = committed_updates;
+        draining = false;
+      }
+      return;
+    }
+    while (!ready.empty()) {
+      in_learning.push_back(std::move(ready.front()));
+      ready.pop_front();
+    }
+    learn_start = Clock::now();
+    learning = learning_executor->submit([this] {
+      uint64_t count = 0, maximum = 0;
+      for (auto &episode : in_learning)
+        for (auto &step : episode.steps) {
+          TORCH_CHECK(step.version <= optimizer.steps && optimizer.steps - step.version <= LagLimit,
+                      "strict terminal policy lag exceeded");
+          maximum = std::max(maximum, optimizer.steps - step.version);
+          ++count;
+        }
+      auto result = learn_episodes(learner, optimizer, in_learning, settings.batch);
+      TORCH_CHECK(result.consumed == count, "terminal learning receipt count differs");
+      {
+        std::lock_guard lock(mailbox.mutex);
+        learning_commit = Commit{result, optimizer.steps, elapsed(learn_start), diagnostic::now(),
+                                 count,  maximum};
+      }
+      mailbox.changed.notify_one();
+      publish_weights();
       return result;
     });
   }
@@ -939,6 +948,10 @@ public:
         ++running;
       }
     }
+    if (settings.terminal_training() &&
+        (draining || committed_updates - epoch_version >= EpochUpdates || learning.valid() ||
+         ready_steps() >= settings.batch))
+      return;
     while (running < settings.concurrency && active() < settings.concurrency &&
            managed() < settings.memory_mb * 1024 * 1024 / 2) {
       if (std::any_of(games.begin(), games.end(), [&](auto &entry) {
@@ -967,41 +980,20 @@ public:
     uint64_t budget = settings.memory_mb * 1024 * 1024;
     auto queued = ready_steps();
     peak_ready = std::max(peak_ready, queued);
+    if (settings.terminal_training()) {
+      // 终局队列背压只限制新局；内存不足由主循环保存后明确退出，不伪造块尾。
+      ready_paused = draining || learning.valid() || queued >= settings.batch;
+      if (managed() > budget * 3 / 4)
+        inputs.trim();
+      return;
+    }
     // 真实块达到四批时暂停 actor，两批以下恢复；在途操作完成后原样保留。
     // actor-only 诊断没有消费者，显式跳过消费速率背压。
-    if (settings.diagnostic != "actor" && !admission.capacity) {
+    if (settings.diagnostic != "actor") {
       if (queued >= 4 * settings.batch)
         ready_paused = true;
       else if (queued <= 2 * settings.batch)
         ready_paused = false;
-    }
-    if (admission.capacity) {
-      for (auto &[id, g] : games) {
-        std::lock_guard lock(*g.progress_mutex);
-        progress_locked(g);
-        if (g.idle() && g.current && g.actor == g.learner && !g.partial.empty() &&
-            (admission.draining || admission.outstanding >= admission.capacity)) {
-          ready.push_back({std::move(g.partial), g.current});
-          g.partial.clear();
-        }
-      }
-      if (admission.draining && !learning.valid() && !admission.outstanding) {
-        if (actor_version != committed_updates) {
-          // 恰好空队列跨过轮边界时也必须发布；不依赖常规发布周期整除轮长。
-          learning = learning_executor->submit([this] {
-            publish_weights();
-            return TrainResult{};
-          });
-        } else {
-          epoch_version = committed_updates;
-          admission.draining = false;
-          diagnostic::record("lag_drain_end", committed_updates);
-        }
-      }
-      if (!sampling_paused && !quiescing)
-        for (auto &[id, g] : games)
-          if (g.idle() && !g.parked && !g.parking && g.current)
-            enqueue(g);
     }
     if (managed() > budget * 3 / 4)
       inputs.trim();
@@ -1073,12 +1065,11 @@ public:
     for (auto &entry : games)
       progress_locked(entry.second);
     auto delta = window ? initial : Counters{};
-    uint64_t partial = 0, pending = 0, reserved = 0, parked_pending = 0, busy = 0, parked = 0,
-             advancing = 0, inference_waiting = 0, inference_running = 0;
+    uint64_t partial = 0, pending = 0, parked_pending = 0, busy = 0, parked = 0, advancing = 0,
+             inference_waiting = 0, inference_running = 0;
     for (auto &p : games) {
       partial += p.second.partial.size();
       pending += bool(p.second.pending);
-      reserved += p.second.reserved;
       parked_pending += p.second.parked && bool(p.second.pending);
       auto phase = p.second.flow->load();
       busy += phase == Flow::Cpu;
@@ -1128,16 +1119,12 @@ public:
       learning_steps += b.steps.size();
     if (counters.consumed + ready_steps() + partial + learning_steps != counters.produced)
       throw std::runtime_error("trajectory accounting differs");
-    TORCH_CHECK(!admission.capacity || admission.outstanding == counters.produced -
-                                                                    counters.consumed + pending +
-                                                                    reserved,
-                "behavior admission accounting differs");
     o << learning_steps;
     o << ",\n  \"lag_limit\": " << LagLimit
-      << ",\n  \"strict_lag\": " << (admission.capacity ? "true" : "false")
+      << ",\n  \"strict_lag\": " << (settings.terminal_training() ? "true" : "false")
       << ",\n  \"lag_drains\": " << lag_drains
-      << ",\n  \"admission_outstanding\": " << admission.outstanding
-      << ",\n  \"lag_waiting_parked\": " << (admission.draining ? parked_pending : 0)
+      << ",\n  \"admission_outstanding\": " << counters.produced - counters.consumed + pending
+      << ",\n  \"lag_waiting_parked\": " << (draining ? parked_pending : 0)
       << ",\n  \"consumed_within_lag\": " << consumed_within_lag
       << ",\n  \"consumed_lag_max\": " << consumed_lag_max
       << ",\n  \"peak_ready_steps\": " << peak_ready
@@ -1160,6 +1147,14 @@ public:
     else
       o << "null";
     o << ",\n  \"loss_update\": " << committed_updates;
+    o << ",\n  \"training_method\": \""
+      << (settings.terminal_training() ? "terminal-vtrace" : "diagnostic-unroll") << "\""
+      << ",\n  \"terminal_games_consumed\": " << terminal_games_consumed
+      << ",\n  \"waiting_for_terminal_drain\": " << (draining ? "true" : "false");
+    if (latest_terminal)
+      o << ",\n  \"latest_value_mse\": " << latest_terminal->value_mse
+        << ",\n  \"latest_policy_entropy\": " << latest_terminal->policy_entropy
+        << ",\n  \"latest_gradient_norm\": " << latest_terminal->gradient_norm;
     o << ",\n  \"inference_nodes\": " << infer_nodes << ",\n  \"encoder_nodes\": " << encoder.nodes
       << ",\n  \"encoder_batches\": " << encoder.batches
       << ",\n  \"policy_cpu_seconds\": " << inference_seconds
@@ -1528,6 +1523,33 @@ public:
     std::cout << out.str();
   }
   void execute() {
+    if (settings.diagnostic == "episodes") {
+      TORCH_CHECK(!settings.resume.empty() && !ready.empty() && !settings.samples,
+                  "episode diagnostic requires complete ready games and no sample truncation");
+      std::vector<Block> episodes(ready.begin(), ready.end());
+      auto started = Clock::now();
+      auto result = learn_episodes(learner, optimizer, episodes, settings.batch);
+      double after = 0;
+      for (auto &episode : episodes)
+        for (size_t at = 0; at < episode.steps.size(); at += settings.batch) {
+          std::vector<std::shared_ptr<Node>> nodes;
+          for (auto j = at; j < std::min(episode.steps.size(), at + settings.batch); ++j)
+            nodes.push_back(episode.steps[j].node);
+          auto values = learner->forward(nodes).second.detach().to(torch::kFloat32);
+          after += (values - episode.steps.back().reward).square().sum().item<double>();
+        }
+      std::ostringstream out;
+      out << std::setprecision(12) << "{\"terminal_games\":" << result.terminal_games
+          << ",\"consumed\":" << result.consumed << ",\"optimizer_updates\":1"
+          << ",\"microbatch\":" << settings.batch << ",\"seconds\":" << elapsed(started)
+          << ",\"value_mse_before\":" << result.value_mse
+          << ",\"value_mse_after\":" << after / result.consumed
+          << ",\"policy_entropy_before\":" << result.policy_entropy
+          << ",\"gradient_norm\":" << result.gradient_norm << "}\n";
+      atomic_text(settings.directory / "window.json", out.str());
+      std::cout << out.str();
+      return;
+    }
     if (settings.diagnostic == "gemm") {
       diagnostic::gemm(actor, settings);
       return;

@@ -97,9 +97,10 @@ int main(int argc, char **argv) {
       s.root_slots = number("--root-slots", 2);
       s.defer_learning = number("--defer-learning", 0) != 0;
       if (s.diagnostic != "actor" && s.diagnostic != "learner" && s.diagnostic != "mixed" &&
-          s.diagnostic != "inference" && s.diagnostic != "service" && s.diagnostic != "gemm")
+          s.diagnostic != "inference" && s.diagnostic != "service" && s.diagnostic != "gemm" &&
+          s.diagnostic != "episodes")
         throw std::runtime_error(
-            "diagnose mode must be actor, learner, mixed, inference, service or gemm");
+            "diagnose mode must be actor, learner, mixed, inference, service, gemm or episodes");
       if (s.warmup < 0)
         throw std::runtime_error("negative warmup");
       if (s.root_slots < 1 || s.root_slots > 2)
@@ -133,8 +134,8 @@ int main(int argc, char **argv) {
     s.save_seconds = std::stod(text("--save-seconds", "300"));
     s.shrine = options.count("--shrine");
     s.samples = number("--samples", 0);
-    if (!s.workers || !s.chunk || !s.batch || !s.inference_batch || !s.width || !s.publish ||
-        s.memory_mb < 128 || s.seconds < 0 || s.save_seconds < 0)
+    if (!s.workers || (!s.chunk && !s.terminal_training()) || !s.batch || !s.inference_batch ||
+        !s.width || !s.publish || s.memory_mb < 128 || s.seconds < 0 || s.save_seconds < 0)
       throw std::runtime_error("invalid training budget");
     if (command == "configure")
       std::cout << hj::describe_configuration(s);

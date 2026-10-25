@@ -160,7 +160,7 @@ class PanelTests(unittest.TestCase):
             patch("builtins.print"),
         ):
             exec(cells["configuration"], namespace)
-            self.assertEqual(namespace["ARGS"][-2:], ["--resume", str(latest)])
+            self.assertEqual(namespace["ARGS"], ["--device", "cuda"])
             # 下拉选旧档与新训练均重算配置，不创建进程。
             picker = namespace["checkpoint_picker"]
             for selection in (str(old), "", str(latest)):

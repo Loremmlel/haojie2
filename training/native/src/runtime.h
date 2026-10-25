@@ -21,6 +21,9 @@ struct Settings {
   double seconds = 0, save_seconds = 300;
   bool shrine = false;
   std::set<std::string> supplied;
+  bool terminal_training() const {
+    return !workset_games && (diagnostic.empty() || diagnostic == "mixed");
+  }
 };
 // 槽持有全部输入、缓存来源与回送内存，完成通知不销毁张量或调用 CUDA。
 struct InferenceFlight {

@@ -154,6 +154,44 @@ struct PolicyTable {
   T mass, logp, entropy;
   std::vector<int64_t> lengths;
 };
+class ValueTanh : public torch::autograd::Function<ValueTanh> {
+public:
+  static T forward(torch::autograd::AutogradContext *ctx, T x) {
+    ctx->save_for_backward({x});
+    return x.tanh();
+  }
+  static torch::autograd::variable_list backward(torch::autograd::AutogradContext *ctx,
+                                                 torch::autograd::variable_list gradients) {
+    // BF16 输出在有限输入处就会舍入为 ±1，不能用该舍入结果计算 1-y²。
+    auto x = ctx->get_saved_variables()[0].to(torch::kFloat32);
+    auto e = (-2 * x.abs()).exp();
+    return {(gradients[0].to(torch::kFloat32) * (4 * e / (1 + e).square())).to(torch::kBFloat16)};
+  }
+};
+class PolicyMass : public torch::autograd::Function<PolicyMass> {
+public:
+  static T forward(torch::autograd::AutogradContext *ctx, T logits, T owner, T lengths, T valid) {
+    auto masked = logits.masked_fill(~valid, -INFINITY);
+    auto maximum = segments(masked, "max", lengths);
+    auto mass = (masked - maximum.index_select(0, owner)).exp();
+    mass = mass / segments(mass, "sum", lengths).index_select(0, owner);
+    ctx->save_for_backward({mass, owner, lengths});
+    return mass;
+  }
+  static torch::autograd::variable_list backward(torch::autograd::AutogradContext *ctx,
+                                                 torch::autograd::variable_list gradients) {
+    auto saved = ctx->get_saved_variables();
+    auto mass = saved[0].to(torch::kFloat32), grad = gradients[0].to(torch::kFloat32);
+    auto owner = saved[1], lengths = saved[2];
+    // 保存的质量与返回梯度仍是 BF16；归约工作区使用算子累加精度。
+    // 先移除共同项，使均匀分布的熵梯度严格为零，避免 BF16 舍入驱动评分整体漂移。
+    auto baseline = segments(grad.masked_fill(mass.eq(0), -INFINITY), "max", lengths);
+    auto centered = grad - baseline.index_select(0, owner);
+    auto mean = segments(mass * centered, "sum", lengths) / segments(mass, "sum", lengths);
+    auto result = (mass * (centered - mean.index_select(0, owner))).to(torch::kBFloat16);
+    return {result, T(), T(), T()};
+  }
+};
 PolicyTable policy_table(const T &logits, std::span<const std::shared_ptr<Node>> nodes,
                          bool statistics = true, Inputs *provided = nullptr) {
   std::vector<int64_t> owner, lengths, mask;
@@ -205,10 +243,7 @@ T packing::grouped_gather(const T &x, const T &ids, const T &positions, const T 
   return GroupedGather::apply(x, ids, positions, offsets);
 }
 T policy_mass(const T &logits, const T &owner, const T &lengths, const T &valid) {
-  auto masked = logits.masked_fill(~valid, -INFINITY);
-  auto maximum = segments(masked.detach(), "max", lengths);
-  auto mass = (masked - maximum.index_select(0, owner)).exp();
-  return mass / segments(mass, "sum", lengths).index_select(0, owner);
+  return PolicyMass::apply(logits, owner, lengths, valid);
 }
 TypedProjectionImpl::TypedProjectionImpl(int64_t w, bool rows) {
   auto features = rows ? RowFeatures : ActionFeatures;
@@ -298,9 +333,10 @@ NetworkImpl::NetworkImpl(int64_t w) : width(w) {
   key = register_module("key", torch::nn::Sequential(torch::nn::Linear(w * 3, w), torch::nn::GELU(),
                                                      torch::nn::Linear(w, w)));
   prior = register_module("prior", torch::nn::Linear(w, 1));
-  value =
-      register_module("value", torch::nn::Sequential(torch::nn::Linear(w, w), torch::nn::GELU(),
-                                                     torch::nn::Linear(w, 1), torch::nn::Tanh()));
+  value = register_module(
+      "value",
+      torch::nn::Sequential(torch::nn::Linear(w, w), torch::nn::GELU(), torch::nn::Linear(w, 1),
+                            torch::nn::Functional([](T x) { return ValueTanh::apply(x); })));
   to(torch::kBFloat16);
 }
 void NetworkImpl::pack_weights() {
@@ -711,6 +747,18 @@ void Optimizer::load(torch::serialize::InputArchive &in, Network &model) {
   }
 }
 namespace {
+struct TraceCarry {
+  double value = 0, target = 0, correction = 0;
+  std::array<double, 2> advance(double current, double reward, bool terminal, double ratio) {
+    double discount = terminal ? 0 : 1;
+    correction = ratio * (reward + discount * value - current) + discount * ratio * correction;
+    double next_target = current + correction;
+    double advantage = ratio * (reward + discount * target - current);
+    value = current;
+    target = next_target;
+    return {target, advantage};
+  }
+};
 // CPU 路径也是设备端目标递推的数值参照；记录表仅用整数保存索引及行为概率的原始位。
 T reference_targets(const T &mass, const T &value_tensor, const T &record_tensor,
                     const T &block_tensor) {
@@ -720,8 +768,8 @@ T reference_targets(const T &mass, const T &value_tensor, const T &record_tensor
   auto records = record_tensor.data_ptr<int64_t>(), blocks = block_tensor.data_ptr<int64_t>();
   for (int64_t bi = 0; bi < block_tensor.numel() / 3; ++bi) {
     auto begin = blocks[bi * 3], end = blocks[bi * 3 + 1], boot = blocks[bi * 3 + 2];
-    double correction = 0, following = boot < 0 ? 0 : float(values[boot]),
-           following_target = following;
+    double bootstrap = boot < 0 ? 0 : float(values[boot]);
+    TraceCarry carry{bootstrap, bootstrap, 0};
     for (auto i = end; i-- > begin;) {
       auto s = records + i * 6;
       double sum = 0;
@@ -729,15 +777,11 @@ T reference_targets(const T &mass, const T &value_tensor, const T &record_tensor
         sum += float(p[s[0] + j]);
       auto chosen = float(p[s[0] + s[2]]);
       double logp = chosen > 0 ? std::log(double(chosen) / sum) : -INFINITY;
-      double value = float(values[i]), d = s[4] ? 0 : 1;
       double ratio = std::min(1.0, std::exp(logp - std::bit_cast<double>(s[5])));
-      correction = ratio * (double(s[3]) + d * following - value) + d * ratio * correction;
-      double target = value + correction;
-      out[i] = BF(float(target));
-      out[count + i] = BF(float(ratio * (double(s[3]) + d * following_target - value)));
+      auto result = carry.advance(float(values[i]), double(s[3]), s[4] != 0, ratio);
+      out[i] = BF(float(result[0]));
+      out[count + i] = BF(float(result[1]));
       out[count * 2 + i] = BF(float(logp));
-      following = value;
-      following_target = target;
     }
   }
   return result;
@@ -804,6 +848,112 @@ TrainResult learn(Network &model, Optimizer &optimizer, const std::vector<Block>
   loss.backward();
   return {count, optimizer.step(model, loss)};
 }
+TrainResult learn_episodes(Network &model, Optimizer &optimizer, const std::vector<Block> &episodes,
+                           uint64_t batch) {
+  // 完整轨迹 V-trace：先冻结当前参数计算整局目标，再按显存小批反向，整批只提交一次。
+  // 分块边界不重置回报递推。参考 DeepNash 补充材料的完整对局/反向分块组织。
+  std::vector<const Step *> steps;
+  std::vector<size_t> ends;
+  for (auto &episode : episodes) {
+    TORCH_CHECK(!episode.steps.empty() && !episode.bootstrap && episode.steps.back().terminal,
+                "terminal learning requires complete games");
+    for (size_t i = 0; i < episode.steps.size(); ++i) {
+      auto &s = episode.steps[i];
+      TORCH_CHECK(s.terminal == (i + 1 == episode.steps.size()) &&
+                      (s.terminal ? s.reward >= -1 && s.reward <= 1 : s.reward == 0),
+                  "invalid terminal trajectory");
+      TORCH_CHECK(s.selected >= 0 && size_t(s.selected) < s.node->mask.size() &&
+                      s.node->mask[s.selected] && std::isfinite(s.logp),
+                  "invalid terminal behavior action");
+      steps.push_back(&s);
+    }
+    ends.push_back(steps.size());
+  }
+  auto count = steps.size();
+  TORCH_CHECK(count && batch, "empty terminal learning batch");
+  auto device = model->parameters()[0].device();
+  std::vector<BF> values(count), targets(count), advantages(count), logps(count), outcomes(count);
+  std::vector<double> canonical(count);
+  auto nodes_at = [&](size_t begin) {
+    std::vector<std::shared_ptr<Node>> nodes;
+    for (auto i = begin; i < std::min(count, begin + batch); ++i)
+      nodes.push_back(steps[i]->node);
+    return nodes;
+  };
+  for (size_t begin = 0; begin < count; begin += batch) {
+    auto nodes = nodes_at(begin);
+    // 与反向使用同一前向后端；仅本小批保留计算图，随后立即释放。
+    auto output = model->forward(nodes);
+    auto masses = probabilities(output.first.detach(), nodes);
+    auto v = output.second.detach().to(torch::kCPU).contiguous();
+    std::copy_n(v.data_ptr<BF>(), nodes.size(), values.begin() + begin);
+    for (size_t j = 0; j < nodes.size(); ++j) {
+      canonical[begin + j] = canonical_logps(masses[j])[steps[begin + j]->selected];
+      logps[begin + j] = BF(float(canonical[begin + j]));
+    }
+  }
+  size_t begin = 0;
+  for (auto end : ends) {
+    TraceCarry carry;
+    std::fill(outcomes.begin() + begin, outcomes.begin() + end, BF(float(steps[end - 1]->reward)));
+    for (auto i = end; i-- > begin;) {
+      auto &s = *steps[i];
+      auto ratio = std::min(1.0, std::exp(canonical[i] - s.logp));
+      auto result = carry.advance(float(values[i]), s.reward, s.terminal, ratio);
+      targets[i] = BF(float(result[0]));
+      advantages[i] = BF(float(result[1]));
+    }
+    begin = end;
+  }
+  auto accumulated = torch::zeros_like(optimizer.gradients);
+  auto residual = torch::zeros_like(accumulated);
+  TrainResult result{count, 0, episodes.size()};
+  for (size_t at = 0; at < count; at += batch) {
+    auto nodes = nodes_at(at);
+    auto size = nodes.size();
+    optimizer.prepare_gradients(model);
+    auto output = model->forward(nodes);
+    auto table = policy_table(output.first, nodes);
+    std::vector<int64_t> selected;
+    int64_t offset = 0;
+    for (size_t j = 0; j < size; ++j) {
+      selected.push_back(offset + steps[at + j]->selected);
+      offset += nodes[j]->mask.size();
+    }
+    auto part = [&](const std::vector<BF> &data) {
+      return torch::from_blob(const_cast<BF *>(data.data() + at), {int64_t(size)}, bfopts())
+          .to(device, false, true);
+    };
+    auto value_targets = part(targets), adv = part(advantages);
+    auto chosen = table.logp.index_select(0, indices(selected, device));
+    auto corrected = chosen + (part(logps) - chosen.detach());
+    auto policy_logp = torch::where(adv.ne(0), corrected, torch::zeros_like(corrected));
+    auto error = (output.second - value_targets).square();
+    auto loss = (-policy_logp * adv + 0.5 * error - 0.01 * table.entropy).mean();
+    loss.backward();
+    torch::NoGradGuard guard;
+    double weight = double(size) / count;
+    result.loss += loss.item<double>() * weight;
+    result.value_mse += (output.second - part(outcomes)).square().mean().item<double>() * weight;
+    result.policy_entropy += table.entropy.mean().item<double>() * weight;
+    // BF16 补偿累加避免长局的小批梯度被反复舍入吞掉；优化器状态仍保持原五组。
+    auto change = residual + optimizer.collect_gradients(model) * weight;
+    auto updated = accumulated + change;
+    residual = change + (accumulated - updated);
+    accumulated = updated;
+  }
+  {
+    torch::NoGradGuard guard;
+    result.gradient_norm = accumulated.to(torch::kFloat32).norm().item<double>();
+    int64_t offset = 0;
+    for (auto &p : model->parameters()) {
+      p.mutable_grad() = accumulated.narrow(0, offset, p.numel()).view(p.sizes());
+      offset += p.numel();
+    }
+  }
+  result.loss = optimizer.step(model, torch::tensor(result.loss, bfopts().device(device)));
+  return result;
+}
 void copy_weights(Network &source, Network &destination) {
   torch::NoGradGuard guard;
   source->pack_weights();
@@ -812,6 +962,47 @@ void copy_weights(Network &source, Network &destination) {
   ++destination->revision;
 }
 void model_checks(const torch::Device &device) {
+  {
+    auto x = torch::tensor({-5.0, 5.0}, bfopts().device(device)).requires_grad_(true);
+    auto y = ValueTanh::apply(x);
+    TORCH_CHECK(y.abs().eq(1).all().item<bool>());
+    y.sum().backward();
+    auto expected = 1 - x.detach().to(torch::kFloat64).tanh().square();
+    TORCH_CHECK(torch::allclose(x.grad().to(torch::kFloat64), expected, 0.01, 1e-7),
+                "rounded BF16 value saturation erased a finite tanh derivative");
+    TraceCarry carry;
+    for (int i = 256; i-- > 0;) {
+      auto target = carry.advance(0, i == 255 ? 1 : 0, i == 255, 1);
+      TORCH_CHECK(target[0] == 1 && target[1] == 1,
+                  "terminal reward did not reach the start of the trajectory");
+    }
+  }
+  {
+    // 非二次幂候选数会让旧 BF16 分步归一化在最大熵点产生伪梯度。
+    auto lengths = indices({59, 125}, device);
+    auto owners =
+        torch::cat({torch::zeros({59}, lengths.options()), torch::ones({125}, lengths.options())});
+    auto valid = torch::ones({184}, lengths.options()).ne(0);
+    auto logits = torch::zeros({184}, bfopts().device(device)).requires_grad_(true);
+    auto mass = policy_mass(logits, owners, lengths, valid);
+    auto logp = mass.log() - segments(mass, "sum", lengths).log().index_select(0, owners);
+    (0.01 * (mass * logp).sum()).backward();
+    TORCH_CHECK(logits.grad().count_nonzero().item<int64_t>() == 0,
+                "maximum-entropy policy has a spurious common-score gradient");
+    logits = (torch::arange(184, lengths.options()).remainder(13).to(torch::kBFloat16) / 8)
+                 .requires_grad_(true);
+    auto upstream =
+        torch::sin(torch::arange(184, lengths.options()).to(torch::kFloat32)).to(torch::kBFloat16);
+    mass = policy_mass(logits, owners, lengths, valid);
+    mass.backward(upstream);
+    // 独立参照使用 LibTorch 的双精度 softmax 自动求导，不重复自定义反向公式。
+    auto reference = logits.detach().to(torch::kFloat64).requires_grad_(true);
+    auto reference_mass = torch::cat(
+        {reference.narrow(0, 0, 59).softmax(0), reference.narrow(0, 59, 125).softmax(0)});
+    reference_mass.backward(upstream.to(torch::kFloat64));
+    TORCH_CHECK(torch::allclose(logits.grad().to(torch::kFloat64), reference.grad(), 0.02, 1e-5),
+                "BF16 policy gradient differs from double-precision softmax");
+  }
   if (device.is_cuda()) {
     {
       torch::NoGradGuard guard;
@@ -954,6 +1145,46 @@ void model_checks(const torch::Device &device) {
   auto logs = canonical_logps(probs[0]);
   TORCH_CHECK(std::abs(std::exp(logs[0]) + std::exp(logs[1]) - 1) < 1e-12);
   TORCH_CHECK(model->blocks->size() == EncoderLayers);
+  {
+    Network whole(32), split(32);
+    whole->to(device);
+    split->to(device);
+    copy_weights(model, whole);
+    copy_weights(model, split);
+    Optimizer whole_optimizer(whole), split_optimizer(split);
+    Block episode;
+    for (int i = 0; i < 7; ++i)
+      episode.steps.push_back({n, 0, logs[0], 0, i == 6, int8_t(i == 6 ? 1 : 0)});
+    auto before = whole->forward({n}).second.item<double>();
+    auto one = learn_episodes(whole, whole_optimizer, {episode}, 7);
+    auto many = learn_episodes(split, split_optimizer, {episode}, 2);
+    TORCH_CHECK(one.consumed == 7 && many.consumed == 7 && whole_optimizer.steps == 1 &&
+                    split_optimizer.steps == 1 && many.terminal_games == 1,
+                "memory microbatches changed terminal consumption or update count");
+    TORCH_CHECK(whole->forward({n}).second.item<double>() > before &&
+                    split->forward({n}).second.item<double>() > before,
+                "true winning return did not raise predicted value");
+    auto full_gradient = whole_optimizer.gradients.to(torch::kFloat32);
+    auto split_gradient = split_optimizer.gradients.to(torch::kFloat32);
+    auto relative_error = (full_gradient - split_gradient).norm().item<double>() /
+                          full_gradient.norm().item<double>();
+    // 不同矩阵批形状的 BF16 舍入会影响近零分量；约束整条梯度的相对误差。
+    TORCH_CHECK(
+        relative_error < 0.02,
+        "microbatch accumulation changed the full-episode gradient; relative L2=", relative_error,
+        "; max absolute=", (full_gradient - split_gradient).abs().max().item<double>());
+    auto original = split->packed_weights.clone();
+    episode.steps.back().terminal = false;
+    bool rejected = false;
+    try {
+      learn_episodes(split, split_optimizer, {episode}, 2);
+    } catch (const c10::Error &) {
+      rejected = true;
+    }
+    TORCH_CHECK(rejected && torch::equal(original, split->packed_weights) &&
+                    split_optimizer.steps == 1,
+                "unfinished episode entered training or changed parameters");
+  }
   {
     // 相同实体引用下，候选差分必须反传到上下文和注意力，防止共享偏置被 softmax 消掉。
     auto probe = std::make_shared<Node>(*n);
