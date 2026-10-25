@@ -15,7 +15,7 @@ PY
 # 复用 Colab 的 pip 向独立环境安装，不依赖系统额外提供 ensurepip。
 python3 -m venv --without-pip "$cache/venv"
 python3 -m pip --python "$cache/venv/bin/python" install --no-cache-dir 'torch==2.14.0' --index-url https://download.pytorch.org/whl/cu126
-python3 -m pip --python "$cache/venv/bin/python" install --no-cache-dir 'nvidia-cuda-nvcc-cu12==12.6.85' 'cmake>=3.24'
+python3 -m pip --python "$cache/venv/bin/python" install --no-cache-dir 'nvidia-cuda-nvcc-cu12==12.6.85' 'cmake>=3.24' 'mini-racer==0.14.1'
 export PATH="$cache/venv/bin:$HOME/.cargo/bin:$PATH"
 if ! command -v rustup >/dev/null; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$cache/rustup-init.sh"

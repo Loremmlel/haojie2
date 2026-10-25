@@ -6,3 +6,4 @@
 /training/native/results/** -text whitespace=cr-at-eol
 # 中断采样可能留下未写完的 CSV 行，原始证据保留尾部空白。
 /training/native/results/**/*.csv -whitespace
+training/evaluation/assets/teacher.js text eol=lf

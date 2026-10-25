@@ -42,4 +42,6 @@ if ($CudaCompilerHeaders) { $runtimeOption += "-DCUDA_CRT_ROOT=$CudaCompilerHead
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 & cmake --build $buildPath --config Release -j 3
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
+# Windows 优先加载可执行文件同目录的 DLL，构建后同步规则库，避免残留旧 ABI。
+Copy-Item -LiteralPath (Join-Path $repoRoot 'artifacts/native-target/release/haojie_native.dll') -Destination (Join-Path $buildPath 'Release/haojie_native.dll')
 [IO.File]::WriteAllText((Join-Path $buildPath 'libtorch-path.txt'), (Resolve-Path $LibTorch).Path, [Text.UTF8Encoding]::new($false))

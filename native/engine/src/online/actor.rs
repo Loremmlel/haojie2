@@ -56,7 +56,7 @@ impl Actor {
                 );
                 Ok(vec![])
             }
-            1 => {
+            1 | 6 => {
                 let id = input.u64()?;
                 let count = input.u32()?;
                 let mut probabilities = Vec::with_capacity(count as usize);
@@ -67,7 +67,12 @@ impl Actor {
                     return Err("trailing actor reply".into());
                 }
                 let game = self.games.get_mut(&id).ok_or("unknown actor")?;
-                let frame = game.advance((count != 0).then_some(probabilities), cat)?;
+                let masses = (count != 0).then_some(probabilities);
+                let frame = if op == 6 {
+                    game.advance_until(masses, cat, true)?
+                } else {
+                    game.advance(masses, cat)?
+                };
                 let mut output = frame;
                 if game.saved.waiting {
                     let search = game.saved.search.as_ref().unwrap();
@@ -168,6 +173,57 @@ impl Actor {
                 }
                 Ok(vec![])
             }
+            // 测评在根边界交替模型与真实游戏 AI；只向对手提供公开观察。
+            7 => {
+                let id = input.u64()?;
+                if !input.0.is_empty() {
+                    return Err("trailing evaluation query".into());
+                }
+                let game = self.games.get_mut(&id).ok_or("unknown actor")?;
+                let terminal = game.saved.state.extra.get("winner").cloned();
+                if terminal.is_none() && game.saved.search.is_none() {
+                    game.start_root(cat)?;
+                }
+                let search = game.saved.search.as_ref();
+                let actor = search.map_or(0, |s| s.actor);
+                let observation = if terminal.is_none() {
+                    Some(runtime::observe(&game.saved.state, actor)?)
+                } else {
+                    None
+                };
+                serde_json::to_vec(&serde_json::json!({
+                    "winner": terminal, "actor": actor,
+                    "optional": search.is_some_and(|s| s.optional),
+                    "observation": observation, "commands": game.saved.commands,
+                    "microsteps": game.saved.microsteps,
+                }))
+                .map_err(|e| e.to_string())
+            }
+            8 => {
+                let id = input.u64()?;
+                let command: serde_json::Value =
+                    serde_json::from_slice(input.0).map_err(|e| e.to_string())?;
+                let game = self.games.get_mut(&id).ok_or("unknown actor")?;
+                let search = game.saved.search.as_ref().ok_or("no evaluation root")?;
+                if !search.cursor.is_empty() || game.saved.waiting {
+                    return Err("teacher command outside root boundary".into());
+                }
+                let next = if command.is_null() {
+                    if !search.optional {
+                        return Err("pass outside optional interrupt".into());
+                    }
+                    None
+                } else {
+                    Some(boundary::step(
+                        &game.saved.state,
+                        search.actor,
+                        &command,
+                        cat,
+                    )?)
+                };
+                game.finish_root(next);
+                Ok(vec![])
+            }
             _ => Err("unknown actor operation".into()),
         }
     }
@@ -229,6 +285,41 @@ pub unsafe extern "C" fn hj_actor_close(handle: *mut c_void) {
 #[cfg(test)]
 mod checks {
     use super::*;
+    #[test]
+    fn evaluation_query_is_public_and_rejected_teacher_command_is_atomic() {
+        let mut actor = Actor {
+            games: BTreeMap::new(),
+            cat: Box::new(catalog::embedded().unwrap()),
+            owner: std::thread::current().id(),
+            output: vec![],
+        };
+        let id = 1u64.to_le_bytes();
+        let mut create = id.to_vec();
+        for value in [73127u32, 1, 1] {
+            create.extend(value.to_le_bytes());
+        }
+        actor.call(0, &create).unwrap();
+        let query: serde_json::Value =
+            serde_json::from_slice(&actor.call(7, &id).unwrap()).unwrap();
+        let observation = &query["observation"];
+        for private in ["seed", "rng", "events", "log"] {
+            assert!(observation.get(private).is_none());
+        }
+        let before = actor.call(2, &id).unwrap();
+        let mut pass = id.to_vec();
+        pass.extend(b"null");
+        assert!(actor.call(8, &pass).is_err());
+        assert_eq!(before, actor.call(2, &id).unwrap());
+        let mut invalid = id.to_vec();
+        invalid.extend(br#"{"type":"end"}"#);
+        assert!(actor.call(8, &invalid).is_err());
+        assert_eq!(before, actor.call(2, &id).unwrap());
+        let mut advance = id.to_vec();
+        advance.extend(0u32.to_le_bytes());
+        let frame = actor.call(6, &advance).unwrap();
+        assert_eq!(u32::from_le_bytes(frame[64..68].try_into().unwrap()), 0);
+        assert_eq!(actor.games[&1].saved.commands, 0);
+    }
     #[test]
     fn typed_identity_and_presence_do_not_round() {
         let mut row = encoding::TypedRow::default();

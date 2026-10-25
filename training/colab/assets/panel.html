@@ -1,0 +1,162 @@
+<section class="hj-game hj-native" id="__PANEL_ID__" aria-label="浩劫训练统计">
+  <header>
+    <div>
+      <p class="eyebrow">浩劫 · 训练观测</p>
+      <h1>自对弈训练</h1>
+    </div>
+    <div class="run-state">
+      <strong data-state>连接中…</strong><span data-updated>等待状态</span>
+    </div>
+  </header>
+  <div class="toolbar">
+    <button type="button" data-action="save" disabled>保存检查点</button>
+    <button type="button" data-action="stop" class="stop" disabled>保存并停止</button>
+    <button type="button" data-refresh disabled>暂停刷新</button>
+    <form novalidate>
+      <label for="concurrency-__PANEL_ID__">并发局数</label>
+      <input
+        id="concurrency-__PANEL_ID__"
+        type="number"
+        min="0"
+        max="128"
+        step="1"
+        aria-describedby="concurrency-help-__PANEL_ID__"
+        disabled
+      />
+      <button type="submit" disabled>应用并发量</button>
+    </form>
+  </div>
+  <p class="help" id="concurrency-help-__PANEL_ID__">
+    0 会停放采集；扩大并发时恢复原局。暂停刷新只暂停面板。
+  </p>
+  <p data-notice role="status" aria-live="polite">正在读取原生训练状态…</p>
+  <div class="readings">
+    <article>
+      <span>滞后上限内消费</span><strong data-value="consume">—</strong
+      ><small>转换 / 秒 · 最近采样区间</small>
+    </article>
+    <article>
+      <span>Actor 决策</span><strong data-value="actor">—</strong
+      ><small>决策 / 秒 · 最近采样区间</small>
+    </article>
+    <article>
+      <span>学习更新</span><strong data-value="updates">—</strong
+      ><small data-value="batch">等待配置</small>
+    </article>
+    <article>
+      <span>真实终局</span><strong data-value="games">—</strong><small>本次运行完成的对局</small>
+    </article>
+    <article>
+      <span>Ready 积压</span><strong data-value="ready">—</strong><small>等待学习的转换</small>
+    </article>
+    <article>
+      <span>最大消费滞后</span><strong data-value="lag">—</strong
+      ><small data-value="lag_limit">等待版本上限</small>
+    </article>
+  </div>
+  <p class="snapshot" data-summary>启动后将显示设备、活动局数和保存状态。</p>
+  <div class="plots">
+    <section>
+      <h2>采集与学习吞吐</h2>
+      <p class="legend">
+        <span class="teal">● 决策 / 秒</span><span class="ember">● 消费 / 秒</span
+        ><span class="gold">● 正式命令 / 秒</span>
+      </p>
+      <div data-chart="throughput"></div>
+    </section>
+    <section>
+      <h2>最近学习总损失</h2>
+      <p>每次状态采样读取最近一次已提交更新</p>
+      <div data-chart="loss"></div>
+    </section>
+    <section>
+      <h2>待学习转换</h2>
+      <p>Ready 队列中的实际转换数</p>
+      <div data-chart="ready"></div>
+    </section>
+    <section>
+      <h2>策略滞后</h2>
+      <p>本轮已消费转换的最大版本差</p>
+      <div data-chart="lag"></div>
+    </section>
+    <section>
+      <h2>CPU / GPU 利用率</h2>
+      <p class="legend"><span class="teal">● CPU</span><span class="ember">● GPU</span></p>
+      <div data-chart="utilization"></div>
+    </section>
+    <section>
+      <h2>内存与显存</h2>
+      <p class="legend">
+        <span class="teal">● 系统已用内存</span><span class="ember">● GPU 已用显存</span>
+      </p>
+      <div data-chart="memory"></div>
+    </section>
+  </div>
+  <p class="help">
+    保留最近 360 个观测点。空读数留白；重新展示同一运行保留曲线。关闭面板后训练进程继续运行。
+  </p>
+  <section class="evaluation" aria-label="AI 棋力测评">
+    <h2>AI 棋力测评</h2>
+    <p>冻结一次检查点，对战简单、普通、困难 AI；经典与神龛各交换先后手。每组 12 局。</p>
+    <div class="toolbar">
+      <button type="button" data-eval-action="evaluate" disabled>立即测评</button>
+      <button type="button" data-eval-action="eval_cancel" disabled>取消测评</button>
+    </div>
+    <form data-eval-form novalidate>
+      <label
+        >间隔（分钟，0 关闭）<input
+          name="minutes"
+          type="number"
+          min="0"
+          max="1440"
+          value="30"
+          required
+      /></label>
+      <label
+        >每轮组数<input name="pairs" type="number" min="1" max="20" value="1" required
+      /></label>
+      <label
+        >每局时限（秒）<input name="seconds" type="number" min="1" max="3600" value="120" required
+      /></label>
+      <button type="submit">应用测评计划</button>
+    </form>
+    <p data-eval-status role="status">等待测评执行器</p>
+    <div class="table-scroll">
+      <table>
+        <caption>
+          本轮冻结模型的结果；胜率以真实终局为分母
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">对手</th>
+            <th scope="col">胜 / 负 / 平</th>
+            <th scope="col">完成 / 计划</th>
+            <th scope="col">未完成 / 错误</th>
+            <th scope="col">胜率</th>
+          </tr>
+        </thead>
+        <tbody data-eval-results></tbody>
+      </table>
+    </div>
+    <p class="help">
+      测评和训练可同时运行，会共享
+      CPU/GPU。取消测评不停止训练；“保存并停止”会同时取消测评、关闭定期计划。
+    </p>
+    <details data-eval-detail>
+      <summary>逐局结果与测评记录位置（展开时固定快照）</summary>
+      <pre data-eval-json>尚无测评</pre>
+    </details>
+  </section>
+  <details data-config>
+    <summary>运行配置与恢复位置</summary>
+    <pre data-configuration>等待配置</pre>
+  </details>
+  <details data-log>
+    <summary>运行日志</summary>
+    <pre data-logs>暂无日志</pre>
+  </details>
+  <details data-raw>
+    <summary>原始状态（展开时固定快照）</summary>
+    <pre data-json>等待状态</pre>
+  </details>
+</section>

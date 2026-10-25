@@ -50,6 +50,8 @@ public:
   InferenceStats stats() const;
 };
 void run(const Settings &);
+void evaluate(const std::filesystem::path &, const std::string &);
+void evaluation_checks(const torch::Device &);
 std::string describe_configuration(Settings);
 void runtime_checks();
 void inference_checks(const torch::Device &);

@@ -81,6 +81,15 @@ jobs:
             $window = Get-Content artifacts/native-ci/restored/window.json -Raw | ConvertFrom-Json
             if ($window.consumed -ne 128) { throw 'Incorrect resumed window consumption' }
           } finally { $env:PATH = $previousPath }
+      - name: Colab control and real AI evaluation bridge
+        shell: pwsh
+        run: |
+          python -m pip install mini-racer==0.14.1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node scripts/training/native/teacher/build.mjs --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -B -m unittest training.colab.test_panel training.evaluation.test_evaluation
+          exit $LASTEXITCODE
       - name: Rules, public tree, encoding and record audit
         shell: pwsh
         run: |

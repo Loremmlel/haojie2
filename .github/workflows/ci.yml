@@ -41,6 +41,7 @@ jobs:
       - name: Install browser for acceptance testing
         run: npx playwright install --with-deps chromium
       - run: npm run test:browser
+      - run: node tests/browser/console/native.mjs
       - run: npm run test:browser:library
       - run: npm run test:pages
       - run: npm run test:browser:ai

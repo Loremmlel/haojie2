@@ -73,12 +73,17 @@ int main(int argc, char **argv) {
     at::globalContext().setAllowBF16ReductionCuBLAS(false);
     c10::set_default_dtype(c10::scalarTypeToTypeMeta(torch::kBFloat16));
     torch::manual_seed(number("--seed", 1));
+    if (command == "evaluate") {
+      hj::evaluate(text("--checkpoint"), text("--device", "cuda"));
+      return 0;
+    }
     if (command == "check") {
       hj::hardware_checks();
       hj::model_checks(torch::Device(text("--device", "cpu")));
       hj::inference_checks(torch::Device(text("--device", "cpu")));
       hj::learning_checks(torch::Device(text("--device", "cpu")));
       hj::runtime_checks();
+      hj::evaluation_checks(torch::Device(text("--device", "cpu")));
       return 0;
     }
     if ((command != "run" && command != "workset" && command != "diagnose" &&

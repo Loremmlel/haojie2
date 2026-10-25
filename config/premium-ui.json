@@ -1,5 +1,5 @@
 {
-  "sourceRoots": ["src", "training/haojie_training/console/assets"],
+  "sourceRoots": ["src", "training/colab/assets"],
   "locale": "zh-CN",
   "canonicalMap": "DESIGN.md",
   "ownership": { "Select/Listbox": "native" }

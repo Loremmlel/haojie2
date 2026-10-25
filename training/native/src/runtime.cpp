@@ -486,6 +486,7 @@ class Session {
   int64_t window_start_unix_ms = 0;
   uint64_t infer_nodes = 0, peak_active = 0, peak_managed = 0;
   double learning_seconds = 0, inference_seconds = 0;
+  std::optional<double> latest_loss;
   Clock::time_point learn_start;
   std::unique_ptr<Executor> learning_executor;
   std::unique_ptr<Executor> preparation_executor;
@@ -782,6 +783,7 @@ public:
       diagnostic::record("learn_callback", commit->updates,
                          diagnostic::now() - commit->returned_ms);
       committed_updates = commit->updates;
+      latest_loss = commit->result.loss;
       counters.consumed += commit->result.consumed;
       if (admission.capacity)
         admission.outstanding -= commit->result.consumed;
@@ -1113,8 +1115,8 @@ public:
       o << "null";
     o << ",\n  \"completed_games\": " << counters.finished - delta.finished
       << ",\n  \"admitted_total\": " << next_id - 1 << ",\n  \"active\": " << active()
-      << ",\n  \"parked\": " << parked << ",\n  \"busy\": " << busy
-      << ",\n  \"advancing_1s\": " << advancing
+      << ",\n  \"target_concurrency\": " << settings.concurrency << ",\n  \"parked\": " << parked
+      << ",\n  \"busy\": " << busy << ",\n  \"advancing_1s\": " << advancing
       << ",\n  \"inference_waiting\": " << inference_waiting
       << ",\n  \"inference_running\": " << inference_running
       << ",\n  \"ready_steps\": " << ready_steps() << ",\n  \"partial_steps\": " << partial
@@ -1152,6 +1154,12 @@ public:
       o << ",\n  \"ready_lag_max\": " << maximum
         << ",\n  \"ready_lag_mean\": " << (count ? double(total) / count : 0);
     }
+    o << ",\n  \"latest_loss\": ";
+    if (latest_loss)
+      o << *latest_loss;
+    else
+      o << "null";
+    o << ",\n  \"loss_update\": " << committed_updates;
     o << ",\n  \"inference_nodes\": " << infer_nodes << ",\n  \"encoder_nodes\": " << encoder.nodes
       << ",\n  \"encoder_batches\": " << encoder.batches
       << ",\n  \"policy_cpu_seconds\": " << inference_seconds

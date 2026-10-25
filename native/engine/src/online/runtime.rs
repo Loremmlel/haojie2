@@ -114,8 +114,16 @@ impl<'a> Game<'a> {
     /// 一次只消费一个随机回复，至多执行 64 个确定性节点，随后让出 CPU lane。
     fn advance(
         &mut self,
+        probabilities: Option<Vec<f64>>,
+        cat: &'a crate::model::Catalog,
+    ) -> Result<Vec<u8>, String> {
+        self.advance_until(probabilities, cat, false)
+    }
+    fn advance_until(
+        &mut self,
         mut probabilities: Option<Vec<f64>>,
         cat: &'a crate::model::Catalog,
+        root_boundary: bool,
     ) -> Result<Vec<u8>, String> {
         let mut selected = -1i32;
         let mut logp = 0.0f64;
@@ -133,6 +141,9 @@ impl<'a> Game<'a> {
                 return Ok(self.frame(1, winner, selected, logp));
             }
             if self.saved.search.is_none() {
+                if root_boundary {
+                    return Ok(self.frame(3, -1, selected, logp));
+                }
                 self.start_root(cat)?;
             }
             if self.tree.is_none() {
