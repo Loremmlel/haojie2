@@ -23,6 +23,8 @@ pwsh -File training/native/run.ps1 check --device cuda
 
 Colab 控制台检查：`python -B -m unittest training.colab.test_panel training.evaluation.test_evaluation`、`node tests/browser/console/native.mjs`。覆盖手工／后台定期测评、取消与超时、真实 TS AI 到 Rust 公开接口、停止／保存协议、刷新草稿、断线和窄屏。需要构建原生库并安装 `mini-racer==0.14.1`；对手静态包用 `node scripts/training/native/teacher/build.mjs --check` 核对，修改 AI 源码后运行同一命令去掉 `--check` 再生成。原生 `check` 另用临时初始化权重验证冻结检查点加载及 BF16 测评推理，不执行学习。
 
+保存回执另用真实零并发 C++ 宿主贯通验证：面板请求保存后收到回执，训练进程仍存活，后台测评再次保存并成功加载冻结模型；不再由测试替身创建回执。终局 learner 将标量目标整局一次上传、统计整局一次回读，并融合 BF16 补偿梯度累加，CUDA 与逐算子参考逐位一致。同一真实检查点的 2 局／10,413 条转换、batch 64、一次更新及价值复测，修改前三次为 6.6843／5.1588／5.0979 秒，修改后三次为 4.6557／4.3317／4.3147 秒；交错运行中位耗时降低 16.0%，对应吞吐提高 19.1%。初始价值 MSE 和熵相同；更新后 MSE 均约 0.5208–0.5209。原始结果保留在 `E:/Temp/haojie-colab-fix-20261025`，该比较不包含自然对局采样和保存时间。
+
 需要验证真实运行控制时，另行运行 `training/native/validate.ps1`。它会实际启动训练、缩放、保存和恢复；不是只读检查。
 
 固定工作量诊断与指标定义见[诊断入口](diagnostics/README.md)。训练使用[正常入口](README.md)，不使用诊断参考行为。

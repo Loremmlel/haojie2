@@ -53,7 +53,7 @@ void driver_check(CUresult e) {
 class DeviceKernels {
   CUmodule module = nullptr;
   CUfunction scatter_, store_, project_, update_, targets_, binary_, reduce_, residual_norm_,
-      attention_;
+      attention_, accumulate_;
   T receipt;
 
 public:
@@ -171,6 +171,16 @@ extern "C" __global__ void residual_norm(const B *a,const B *b,const B *w,const 
   if(!lane) { mean[row]=rounded(m); inverse[row]=rounded(inv); }
   for(int j=lane;j<width;j+=stride)
     y[base+j]=rounded(((value(x[base+j])-m)*inv)*value(w[j])+value(bias[j]));
+}
+// 与逐算子 BF16 补偿累加逐位一致，每个中间结果保留原来的舍入点。
+extern "C" __global__ void accumulate(B *sum,B *residual,const B *gradient,U count,float weight) {
+  U i=(U)blockIdx.x*blockDim.x+threadIdx.x;
+  if(i>=count) return;
+  float old=value(sum[i]);
+  float change=r(value(residual[i])+r(value(gradient[i])*weight));
+  float updated=r(old+change);
+  residual[i]=rounded(change+r(old-updated));
+  sum[i]=rounded(updated);
 }
 // 每个显式中间结果仍按 BF16 舍入；只融合搬运，不改变补偿更新的算式。
 extern "C" __global__ void update(const B *g,B *p,B *m,B *v,B *mr,B *vr,B *pr,const B *norm,
@@ -345,12 +355,21 @@ extern "C" __global__ void store(const U *r, const B *tokens, const B *context, 
     driver_check(cuModuleGetFunction(&reduce_, module, "reduce"));
     driver_check(cuModuleGetFunction(&residual_norm_, module, "residual_norm"));
     driver_check(cuModuleGetFunction(&attention_, module, "attention"));
+    driver_check(cuModuleGetFunction(&accumulate_, module, "accumulate"));
     receipt = torch::empty(
         {8}, torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCPU).pinned_memory(true));
   }
   ~DeviceKernels() {
     if (module)
       cuModuleUnload(module);
+  }
+  void accumulate(const T &sum, const T &residual, const T &gradient, double weight) {
+    auto s = sum.data_ptr(), r = residual.data_ptr(), g = gradient.data_ptr();
+    auto count = uint64_t(sum.numel());
+    float w = float(weight);
+    void *args[] = {&s, &r, &g, &count, &w};
+    driver_check(cuLaunchKernel(accumulate_, unsigned((count + 255) / 256), 1, 1, 256, 1, 1, 0,
+                                c10::cuda::getCurrentCUDAStream(), args, nullptr));
   }
   T attention(const T &qkv, const T &cu, const T &used) {
     int roots = int(cu.numel() - 1), heads = int(qkv.size(2)), dim = int(qkv.size(3));
@@ -718,6 +737,18 @@ T short_attention_cuda(const T &qkv, const T &cu, const T &used) {
 #else
   TORCH_CHECK(false, "short attention requires CUDA");
 #endif
+}
+void compensated_gradient_add(T &sum, T &residual, const T &gradient, double weight) {
+#ifdef HJ_CUDA
+  if (sum.is_cuda()) {
+    device_kernels(sum.device())->accumulate(sum, residual, gradient, weight);
+    return;
+  }
+#endif
+  auto change = residual + gradient * weight;
+  auto updated = sum + change;
+  residual = change + (sum - updated);
+  sum = updated;
 }
 T segmented_table(const T &data, const T &ids, const T &offsets, bool mean) {
 #ifdef HJ_CUDA

@@ -32,7 +32,10 @@ try {
     & $exe resize --directory $live --concurrency 0
     $null = Wait-State { param($s) $s.active -eq 0 -and $s.parked -eq $Concurrency }
     & $exe save --directory $live
-    $null = Wait-State { param($s) (Test-Path -LiteralPath (Join-Path $live 'checkpoint.pt')) }
+    $null = Wait-State { param($s) (Test-Path -LiteralPath (Join-Path $live 'saved.json')) }
+    if (-not (Test-Path -LiteralPath (Join-Path $live 'checkpoint.pt'))) { throw '保存回执早于检查点发布。' }
+    $receipt = Get-Content -LiteralPath (Join-Path $live 'saved.json') -Raw | ConvertFrom-Json
+    if ($receipt.active -ne 0 -or $receipt.parked -ne $Concurrency) { throw '运行中保存回执与冻结状态不符。' }
     & $exe resize --directory $live --concurrency $Concurrency
     $null = Wait-State { param($s) $s.active -eq $Concurrency -and $s.parked -eq 0 }
     & $exe stop --directory $live

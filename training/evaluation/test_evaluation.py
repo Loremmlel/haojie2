@@ -1,9 +1,11 @@
-"""边界与控制测试；不启动真实训练或完整棋力测评。"""
+"""边界与控制测试；原生零并发宿主验证保存回执和测评启动，不执行学习。"""
 
 import ctypes
 import json
 import os
 import struct
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -13,9 +15,80 @@ from unittest.mock import Mock, patch
 from .control import EvaluationControl
 from .run import schedule, summarize, run
 from .teacher import Teacher
+from training.colab.panel import Panel
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_running_native_save_receipt_and_evaluation(self):
+        import torch
+
+        root = Path(__file__).resolve().parents[2]
+        binary = root / "artifacts/cpp-training-build" / (
+            "Release/haojie-train.exe" if os.name == "nt" else "haojie-train"
+        )
+        libraries = [
+            Path(torch.__file__).parent / "lib",
+            root / "artifacts/native-target/release",
+        ]
+        environment = os.environ.copy()
+        environment["PATH"] = (
+            os.pathsep.join(map(str, libraries))
+            + os.pathsep
+            + environment.get("PATH", "")
+        )
+        with (
+            tempfile.TemporaryDirectory(prefix="haojie-save-eval-") as temporary,
+            patch.dict(os.environ, environment),
+        ):
+            directory = Path(temporary) / "run"
+            with open(Path(temporary) / "native.log", "w", encoding="utf-8") as log:
+                process = subprocess.Popen(
+                    [
+                        str(binary), "run", "--directory", str(directory),
+                        "--device", "cpu", "--concurrency", "0", "--workers", "1",
+                        "--threads", "1", "--seconds", "45", "--save-seconds", "0",
+                    ],
+                    stdout=log,
+                    stderr=log,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
+                panel = Panel(directory, process, {"device": "cpu"})
+                control = EvaluationControl(
+                    directory, process, [str(binary)], sys.executable, "cpu"
+                )
+
+                def wait_for(predicate):
+                    deadline = time.monotonic() + 30
+                    while time.monotonic() < deadline:
+                        self.assertIsNone(process.poll(), "原生宿主提前退出")
+                        if predicate():
+                            return
+                        time.sleep(0.1)
+                    self.fail(f"真实保存/测评未完成：{control.status()}")
+
+                try:
+                    wait_for(lambda: panel.snapshot()["can_control"])
+                    self.assertTrue(panel.call(panel.identity, "save")["save_pending"])
+                    wait_for(lambda: not panel.snapshot()["save_pending"])
+                    self.assertTrue((directory / "checkpoint.pt").exists())
+                    self.assertFalse((directory / "window.json").exists())
+                    control.request()
+                    wait_for(
+                        lambda: (control.status()["report"] or {}).get("phase") == "running"
+                    )
+                    self.assertFalse(control.pending)
+                    self.assertIsNone(process.poll())
+                finally:
+                    control.cancel()
+                    child = control.child
+                    if child:
+                        child.wait(timeout=30)
+                    control.close()
+                    if directory.exists():
+                        (directory / "stop").write_text("1", encoding="utf-8")
+                    process.wait(timeout=30)
+                self.assertEqual(process.returncode, 0)
+
     def test_schedule_and_unfinished_denominator(self):
         plan = schedule(2)
         self.assertEqual(len(plan), 24)

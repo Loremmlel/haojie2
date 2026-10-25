@@ -1281,7 +1281,8 @@ public:
       archive->write("optimizer", opt);
     }
     auto path = settings.directory / "checkpoint.pt";
-    writer = std::async(std::launch::async, [archive, path] {
+    auto receipt = metrics(false);
+    writer = std::async(std::launch::async, [archive, path, receipt] {
       auto tmp = path;
       tmp += ".tmp";
       std::ofstream file(tmp, std::ios::binary);
@@ -1291,6 +1292,8 @@ public:
         throw std::runtime_error("checkpoint write failed");
       file.close();
       replace(tmp, path);
+      // 回执与已落盘的冻结快照绑定；手动保存和后台测评无需等待训练退出。
+      atomic_text(path.parent_path() / "saved.json", receipt);
     });
     last_save = Clock::now();
     quiescing = !resume;
@@ -1696,7 +1699,6 @@ public:
     save_workset();
     if (writer.valid())
       writer.get();
-    atomic_text(settings.directory / "saved.json", metrics(false));
     std::cout << window;
   }
 };
@@ -1993,7 +1995,9 @@ void runtime_checks() {
                     restored.ready.size() == 1 && restored.games.at(1).partial.size() == 1,
                 "asynchronous checkpoint lost counters or unfinished games");
     restored.metrics(false);
+    TORCH_CHECK(fs::exists(directory / "saved.json"), "checkpoint did not publish its receipt");
     fs::remove(directory / "checkpoint.pt");
+    fs::remove(directory / "saved.json");
     fs::remove(directory);
   }
   std::cout << "asynchronous terminal learning, parked long game, stale rejection and busy "

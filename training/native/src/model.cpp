@@ -907,6 +907,12 @@ TrainResult learn_episodes(Network &model, Optimizer &optimizer, const std::vect
   }
   auto accumulated = torch::zeros_like(optimizer.gradients);
   auto residual = torch::zeros_like(accumulated);
+  // 整局标量目标一次上传；每个反向小批只取设备视图。
+  auto device_targets = bf_tensor(targets, 1, device).view({-1});
+  auto device_advantages = bf_tensor(advantages, 1, device).view({-1});
+  auto device_logps = bf_tensor(logps, 1, device).view({-1});
+  auto device_outcomes = bf_tensor(outcomes, 1, device).view({-1});
+  std::vector<T> statistics;
   TrainResult result{count, 0, episodes.size()};
   for (size_t at = 0; at < count; at += batch) {
     auto nodes = nodes_at(at);
@@ -920,27 +926,30 @@ TrainResult learn_episodes(Network &model, Optimizer &optimizer, const std::vect
       selected.push_back(offset + steps[at + j]->selected);
       offset += nodes[j]->mask.size();
     }
-    auto part = [&](const std::vector<BF> &data) {
-      return torch::from_blob(const_cast<BF *>(data.data() + at), {int64_t(size)}, bfopts())
-          .to(device, false, true);
-    };
-    auto value_targets = part(targets), adv = part(advantages);
+    auto part = [&](const T &data) { return data.narrow(0, at, size); };
+    auto value_targets = part(device_targets), adv = part(device_advantages);
     auto chosen = table.logp.index_select(0, indices(selected, device));
-    auto corrected = chosen + (part(logps) - chosen.detach());
+    auto corrected = chosen + (part(device_logps) - chosen.detach());
     auto policy_logp = torch::where(adv.ne(0), corrected, torch::zeros_like(corrected));
     auto error = (output.second - value_targets).square();
     auto loss = (-policy_logp * adv + 0.5 * error - 0.01 * table.entropy).mean();
     loss.backward();
     torch::NoGradGuard guard;
     double weight = double(size) / count;
-    result.loss += loss.item<double>() * weight;
-    result.value_mse += (output.second - part(outcomes)).square().mean().item<double>() * weight;
-    result.policy_entropy += table.entropy.mean().item<double>() * weight;
+    // 保留各小批原来的 BF16 统计值，整局结束后一次回读并按原顺序加权。
+    statistics.push_back(loss.detach());
+    statistics.push_back((output.second - part(device_outcomes)).square().mean());
+    statistics.push_back(table.entropy.mean());
     // BF16 补偿累加避免长局的小批梯度被反复舍入吞掉；优化器状态仍保持原五组。
-    auto change = residual + optimizer.collect_gradients(model) * weight;
-    auto updated = accumulated + change;
-    residual = change + (accumulated - updated);
-    accumulated = updated;
+    compensated_gradient_add(accumulated, residual, optimizer.collect_gradients(model), weight);
+  }
+  auto host_statistics = torch::stack(statistics).to(torch::kCPU).contiguous();
+  auto stats = host_statistics.data_ptr<BF>();
+  for (size_t at = 0, j = 0; at < count; at += batch, j += 3) {
+    double weight = double(std::min(count - at, size_t(batch))) / count;
+    result.loss += float(stats[j]) * weight;
+    result.value_mse += float(stats[j + 1]) * weight;
+    result.policy_entropy += float(stats[j + 2]) * weight;
   }
   {
     torch::NoGradGuard guard;
@@ -962,6 +971,22 @@ void copy_weights(Network &source, Network &destination) {
   ++destination->revision;
 }
 void model_checks(const torch::Device &device) {
+  {
+    torch::NoGradGuard guard;
+    auto sum = torch::randn({4097}, bfopts().device(device));
+    auto residual = torch::randn_like(sum) / 256;
+    auto expected_sum = sum.clone(), expected_residual = residual.clone();
+    for (double weight : {1.0, 0.0037, 0.125, 0.00001}) {
+      auto gradient = torch::randn_like(sum);
+      auto change = expected_residual + gradient * weight;
+      auto updated = expected_sum + change;
+      expected_residual = change + (expected_sum - updated);
+      expected_sum = updated;
+      compensated_gradient_add(sum, residual, gradient, weight);
+      TORCH_CHECK(torch::equal(sum, expected_sum) && torch::equal(residual, expected_residual),
+                  "fused terminal gradient accumulation changed BF16 rounding");
+    }
+  }
   {
     auto x = torch::tensor({-5.0, 5.0}, bfopts().device(device)).requires_grad_(true);
     auto y = ValueTanh::apply(x);

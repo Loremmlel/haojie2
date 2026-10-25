@@ -95,6 +95,7 @@ T segmented_table(const T &, const T &, const T &, bool mean);
 T bf16_norm(const T &, torch::nn::LayerNorm &);
 std::vector<T> residual_norm_cuda(const T &, const T &, const T &, const T &, double);
 T short_attention_cuda(const T &, const T &, const T &);
+void compensated_gradient_add(T &, T &, const T &, double);
 struct Optimizer {
   UpdateKernel native_update;
   TargetKernel targets;
