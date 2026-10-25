@@ -53,7 +53,7 @@ pwsh -File training/native/run.ps1 run --directory E:/Training/haojie/restored -
 
 训练恢复与评测均不比较构建指纹。v3 共享表格式保留；正式恢复要求 `chunk=0` 的完整终局轨迹，旧短轨迹档明确提示从头开始，仍可用于冻结测评。源检查点只读，新保存写入新运行目录。模型尺寸和 BF16 类型检查保留。
 
-缩容在当前规则操作完成后停放并释放规则树与缓存；扩容先恢复旧局。并发可调到零，停放局仍可保存。恢复保留档内学习 batch 和并发（包括零并发），设备、lane、线程、推理上限与宿主内存预算重新检测。保留并发可避免自动停放尚有未决后继的旧局；需要调整时显式指定 `--concurrency`。
+缩容在当前规则操作完成后停放并释放规则树与缓存；扩容先恢复旧局。并发可调到零，停放局仍可保存，ready 对局继续学习。恢复保留档内学习 batch 和并发（包括零并发），设备、lane、线程、推理上限与宿主内存预算重新检测；需要调整并发时显式指定 `--concurrency`。
 
 ## 训练与资源边界
 
@@ -61,13 +61,15 @@ pwsh -File training/native/run.ps1 run --directory E:/Training/haojie/restored -
 
 同席位的全部决策保留到真实终局，折扣为 1，只有胜/负/平产生 +1/-1/0 奖励。未终局、停放与中断轨迹保留原状态，不进入学习。冻结当前 learner 参数计算整局 V-trace 目标，反向递推跨越计算小批；随后逐小批反向并用 BF16 补偿汇总梯度，完整验证后只提交一次 AdamW 更新。行为概率来自实际 BF16 质量的规范分布。算法依据与边界见[架构决策](architecture/DECISION.md)。
 
-严格策略滞后上限 K=64：每轮至多先更新 48 次，再停止开新局，让所有在途局自然结束，最后把剩余完整轨迹汇总为一次更新。每次消费前检查真实行为版本差；计算小批不增加版本号。排空会等待停放局恢复，不强制结束长局。学习繁忙或 ready 积压时限制新局，已有局继续行动。
+完整终局按完成顺序异步进入学习，不等待长局或停放局。每次取完整对局直到转换数达到 `batch`，不足也立即提交学习；单局超过 `batch` 时按计算小批汇总一次梯度更新。学习期间照常补局，ready 对局数达到目标并发时才限制补局，已有局继续行动。
+
+实际消费仍检查策略滞后上限 K=64。完整对局中任一行为版本超过上限，则整局跳过学习，记录为 `stale_games/stale_steps`，继续消费后面的新鲜对局。没有按更新次数触发的全局等待，没有长局计时截断；停放局恢复后继续真实对局，最终是否可学习按实际版本差决定。
 
 CPU lane 公平轮转，根请求由两个 GPU 槽集中处理；缓存、迟到结果及 CPU 头绑定实际快照版本。推理图按配置捕获，最多 128 根/8192 token，超容量执行完整普通前向。完整终局学习按计算小批执行普通前向/反向，只有一个优化更新在途；旧短块学习图只供固定工作集诊断。
 
 `--memory-mb` 管理宿主轨迹与缓存，CUDA 分配器另使用物理显存的 90% 预算。固定转换数不等于固定 token 数；不得把本机容量经验当作所有训练卡的性能结论。
 
-`status.json` 为最新快照；`window.json` 在退出排空前冻结；`saved.json` 为保存后的累计状态。`consumed_within_lag` 与 `consumed_lag_max` 报告 K 内消费及实际最大滞后。恢复后的速率重新计时。消费守恒为 `produced = consumed + ready + partial + learning`。
+`status.json` 为最新快照；`window.json` 在退出排空前冻结；`saved.json` 为保存后的累计状态。`consumed_within_lag` 与 `consumed_lag_max` 报告 K 内消费及实际最大滞后；`stale_games/stale_steps` 单列过期未学习的数据。恢复后的速率与窗口计数重新计时，检查点保留累计过期计数。累计守恒为 `produced = consumed + stale_steps + ready + partial + learning`。
 
 `training_method=terminal-vtrace` 标识正式方法；`terminal_games_consumed` 是本次进程已学习的终局数。`latest_value_mse` 对照真实终局结果，`latest_policy_entropy` 和 `latest_gradient_norm` 用于检查退化；这些原始指标可在控制台 JSON 中查看。首次终局前 updates/consumed 为零属于正常采集阶段。完整更新期间保存/停止等待原子边界；宿主轨迹超预算时先保存并退出，保留未结束局。
 

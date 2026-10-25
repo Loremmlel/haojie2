@@ -135,7 +135,7 @@
       : '尚未保存';
     const r = reply.resources;
     find('[data-summary]').textContent =
-      `${c.gpu || c.device || '等待设备'} · ${number(c.workers)} 个 lane · 活动 ${number(m.active)} / 目标 ${number(target)} 局 · 已停放 ${number(m.parked)} 局 · 显存 ${number(r.vram, 1)} / ${number(r.vram_total, 1)} GiB · GPU ${number(r.power, 1)} W · 最近保存：${saved}${reply.save_pending ? '（保存请求处理中）' : ''}${m.waiting_for_terminal_drain ? ' · 正在等待在途局自然结束后更新；停放局需恢复' : m.training_method === 'terminal-vtrace' && !m.updates ? ' · 正在收集完整终局，首次学习前消费为零' : ''}`;
+      `${c.gpu || c.device || '等待设备'} · ${number(c.workers)} 个 lane · 活动 ${number(m.active)} / 目标 ${number(target)} 局 · 已停放 ${number(m.parked)} 局 · 终局排队 ${number(m.ready_games)} 局 · 显存 ${number(r.vram, 1)} / ${number(r.vram_total, 1)} GiB · GPU ${number(r.power, 1)} W · 最近保存：${saved}${reply.save_pending ? '（保存请求处理中）' : ''}${m.stale_games ? ` · 过期未学习 ${number(m.stale_games)} 局 / ${number(m.stale_steps)} 条` : ''}${m.training_method === 'terminal-vtrace' && !m.updates ? ' · 本轮尚无新终局更新' : ''}`;
     chart(
       'throughput',
       history,

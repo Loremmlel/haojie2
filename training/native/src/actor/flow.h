@@ -7,7 +7,7 @@
 namespace hj {
 struct Counters {
   uint64_t consumed = 0, produced = 0, commands = 0, microsteps = 0, finished = 0, backtracks = 0,
-           failures = 0;
+           failures = 0, stale_steps = 0, stale_games = 0;
 };
 enum class Flow : uint8_t { Idle, Cpu, RootQueued, RootRunning };
 struct Game {

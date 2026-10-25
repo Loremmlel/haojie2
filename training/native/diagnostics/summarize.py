@@ -77,8 +77,10 @@ def summarize(root):
                           consumed_lag_max=w['consumed_lag_max'],
                           outside_lag=delta['consumed'] - (w['consumed_within_lag'] - b.get('consumed_within_lag', 0)),
                           strict_lag=w.get('strict_lag', False),
-                          lag_drains=w.get('lag_drains', 0) - b.get('lag_drains', 0),
-                          admission_outstanding=w.get('admission_outstanding'),
+                          stale_steps=w.get('stale_steps', 0) - b.get('stale_steps', 0),
+                          stale_games=w.get('stale_games', 0) - b.get('stale_games', 0),
+                          outstanding_steps=w.get('outstanding_steps'),
+                          ready_games=w.get('ready_games'),
                           peak_ready=w.get('peak_ready_steps'),
                           pending=w.get('pending_steps'), learning_steps=w.get('learning_steps'))
         for kind in ('rules', 'policy'):

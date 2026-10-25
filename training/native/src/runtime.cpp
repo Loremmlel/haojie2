@@ -98,6 +98,35 @@ Block read_block(Reader &r, const GraphReader &graph) {
   return b;
 }
 
+constexpr uint64_t LagLimit = 64;
+bool terminal_queue_full(size_t queued, uint64_t concurrency) {
+  return queued >= std::max<uint64_t>(1, concurrency);
+}
+std::vector<Block> terminal_batch(std::deque<Block> &ready, uint64_t version, uint64_t batch,
+                                  Counters &counters) {
+  std::vector<Block> result;
+  uint64_t count = 0;
+  while (!ready.empty() && count < batch) {
+    auto &episode = ready.front();
+    TORCH_CHECK(!episode.bootstrap && !episode.steps.empty() && episode.steps.back().terminal,
+                "terminal queue contains an unfinished game");
+    bool stale = false;
+    for (auto &step : episode.steps) {
+      TORCH_CHECK(step.version <= version, "behavior version exceeds learner version");
+      stale |= version - step.version > LagLimit;
+    }
+    if (stale) {
+      counters.stale_steps += episode.steps.size();
+      ++counters.stale_games;
+    } else {
+      count += episode.steps.size();
+      result.push_back(std::move(episode));
+    }
+    ready.pop_front();
+  }
+  return result;
+}
+
 // 每个模型有固定提交线程和设备流；只在空闲时等待，不为每次更新创建线程。
 class Executor {
   std::mutex mutex;
@@ -433,6 +462,7 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
   return {std::move(s), std::move(archive)};
 }
 class Session {
+  friend void hj::runtime_checks();
   Settings settings;
   torch::Device device;
   Network learner, actor;
@@ -442,9 +472,6 @@ class Session {
   InputPool inputs;
   std::atomic<bool> sampling_paused{false};
   bool ready_paused = false;
-  bool draining = false;
-  uint64_t epoch_version = 0, lag_drains = 0;
-  static constexpr uint64_t LagLimit = 64, EpochUpdates = 48;
   uint64_t consumed_within_lag = 0, consumed_lag_max = 0, peak_ready = 0;
   bool quiescing = false;
   std::vector<std::unique_ptr<Lane>> lanes;
@@ -521,26 +548,11 @@ public:
       restore(*resumed.second);
     if (settings.diagnostic == "learner" || settings.diagnostic == "episodes")
       settings.batch = diagnostic_batch;
-    epoch_version = actor_version;
     if (settings.terminal_training()) {
-      auto include = [&](const Step &step) {
-        epoch_version = std::min(epoch_version, step.version);
-      };
       for (auto &block : ready) {
         TORCH_CHECK(!block.bootstrap && !block.steps.empty() && block.steps.back().terminal,
                     "checkpoint contains unfinished ready trajectories");
-        for (auto &step : block.steps)
-          include(step);
       }
-      for (auto &[id, g] : games) {
-        for (auto &step : g.partial)
-          include(step);
-        if (g.pending)
-          include(*g.pending);
-      }
-      TORCH_CHECK(optimizer.steps >= epoch_version && optimizer.steps - epoch_version <= LagLimit,
-                  "checkpoint backlog exceeds strict lag capacity; archive remains unchanged");
-      draining = optimizer.steps - epoch_version >= EpochUpdates;
     }
     // 主线程的初始化完成后，持久流才可读取模型和优化器。
     synchronize(learner->parameters()[0].device());
@@ -877,25 +889,11 @@ public:
   void train_terminal() {
     if (learning.valid())
       return;
-    if (committed_updates - epoch_version >= EpochUpdates && !draining) {
-      draining = true;
-      ++lag_drains;
-    }
-    // 到轮次边界只停开新局，已有局必须能继续采样到自然终局。
-    // 排空的所有完整轨迹合并为一次更新，长局不会被切成超出 K 的更新队列。
-    if (draining && !games.empty())
+    // 完成局独立取走；长局、停放局与更新次数不参与就绪条件。
+    // 批次达到计算小批大小即提交已有完整局，不把整个队列合成一次大更新。
+    in_learning = terminal_batch(ready, committed_updates, settings.batch, counters);
+    if (in_learning.empty())
       return;
-    if (ready.empty()) {
-      if (draining) {
-        epoch_version = committed_updates;
-        draining = false;
-      }
-      return;
-    }
-    while (!ready.empty()) {
-      in_learning.push_back(std::move(ready.front()));
-      ready.pop_front();
-    }
     learn_start = Clock::now();
     learning = learning_executor->submit([this] {
       uint64_t count = 0, maximum = 0;
@@ -948,9 +946,7 @@ public:
         ++running;
       }
     }
-    if (settings.terminal_training() &&
-        (draining || committed_updates - epoch_version >= EpochUpdates || learning.valid() ||
-         ready_steps() >= settings.batch))
+    if (settings.terminal_training() && terminal_queue_full(ready.size(), settings.concurrency))
       return;
     while (running < settings.concurrency && active() < settings.concurrency &&
            managed() < settings.memory_mb * 1024 * 1024 / 2) {
@@ -982,7 +978,7 @@ public:
     peak_ready = std::max(peak_ready, queued);
     if (settings.terminal_training()) {
       // 终局队列背压只限制新局；内存不足由主循环保存后明确退出，不伪造块尾。
-      ready_paused = draining || learning.valid() || queued >= settings.batch;
+      ready_paused = terminal_queue_full(ready.size(), settings.concurrency);
       if (managed() > budget * 3 / 4)
         inputs.trim();
       return;
@@ -1065,12 +1061,11 @@ public:
     for (auto &entry : games)
       progress_locked(entry.second);
     auto delta = window ? initial : Counters{};
-    uint64_t partial = 0, pending = 0, parked_pending = 0, busy = 0, parked = 0, advancing = 0,
-             inference_waiting = 0, inference_running = 0;
+    uint64_t partial = 0, pending = 0, busy = 0, parked = 0, advancing = 0, inference_waiting = 0,
+             inference_running = 0;
     for (auto &p : games) {
       partial += p.second.partial.size();
       pending += bool(p.second.pending);
-      parked_pending += p.second.parked && bool(p.second.pending);
       auto phase = p.second.flow->load();
       busy += phase == Flow::Cpu;
       inference_running += phase == Flow::RootRunning;
@@ -1117,14 +1112,18 @@ public:
       learning_steps += b.steps.size();
     for (auto &b : next_learning)
       learning_steps += b.steps.size();
-    if (counters.consumed + ready_steps() + partial + learning_steps != counters.produced)
+    if (counters.consumed + counters.stale_steps + ready_steps() + partial + learning_steps !=
+        counters.produced)
       throw std::runtime_error("trajectory accounting differs");
     o << learning_steps;
     o << ",\n  \"lag_limit\": " << LagLimit
       << ",\n  \"strict_lag\": " << (settings.terminal_training() ? "true" : "false")
-      << ",\n  \"lag_drains\": " << lag_drains
-      << ",\n  \"admission_outstanding\": " << counters.produced - counters.consumed + pending
-      << ",\n  \"lag_waiting_parked\": " << (draining ? parked_pending : 0)
+      << ",\n  \"stale_steps\": " << counters.stale_steps - delta.stale_steps
+      << ",\n  \"stale_games\": " << counters.stale_games - delta.stale_games
+      << ",\n  \"outstanding_steps\": "
+      << counters.produced - counters.consumed - counters.stale_steps + pending
+      << ",\n  \"ready_games\": " << ready.size()
+      << ",\n  \"ready_game_limit\": " << std::max<uint64_t>(1, settings.concurrency)
       << ",\n  \"consumed_within_lag\": " << consumed_within_lag
       << ",\n  \"consumed_lag_max\": " << consumed_lag_max
       << ",\n  \"peak_ready_steps\": " << peak_ready
@@ -1149,8 +1148,7 @@ public:
     o << ",\n  \"loss_update\": " << committed_updates;
     o << ",\n  \"training_method\": \""
       << (settings.terminal_training() ? "terminal-vtrace" : "diagnostic-unroll") << "\""
-      << ",\n  \"terminal_games_consumed\": " << terminal_games_consumed
-      << ",\n  \"waiting_for_terminal_drain\": " << (draining ? "true" : "false");
+      << ",\n  \"terminal_games_consumed\": " << terminal_games_consumed;
     if (latest_terminal)
       o << ",\n  \"latest_value_mse\": " << latest_terminal->value_mse
         << ",\n  \"latest_policy_entropy\": " << latest_terminal->policy_entropy
@@ -1263,6 +1261,9 @@ public:
                                    int64_t(device.index()),
                                    int64_t(std::llround(settings.save_seconds * 1000000))};
     archive->write("config", torch::tensor(config, torch::kInt64));
+    archive->write("stale_counts",
+                   torch::tensor({int64_t(counters.stale_steps), int64_t(counters.stale_games)},
+                                 torch::kInt64));
     auto state_owner = std::make_shared<Bytes>(std::move(state));
     archive->write("state", torch::from_blob(
                                 state_owner->data(), {int64_t(state_owner->size())},
@@ -1309,6 +1310,14 @@ public:
     }
   }
   void restore(torch::serialize::InputArchive &archive) {
+    T stale_counts;
+    if (archive.try_read("stale_counts", stale_counts)) {
+      TORCH_CHECK(stale_counts.scalar_type() == torch::kInt64 && stale_counts.dim() == 1 &&
+                      stale_counts.numel() == 2 && stale_counts.ge(0).all().item<bool>(),
+                  "invalid stale trajectory counters");
+      counters.stale_steps = stale_counts[0].item<int64_t>();
+      counters.stale_games = stale_counts[1].item<int64_t>();
+    }
     T s;
     archive.read("state", s);
     TORCH_CHECK(s.scalar_type() == torch::kUInt8 && s.dim() == 1, "invalid checkpoint metadata");
@@ -1915,6 +1924,80 @@ void runtime_checks() {
   if (continued.node)
     TORCH_CHECK(encode(continued.node) == encode(selected.node));
   hj_actor_close(handle);
+  {
+    Settings settings;
+    settings.device = "cpu";
+    settings.width = 32;
+    settings.workers = settings.inference_batch = settings.batch = settings.publish = 1;
+    settings.concurrency = settings.chunk = 0;
+    Session session({settings, {}});
+    auto action =
+        int64_t(std::find(f.node->mask.begin(), f.node->mask.end(), 1) - f.node->mask.begin());
+    auto episode = [&](uint64_t version) {
+      return Block{{Step{f.node, action, logps[action], version, true, 1}}, {}};
+    };
+    Game parked;
+    parked.id = 1;
+    parked.actor = f.actor;
+    parked.learner = f.learner;
+    parked.parked = true;
+    parked.snapshot = saved;
+    parked.current = f.node;
+    parked.partial = episode(0).steps;
+    parked.partial.back().terminal = false;
+    parked.partial.back().reward = 0;
+    session.games.emplace(1, std::move(parked));
+    session.next_id = 2;
+    session.counters.produced = 1;
+    // 旧版本停放局一直存在，短局仍须跨过 48/64 次边界独立更新。
+    for (uint64_t version = 0; version < 65; ++version) {
+      session.ready.push_back(episode(version));
+      ++session.counters.produced;
+      session.train();
+      TORCH_CHECK(session.learning.valid(), "parked game blocked terminal learning");
+      session.collect_learning(true);
+      TORCH_CHECK(session.committed_updates == version + 1);
+    }
+    session.ready = {episode(0), episode(1), episode(65)};
+    session.counters.produced += 3;
+    session.train();
+    TORCH_CHECK(session.counters.stale_games == 1 && session.counters.stale_steps == 1 &&
+                    session.ready.size() == 1 && session.learning.valid(),
+                "stale episode blocked fresh data or terminal batch consumed the entire queue");
+    // learner 在途仍可恢复原局并补入新局，队列容量只限制后续准入。
+    session.settings.concurrency = 2;
+    session.resize();
+    TORCH_CHECK(session.games.size() == 2, "learning in flight blocked game admission");
+    session.sampling_paused = true;
+    session.roots->wake();
+    session.settle();
+    session.collect_learning(true);
+    TORCH_CHECK(session.consumed_lag_max == 64 && session.counters.consumed == 66 &&
+                    session.games.at(1).partial.size() == 1,
+                "lag boundary or parked trajectory changed");
+    TORCH_CHECK(!terminal_queue_full(1, 2) && terminal_queue_full(2, 2));
+    auto directory =
+        fs::temp_directory_path() /
+        ("haojie-async-check-" + std::to_string(Clock::now().time_since_epoch().count()));
+    fs::create_directory(directory);
+    session.settings.directory = directory;
+    session.checkpoint(false);
+    session.writer.get();
+    auto archive = std::make_shared<torch::serialize::InputArchive>();
+    std::ifstream file(directory / "checkpoint.pt", std::ios::binary);
+    archive->load_from(file, torch::kCPU);
+    file.close();
+    Session restored({settings, archive});
+    TORCH_CHECK(restored.counters.stale_steps == 1 && restored.counters.stale_games == 1 &&
+                    restored.counters.consumed == 66 && restored.committed_updates == 66 &&
+                    restored.ready.size() == 1 && restored.games.at(1).partial.size() == 1,
+                "asynchronous checkpoint lost counters or unfinished games");
+    restored.metrics(false);
+    fs::remove(directory / "checkpoint.pt");
+    fs::remove(directory);
+  }
+  std::cout << "asynchronous terminal learning, parked long game, stale rejection and busy "
+               "admission: passed\n";
   std::cout << "typed node roundtrip, actor parking, RNG/progress continuation and canonical "
                "behavior probability: passed\n";
 }
