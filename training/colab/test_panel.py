@@ -4,8 +4,10 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import Mock, patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, Mock, patch
 
 from training.colab.panel import Panel
 
@@ -114,15 +116,83 @@ class PanelTests(unittest.TestCase):
         self.status(0.5)
         self.assertEqual(len(self.panel.history), 1)
 
-    def test_notebook_default_stays_stopped_and_panel_is_embedded(self):
+    def test_notebook_click_to_resume_and_start(self):
         notebook = json.loads(
             Path(__file__).with_name("train.ipynb").read_text(encoding="utf-8")
         )
-        start = next(c for c in notebook["cells"] if c.get("id") == "start")
+        cells = {
+            c["id"]: "".join(c["source"])
+            for c in notebook["cells"]
+            if c["cell_type"] == "code"
+        }
+        root = Path(self.temporary.name)
+        old = root / "old" / "checkpoint.pt"
+        latest = root / "latest" / "checkpoint.pt"
+        for checkpoint, stamp in ((old, 1), (latest, 2)):
+            checkpoint.parent.mkdir()
+            checkpoint.write_bytes(b"unchanged checkpoint")
+            os.utime(checkpoint, (stamp, stamp))
+        widgets = Mock()
+        widgets.Dropdown.side_effect = lambda **args: SimpleNamespace(
+            value=args["options"][0][1], disabled=False, observe=Mock()
+        )
+        widgets.Output.side_effect = MagicMock
         fake = Mock()
-        with patch("builtins.print"):
-            exec("".join(start["source"]), {"subprocess": fake})
-        fake.Popen.assert_not_called()
+        fake.check_output.return_value = '{"concurrency":8,"batch":512}'
+        fake.Popen.return_value.poll.return_value = None
+        namespace = {
+            "Path": Mock(return_value=root),
+            "SOURCE": Path(__file__).resolve().parents[2],
+            "subprocess": fake,
+            "json": json,
+            "datetime": datetime,
+            "timezone": timezone,
+            "NATIVE": ["native-test"],
+        }
+        with (
+            patch.dict("sys.modules", {
+                "google.colab": Mock(),
+                "ipywidgets": widgets,
+                "IPython.display": Mock(),
+            }),
+            patch("importlib.reload"),
+            patch("training.colab.panel.show") as show,
+            patch("builtins.print"),
+        ):
+            exec(cells["configuration"], namespace)
+            self.assertEqual(namespace["ARGS"][-2:], ["--resume", str(latest)])
+            # 下拉选旧档与新训练均重算配置，不创建进程。
+            picker = namespace["checkpoint_picker"]
+            for selection in (str(old), "", str(latest)):
+                picker.value = selection
+                namespace["prepare_training"]()
+                self.assertEqual("--resume" in namespace["ARGS"], bool(selection))
+            exec(cells["start"], namespace)
+            fake.Popen.assert_not_called()
+            button = namespace["start_button"]
+            button.on_click.call_args.args[0](button)
+            fake.Popen.assert_called_once()
+            self.assertEqual(fake.Popen.call_args.args[0][-2:], ["--resume", str(latest)])
+            self.assertNotEqual(namespace["RUN"], latest.parent)
+            self.assertTrue(picker.disabled)
+            show.assert_called_once()
+            namespace["start_training"](button)
+            exec(cells["start"], namespace)
+            fake.Popen.assert_called_once()
+            self.assertEqual(show.call_count, 2)
+            # 停止后重新扫描，不能用禁用的旧选择器再次启动。
+            namespace["process"].poll.return_value = 0
+            exec(cells["start"], namespace)
+            fake.Popen.assert_called_once()
+            for checkpoint in (old, latest):
+                self.assertEqual(checkpoint.read_bytes(), b"unchanged checkpoint")
+            old.unlink()
+            latest.unlink()
+            exec(cells["configuration"], namespace)
+            self.assertEqual(namespace["checkpoint_picker"].value, "")
+            self.assertEqual(namespace["ARGS"], ["--device", "cuda"])
+
+    def test_panel_is_embedded(self):
         markup = self.panel.render()
         self.assertIn("haojie.native_panel", markup)
         self.assertIn("var(--paper)", markup)
