@@ -1,6 +1,7 @@
 #pragma once
 #include "runtime.h"
 #include <ATen/Parallel.h>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <set>
@@ -26,7 +27,88 @@ struct Hardware {
   uint64_t gpu_total = 0, gpu_free = 0;
   int sm = 0, major = 0, minor = 0;
   std::string device = "cpu", name = "CPU";
+  double cpu_capacity = 0;
 };
+// cgroup 当前层和父层均可限额；容器内可见核数及 MemAvailable 不是实际配额。
+inline void cgroup_limits(Hardware &h, const std::filesystem::path &root,
+                          std::filesystem::path current, bool unified) {
+  double cpus = h.cpu_capacity > 0 ? h.cpu_capacity : double(h.logical);
+  for (;;) {
+    std::string quota;
+    double period = 0;
+    if (unified) {
+      std::ifstream(current / "cpu.max") >> quota >> period;
+    } else {
+      std::ifstream(current / "cpu.cfs_quota_us") >> quota;
+      std::ifstream(current / "cpu.cfs_period_us") >> period;
+    }
+    if (!quota.empty() && quota != "max" && period > 0) {
+      auto value = std::stod(quota);
+      if (value > 0)
+        cpus = std::min(cpus, value / period);
+    }
+    std::string limit;
+    uint64_t used = 0;
+    std::ifstream(current / (unified ? "memory.max" : "memory.limit_in_bytes")) >> limit;
+    bool has_usage = bool(
+        std::ifstream(current / (unified ? "memory.current" : "memory.usage_in_bytes")) >> used);
+    if (!limit.empty() && limit != "max" && has_usage) {
+      auto maximum = std::stoull(limit);
+      uint64_t reclaimable = 0, dirty = 0, writeback = 0, value;
+      std::string key;
+      std::ifstream statistics(current / "memory.stat");
+      while (statistics >> key >> value) {
+        if (key == (unified ? "inactive_file" : "total_inactive_file"))
+          reclaimable = value;
+        if (key == (unified ? "file_dirty" : "total_dirty"))
+          dirty = value;
+        if (key == (unified ? "file_writeback" : "total_writeback"))
+          writeback = value;
+      }
+      auto clean = reclaimable > dirty + writeback ? reclaimable - dirty - writeback : 0;
+      auto occupied = used - std::min(used, clean);
+      h.ram_available = std::min<uint64_t>(h.ram_available, maximum - std::min(maximum, occupied));
+    }
+    if (current == root || current == current.parent_path())
+      break;
+    current = current.parent_path();
+  }
+  h.cpu_capacity = cpus;
+  auto whole = std::max<uint64_t>(1, uint64_t(cpus));
+  h.logical = std::min(h.logical, whole);
+  h.cores = std::min(h.cores, whole);
+}
+inline void container_limits(Hardware &h) {
+  std::ifstream groups("/proc/self/cgroup");
+  std::string line;
+  while (std::getline(groups, line)) {
+    auto first = line.find(':'), last = line.find(':', first + 1);
+    if (first == std::string::npos || last == std::string::npos)
+      continue;
+    auto controllers = line.substr(first + 1, last - first - 1);
+    auto relative = std::filesystem::path(line.substr(last + 1)).relative_path();
+    if (controllers.empty()) {
+      auto root = std::filesystem::path("/sys/fs/cgroup");
+      auto current = (root / relative).lexically_normal();
+      // cgroup namespace 可把容器当前组直接挂载为根，/proc 中的祖先路径可能不可见。
+      if (!std::filesystem::exists(current / "cgroup.procs"))
+        current = root;
+      cgroup_limits(h, root, current, true);
+    } else {
+      for (auto name : {"cpu", "memory"}) {
+        if (("," + controllers + ",").find("," + std::string(name) + ",") == std::string::npos)
+          continue;
+        auto root = std::filesystem::path("/sys/fs/cgroup") / name;
+        if (!std::filesystem::exists(root))
+          root = root.parent_path() / controllers;
+        auto current = (root / relative).lexically_normal();
+        if (!std::filesystem::exists(current / "cgroup.procs"))
+          current = root;
+        cgroup_limits(h, root, current, false);
+      }
+    }
+  }
+}
 inline Hardware hardware(const std::string &requested) {
   Hardware h;
   h.logical = std::max(1u, std::thread::hardware_concurrency());
@@ -78,6 +160,7 @@ inline Hardware hardware(const std::string &requested) {
     if (in >> key >> kib && key == "MemAvailable:")
       h.ram_available = kib * 1024;
   }
+  container_limits(h);
 #endif
   h.cores = std::clamp<uint64_t>(h.cores, 1, h.logical);
   TORCH_CHECK(h.ram_available >= (uint64_t(512) << 20), "insufficient available host memory");
@@ -148,6 +231,7 @@ inline std::string configuration_json(const Settings &s, const Hardware &h) {
   out << "{\"device\":" << std::quoted(s.device) << ",\"gpu\":" << std::quoted(h.name)
       << ",\"logical_cpus\":" << h.logical << ",\"physical_cores\":" << h.cores
       << ",\"host_available_bytes\":" << h.ram_available << ",\"gpu_total_bytes\":" << h.gpu_total
+      << ",\"cpu_capacity\":" << (h.cpu_capacity > 0 ? h.cpu_capacity : double(h.logical))
       << ",\"gpu_free_bytes\":" << h.gpu_free << ",\"sm_count\":" << h.sm
       << ",\"compute_major\":" << h.major << ",\"compute_minor\":" << h.minor
       << ",\"workers\":" << s.workers << ",\"concurrency\":" << s.concurrency
@@ -158,6 +242,42 @@ inline std::string configuration_json(const Settings &s, const Hardware &h) {
   return out.str();
 }
 inline void hardware_checks() {
+  {
+    namespace fs = std::filesystem;
+    auto root = fs::temp_directory_path() /
+                ("haojie-cgroup-" +
+                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    TORCH_CHECK(!fs::exists(root));
+    fs::create_directories(root / "child");
+    auto write = [&](const fs::path &path, const char *value) { std::ofstream(path) << value; };
+    write(root / "cpu.max", "150000 100000");
+    write(root / "child/cpu.max", "250000 100000");
+    write(root / "memory.max", "1000");
+    write(root / "memory.current", "800");
+    write(root / "memory.stat", "inactive_file 300\nfile_dirty 40\nfile_writeback 10\n");
+    Hardware limited;
+    limited.logical = 12;
+    limited.cores = 6;
+    limited.ram_available = 10000;
+    cgroup_limits(limited, root, root / "child", true);
+    TORCH_CHECK(limited.cpu_capacity == 1.5 && limited.cores == 1 && limited.ram_available == 450,
+                "parent cgroup quota or clean reclaimable memory ignored");
+    write(root / "cpu.cfs_quota_us", "-1");
+    write(root / "cpu.cfs_period_us", "100000");
+    write(root / "child/cpu.cfs_quota_us", "400000");
+    write(root / "child/cpu.cfs_period_us", "100000");
+    write(root / "child/memory.limit_in_bytes", "900");
+    write(root / "child/memory.usage_in_bytes", "950");
+    write(root / "child/memory.stat", "total_inactive_file 100\ntotal_dirty 20\n");
+    limited = Hardware{};
+    limited.logical = 12;
+    limited.cores = 6;
+    limited.ram_available = 10000;
+    cgroup_limits(limited, root, root / "child", false);
+    TORCH_CHECK(limited.cores == 4 && limited.ram_available == 30, "v1 cgroup quota ignored");
+    TORCH_CHECK(fs::equivalent(root.parent_path(), fs::temp_directory_path()));
+    fs::remove_all(root);
+  }
   Hardware laptop{
       16, 8, uint64_t(12) << 30, uint64_t(6) << 30, uint64_t(5) << 30, 30, 8, 6, "cuda:0", "test"};
   Settings s;
