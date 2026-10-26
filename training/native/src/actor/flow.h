@@ -1,7 +1,6 @@
 #pragma once
 #include "runtime.h"
 #include "search.h"
-#include "workset.h"
 #include <condition_variable>
 #include <optional>
 
@@ -12,7 +11,7 @@ struct Counters {
   uint64_t discarded_steps = 0, discarded_games = 0, discarded_long_games = 0,
            discarded_stale_games = 0, discarded_memory_games = 0, discarded_error_games = 0;
 };
-enum class Flow : uint8_t { Idle, Cpu, RootQueued, RootRunning };
+enum class Flow : uint8_t { Idle, Cpu };
 struct Game {
   uint64_t id = 0, commands = 0, microsteps = 0, backtracks = 0, failures = 0;
   bool parked = false, parking = false, sent_training = false;
@@ -33,8 +32,6 @@ struct Game {
   Counters progress;
   std::deque<Block> completed;
   uint64_t scored = 0;
-  double policy_seconds = 0;
-  bool workset_done = false;
   bool idle() const {
     return flow->load() == Flow::Idle;
   }
@@ -44,12 +41,7 @@ struct Job {
   uint32_t op;
   Bytes bytes;
   std::shared_ptr<Node> node;
-  CpuSnapshot weights;
-  std::shared_ptr<Workset::Record> record;
   Game *state = nullptr;
-  uint64_t chunk = 16, quota = 0;
-  bool root_reply = false;
-  double queued_ms = 0, root_queued_ms = 0, root_started_ms = 0;
 };
 struct Event {
   uint64_t game;

@@ -1,4 +1,3 @@
-#include "diagnostics/timing.h"
 #include "runtime.h"
 // 根编码、设备搬运与 BF16 更新共用的原生加速器实现。
 #include <ATen/ops/embedding_bag.h>
@@ -52,8 +51,7 @@ void driver_check(CUresult e) {
 // 类型化投影与均值按真实长度计算；累加只在寄存器中，输出张量仍为 BF16。
 class DeviceKernels {
   CUmodule module = nullptr;
-  CUfunction scatter_, store_, project_, update_, targets_, binary_, reduce_, residual_norm_,
-      attention_, accumulate_;
+  CUfunction scatter_, store_, project_, update_, reduce_, residual_norm_, attention_, accumulate_;
   T receipt;
 
 public:
@@ -185,14 +183,9 @@ extern "C" __global__ void accumulate(B *sum,B *residual,const B *gradient,U cou
 // 每个显式中间结果仍按 BF16 舍入；只融合搬运，不改变补偿更新的算式。
 extern "C" __global__ void update(const B *g,B *p,B *m,B *v,B *mr,B *vr,B *pr,const B *norm,
                                   int *valid,const B *loss,U count,float lr,float bc1,float bc2,
-                                  const U *control,int commit) {
-  if(control) {
-    lr=__uint_as_float((unsigned)control[1]);
-    bc1=__uint_as_float((unsigned)control[2]);
-    bc2=__uint_as_float((unsigned)control[3]);
-  }
+                                  int commit) {
   U i=(U)blockIdx.x*blockDim.x+threadIdx.x;
-  if(i>=count||(commit&&(!*valid||(control&&!control[0])))) return;
+  if(i>=count||(commit&&!*valid)) return;
   if(i==0&&!commit) {
     ((B *)(valid+1))[0]=loss?*loss:0;
     if(loss&&!isfinite(value(*loss))) atomicExch(valid,0);
@@ -212,22 +205,7 @@ extern "C" __global__ void update(const B *g,B *p,B *m,B *v,B *mr,B *vr,B *pr,co
   } else if(!isfinite(n)||!isfinite(grad)||!isfinite(a)||!isfinite(pn)||!isfinite(mn)||
             !isfinite(vn)||!isfinite(mc)||!isfinite(vc)||!isfinite(pc)) atomicExch(valid,0);
 }
-// 原始整数位在设备解包成精确零一输入；连续槽独立处理，不参与身份转换。
-extern "C" __global__ void binary(const U *raw,B *out,U count,int typed) {
-  U i=(U)blockIdx.x*blockDim.x+threadIdx.x;
-  int width=typed?3944:4096;
-  if(i>=count*(U)width) return;
-  U row=i/width,col=i%width;
-  U word; int bit;
-  if(typed&&col>=3840) {
-    word=raw[row*75+(col<3892?60:61)]; bit=(int)(col-(col<3892?3840:3892));
-  } else {
-    word=raw[row*(typed?75:64)+col/64]; word=(word<<1)^(0ULL-(word>>63));
-    bit=(int)(col%64);
-  }
-  out[i]=((word>>bit)&1)?0x3f80:0;
-}
-// CSR 归约只读真实区间；同一个内核用于参数均值和 gather 的转置。
+// 按分段索引聚合梯度，不读取容量尾部。
 extern "C" __global__ void reduce(const B *data,const long long *ids,const long long *offsets,
                                   B *out,U rows,int width,int mean) {
   U i=(U)blockIdx.x*blockDim.x+threadIdx.x;
@@ -238,28 +216,6 @@ extern "C" __global__ void reduce(const B *data,const long long *ids,const long 
   for(long long k=begin;k<end;++k) sum+=value(data[(U)ids[k]*width+col]);
   if(mean&&end>begin) sum/=(float)(end-begin);
   out[i]=rounded(sum);
-}
-// 同席位短轨迹按真实顺序反向递推；概率标量只在寄存器中使用 double。
-extern "C" __global__ void targets(const B *mass,const B *values,const long long *records,
-                                   const long long *blocks,B *out,long long count) {
-  U bi=(U)blockIdx.x*blockDim.x+threadIdx.x;
-  long long begin=blocks[bi*3],end=blocks[bi*3+1],bootstrap=blocks[bi*3+2];
-  double correction=0,following=bootstrap<0?0:value(values[bootstrap]),following_target=following;
-  for(long long i=end;i-->begin;) {
-    const long long *s=records+i*6;
-    double total=0;
-    for(long long j=0;j<s[1];++j) total+=value(mass[s[0]+j]);
-    double chosen=value(mass[s[0]+s[2]]);
-    double logp=chosen>0?log(chosen/total):-__longlong_as_double(0x7ff0000000000000LL);
-    double ratio=fmin(1.0,exp(logp-__longlong_as_double(s[5])));
-    double v=value(values[i]),d=s[4]?0:1;
-    correction=ratio*((double)s[3]+d*following-v)+d*ratio*correction;
-    double target=v+correction;
-    out[i]=rounded((float)target);
-    out[count+i]=rounded((float)(ratio*((double)s[3]+d*following_target-v)));
-    out[count*2+i]=rounded((float)logp);
-    following=v; following_target=target;
-  }
 }
 // 按真实行和置位数量求和，不扫描容量尾部的填充索引。
 extern "C" __global__ void project(const Field *f,const U *data,const B *weight,B *out,B *continuous,
@@ -350,8 +306,6 @@ extern "C" __global__ void store(const U *r, const B *tokens, const B *context, 
     driver_check(cuModuleGetFunction(&store_, module, "store"));
     driver_check(cuModuleGetFunction(&project_, module, "project"));
     driver_check(cuModuleGetFunction(&update_, module, "update"));
-    driver_check(cuModuleGetFunction(&targets_, module, "targets"));
-    driver_check(cuModuleGetFunction(&binary_, module, "binary"));
     driver_check(cuModuleGetFunction(&reduce_, module, "reduce"));
     driver_check(cuModuleGetFunction(&residual_norm_, module, "residual_norm"));
     driver_check(cuModuleGetFunction(&attention_, module, "attention"));
@@ -396,7 +350,7 @@ extern "C" __global__ void store(const U *r, const B *tokens, const B *context, 
     return {x, y, mean, inverse};
   }
   T checked_update(const T &gradient, const T &parameters, const std::vector<T> &state,
-                   const T &norm, double rate, uint64_t step, const T &loss, const T &control) {
+                   const T &norm, double rate, uint64_t step, const T &loss) {
     auto count = uint64_t(parameters.numel());
     auto valid = torch::ones({2}, parameters.options().dtype(torch::kInt32));
     auto g = gradient.data_ptr(), p = parameters.data_ptr(), m = state[0].data_ptr(),
@@ -406,10 +360,9 @@ extern "C" __global__ void store(const U *r, const B *tokens, const B *context, 
     // 与 ATen 的 CPU 标量除法相同：先在 double 中求倒数，再转为设备 opmath。
     float lr = float(rate), bc1 = float(1 / (1 - std::pow(0.9, double(step)))),
           bc2 = float(1 / (1 - std::pow(0.999, double(step))));
-    void *control_data = control.defined() ? control.data_ptr() : nullptr;
     int commit = 0;
-    void *args[] = {&g,  &p,         &m,     &v,  &mr,  &vr,  &pr,           &n,
-                    &ok, &loss_data, &count, &lr, &bc1, &bc2, &control_data, &commit};
+    void *args[] = {&g,  &p,         &m,     &v,  &mr,  &vr,  &pr,    &n,
+                    &ok, &loss_data, &count, &lr, &bc1, &bc2, &commit};
     // 第一遍仅检查；第二遍复算并提交，省去六组全参数提案的写入和重读。
     for (commit = 0; commit < 2; ++commit)
       driver_check(cuLaunchKernel(update_, unsigned((count + 255) / 256), 1, 1, 256, 1, 1, 0,
@@ -418,7 +371,7 @@ extern "C" __global__ void store(const U *r, const B *tokens, const B *context, 
   }
   UpdateResult update(const T &gradient, const T &parameters, const std::vector<T> &state,
                       const T &norm, double rate, uint64_t step, const T &loss) {
-    auto valid = checked_update(gradient, parameters, state, norm, rate, step, loss, {});
+    auto valid = checked_update(gradient, parameters, state, norm, rate, step, loss);
     auto ok = valid.data_ptr();
     cuda_check(cudaMemcpyAsync(receipt.data_ptr(), ok, 8, cudaMemcpyDeviceToHost,
                                c10::cuda::getCurrentCUDAStream()));
@@ -431,30 +384,6 @@ extern "C" __global__ void store(const U *r, const B *tokens, const B *context, 
     BF loss_value;
     std::memcpy(&loss_value.x, bytes + 4, 2);
     return {{}, double(float(loss_value)), true};
-  }
-  T targets(const T &mass, const T &values, const T &records, const T &blocks) {
-    auto count = records.numel() / 6;
-    auto output = torch::zeros({3, count}, values.options());
-    auto p = mass.data_ptr(), v = values.data_ptr(), r = records.data_ptr(), b = blocks.data_ptr(),
-         o = output.data_ptr();
-    void *args[] = {&p, &v, &r, &b, &o, &count};
-    driver_check(cuLaunchKernel(targets_, unsigned(blocks.numel() / 3), 1, 1, 1, 1, 1, 0,
-                                c10::cuda::getCurrentCUDAStream(), args, nullptr));
-    return output;
-  }
-  T captured_update(const T &gradient, const T &parameters, const std::vector<T> &state,
-                    const T &norm, const T &loss, const T &control) {
-    return checked_update(gradient, parameters, state, norm, 0, 1, loss, control);
-  }
-  T binary(const T &raw, bool typed) {
-    auto count = uint64_t(raw.size(0));
-    int t = typed, width = typed ? 3944 : 4096;
-    auto output = torch::empty({int64_t(count), width}, raw.options().dtype(torch::kBFloat16));
-    auto r = raw.data_ptr(), o = output.data_ptr();
-    void *args[] = {&r, &o, &count, &t};
-    driver_check(cuLaunchKernel(binary_, unsigned((count * width + 255) / 256), 1, 1, 256, 1, 1, 0,
-                                c10::cuda::getCurrentCUDAStream(), args, nullptr));
-    return output;
   }
   T reduce(const T &data, const T &ids, const T &offsets, bool mean) {
     auto count = uint64_t(offsets.numel() - 1);
@@ -576,9 +505,6 @@ struct Slot {
   std::vector<CacheWrite> writes;
   std::shared_ptr<InferenceFlight> flight;
   Clock::time_point start;
-  diagnostic::GpuSpan timing;
-  double submitted_ms = 0;
-  uint64_t token_count = 0;
   size_t bytes = 0, capacity_bytes = 0;
   bool active = false;
   std::atomic<uint64_t> *pending = nullptr;
@@ -599,7 +525,6 @@ struct Slot {
   static void CUDART_CB complete(void *p) {
     auto &s = *static_cast<Slot *>(p);
     s.flight->seconds = seconds(s.start);
-    s.flight->callback_ms = diagnostic::now();
     s.flight->complete.store(true, std::memory_order_release);
     s.pending->fetch_sub(1, std::memory_order_acq_rel);
     s.pending->notify_all();
@@ -690,39 +615,17 @@ void primitive_checks(const torch::Device &device) {
 #endif
 } // namespace
 
-UpdateKernel make_update_kernel(const torch::Device &device, TargetKernel &targets) {
+UpdateKernel make_update_kernel(const torch::Device &device) {
 #ifdef HJ_CUDA
   if (device.is_cuda()) {
     c10::cuda::CUDAGuard guard(device);
     auto kernels = device_kernels(device);
-    targets = [kernels](const T &mass, const T &values, const T &records, const T &blocks) {
-      return kernels->targets(mass, values, records, blocks);
-    };
     return [kernels](const T &g, const T &p, const std::vector<T> &state, const T &norm, double lr,
                      uint64_t step,
                      const T &loss) { return kernels->update(g, p, state, norm, lr, step, loss); };
   }
 #endif
   return {};
-}
-CapturedUpdate make_captured_update(const torch::Device &device) {
-#ifdef HJ_CUDA
-  if (device.is_cuda()) {
-    auto kernels = device_kernels(device);
-    return [kernels](const T &g, const T &p, const std::vector<T> &state, const T &norm,
-                     const T &loss, const T &control) {
-      return kernels->captured_update(g, p, state, norm, loss, control);
-    };
-  }
-#endif
-  return {};
-}
-T typed_binary(const T &raw, bool rows) {
-#ifdef HJ_CUDA
-  if (raw.is_cuda())
-    return device_kernels(raw.device())->binary(raw, rows);
-#endif
-  TORCH_CHECK(false, "raw binary projection requires CUDA");
 }
 std::vector<T> residual_norm_cuda(const T &a, const T &b, const T &w, const T &bias, double eps) {
 #ifdef HJ_CUDA
@@ -929,11 +832,10 @@ InferenceEngine::submit(size_t slot, std::vector<std::shared_ptr<Node>> nodes, u
     s.used = 0;
     auto roots = roots_of(flight->nodes);
     auto c = capacity(roots.size());
-    int64_t count = roots.size(), total = c, longest = 0;
+    int64_t count = roots.size(), total = c;
     for (auto &r : roots) {
       count += r->rows.size();
       total += r->rows.size();
-      longest = std::max<int64_t>(longest, r->rows.size() + 1);
     }
     auto n = token_bucket(total);
     auto bucket = s.buckets.find({n, c});
@@ -941,9 +843,6 @@ InferenceEngine::submit(size_t slot, std::vector<std::shared_ptr<Node>> nodes, u
     if (bucket != s.buckets.end())
       s.output = s.graph_output;
     s.reserve((count * 2 + roots.size()) * p.actor->width, p.actor->parameters()[0].options());
-    s.submitted_ms = diagnostic::now();
-    s.token_count = count;
-    s.timing.start();
     if (bucket != s.buckets.end() && p.prepare(s, *bucket->second, flight->nodes)) {
       cuda_check(cudaMemcpyAsync(s.input.data_ptr(), s.pinned.data_ptr(), s.bytes,
                                  cudaMemcpyHostToDevice, s.stream));
@@ -973,11 +872,8 @@ InferenceEngine::submit(size_t slot, std::vector<std::shared_ptr<Node>> nodes, u
       p.fallbacks++;
     }
     // 一个槽只回送一包 BF16 数据；完成后复制为根拥有的普通 CPU 缓存。
-    s.timing.compute_end();
     cuda_check(cudaMemcpyAsync(s.host_output.data_ptr(), s.output.data_ptr(), s.used * 2,
                                cudaMemcpyDeviceToHost, s.stream));
-    s.timing.return_end();
-    diagnostic::record("root_shape", roots.size(), count, n, longest, flight->graphed);
     p.tokens += count;
     p.pending.fetch_add(1, std::memory_order_acq_rel);
     auto status = cudaLaunchHostFunc(s.stream, &Slot::complete, &s);
@@ -1011,10 +907,6 @@ void InferenceEngine::finish(const std::shared_ptr<InferenceFlight> &flight) {
       auto &s = *slot;
       if (s.flight != flight)
         continue;
-      s.timing.report("root_batch", 0, s.submitted_ms, flight->callback_ms, flight->nodes.size(),
-                      s.token_count);
-      diagnostic::record("root_callback", 0, diagnostic::now() - flight->callback_ms,
-                         s.timing.uncertainty_ms);
       for (auto &out : s.writes) {
         std::lock_guard lock(out.root->cache_mutex);
         auto width = impl->actor->width, count = (out.entities * 2 + 1) * width;

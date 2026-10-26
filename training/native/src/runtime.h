@@ -8,26 +8,20 @@
 
 namespace hj {
 struct Settings {
-  std::filesystem::path directory, resume, profile, replay;
-  std::string diagnostic;
-  double warmup = 5;
-  uint64_t root_slots = 2;
-  bool defer_learning = false;
+  std::filesystem::path directory, resume;
   std::string device = "cuda";
-  uint64_t concurrency = 12, workers = 8, seed = 1, chunk = 16, batch = 512, inference_batch = 64,
-           width = DefaultWidth, publish = 8;
+  uint64_t concurrency = 12, workers = 8, seed = 1, batch = 512, inference_batch = 64,
+           width = DefaultWidth;
+  // v3 检查点配置仍保留这两个位置，只允许完整终局与逐次发布。
+  uint64_t chunk = 0, publish = 1;
   uint64_t memory_mb = 4096, updates = 0, samples = 0;
   uint64_t max_game_steps = 262144;
   uint64_t search_simulations = 0, search_depth = 64;
   uint64_t history_size = 8, history_interval = 64, history_percent = 20;
   uint64_t threads = 1;
-  uint64_t workset_games = 0, game_samples = 256;
   double seconds = 0, save_seconds = 300;
   bool shrine = false;
   std::set<std::string> supplied;
-  bool terminal_training() const {
-    return !workset_games && (diagnostic.empty() || diagnostic == "mixed");
-  }
 };
 // 槽持有全部输入、缓存来源与回送内存，完成通知不销毁张量或调用 CUDA。
 struct InferenceFlight {
@@ -35,7 +29,6 @@ struct InferenceFlight {
   uint64_t version = 0, revision = 0;
   bool graphed = false;
   double seconds = 0;
-  double callback_ms = 0;
   std::vector<std::shared_ptr<Node>> nodes;
 };
 struct InferenceStats {

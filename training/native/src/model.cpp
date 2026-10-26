@@ -442,19 +442,10 @@ void NetworkImpl::encode_roots(const std::vector<std::shared_ptr<Root>> &request
   }
   encoded_roots += roots.size();
 }
-std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &nodes,
-                                     int64_t policy_nodes) {
-  return prepare_forward(nodes, policy_nodes)();
-}
-Forward NetworkImpl::prepare_forward(const std::vector<std::shared_ptr<Node>> &nodes,
-                                     int64_t policy_nodes) {
+std::pair<T, T> NetworkImpl::forward(const std::vector<std::shared_ptr<Node>> &nodes) {
   RECORD_FUNCTION("hj.forward", std::vector<c10::IValue>());
   if (nodes.empty())
     throw std::runtime_error("empty model batch");
-  if (policy_nodes < 0)
-    policy_nodes = nodes.size();
-  TORCH_CHECK(policy_nodes > 0 && policy_nodes <= int64_t(nodes.size()),
-              "invalid policy node count");
   auto device = parameters()[0].device();
   std::map<std::pair<uint64_t, uint64_t>, int64_t> root_ids;
   std::vector<std::shared_ptr<Root>> roots;
@@ -519,7 +510,7 @@ Forward NetworkImpl::prepare_forward(const std::vector<std::shared_ptr<Node>> &n
   std::vector<int64_t> candidates, owners, source, target, key_ids, live_positions;
   std::map<std::array<int64_t, 4>, int64_t> keys;
   int64_t full_candidates = 0;
-  for (size_t i = 0; i < size_t(policy_nodes); ++i) {
+  for (size_t i = 0; i < nodes.size(); ++i) {
     auto &n = *nodes[i];
     auto off = offsets[node_roots[i]];
     for (size_t j = 0; j < n.candidates.size(); ++j) {
@@ -595,41 +586,38 @@ Forward NetworkImpl::prepare_forward(const std::vector<std::shared_ptr<Node>> &n
       dst(input, target, entity_count, !caching);
   // 一份整数表和一份 BF16 表上传，后续算子只使用设备端视图。
   input.upload(device);
-  // 返回的闭包只持本批输入；后台打包和上传不读取或更新浮点权重。
-  return [=, this, input = std::move(input)]() mutable -> std::pair<T, T> {
-    auto row_embeddings =
-        entity(input.get(row_input[0]), input.get(row_input[1]), input.bf(row_input[2], 52));
-    T mixed, r;
-    if (!missing.empty()) {
-      auto cu = input.get(root_cumulative).to(torch::kInt32);
-      auto x =
-          encode_table(er_ids.bind(input)(row_embeddings), global_ids.bind(input)(row_embeddings),
-                       input.get(kind), input.get(root_gather), cu, lengths);
-      auto context_part = project_root_context(x.index_select(0, input.get(encoded_global)));
-      TORCH_CHECK(!caching, "root cache changed during inference");
-      // 学习只进行两次整表 gather；逐根取视图会在反向为每根重复分配整表梯度。
-      mixed = x.index_select(0, input.get(encoded_entity));
-      r = context_part;
-      encoded_roots += missing.size();
-      computed_tokens += cumulative.back();
-    }
-    if (!caching) {
-      scored_candidates += owners.size();
-      projected_candidates += actions.size();
-    }
-    if (caching) {
-      mixed = torch::cat(root_tokens, 0);
-      r = torch::stack(root_context, 0);
-    }
-    auto projected = torch::gelu(action(input.get(a_bits), input.get(a_offsets)));
-    auto entity_table = torch::cat({torch::zeros({1, mixed.size(1)}, mixed.options()), mixed}, 0);
-    if (!caching)
-      entity_table = project_entities(referenced.bind(input)(entity_table));
-    return score_table({row_embeddings, input.get(prefix_ids), input.get(prefix_offset), r,
-                        entity_table, projected, node_root.bind(input), owner.bind(input),
-                        candidate.bind(input), src.bind(input), dst.bind(input),
-                        key_refs.bind(input), input.get(live), full_candidates});
-  };
+  auto row_embeddings =
+      entity(input.get(row_input[0]), input.get(row_input[1]), input.bf(row_input[2], 52));
+  T mixed, r;
+  if (!missing.empty()) {
+    auto cu = input.get(root_cumulative).to(torch::kInt32);
+    auto x =
+        encode_table(er_ids.bind(input)(row_embeddings), global_ids.bind(input)(row_embeddings),
+                     input.get(kind), input.get(root_gather), cu, lengths);
+    auto context_part = project_root_context(x.index_select(0, input.get(encoded_global)));
+    TORCH_CHECK(!caching, "root cache changed during inference");
+    // 学习只进行两次整表 gather；逐根取视图会在反向为每根重复分配整表梯度。
+    mixed = x.index_select(0, input.get(encoded_entity));
+    r = context_part;
+    encoded_roots += missing.size();
+    computed_tokens += cumulative.back();
+  }
+  if (!caching) {
+    scored_candidates += owners.size();
+    projected_candidates += actions.size();
+  }
+  if (caching) {
+    mixed = torch::cat(root_tokens, 0);
+    r = torch::stack(root_context, 0);
+  }
+  auto projected = torch::gelu(action(input.get(a_bits), input.get(a_offsets)));
+  auto entity_table = torch::cat({torch::zeros({1, mixed.size(1)}, mixed.options()), mixed}, 0);
+  if (!caching)
+    entity_table = project_entities(referenced.bind(input)(entity_table));
+  return score_table({row_embeddings, input.get(prefix_ids), input.get(prefix_offset), r,
+                      entity_table, projected, node_root.bind(input), owner.bind(input),
+                      candidate.bind(input), src.bind(input), dst.bind(input), key_refs.bind(input),
+                      input.get(live), full_candidates});
 }
 
 std::vector<double> canonical_logps(const std::vector<uint16_t> &bits) {
@@ -663,7 +651,7 @@ Optimizer::Optimizer(Network &model) {
   for (int i = 0; i < 5; ++i)
     state.push_back(torch::zeros({count}, model->parameters()[0].options()));
   gradients = torch::zeros({count}, model->parameters()[0].options());
-  native_update = make_update_kernel(model->parameters()[0].device(), targets);
+  native_update = make_update_kernel(model->parameters()[0].device());
 }
 void Optimizer::prepare_gradients(Network &model) {
   for (auto &p : model->parameters())
@@ -759,95 +747,7 @@ struct TraceCarry {
     return {target, advantage};
   }
 };
-// CPU 路径也是设备端目标递推的数值参照；记录表仅用整数保存索引及行为概率的原始位。
-T reference_targets(const T &mass, const T &value_tensor, const T &record_tensor,
-                    const T &block_tensor) {
-  auto count = record_tensor.numel() / 6;
-  auto result = torch::empty({3, count}, value_tensor.options());
-  auto p = mass.data_ptr<BF>(), values = value_tensor.data_ptr<BF>(), out = result.data_ptr<BF>();
-  auto records = record_tensor.data_ptr<int64_t>(), blocks = block_tensor.data_ptr<int64_t>();
-  for (int64_t bi = 0; bi < block_tensor.numel() / 3; ++bi) {
-    auto begin = blocks[bi * 3], end = blocks[bi * 3 + 1], boot = blocks[bi * 3 + 2];
-    double bootstrap = boot < 0 ? 0 : float(values[boot]);
-    TraceCarry carry{bootstrap, bootstrap, 0};
-    for (auto i = end; i-- > begin;) {
-      auto s = records + i * 6;
-      double sum = 0;
-      for (int64_t j = 0; j < s[1]; ++j)
-        sum += float(p[s[0] + j]);
-      auto chosen = float(p[s[0] + s[2]]);
-      double logp = chosen > 0 ? std::log(double(chosen) / sum) : -INFINITY;
-      double ratio = std::min(1.0, std::exp(logp - std::bit_cast<double>(s[5])));
-      auto result = carry.advance(float(values[i]), double(s[3]), s[4] != 0, ratio);
-      out[i] = BF(float(result[0]));
-      out[count + i] = BF(float(result[1]));
-      out[count * 2 + i] = BF(float(logp));
-    }
-  }
-  return result;
-}
 } // namespace
-TrainResult learn(Network &model, Optimizer &optimizer, const std::vector<Block> &blocks,
-                  Forward prepared) {
-  RECORD_FUNCTION("hj.learn", std::vector<c10::IValue>());
-  std::vector<std::shared_ptr<Node>> nodes;
-  for (auto &b : blocks)
-    for (auto &s : b.steps) {
-      nodes.push_back(s.node);
-    }
-  auto count = nodes.size();
-  if (!count)
-    throw std::runtime_error("empty learning batch");
-  std::vector<int64_t> boot;
-  for (auto &b : blocks) {
-    boot.push_back(b.bootstrap ? int64_t(nodes.size()) : -1);
-    if (b.bootstrap)
-      nodes.push_back(b.bootstrap);
-  }
-  std::vector<int64_t> records, trajectories, selected;
-  size_t offset = 0;
-  int64_t action_offset = 0;
-  for (size_t bi = 0; bi < blocks.size(); ++bi) {
-    auto &block = blocks[bi];
-    trajectories.insert(trajectories.end(),
-                        {int64_t(offset), int64_t(offset + block.steps.size()), boot[bi]});
-    for (auto &s : block.steps) {
-      auto n = int64_t(s.node->mask.size());
-      TORCH_CHECK(s.selected >= 0 && s.selected < n && s.node->mask[s.selected],
-                  "invalid learning action");
-      records.insert(records.end(), {action_offset, n, s.selected, s.reward, s.terminal,
-                                     std::bit_cast<int64_t>(s.logp)});
-      selected.push_back(action_offset + s.selected);
-      action_offset += n;
-    }
-    offset += block.steps.size();
-  }
-  Inputs input;
-  auto record_slice = input.add(records), block_slice = input.add(trajectories),
-       selected_slice = input.add(selected);
-  // 全部价值、目标和损失共用这一次前向；bootstrap 节点不执行未使用的候选策略分支。
-  optimizer.prepare_gradients(model);
-  auto output = prepared ? prepared() : model->forward(nodes, count);
-  auto table = policy_table(output.first, std::span(nodes).first(count), true, &input);
-  auto target_table = optimizer.targets
-                          ? optimizer.targets(table.mass, output.second, input.get(record_slice),
-                                              input.get(block_slice))
-                          : reference_targets(table.mass, output.second, input.get(record_slice),
-                                              input.get(block_slice));
-  auto logp = table.logp.index_select(0, input.get(selected_slice));
-  auto corrected = logp + (target_table[2] - logp.detach());
-  auto targets = target_table[0], advantages = target_table[1];
-  // 新策略可将旧行为动作的质量舍入为零；V-trace 权重随之为零，策略项也应严格为零。
-  auto policy_logp = torch::where(advantages.ne(0), corrected, torch::zeros_like(corrected));
-  auto loss =
-      (-policy_logp * advantages + 0.5 * (output.second.narrow(0, 0, count) - targets).square() -
-       0.01 * table.entropy.narrow(0, 0, count))
-          .mean();
-  if (!optimizer.native_update && !torch::isfinite(loss).item<bool>())
-    throw std::runtime_error("non-finite learning loss");
-  loss.backward();
-  return {count, optimizer.step(model, loss)};
-}
 TrainResult learn_episodes(Network &model, Optimizer &optimizer, const std::vector<Block> &episodes,
                            uint64_t batch) {
   // 完整轨迹 V-trace：先冻结当前参数计算整局目标，再按显存小批反向，整批只提交一次。
@@ -1303,7 +1203,7 @@ void model_checks(const torch::Device &device) {
     Optimizer skew_optimizer(skew);
     Block old_behavior;
     old_behavior.steps = {{n, int64_t(zero), std::log(0.5), 0, true, 1}};
-    auto update = learn(skew, skew_optimizer, {old_behavior});
+    auto update = learn_episodes(skew, skew_optimizer, {old_behavior}, 1);
     TORCH_CHECK(update.consumed == 1 && std::isfinite(update.loss),
                 "zero-mass off-policy action produced a non-finite loss");
     for (auto &p : skew->parameters())
@@ -1312,36 +1212,6 @@ void model_checks(const torch::Device &device) {
   Block block;
   if (optimizer.native_update) {
     torch::NoGradGuard guard;
-    auto full = model->forward({n, n}), pruned = model->forward({n, n}, 1);
-    TORCH_CHECK(torch::equal(full.first.narrow(0, 0, n->mask.size()), pruned.first) &&
-                    torch::equal(full.second, pruned.second),
-                "bootstrap pruning changed live policy or value outputs");
-    std::vector<BF> masses, values;
-    std::vector<int64_t> records, trajectories;
-    constexpr int64_t trajectories_count = 100, length = 17, count = trajectories_count * length;
-    for (int64_t i = 0; i < count + trajectories_count; ++i)
-      values.emplace_back(float(i % 11 - 5) / 8);
-    for (int64_t bi = 0; bi < trajectories_count; ++bi) {
-      trajectories.insert(trajectories.end(),
-                          {bi * length, (bi + 1) * length, bi % 3 ? count + bi : -1});
-      for (int64_t j = 0; j < length; ++j) {
-        auto i = bi * length + j, actions = 1 + i % 23;
-        records.insert(records.end(),
-                       {int64_t(masses.size()), actions, i % actions,
-                        j == length - 1 && bi % 3 == 0 ? (bi / 3) % 3 - 1 : 0,
-                        j == length - 1 && bi % 3 == 0,
-                        std::bit_cast<int64_t>(-std::log(double(actions)) + (i % 3 - 1) / 4.0)});
-        for (int64_t k = 0; k < actions; ++k)
-          masses.emplace_back(k % 7 == 0 && actions > 1 ? 0 : float(k % 5 + 1) / 64);
-      }
-    }
-    auto m = bf_tensor(masses, 1, torch::kCPU).squeeze(1),
-         v = bf_tensor(values, 1, torch::kCPU).squeeze(1);
-    auto r = indices(records, torch::kCPU), b = indices(trajectories, torch::kCPU);
-    auto expected = reference_targets(m, v, r, b);
-    auto actual = optimizer.targets(m.to(device), v.to(device), r.to(device), b.to(device));
-    TORCH_CHECK(torch::equal(expected.to(device), actual),
-                "device V-trace targets changed canonical probability or trajectory recursion");
     auto p = torch::randn({4097}, model->parameters()[0].options());
     std::vector<T> state{torch::randn_like(p) / 8, (torch::rand_like(p) + 0.5) / 8,
                          torch::randn_like(p) / 4096, torch::randn_like(p) / 4096,
@@ -1360,7 +1230,7 @@ void model_checks(const torch::Device &device) {
     }
   }
   block.steps = {{n, 0, logs[0], 0, false, 0}, {n, 1, logs[1], 0, true, 1}};
-  auto result = learn(model, optimizer, {block});
+  auto result = learn_episodes(model, optimizer, {block}, 2);
   TORCH_CHECK(result.consumed == 2 && optimizer.steps == 1);
   for (auto &p : model->parameters())
     TORCH_CHECK(p.scalar_type() == torch::kBFloat16 && torch::isfinite(p).all().item<bool>());
@@ -1428,8 +1298,8 @@ void model_checks(const torch::Device &device) {
     TORCH_CHECK(torch::equal(before[i], after[i]));
   for (size_t i = 0; i < optimizer.state.size(); ++i)
     TORCH_CHECK(torch::equal(optimizer.state[i], restored_optimizer.state[i]));
-  learn(model, optimizer, {block});
-  learn(restored, restored_optimizer, {block});
+  learn_episodes(model, optimizer, {block}, 2);
+  learn_episodes(restored, restored_optimizer, {block}, 2);
   before = model->parameters();
   after = restored->parameters();
   for (size_t i = 0; i < before.size(); ++i)

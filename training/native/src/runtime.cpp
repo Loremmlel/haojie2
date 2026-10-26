@@ -1,12 +1,9 @@
 #include "runtime.h"
+#include "actor/flow.h"
 #include "actor/history.h"
-#include "actor/roots.h"
-#include "diagnostics/gemm.h"
-#include "diagnostics/service.h"
 #include "engine.h"
 #include "host/hardware.h"
 #include "storage/checkpoint.h"
-#include "workset.h"
 #include <ATen/record_function.h>
 #include <atomic>
 #include <c10/core/StreamGuard.h>
@@ -17,10 +14,8 @@
 #include <iomanip>
 #include <iostream>
 #include <optional>
-#include <shared_mutex>
 #include <sstream>
 #include <thread>
-#include <torch/csrc/autograd/profiler_kineto.h>
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
@@ -211,16 +206,9 @@ class Lane {
   std::atomic<bool> closing{false};
   Mailbox &output;
   std::atomic<bool> &paused;
-  std::atomic<CpuSnapshot> &weights;
-  std::function<bool(Job &)> request_root;
-  std::atomic<uint64_t> &cache_hits;
   std::function<SearchResult(void *, Job &, const std::function<bool()> &)> search;
   std::thread thread;
-  static bool host_ready(const Root &root, const CpuSnapshot &weights) {
-    return weights && root.host_valid(weights->owner, weights->revision);
-  }
-  static void successor(Game &g, const std::shared_ptr<Node> &next, const Job &job,
-                        std::optional<int8_t> reward = {}) {
+  static void successor(Game &g, std::optional<int8_t> reward = {}) {
     if (g.pending) {
       auto step = std::move(*g.pending);
       g.pending.reset();
@@ -230,27 +218,20 @@ class Lane {
       }
       g.partial.push_back(std::move(step));
       ++g.progress.produced;
-      if (job.record && ++job.record->steps >= job.quota)
-        g.workset_done = true;
     }
-    if (!g.partial.empty() &&
-        ((job.chunk && g.partial.size() >= job.chunk) || reward || g.workset_done)) {
-      g.completed.push_back({std::move(g.partial), next});
+    if (!g.partial.empty() && reward) {
+      g.completed.push_back({std::move(g.partial), {}});
       g.partial.clear();
     }
   }
 
 public:
-  Lane(Mailbox &out, std::atomic<bool> &paused, std::atomic<CpuSnapshot> &weights,
-       std::function<bool(Job &)> request_root, std::atomic<uint64_t> &cache_hits,
-       std::function<SearchResult(void *, Job &, const std::function<bool()> &)> search = {})
-      : output(out), paused(paused), weights(weights), request_root(std::move(request_root)),
-        cache_hits(cache_hits), search(std::move(search)), thread([this] {
+  Lane(Mailbox &out, std::atomic<bool> &paused,
+       std::function<SearchResult(void *, Job &, const std::function<bool()> &)> search)
+      : output(out), paused(paused), search(std::move(search)), thread([this] {
           void *actor = hj_actor_create();
-          CpuPolicy policy;
           InputPool inputs;
           auto last_trim = Clock::now();
-          uint64_t active_games = 0;
           while (true) {
             Job job;
             {
@@ -262,9 +243,6 @@ public:
               jobs.pop_front();
             }
             Event e{job.game, job.op, {}, {}};
-            auto lane_started = diagnostic::now();
-            double policy_ms = 0;
-            diagnostic::record("lane_queue", job.game, lane_started - job.queued_ms);
             if (job.op == 1 && (this->paused || *job.state->pause || closing)) {
               e.kind = job.node ? 0 : 2;
               output.bytes -= job.bytes.capacity();
@@ -278,23 +256,8 @@ public:
                 Bytes reply;
                 const Bytes *input = &job.bytes;
                 if (job.node) {
-                  if (!job.weights)
-                    job.weights = this->weights.load();
-                  if (!this->search && !host_ready(*job.node->root, job.weights)) {
-                    auto bytes = job.bytes.capacity();
-                    job.state->flow->store(Flow::RootQueued);
-                    if (this->request_root(job)) {
-                      output.bytes -= bytes;
-                      continue;
-                    }
-                    job.state->flow->store(Flow::Cpu);
-                    output.bytes -= bytes;
-                    output.push(std::move(e));
-                    continue;
-                  }
-                  auto start = Clock::now();
                   std::vector<uint16_t> mass;
-                  uint64_t version = job.weights->version;
+                  uint64_t version = 0;
                   if (this->search) {
                     auto cancelled = [&] { return this->paused || *job.state->pause || closing; };
                     try {
@@ -315,8 +278,6 @@ public:
                       output.push(std::move(e));
                       continue;
                     }
-                  } else {
-                    mass = policy.score(*job.node, job.weights);
                   }
                   {
                     std::lock_guard lock(*job.state->progress_mutex);
@@ -324,18 +285,10 @@ public:
                     job.state->sent_training = job.state->actor == job.state->learner;
                     job.state->sent_version = version;
                   }
-                  if (!job.root_reply)
-                    ++this->cache_hits;
-                  job.root_reply = false;
-                  policy_ms = elapsed(start) * 1000;
-                  diagnostic::record("policy", job.game, policy_ms);
                   {
                     std::lock_guard lock(*job.state->progress_mutex);
-                    job.state->policy_seconds += elapsed(start);
                     ++job.state->scored;
                   }
-                  if (job.record)
-                    mass = Workset::probabilities(*job.record, std::move(mass), job.node->mask);
                   put(reply, job.game);
                   put<uint32_t>(reply, mass.size());
                   raw(reply, mass.data(), mass.size() * 2);
@@ -344,9 +297,7 @@ public:
                 const uint8_t *p = nullptr;
                 size_t n = 0;
                 RECORD_FUNCTION("haojie::rust_actor", std::vector<c10::IValue>());
-                auto rules_started = diagnostic::now();
                 int status = hj_actor_call(actor, job.op, input->data(), input->size(), &p, &n);
-                diagnostic::record("rules", job.game, diagnostic::now() - rules_started, job.op);
                 if (status) {
                   e.error = std::string(reinterpret_cast<const char *>(p), n);
                   // 仅隔离已知的单局空根；协议、设备和其他规则错误仍上报宿主。
@@ -356,8 +307,6 @@ public:
                     if (!hj_actor_call(actor, 3, id.data(), id.size(), &p, &n)) {
                       e.bytes.assign(p, p + n);
                       e.kind = 4;
-                      --active_games;
-                      policy.clear();
                       inputs.trim();
                     }
                   }
@@ -394,17 +343,12 @@ public:
                       if (f.kind == 1) {
                         auto reward =
                             f.winner == 0 ? 0 : (uint32_t(f.winner) == g.learner ? 1 : -1);
-                        successor(g, {}, job, int8_t(reward));
+                        successor(g, int8_t(reward));
                         ++g.progress.finished;
-                        if (job.record) {
-                          job.record->terminal = true;
-                          g.workset_done = true;
-                        }
                       } else {
                         if (f.kind == 0 && g.actor == g.learner)
-                          successor(g, g.current, job);
-                        if (!this->paused && !*g.pause && !closing && !g.workset_done) {
-                          job.weights = this->weights.load();
+                          successor(g);
+                        if (!this->paused && !*g.pause && !closing) {
                           again = true;
                           if (again && f.kind == 0) {
                             job.node = g.current;
@@ -430,12 +374,6 @@ public:
                     }
                   } else if (n)
                     e.bytes.assign(p, p + n);
-                  if (job.op == 0 || job.op == 4)
-                    ++active_games;
-                  if (job.op == 3 || job.op == 5)
-                    --active_games;
-                  if (!active_games)
-                    policy.clear();
                   if (job.op == 3 || job.op == 5)
                     inputs.trim();
                 }
@@ -448,7 +386,6 @@ public:
           hj_actor_close(actor);
         }) {}
   void submit(Job job) {
-    job.queued_ms = diagnostic::now();
     {
       std::lock_guard<std::mutex> lock(mutex);
       output.bytes += job.bytes.capacity();
@@ -466,14 +403,6 @@ public:
   }
 };
 std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_settings(Settings s) {
-  if (s.terminal_training()) {
-    TORCH_CHECK(!s.supplied.count("--chunk") || s.chunk == 0,
-                "training retains full games; --chunk is diagnostic-only");
-    TORCH_CHECK(!s.supplied.count("--publish") || s.publish == 1,
-                "terminal updates publish once per committed episode batch");
-    s.chunk = 0;
-    s.publish = 1;
-  }
   if (s.resume.empty())
     return {std::move(s), {}};
   auto archive = std::make_shared<torch::serialize::InputArchive>();
@@ -484,7 +413,7 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
   TORCH_CHECK(config.scalar_type() == torch::kInt64 && config.dim() == 1 && config.numel() == 13,
               "invalid checkpoint configuration");
   auto c = config.data_ptr<int64_t>();
-  TORCH_CHECK(!s.terminal_training() || c[2] == 0,
+  TORCH_CHECK(c[2] == 0,
               "this checkpoint contains short-trajectory training; start a new terminal run");
   auto fixed = [&](const std::string &name, uint64_t &field, size_t index) {
     auto value = uint64_t(c[index]);
@@ -495,8 +424,7 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
   fixed("--width", s.width, 0);
   fixed("--seed", s.seed, 1);
   fixed("--chunk", s.chunk, 2);
-  if (s.diagnostic != "learner" && s.diagnostic != "episodes")
-    fixed("--batch", s.batch, 3);
+  fixed("--batch", s.batch, 3);
   fixed("--publish", s.publish, 7);
   if (!s.supplied.count("--concurrency"))
     s.concurrency = c[4];
@@ -510,9 +438,7 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
     throw std::runtime_error("resume rules mode differs");
   s.shrine = c[9] != 0;
   if (!s.supplied.count("--device"))
-    s.device = s.diagnostic.empty() && !s.workset_games ? "auto"
-               : c[10] ? (c[11] < 0 ? "cuda" : "cuda:" + std::to_string(c[11]))
-                       : "cpu";
+    s.device = "auto";
   if (!s.supplied.count("--save-seconds"))
     s.save_seconds = double(c[12]) / 1000000;
   T limits;
@@ -547,7 +473,6 @@ class Session {
   Settings settings;
   torch::Device device;
   Network learner, actor;
-  std::atomic<CpuSnapshot> cpu_weights;
   Optimizer optimizer;
   Mailbox mailbox;
   InputPool inputs;
@@ -561,38 +486,27 @@ class Session {
   std::deque<Block> ready;
   Counters counters, initial;
   uint64_t next_id = 1, published = 0, initial_updates = 0, committed_updates = 0;
-  uint64_t committed_graph_replays = 0, committed_graph_fallbacks = 0;
-  std::array<uint64_t, 4> committed_graph_work{};
   std::atomic<uint64_t> actor_version{0};
-  std::shared_mutex actor_weights;
-  std::atomic<bool> publishing{false};
   std::future<TrainResult> learning;
   struct Commit {
     TrainResult result;
     uint64_t updates;
     double seconds;
-    double returned_ms;
     uint64_t within_lag, lag_max;
   };
   std::optional<Commit> learning_commit;
   std::vector<Block> in_learning;
-  std::vector<Block> next_learning;
-  std::future<Forward> prepared_learning;
   std::future<void> writer;
   Clock::time_point start, last_status, last_save, activity_at;
   double active_game_seconds = 0;
   int64_t window_start_unix_ms = 0;
   uint64_t infer_nodes = 0, peak_active = 0, peak_managed = 0;
-  double learning_seconds = 0, inference_seconds = 0;
+  double learning_seconds = 0;
   std::optional<double> latest_loss;
   std::optional<TrainResult> latest_terminal;
   uint64_t terminal_games_consumed = 0;
   Clock::time_point learn_start;
   std::unique_ptr<Executor> learning_executor;
-  std::unique_ptr<Executor> preparation_executor;
-  std::unique_ptr<RootService> roots;
-  std::unique_ptr<LearningEngine> learning_engine;
-  std::unique_ptr<Workset> workset;
   OpponentHistory history;
   std::unique_ptr<SearchService> search_service;
   std::atomic<uint64_t> search_simulations{0}, search_expanded{0}, search_opponent_nodes{0},
@@ -616,89 +530,47 @@ public:
     // 优化器在设备迁移后重建，浮点参数及状态始终为 BF16。
     optimizer = Optimizer(learner);
     copy_weights(learner, actor);
-    if (settings.workset_games) {
-      if ((settings.workset_games * settings.game_samples + settings.batch - 1) / settings.batch >
-          settings.publish)
-        throw std::runtime_error("workset must finish before its first actor publication");
-      workset =
-          std::make_unique<Workset>(settings.workset_games, settings.game_samples, settings.replay);
-    }
-    for (uint64_t i = 0; settings.diagnostic != "learner" && settings.diagnostic != "inference" &&
-                         settings.diagnostic != "service" && settings.diagnostic != "gemm" &&
-                         settings.diagnostic != "episodes" && i < settings.workers;
-         ++i)
+    for (uint64_t i = 0; i < settings.workers; ++i)
       lanes.push_back(std::make_unique<Lane>(
-          mailbox, sampling_paused, cpu_weights,
-          [this](Job &job) { return roots && roots->submit(job); }, actor->cache_hits,
-          settings.terminal_training()
-              ? std::function<SearchResult(void *, Job &, const std::function<bool()> &)>(
-                    [this](void *handle, Job &job, const std::function<bool()> &cancelled) {
-                      auto &game = *job.state;
-                      auto policy = game.actor != game.learner && game.opponent
-                                        ? game.opponent
-                                        : history.latest.load();
-                      auto result =
-                          search_actor(handle, game.id, game.actor, job.node, policy,
+          mailbox, sampling_paused,
+          [this](void *handle, Job &job, const std::function<bool()> &cancelled) {
+            auto &game = *job.state;
+            auto policy =
+                game.actor != game.learner && game.opponent ? game.opponent : history.latest.load();
+            auto result = search_actor(handle, game.id, game.actor, job.node, policy,
                                        *search_service, settings.search_simulations,
                                        settings.search_depth, cancelled, &game.search_plan);
-                      search_simulations += result.simulations;
-                      search_expanded += result.expanded;
-                      search_opponent_nodes += result.opponent_nodes;
-                      search_parameter_fallbacks += result.parameter_limit;
-                      search_empty_fallbacks += result.empty_branch;
-                      auto old_depth = search_max_depth.load();
-                      while (old_depth < result.depth &&
-                             !search_max_depth.compare_exchange_weak(old_depth, result.depth)) {
-                      }
-                      return result;
-                    })
-              : std::function<SearchResult(void *, Job &, const std::function<bool()> &)>()));
-    auto diagnostic_batch = settings.batch;
+            search_simulations += result.simulations;
+            search_expanded += result.expanded;
+            search_opponent_nodes += result.opponent_nodes;
+            search_parameter_fallbacks += result.parameter_limit;
+            search_empty_fallbacks += result.empty_branch;
+            auto old_depth = search_max_depth.load();
+            while (old_depth < result.depth &&
+                   !search_max_depth.compare_exchange_weak(old_depth, result.depth)) {
+            }
+            return result;
+          }));
     if (resumed.second)
       restore(*resumed.second);
-    if (settings.diagnostic == "learner" || settings.diagnostic == "episodes")
-      settings.batch = diagnostic_batch;
-    if (settings.terminal_training()) {
-      for (auto &block : ready) {
-        TORCH_CHECK(!block.bootstrap && !block.steps.empty() && block.steps.back().terminal,
-                    "checkpoint contains unfinished ready trajectories");
-      }
-    }
-    // 主线程的初始化完成后，持久流才可读取模型和优化器。
+    for (auto &block : ready)
+      TORCH_CHECK(!block.bootstrap && !block.steps.empty() && block.steps.back().terminal,
+                  "checkpoint contains unfinished ready trajectories");
     synchronize(learner->parameters()[0].device());
-    cpu_weights.store(CpuPolicy::snapshot(actor, actor_version.load()));
-    if (settings.terminal_training()) {
-      history.limit = settings.history_size;
-      history.interval = settings.history_interval;
-      history.percent = settings.history_percent;
-      if (resumed.second) {
-        auto bindings = history.load(*resumed.second, actor, actor_version.load());
-        for (auto &[id, policy] : bindings) {
-          TORCH_CHECK(games.count(id), "historical opponent references missing game");
-          games.at(id).opponent = policy;
-        }
+    history.limit = settings.history_size;
+    history.interval = settings.history_interval;
+    history.percent = settings.history_percent;
+    if (resumed.second) {
+      auto bindings = history.load(*resumed.second, actor, actor_version.load());
+      for (auto &[id, policy] : bindings) {
+        TORCH_CHECK(games.count(id), "historical opponent references missing game");
+        games.at(id).opponent = policy;
       }
-      history.publish(std::make_shared<FrozenPolicy>(actor, actor_version.load()));
-      search_service = std::make_unique<SearchService>(
-          device, settings.width, std::min(settings.workers, settings.inference_batch));
     }
-    if (settings.diagnostic == "inference" || settings.diagnostic == "service" ||
-        settings.diagnostic == "gemm" || settings.diagnostic == "episodes")
-      return;
-    if (!settings.terminal_training())
-      learning_engine = std::make_unique<LearningEngine>(learner, optimizer, settings.batch);
-    if (settings.diagnostic == "learner")
-      return;
-    if (!settings.terminal_training())
-      roots = std::make_unique<RootService>(
-          actor, device, sampling_paused, publishing, cpu_weights, actor_weights, mailbox,
-          settings.inference_batch,
-          [this](Job job) { lanes[job.game % lanes.size()]->submit(std::move(job)); },
-          settings.root_slots);
-    learning_executor =
-        std::make_unique<Executor>(mailbox, learner->parameters()[0].device(), false);
-    preparation_executor =
-        std::make_unique<Executor>(mailbox, learner->parameters()[0].device(), false);
+    history.publish(std::make_shared<FrozenPolicy>(actor, actor_version.load()));
+    search_service = std::make_unique<SearchService>(
+        device, settings.width, std::min(settings.workers, settings.inference_batch));
+    learning_executor = std::make_unique<Executor>(mailbox, device, false);
     initial = counters;
     initial_updates = committed_updates = optimizer.steps;
     start = last_status = last_save = activity_at = Clock::now();
@@ -707,13 +579,9 @@ public:
   ~Session() {
     sampling_paused = true;
     learning_executor.reset();
-    preparation_executor.reset();
-    if (roots)
-      roots->stop();
     for (auto &lane : lanes)
       lane.reset();
     search_service.reset();
-    roots.reset();
   }
   void submit(Game &g, uint32_t op, Bytes b) {
     if (!g.idle())
@@ -721,11 +589,6 @@ public:
     g.flow->store(Flow::Cpu);
     Job job{g.id, op, std::move(b)};
     job.state = &g;
-    job.chunk = settings.chunk;
-    if (workset) {
-      job.record = workset->records.at(g.id);
-      job.quota = workset->quota;
-    }
     lanes[g.id % lanes.size()]->submit(std::move(job));
   }
   void enqueue(Game &g) {
@@ -733,12 +596,7 @@ public:
       g.flow->store(Flow::Cpu);
       Job job{g.id, 1, {}};
       job.state = &g;
-      job.chunk = settings.chunk;
       job.node = g.current;
-      if (workset) {
-        job.record = workset->records.at(g.id);
-        job.quota = workset->quota;
-      }
       lanes[g.id % lanes.size()]->submit(std::move(job));
     }
   }
@@ -769,9 +627,6 @@ public:
     RECORD_FUNCTION("haojie::managed", std::vector<c10::IValue>());
     uint64_t bytes = hj_memory_bytes() + StorageBytes::total.load(std::memory_order_relaxed) +
                      mailbox.bytes.load();
-    if (workset)
-      for (auto &p : workset->records)
-        bytes += p.second->bytes.load();
     for (auto &pair : games) {
       auto &g = pair.second;
       std::lock_guard lock(*g.progress_mutex);
@@ -783,8 +638,6 @@ public:
       bytes += sizeof(Block) + b.steps.capacity() * sizeof(Step);
     for (auto &b : in_learning)
       bytes += sizeof(Block) + b.steps.capacity() * sizeof(Step);
-    for (auto &b : next_learning)
-      bytes += sizeof(Block) + b.steps.capacity() * sizeof(Step);
     return bytes;
   }
   void progress_locked(Game &g) {
@@ -795,13 +648,10 @@ public:
     counters.failures += std::exchange(g.progress.failures, 0);
     counters.finished += std::exchange(g.progress.finished, 0);
     infer_nodes += std::exchange(g.scored, 0);
-    inference_seconds += std::exchange(g.policy_seconds, 0);
     while (!g.completed.empty()) {
       ready.push_back(std::move(g.completed.front()));
       g.completed.pop_front();
     }
-    if (workset && g.workset_done)
-      workset->done.insert(g.id);
   }
   void event(Event e) {
     accrue_activity();
@@ -854,7 +704,7 @@ public:
       if (e.kind == 1) {
         submit(g, 5, id_packet(g.id));
       } else {
-        if (g.parking || (workset && workset->done.count(g.id))) {
+        if (g.parking) {
           g.parking = true;
           submit(g, 3, id_packet(g.id));
         } else if (e.kind == 2 && !sampling_paused) {
@@ -869,11 +719,6 @@ public:
       if (e.op == 3) {
         g.parked = true;
         g.parking = false;
-        if (!settings.terminal_training() && g.current && g.actor == g.learner &&
-            !g.partial.empty()) {
-          ready.push_back({std::move(g.partial), g.current});
-          g.partial.clear();
-        }
         g.current.reset();
         if (g.root)
           g.root->clear_cache();
@@ -915,18 +760,11 @@ public:
       commit = std::exchange(learning_commit, std::nullopt);
     }
     if (commit) {
-      diagnostic::record("learn_callback", commit->updates,
-                         diagnostic::now() - commit->returned_ms);
       committed_updates = commit->updates;
       latest_loss = commit->result.loss;
       counters.consumed += commit->result.consumed;
       consumed_within_lag += commit->within_lag;
       consumed_lag_max = std::max(consumed_lag_max, commit->lag_max);
-      if (learning_engine) {
-        committed_graph_replays = learning_engine->replays();
-        committed_graph_fallbacks = learning_engine->fallbacks();
-        committed_graph_work = learning_engine->workload();
-      }
       if (commit->result.terminal_games) {
         latest_terminal = commit->result;
         terminal_games_consumed += commit->result.terminal_games;
@@ -936,111 +774,14 @@ public:
     }
   }
   void publish_weights() {
-    // 前向与反向不持推理锁。只在整批推理结束后发布，并等待拷贝完成再交权。
-    publishing = true;
-    std::unique_lock lock(actor_weights);
-    if (roots)
-      roots->wait_reads();
+    // 完成整局梯度更新后拷贝并冻结新快照，等待设备拷贝完成再交给策略服务。
     copy_weights(learner, actor);
     synchronize(device);
-    cpu_weights.store(CpuPolicy::snapshot(actor, optimizer.steps));
-    if (settings.terminal_training())
-      history.publish(std::make_shared<FrozenPolicy>(actor, optimizer.steps));
+    history.publish(std::make_shared<FrozenPolicy>(actor, optimizer.steps));
     actor_version = published = optimizer.steps;
-    publishing = false;
-    if (roots)
-      roots->wake();
   }
   void train() {
-    RECORD_FUNCTION("haojie::train", std::vector<c10::IValue>());
     collect_learning();
-    if (settings.diagnostic == "actor")
-      return;
-    if (settings.terminal_training()) {
-      train_terminal();
-      return;
-    }
-    if (settings.defer_learning && roots && roots->queued())
-      return;
-    if (next_learning.empty()) {
-      if (ready.empty())
-        return;
-      uint64_t desired = settings.batch;
-      if (settings.samples) {
-        uint64_t inflight = 0;
-        for (auto &b : in_learning)
-          inflight += b.steps.size();
-        desired =
-            std::min(desired, settings.samples - (counters.consumed - initial.consumed) - inflight);
-      }
-      if (!desired)
-        return;
-      uint64_t n = 0;
-      while (!ready.empty() && n < desired) {
-        auto &block = ready.front();
-        auto take = std::min<uint64_t>(block.steps.size(), desired - n);
-        if (take == block.steps.size()) {
-          n += take;
-          next_learning.push_back(std::move(block));
-          ready.pop_front();
-        } else {
-          Block head;
-          head.steps.assign(std::make_move_iterator(block.steps.begin()),
-                            std::make_move_iterator(block.steps.begin() + take));
-          head.bootstrap = block.steps[take].node;
-          block.steps.erase(block.steps.begin(), block.steps.begin() + take);
-          next_learning.push_back(std::move(head));
-          n += take;
-        }
-      }
-      if (n < desired && !(workset && workset->complete()) &&
-          managed() < settings.memory_mb * 1024 * 1024 / 2) {
-        for (auto it = next_learning.rbegin(); it != next_learning.rend(); ++it)
-          ready.push_front(std::move(*it));
-        next_learning.clear();
-        return;
-      }
-      prepared_learning = preparation_executor->submit([this, blocks = next_learning] {
-        auto started = diagnostic::now();
-        auto forward = learning_engine->prepare(blocks);
-        synchronize(device);
-        diagnostic::record("learn_pack", 0, diagnostic::now() - started);
-        return forward;
-      });
-    }
-    if (learning.valid())
-      return;
-    in_learning = std::move(next_learning);
-    next_learning.clear();
-    learn_start = Clock::now();
-    learning = learning_executor->submit([this, prepared = std::move(prepared_learning)]() mutable {
-      diagnostic::record("learn_queue", optimizer.steps, elapsed(learn_start) * 1000);
-      uint64_t count = 0, maximum = 0, total = 0, within = 0;
-      for (auto &block : in_learning)
-        for (auto &step : block.steps) {
-          auto lag = optimizer.steps - step.version;
-          maximum = std::max(maximum, lag);
-          total += lag;
-          within += lag <= LagLimit;
-          ++count;
-        }
-      auto result = learning_engine->step(in_learning, prepared.get());
-      TORCH_CHECK(result.consumed == count, "learning receipt count differs");
-      diagnostic::record("learn_lag", optimizer.steps - 1, maximum, double(total) / count, count,
-                         within);
-      {
-        std::lock_guard lock(mailbox.mutex);
-        learning_commit = Commit{result, optimizer.steps, elapsed(learn_start), diagnostic::now(),
-                                 within, maximum};
-      }
-      mailbox.changed.notify_one();
-      if (optimizer.steps - published >= settings.publish) {
-        publish_weights();
-      }
-      return result;
-    });
-  }
-  void train_terminal() {
     if (learning.valid())
       return;
     // 完成局独立取走；长局、停放局与更新次数不参与就绪条件。
@@ -1063,8 +804,7 @@ public:
       TORCH_CHECK(result.consumed == count, "terminal learning receipt count differs");
       {
         std::lock_guard lock(mailbox.mutex);
-        learning_commit = Commit{result, optimizer.steps, elapsed(learn_start), diagnostic::now(),
-                                 count,  maximum};
+        learning_commit = Commit{result, optimizer.steps, elapsed(learn_start), count, maximum};
       }
       mailbox.changed.notify_one();
       publish_weights();
@@ -1073,8 +813,6 @@ public:
   }
   void resume_sampling() {
     sampling_paused = quiescing || memory_paused;
-    if (roots)
-      roots->wake();
     if (sampling_paused)
       return;
     for (auto &entry : games) {
@@ -1111,8 +849,6 @@ public:
     inputs.trim();
   }
   void limit_trajectories() {
-    if (!settings.terminal_training())
-      return;
     auto budget = settings.memory_mb * 1024 * 1024;
     auto used = managed();
     bool pressure = used >= budget * 3 / 4;
@@ -1131,8 +867,6 @@ public:
     }
     // 先收回全部 lane 和设备槽的所有权，不能释放仍被在途推理引用的轨迹。
     sampling_paused = true;
-    if (roots)
-      roots->wake();
     settle();
     collect_learning();
     std::vector<std::pair<uint64_t, Discard>> rejected;
@@ -1185,34 +919,27 @@ public:
       auto &g = p.second;
       if (running >= settings.concurrency || active() >= settings.concurrency)
         break;
-      if (g.parked && g.idle() && !(workset && workset->done.count(g.id))) {
+      if (g.parked && g.idle()) {
         g.parked = false;
         *g.pause = false;
         submit(g, 4, g.snapshot);
         ++running;
       }
     }
-    if (settings.terminal_training() && terminal_queue_full(ready.size(), settings.concurrency))
+    if (terminal_queue_full(ready.size(), settings.concurrency))
       return;
     while (running < settings.concurrency && active() < settings.concurrency &&
            managed() < settings.memory_mb * 1024 * 1024 / 2) {
-      if (std::any_of(games.begin(), games.end(), [&](auto &entry) {
-            return entry.second.parking && !(workset && workset->done.count(entry.first));
-          }))
-        break;
-      if (workset && next_id > workset->games)
+      if (std::any_of(games.begin(), games.end(),
+                      [&](auto &entry) { return entry.second.parking; }))
         break;
       Game game;
       game.id = next_id++;
       game.learner = uint32_t(1 + (game.id & 1));
-      if (settings.terminal_training()) {
-        game.opponent = history.choose(game.id, uint32_t(settings.seed));
-        historical_games += bool(game.opponent);
-      }
+      game.opponent = history.choose(game.id, uint32_t(settings.seed));
+      historical_games += bool(game.opponent);
       auto id = game.id;
       games.emplace(id, std::move(game));
-      if (workset)
-        workset->opened(id);
       Bytes b = id_packet(id);
       put<uint32_t>(b, uint32_t(settings.seed + id * 2654435761u));
       put<uint32_t>(b, games[id].learner);
@@ -1223,86 +950,10 @@ public:
     peak_active = std::max(peak_active, running);
   }
   void sampling_budget() {
-    uint64_t budget = settings.memory_mb * 1024 * 1024;
-    auto queued = ready_steps();
-    peak_ready = std::max(peak_ready, queued);
-    if (settings.terminal_training()) {
-      // 终局队列背压只限制新局；内存不足由主循环保存后明确退出，不伪造块尾。
-      ready_paused = terminal_queue_full(ready.size(), settings.concurrency);
-      if (managed() > budget * 3 / 4)
-        inputs.trim();
-      return;
-    }
-    // 真实块达到四批时暂停 actor，两批以下恢复；在途操作完成后原样保留。
-    // actor-only 诊断没有消费者，显式跳过消费速率背压。
-    if (settings.diagnostic != "actor") {
-      if (queued >= 4 * settings.batch)
-        ready_paused = true;
-      else if (queued <= 2 * settings.batch)
-        ready_paused = false;
-    }
-    if (managed() > budget * 3 / 4)
+    peak_ready = std::max(peak_ready, ready_steps());
+    ready_paused = terminal_queue_full(ready.size(), settings.concurrency);
+    if (managed() > settings.memory_mb * 1024 * 1024 * 3 / 4)
       inputs.trim();
-    if (ready_paused || managed() > budget * 3 / 4) {
-      sampling_paused = true;
-      if (roots)
-        roots->wake();
-      for (auto &p : games) {
-        auto &g = p.second;
-        std::lock_guard lock(*g.progress_mutex);
-        progress_locked(g);
-        if (g.idle() && !g.partial.empty() && g.current && g.actor == g.learner) {
-          ready.push_back({std::move(g.partial), g.current});
-          g.partial.clear();
-        }
-      }
-      if (!ready.empty() || learning.valid())
-        return;
-    }
-    if (sampling_paused && !quiescing) {
-      sampling_paused = false;
-      if (roots)
-        roots->wake();
-      for (auto &entry : games) {
-        auto &g = entry.second;
-        if (g.idle() && !g.parked && !g.parking) {
-          if (g.current)
-            enqueue(g);
-          else {
-            auto b = id_packet(g.id);
-            put<uint32_t>(b, 0);
-            submit(g, 1, std::move(b));
-          }
-        }
-      }
-    }
-  }
-  void save_workset() {
-    if (!workset)
-      return;
-    auto path = settings.directory / "workset";
-    fs::create_directory(path);
-    std::ostringstream index;
-    index << "{\"complete\":" << (workset->complete() ? "true" : "false") << ",\"games\":[";
-    bool first = true;
-    for (auto &[id, record] : workset->records) {
-      auto &entry = *record;
-      if (workset->complete() && !workset->replay.empty() && entry.offset != entry.reference.size())
-        throw std::runtime_error("reference behavior tape has unconsumed decisions");
-      if (!first)
-        index << ',';
-      first = false;
-      index << "{\"id\":" << id << ",\"steps\":" << entry.steps
-            << ",\"terminal\":" << (entry.terminal ? "true" : "false") << '}';
-      auto prefix = path / ("game-" + std::to_string(id));
-      atomic_text(prefix.string() + ".bin", std::string(entry.tape.begin(), entry.tape.end()));
-      auto game = games.find(id);
-      if (game != games.end())
-        atomic_text(prefix.string() + ".json",
-                    std::string(game->second.snapshot.begin(), game->second.snapshot.end()));
-    }
-    index << "]}\n";
-    atomic_text(path / "index.json", index.str());
   }
   std::string metrics(bool window) {
     accrue_activity();
@@ -1320,16 +971,14 @@ public:
       pending += bool(p.second.pending);
       auto phase = p.second.flow->load();
       busy += phase == Flow::Cpu;
-      inference_running += phase == Flow::RootRunning;
       parked += p.second.parked;
       if (!p.second.parked) {
         advancing += elapsed(p.second.last_advance) < 1;
-        inference_waiting +=
-            phase == Flow::RootQueued || (phase == Flow::Idle && bool(p.second.current));
+        inference_waiting += phase == Flow::Idle && bool(p.second.current);
       }
     }
-    auto graph = search_service ? search_service->stats() : roots->stats();
-    auto encoder = search_service ? search_service->progress() : roots->progress();
+    auto graph = search_service->stats();
+    auto encoder = search_service->progress();
     peak_managed = std::max(peak_managed, used);
     double wall = elapsed(start);
     std::ostringstream o;
@@ -1362,15 +1011,12 @@ public:
     uint64_t learning_steps = 0;
     for (auto &b : in_learning)
       learning_steps += b.steps.size();
-    for (auto &b : next_learning)
-      learning_steps += b.steps.size();
     if (counters.consumed + counters.stale_steps + counters.discarded_steps + ready_steps() +
             partial + learning_steps !=
         counters.produced)
       throw std::runtime_error("trajectory accounting differs");
     o << learning_steps;
-    o << ",\n  \"lag_limit\": " << LagLimit
-      << ",\n  \"strict_lag\": " << (settings.terminal_training() ? "true" : "false")
+    o << ",\n  \"lag_limit\": " << LagLimit << ",\n  \"strict_lag\": " << "true"
       << ",\n  \"stale_steps\": " << counters.stale_steps - delta.stale_steps
       << ",\n  \"stale_games\": " << counters.stale_games - delta.stale_games
       << ",\n  \"discarded_steps\": " << counters.discarded_steps - delta.discarded_steps
@@ -1404,18 +1050,6 @@ public:
       << ",\n  \"search_model_queries\": " << (search_service ? search_service->queries.load() : 0)
       << ",\n  \"history_pool_size\": " << history.snapshots().size()
       << ",\n  \"historical_games_admitted\": " << historical_games;
-    if (diagnostic::enabled) {
-      uint64_t maximum = 0, total = 0, count = 0;
-      for (auto &block : ready)
-        for (auto &step : block.steps) {
-          auto lag = committed_updates - step.version;
-          maximum = std::max(maximum, lag);
-          total += lag;
-          ++count;
-        }
-      o << ",\n  \"ready_lag_max\": " << maximum
-        << ",\n  \"ready_lag_mean\": " << (count ? double(total) / count : 0);
-    }
     o << ",\n  \"latest_loss\": ";
     if (latest_loss)
       o << *latest_loss;
@@ -1423,18 +1057,15 @@ public:
       o << "null";
     o << ",\n  \"loss_update\": " << committed_updates;
     o << ",\n  \"training_method\": \""
-      << (settings.terminal_training()
-              ? (settings.search_simulations ? "terminal-vtrace-mcts" : "terminal-vtrace")
-              : "diagnostic-unroll")
-      << "\""
+      << (settings.search_simulations ? "terminal-vtrace-mcts" : "terminal-vtrace") << "\""
       << ",\n  \"terminal_games_consumed\": " << terminal_games_consumed;
     if (latest_terminal)
       o << ",\n  \"latest_value_mse\": " << latest_terminal->value_mse
         << ",\n  \"latest_policy_entropy\": " << latest_terminal->policy_entropy
         << ",\n  \"latest_gradient_norm\": " << latest_terminal->gradient_norm;
     o << ",\n  \"inference_nodes\": " << infer_nodes << ",\n  \"encoder_nodes\": " << encoder.nodes
-      << ",\n  \"encoder_batches\": " << encoder.batches << ",\n  \"policy_cpu_seconds\": "
-      << (search_service ? search_service->policy_seconds() : inference_seconds)
+      << ",\n  \"encoder_batches\": " << encoder.batches
+      << ",\n  \"policy_cpu_seconds\": " << search_service->policy_seconds()
       << ",\n  \"encoder_seconds\": " << encoder.seconds
       << ",\n  \"graph_replays\": " << graph.replays
       << ",\n  \"graph_fallbacks\": " << graph.fallbacks
@@ -1442,21 +1073,12 @@ public:
       << ",\n  \"input_capacity_bytes\": " << graph.capacity_bytes
       << ",\n  \"encoded_tokens_actual\": " << graph.tokens
       << ",\n  \"encoded_tokens_capacity\": " << graph.token_capacity
-      << ",\n  \"peak_active\": " << peak_active << ",\n  \"encoded_roots\": "
-      << (search_service ? encoder.nodes : actor->encoded_roots.load())
-      << ",\n  \"root_cache_hits\": "
-      << (search_service ? search_service->queries.load() - encoder.nodes
-                         : actor->cache_hits.load())
+      << ",\n  \"peak_active\": " << peak_active << ",\n  \"encoded_roots\": " << encoder.nodes
+      << ",\n  \"root_cache_hits\": " << (search_service->queries.load() - encoder.nodes)
       << ",\n  \"learner_encoded_roots\": " << learner->encoded_roots
       << ",\n  \"learner_encoded_tokens\": " << learner->computed_tokens
       << ",\n  \"learner_scored_candidates\": " << learner->scored_candidates
       << ",\n  \"learner_projected_candidates\": " << learner->projected_candidates
-      << ",\n  \"learning_graph_replays\": " << committed_graph_replays
-      << ",\n  \"learning_graph_fallbacks\": " << committed_graph_fallbacks
-      << ",\n  \"learning_graph_tokens_actual\": " << committed_graph_work[0]
-      << ",\n  \"learning_graph_tokens_capacity\": " << committed_graph_work[1]
-      << ",\n  \"learning_graph_keys_actual\": " << committed_graph_work[2]
-      << ",\n  \"learning_graph_keys_capacity\": " << committed_graph_work[3]
       << ",\n  \"learning_seconds\": " << learning_seconds << ",\n  \"managed_bytes\": " << used
       << ",\n  \"peak_managed_bytes\": " << peak_managed
       << ",\n  \"backtracks\": " << counters.backtracks - delta.backtracks
@@ -1474,15 +1096,8 @@ public:
   void checkpoint(bool resume = true) {
     quiescing = true;
     sampling_paused = true;
-    if (roots)
-      roots->wake();
     settle();
     collect_learning(true);
-    if (prepared_learning.valid())
-      prepared_learning.get();
-    for (auto it = next_learning.rbegin(); it != next_learning.rend(); ++it)
-      ready.push_front(std::move(*it));
-    next_learning.clear();
     if (writer.valid())
       writer.get();
     for (auto &p : games)
@@ -1552,7 +1167,7 @@ public:
                        int64_t(settings.history_size), int64_t(settings.history_interval),
                        int64_t(settings.history_percent)},
                       torch::kInt64));
-    if (settings.terminal_training()) {
+    {
       std::vector<std::pair<uint64_t, Frozen>> bindings;
       for (auto &[id, game] : games)
         if (game.opponent)
@@ -1581,7 +1196,6 @@ public:
                                 state_owner->data(), {int64_t(state_owner->size())},
                                 [state_owner](void *) {}, torch::kUInt8));
     {
-      std::unique_lock lock(actor_weights);
       torch::serialize::OutputArchive opt;
       auto save_weights = [&](const char *name, Network &n) {
         archive->write(name, n->packed_weights.detach().to(
@@ -1711,226 +1325,13 @@ public:
     if (optimizer.steps != steps)
       throw std::runtime_error("optimizer metadata differs");
   }
-  // 只读检查点里的真实 ready 块，固定顺序与转换配额；不保存诊断更新。
-  void replay_learning() {
-    TORCH_CHECK(!settings.resume.empty(), "learner diagnostic requires a checkpoint");
-    auto quota = settings.samples ? settings.samples : 4096;
-    TORCH_CHECK(quota % settings.batch == 0 && ready_steps() >= quota,
-                "learner diagnostic requires enough ready steps and complete batches");
-    std::vector<std::vector<Block>> batches;
-    uint64_t used = 0;
-    std::vector<Block> batch;
-    uint64_t size = 0;
-    for (auto &source : ready) {
-      for (size_t at = 0; at < source.steps.size() && used < quota;) {
-        auto take =
-            std::min<uint64_t>({source.steps.size() - at, settings.batch - size, quota - used});
-        Block part;
-        part.steps.assign(source.steps.begin() + at, source.steps.begin() + at + take);
-        part.bootstrap =
-            at + take < source.steps.size() ? source.steps[at + take].node : source.bootstrap;
-        batch.push_back(std::move(part));
-        at += take;
-        used += take;
-        size += take;
-        if (size == settings.batch) {
-          batches.push_back(std::move(batch));
-          batch.clear();
-          size = 0;
-        }
-      }
-      if (used == quota)
-        break;
-    }
-    auto original = learner->packed_weights.detach().clone();
-    std::vector<T> original_state;
-    for (auto &state : optimizer.state)
-      original_state.push_back(state.clone());
-    auto original_steps = optimizer.steps;
-    for (auto &b : batches)
-      learning_engine->step(b);
-    {
-      torch::NoGradGuard guard;
-      learner->packed_weights.copy_(original);
-      for (size_t i = 0; i < optimizer.state.size(); ++i)
-        optimizer.state[i].copy_(original_state[i]);
-      optimizer.steps = original_steps;
-      ++learner->revision;
-    }
-    synchronize(device);
-    diagnostic::record("window_begin", 0);
-    auto begin = Clock::now();
-    Executor preparation(mailbox, device, false);
-    auto prepare = [&](size_t i) {
-      return preparation.submit([&, i] {
-        auto started = diagnostic::now();
-        auto forward = learning_engine->prepare(batches[i]);
-        synchronize(device);
-        diagnostic::record("learn_pack", i, diagnostic::now() - started);
-        return forward;
-      });
-    };
-    auto prepared = prepare(0);
-    for (size_t i = 0; i < batches.size(); ++i) {
-      auto forward = prepared.get();
-      if (i + 1 < batches.size())
-        prepared = prepare(i + 1);
-      learning_engine->step(batches[i], std::move(forward));
-    }
-    auto wall = elapsed(begin);
-    diagnostic::record("window_end", 0);
-    diagnostic::memory(device);
-    diagnostic::save(settings.directory / "timing.csv");
-    std::ostringstream out;
-    out << std::setprecision(12) << "{\"seconds\":" << wall << ",\"consumed\":" << quota
-        << ",\"updates\":" << optimizer.steps - original_steps << ",\"batch\":" << settings.batch
-        << ",\"consumed_per_second\":" << quota / wall << "}\n";
-    atomic_text(settings.directory / "window.json", out.str());
-    std::cout << out.str();
-  }
-  std::vector<std::shared_ptr<Node>> inference_fixture() {
-    TORCH_CHECK(!settings.resume.empty(), "inference diagnostic requires a checkpoint");
-    std::vector<std::shared_ptr<Node>> fixture;
-    std::set<std::pair<uint64_t, uint64_t>> seen;
-    for (auto &b : ready) {
-      for (auto &s : b.steps)
-        if (seen.insert({s.node->root->game, s.node->root->id}).second)
-          fixture.push_back(s.node);
-      if (fixture.size() >= 32)
-        break;
-    }
-    TORCH_CHECK(fixture.size() >= 32, "inference diagnostic needs 32 distinct real roots");
-    fixture.resize(32);
-    return fixture;
-  }
-  void replay_inference() {
-    TORCH_CHECK(settings.inference_batch == 1 || settings.inference_batch == 32,
-                "inference diagnostic requires batch 1 or 32");
-    auto fixture = inference_fixture();
-    InferenceEngine engine(actor, device, [] {}, 1);
-    auto pass = [&] {
-      for (size_t i = 0; i < fixture.size(); i += settings.inference_batch) {
-        std::vector<std::shared_ptr<Node>> nodes(fixture.begin() + i,
-                                                 fixture.begin() + i + settings.inference_batch);
-        for (auto &n : nodes)
-          n->root->clear_cache();
-        auto flight = engine.submit(0, std::move(nodes), actor_version.load());
-        engine.wait_reads();
-        engine.finish(flight);
-      }
-    };
-    auto warm = Clock::now();
-    do {
-      pass();
-    } while (elapsed(warm) < settings.warmup);
-    auto count = settings.samples ? settings.samples : 4096;
-    TORCH_CHECK(count % 32 == 0, "inference sample count must be a multiple of 32");
-    if (!settings.profile.empty()) {
-      namespace pi = torch::profiler::impl;
-      pi::ExperimentalConfig experimental;
-      experimental.profile_all_threads = true;
-      pi::ProfilerConfig config(pi::ProfilerState::KINETO, false, false, false, false, false,
-                                experimental);
-      std::set<pi::ActivityType> activities{pi::ActivityType::CPU, pi::ActivityType::CUDA};
-      torch::autograd::profiler::prepareProfiler(config, activities);
-      torch::autograd::profiler::enableProfiler(config, activities);
-    }
-    diagnostic::record("window_begin", 0);
-    auto begin = Clock::now();
-    for (size_t i = 0; i < count / 32; ++i)
-      pass();
-    auto wall = elapsed(begin);
-    diagnostic::record("window_end", 0);
-    diagnostic::memory(device);
-    diagnostic::save(settings.directory / "timing.csv");
-    if (!settings.profile.empty()) {
-      auto trace = torch::autograd::profiler::disableProfiler();
-      trace->save(settings.profile.string());
-    }
-    std::ostringstream out;
-    out << std::setprecision(12) << "{\"seconds\":" << wall << ",\"root_forwards\":" << count
-        << ",\"batch\":" << settings.inference_batch
-        << ",\"root_forwards_per_second\":" << count / wall << "}\n";
-    atomic_text(settings.directory / "window.json", out.str());
-    std::cout << out.str();
-  }
   void execute() {
-    if (settings.diagnostic == "episodes") {
-      TORCH_CHECK(!settings.resume.empty() && !ready.empty() && !settings.samples,
-                  "episode diagnostic requires complete ready games and no sample truncation");
-      std::vector<Block> episodes(ready.begin(), ready.end());
-      auto started = Clock::now();
-      auto result = learn_episodes(learner, optimizer, episodes, settings.batch);
-      double after = 0;
-      for (auto &episode : episodes)
-        for (size_t at = 0; at < episode.steps.size(); at += settings.batch) {
-          std::vector<std::shared_ptr<Node>> nodes;
-          for (auto j = at; j < std::min(episode.steps.size(), at + settings.batch); ++j)
-            nodes.push_back(episode.steps[j].node);
-          auto values = learner->forward(nodes).second.detach().to(torch::kFloat32);
-          after += (values - episode.steps.back().reward).square().sum().item<double>();
-        }
-      std::ostringstream out;
-      out << std::setprecision(12) << "{\"terminal_games\":" << result.terminal_games
-          << ",\"consumed\":" << result.consumed << ",\"optimizer_updates\":1"
-          << ",\"microbatch\":" << settings.batch << ",\"seconds\":" << elapsed(started)
-          << ",\"value_mse_before\":" << result.value_mse
-          << ",\"value_mse_after\":" << after / result.consumed
-          << ",\"policy_entropy_before\":" << result.policy_entropy
-          << ",\"gradient_norm\":" << result.gradient_norm << "}\n";
-      atomic_text(settings.directory / "window.json", out.str());
-      std::cout << out.str();
-      return;
-    }
-    if (settings.diagnostic == "gemm") {
-      diagnostic::gemm(actor, settings);
-      return;
-    }
-    if (settings.diagnostic == "service") {
-      diagnostic::service(actor, device, settings, inference_fixture(), cpu_weights.load(),
-                          actor_version.load());
-      return;
-    }
-    if (settings.diagnostic == "inference") {
-      replay_inference();
-      return;
-    }
-    if (settings.diagnostic == "learner") {
-      replay_learning();
-      return;
-    }
     bool stopping = false;
-    bool profiling = false, profiled = false;
-    bool warmed = settings.diagnostic.empty();
     auto last_control = start - std::chrono::seconds(1);
     while (!stopping) {
       auto observed_revision = mailbox.revision.load();
-      // 诊断只截取热身后的两秒，使用与当前 LibTorch 一起发布的 CUPTI。
-      if (!settings.profile.empty() && !profiled && elapsed(start) >= 8) {
-        namespace pi = torch::profiler::impl;
-        pi::ExperimentalConfig experimental;
-        experimental.profile_all_threads = true;
-        pi::ProfilerConfig config(pi::ProfilerState::KINETO, true, true, false, false, false,
-                                  experimental);
-        std::set<pi::ActivityType> activities{pi::ActivityType::CPU};
-        if (device.is_cuda())
-          activities.insert(pi::ActivityType::CUDA);
-        torch::autograd::profiler::prepareProfiler(config, activities);
-        torch::autograd::profiler::enableProfiler(config, activities);
-        profiling = profiled = true;
-      }
-      if (profiling && elapsed(start) >= 10) {
-        auto result = torch::autograd::profiler::disableProfiler();
-        result->save(settings.profile.string());
-        profiling = false;
-      }
       collect();
       collect_learning();
-      if (!warmed && elapsed(start) >= settings.warmup) {
-        atomic_text(settings.directory / "warmup.json", metrics(true));
-        diagnostic::record("window_begin", 0);
-        warmed = true;
-      }
       // 控制文件只需毫秒级响应；规则和设备事件直接唤醒，不重复访问文件系统。
       bool control_tick = elapsed(last_control) >= 0.02;
       if (control_tick) {
@@ -1955,17 +1356,11 @@ public:
           fs::remove(budget_path);
         }
       }
-      if (settings.seconds > 0 &&
-          elapsed(start) >= settings.seconds + (settings.diagnostic.empty() ? 0 : settings.warmup))
+      if (settings.seconds > 0 && elapsed(start) >= settings.seconds)
         stopping = true;
       if (settings.updates > 0 && committed_updates - initial_updates >= settings.updates)
         stopping = true;
       if (settings.samples > 0 && counters.consumed - initial.consumed >= settings.samples)
-        stopping = true;
-      if (workset && workset->complete() && !learning.valid() && next_learning.empty() &&
-          (settings.diagnostic == "actor" ||
-           (ready.empty() && counters.consumed == counters.produced)) &&
-          std::none_of(games.begin(), games.end(), [](auto &p) { return !p.second.idle(); }))
         stopping = true;
       if (stopping)
         break;
@@ -1987,10 +1382,9 @@ public:
         last_status = Clock::now();
       }
       auto budget = settings.memory_mb * 1024 * 1024;
-      if (settings.terminal_training() && managed() >= budget * 3 / 4)
+      if (managed() >= budget * 3 / 4)
         limit_trajectories();
-      if (managed() > budget &&
-          (!settings.terminal_training() || (ready.empty() && !learning.valid()))) {
+      if (managed() > budget && (ready.empty() && !learning.valid())) {
         checkpoint(false);
         if (writer.valid())
           writer.get();
@@ -2002,27 +1396,17 @@ public:
         return future.valid() &&
                future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
       };
-      if (settings.diagnostic == "actor" || learning.valid() || ready_steps() < settings.batch)
+      if (learning.valid() || ready_steps() < settings.batch)
         mailbox.changed.wait_for(lock, std::chrono::milliseconds(20), [&] {
           return !mailbox.events.empty() || mailbox.revision.load() != observed_revision ||
                  learning_commit.has_value() || completed(learning);
         });
     }
-    if (profiling) {
-      auto result = torch::autograd::profiler::disableProfiler();
-      result->save(settings.profile.string());
-    }
     // 测量窗口在退出排空之前冻结，恢复累计计数不会进入本轮速率。
     collect_learning();
     auto window = metrics(true);
     atomic_text(settings.directory / "window.json", window);
-    if (!settings.diagnostic.empty()) {
-      diagnostic::record("window_end", 0);
-      diagnostic::memory(device);
-      diagnostic::save(settings.directory / "timing.csv");
-    }
     checkpoint(false);
-    save_workset();
     if (writer.valid())
       writer.get();
     std::cout << window;
@@ -2118,11 +1502,9 @@ void run(const Settings &settings) {
     throw std::runtime_error("run directory must be new or empty");
   fs::create_directories(settings.directory);
   auto full_started = Clock::now();
-  diagnostic::enabled = !settings.diagnostic.empty();
-  diagnostic::origin = Clock::now();
   try {
     auto resumed = resume_settings(settings);
-    if (settings.diagnostic.empty() && !settings.workset_games) {
+    {
       auto h = hardware(resumed.first.device);
       select_configuration(resumed.first, h);
       at::set_num_threads(int(resumed.first.threads));
@@ -2314,8 +1696,6 @@ void runtime_checks() {
     session.resize();
     TORCH_CHECK(session.games.size() == 2, "learning in flight blocked game admission");
     session.sampling_paused = true;
-    if (session.roots)
-      session.roots->wake();
     session.settle();
     session.collect_learning(true);
     TORCH_CHECK(session.consumed_lag_max == 64 && session.counters.consumed == 66 &&

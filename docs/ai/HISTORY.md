@@ -17,6 +17,7 @@
 | 原生重构的旧架构结果及失败证据                   | [193 份原始结果](https://github.com/Loremmlel/haojie2/tree/12a883569d92b5dca9953f73978566803b51e837/training/native/results)、[已撤回 MLP 报告](https://github.com/Loremmlel/haojie2/blob/12a883569d92b5dca9953f73978566803b51e837/training/native/history/MLP-VALIDATION.md) |
 | 终局训练、内存回收、空前缀过滤及可选 MCTS 验收   | [截至 2026-10-26 的完整验收](https://github.com/Loremmlel/haojie2/blob/12a883569d92b5dca9953f73978566803b51e837/training/native/VALIDATION.md)                                                                                                                                |
 | 已失效的旧 Python 宿主对照脚本                   | [原对照入口](https://github.com/Loremmlel/haojie2/blob/12a883569d92b5dca9953f73978566803b51e837/scripts/training/native/performance/compare_main.py)                                                                                                                          |
+| 旧短块学习器、双槽根服务及其专属诊断             | [旧实现](https://github.com/Loremmlel/haojie2/tree/03deedf7c2997bbe089492a8354f9b92a9076070/training/native/src)、[诊断脚本](https://github.com/Loremmlel/haojie2/tree/03deedf7c2997bbe089492a8354f9b92a9076070/training/native/diagnostics)                                  |
 
 作者[原始 AI 实战观察](AI-HARD-PLAYTEST-2026-09-07.md)、[规则反馈](../feedback/)和版本对应的 `docs/playtests/` 回放保留原内容。历史回放使用各自原规则提交验证，当前规则回放在 `docs/playtests/current/`。模型、原始轨迹、优化器和其他本地产物由使用者保管，文档清理不会删除它们。
 

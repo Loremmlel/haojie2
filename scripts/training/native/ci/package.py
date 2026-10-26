@@ -27,8 +27,6 @@ def main():
         root / "native/engine/build.rs",
         root / "native/engine/README.md",
         *root.glob("scripts/training/native/ci/*.py"),
-        *root.glob("training/native/diagnostics/*.py"),
-        *root.glob("training/native/diagnostics/*.ps1"),
     ]
     files = sorted({path for path in files if path.is_file()})
     args.output.parent.mkdir(parents=True, exist_ok=True)

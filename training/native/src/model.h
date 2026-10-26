@@ -6,7 +6,6 @@
 
 namespace hj {
 constexpr int64_t DefaultWidth = 384, EncoderLayers = 6;
-using Forward = std::function<std::pair<T, T>()>;
 // 整数位精确对应独立可学习向量；置位向量求和等价于零一矩阵的线性投影。
 struct TypedProjectionImpl : torch::nn::Module {
   torch::nn::EmbeddingBag bits{nullptr};
@@ -52,9 +51,7 @@ struct NetworkImpl : torch::nn::Module {
            r.cached_tokens.defined();
   }
   // 根、节点、候选均为不补零的张量表，同一根/候选在一次前向内只投影一次。
-  std::pair<T, T> forward(const std::vector<std::shared_ptr<Node>> &nodes,
-                          int64_t policy_nodes = -1);
-  Forward prepare_forward(const std::vector<std::shared_ptr<Node>> &, int64_t policy_nodes = -1);
+  std::pair<T, T> forward(const std::vector<std::shared_ptr<Node>> &nodes);
 };
 TORCH_MODULE(Network);
 struct CpuWeights {
@@ -84,14 +81,9 @@ struct UpdateResult {
   double loss = 0;
   bool states_committed = false;
 };
-using TargetKernel = std::function<T(const T &, const T &, const T &, const T &)>;
 using UpdateKernel = std::function<UpdateResult(const T &, const T &, const std::vector<T> &,
                                                 const T &, double, uint64_t, const T &)>;
-using CapturedUpdate =
-    std::function<T(const T &, const T &, const std::vector<T> &, const T &, const T &, const T &)>;
-UpdateKernel make_update_kernel(const torch::Device &, TargetKernel &);
-CapturedUpdate make_captured_update(const torch::Device &);
-T typed_binary(const T &, bool rows);
+UpdateKernel make_update_kernel(const torch::Device &);
 T segmented_table(const T &, const T &, const T &, bool mean);
 T bf16_norm(const T &, torch::nn::LayerNorm &);
 std::vector<T> residual_norm_cuda(const T &, const T &, const T &, const T &, double);
@@ -99,7 +91,6 @@ T short_attention_cuda(const T &, const T &, const T &);
 void compensated_gradient_add(T &, T &, const T &, double);
 struct Optimizer {
   UpdateKernel native_update;
-  TargetKernel targets;
   std::vector<T> state;
   T gradients;
   uint64_t steps = 0;
@@ -117,22 +108,7 @@ struct TrainResult {
   uint64_t terminal_games = 0;
   double value_mse = 0, policy_entropy = 0, gradient_norm = 0;
 };
-TrainResult learn(Network &, Optimizer &, const std::vector<Block> &, Forward prepared = {});
 TrainResult learn_episodes(Network &, Optimizer &, const std::vector<Block> &, uint64_t batch);
-class LearningEngine {
-  struct Impl;
-  std::unique_ptr<Impl> impl;
-
-public:
-  LearningEngine(Network &, Optimizer &, uint64_t batch);
-  ~LearningEngine();
-  Forward prepare(const std::vector<Block> &);
-  TrainResult step(const std::vector<Block> &, Forward prepared = {});
-  uint64_t replays() const;
-  uint64_t fallbacks() const;
-  std::array<uint64_t, 4> workload() const;
-};
-void learning_checks(const torch::Device &);
 T policy_mass(const T &logits, const T &owner, const T &lengths, const T &valid);
 std::vector<std::vector<uint16_t>> probabilities(const T &,
                                                  const std::vector<std::shared_ptr<Node>> &);

@@ -37,6 +37,32 @@ int main(int argc, char **argv) {
         throw std::runtime_error("invalid integer " + key);
       return uint64_t(n);
     };
+    const std::set<std::string> supported{"--directory",
+                                          "--resume",
+                                          "--device",
+                                          "--threads",
+                                          "--concurrency",
+                                          "--workers",
+                                          "--seed",
+                                          "--batch",
+                                          "--inference-batch",
+                                          "--width",
+                                          "--memory-mb",
+                                          "--max-game-steps",
+                                          "--search-simulations",
+                                          "--search-depth",
+                                          "--history-size",
+                                          "--history-interval",
+                                          "--history-percent",
+                                          "--updates",
+                                          "--seconds",
+                                          "--save-seconds",
+                                          "--shrine",
+                                          "--samples",
+                                          "--checkpoint"};
+    for (const auto &[key, value] : options)
+      if (!supported.count(key))
+        throw std::runtime_error("unknown option " + key);
     auto directory = std::filesystem::path(text("--directory"));
     if (command == "status") {
       auto status = std::filesystem::exists(directory / "window.json") ? directory / "window.json"
@@ -67,8 +93,8 @@ int main(int argc, char **argv) {
              "--directory "
              "PATH\nhaojie-train check [--device cpu|cuda]\n"
              "haojie-train configure [--device auto|cuda|cpu] [--resume CHECKPOINT]\n"
-             "haojie-train workset --directory PATH [--games 16] [--game-samples 256] "
-             "[--concurrency 12] [--replay REFERENCE_DIRECTORY]\n";
+             "haojie-train evaluate --checkpoint PATH [--device cpu|cuda] "
+             "[--search-simulations N]\n";
       return 0;
     }
     at::set_num_threads(int(number("--threads", 1)));
@@ -91,54 +117,27 @@ int main(int argc, char **argv) {
       hj::hardware_checks();
       hj::model_checks(torch::Device(text("--device", "cpu")));
       hj::inference_checks(torch::Device(text("--device", "cpu")));
-      hj::learning_checks(torch::Device(text("--device", "cpu")));
       hj::runtime_checks();
       hj::evaluation_checks(torch::Device(text("--device", "cpu")));
       hj::search_checks(torch::Device(text("--device", "cpu")));
       return 0;
     }
-    if ((command != "run" && command != "workset" && command != "diagnose" &&
-         command != "configure") ||
+    if ((command != "run" && command != "configure") ||
         (command != "configure" && directory.empty()))
       throw std::runtime_error("use run --directory PATH");
     hj::Settings s;
-    if (command == "diagnose") {
-      s.diagnostic = text("--mode", "actor");
-      s.warmup = std::stod(text("--warmup", "5"));
-      s.root_slots = number("--root-slots", 2);
-      s.defer_learning = number("--defer-learning", 0) != 0;
-      if (s.diagnostic != "actor" && s.diagnostic != "learner" && s.diagnostic != "mixed" &&
-          s.diagnostic != "inference" && s.diagnostic != "service" && s.diagnostic != "gemm" &&
-          s.diagnostic != "episodes")
-        throw std::runtime_error(
-            "diagnose mode must be actor, learner, mixed, inference, service, gemm or episodes");
-      if (s.warmup < 0)
-        throw std::runtime_error("negative warmup");
-      if (s.root_slots < 1 || s.root_slots > 2)
-        throw std::runtime_error("diagnostic root slots must be 1 or 2");
-    }
     for (auto &option : options)
       s.supplied.insert(option.first);
     s.directory = directory;
     s.resume = text("--resume");
-    s.profile = text("--profile");
-    if (command == "workset" || (s.diagnostic == "actor" && options.count("--games"))) {
-      s.workset_games = number("--games", 16);
-      s.game_samples = number("--game-samples", 256);
-      s.replay = text("--replay");
-      if (!s.resume.empty() || !s.workset_games || !s.game_samples || !text("--samples").empty())
-        throw std::runtime_error("workset requires a fresh session and per-game sample quota");
-    }
-    s.device = text("--device", command == "run" || command == "configure" ? "auto" : "cuda");
+    s.device = text("--device", "auto");
     s.threads = number("--threads", 1);
     s.concurrency = number("--concurrency", 12);
     s.workers = number("--workers", 8);
     s.seed = number("--seed", 1);
-    s.chunk = number("--chunk", 16);
     s.batch = number("--batch", 512);
     s.inference_batch = number("--inference-batch", 64);
     s.width = number("--width", hj::DefaultWidth);
-    s.publish = number("--publish", 8);
     s.memory_mb = number("--memory-mb", 4096);
     s.max_game_steps = number("--max-game-steps", 262144);
     s.search_simulations = number("--search-simulations", 0);
@@ -151,10 +150,9 @@ int main(int argc, char **argv) {
     s.save_seconds = std::stod(text("--save-seconds", "300"));
     s.shrine = options.count("--shrine");
     s.samples = number("--samples", 0);
-    if (!s.workers || (!s.chunk && !s.terminal_training()) || !s.batch || !s.inference_batch ||
-        !s.width || !s.publish || !s.max_game_steps || !s.search_depth || !s.history_size ||
-        !s.history_interval || s.history_percent > 100 || s.memory_mb < 128 || s.seconds < 0 ||
-        s.save_seconds < 0)
+    if (!s.workers || !s.batch || !s.inference_batch || !s.width || !s.publish ||
+        !s.max_game_steps || !s.search_depth || !s.history_size || !s.history_interval ||
+        s.history_percent > 100 || s.memory_mb < 128 || s.seconds < 0 || s.save_seconds < 0)
       throw std::runtime_error("invalid training budget");
     if (command == "configure")
       std::cout << hj::describe_configuration(s);

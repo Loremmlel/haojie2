@@ -25,6 +25,6 @@ node --import tsx scripts/training/native/sampling/validate.ts --output artifact
 
 两条差分命令要求输出目录不存在，默认使用 `artifacts/native-target/release/haojie-engine`（Windows 自动加 `.exe`）。夹具保留完整候选与随机边界；不缩减输入或伪造终局以通过检查。
 
-`training/native/validate.ps1` 会实际启动训练，检查缩放、保存、停止及恢复；需要时单独执行。性能测量使用[诊断工具](diagnostics/README.md)，按真实工作量与完整墙钟比较，避免混用正式命令、模型查询和已学习转换吞吐。
+`training/native/validate.ps1` 会实际启动训练，检查缩放、保存、停止及恢复；需要时单独执行。训练吞吐读取正常运行的 `window.json` 与 `wall.json`，区分正式命令、模型查询和已学习转换。
 
 网页代码按根 [README](../../README.md) 执行格式、TypeScript、行为测试、构建／发行一致性、目录结构和离线浏览器验收。训练控制台浏览器检查为 `node tests/browser/console/native.mjs`。本地通过与 Colab 真机验证分别记录。
