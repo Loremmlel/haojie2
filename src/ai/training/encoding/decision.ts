@@ -137,7 +137,7 @@ function decisionEncoder(
     entity_mask.length = state.entities.length;
     candidate_mask.length = candidates.length;
     entity_mask.fill(true);
-    candidate_mask.fill(true);
+    for (let i = 0; i < candidates.length; i++) candidate_mask[i] = node.mask?.[i] ?? true;
     return {
       entities: state.entities,
       kinds: state.kinds,

@@ -1,4 +1,4 @@
-//! 同 TS 惰性参数树；节点只缓存当前公开局面，不做评分或候选裁剪。
+//! 同 TS 惰性参数树；只在当前公开局面排除确定空分支，不改候选下标或合法叶子。
 use crate::actions::{self, Action, Step, text};
 use crate::geometry;
 use crate::model::{Catalog, Command, Point, State, Unit};
@@ -14,6 +14,7 @@ pub struct Prefix {
     action: usize,
     pub command: Command,
     offset: usize,
+    completion: OnceCell<bool>,
 }
 #[derive(Clone)]
 pub enum ChoiceKey {
@@ -68,10 +69,14 @@ pub struct Node {
     pub prefix: Option<Command>,
     pub stage: &'static str,
     pub choices: Vec<Choice>,
+    pub mask: Vec<bool>,
 }
 impl Node {
+    pub fn enabled(&self, index: usize) -> bool {
+        self.mask.get(index).copied().unwrap_or(true)
+    }
     pub fn wire(&self) -> Value {
-        let mut value = json!({"cursor":self.cursor,"stage":self.stage,"choices":self.choices.iter().map(|c|{
+        let mut value = json!({"cursor":self.cursor,"stage":self.stage,"mask":self.mask,"choices":self.choices.iter().map(|c|{
             let mut v=json!({"key":c.key,"command":c.command,"status":c.status,"next":c.next.is_some()});
             if let Some(s)=&c.subject {v["subject"]=json!(s);}v
         }).collect::<Vec<_>>()});
@@ -265,7 +270,20 @@ impl<'a> Tree<'a> {
             action: i,
             command: a.command.clone(),
             offset: 0,
+            completion: OnceCell::new(),
         }
+    }
+    fn can_complete(&self, p: &Prefix) -> Result<bool, String> {
+        if let Some(possible) = p.completion.get() {
+            return Ok(*possible);
+        }
+        let steps = &self.actions[p.action].steps;
+        // 与 TS 一样只前瞻最后一个固定参数，重复路径与材料组合保守保留。
+        let possible = steps.len() - p.offset != 1
+            || matches!(steps[p.offset].kind, "path" | "material")
+            || !self.expand(p)?.is_empty();
+        let _ = p.completion.set(possible);
+        Ok(possible)
     }
     fn expand(&self, p: &Prefix) -> Result<Vec<Choice>, String> {
         #[cfg(feature = "kernel-profile")]
@@ -309,6 +327,7 @@ impl<'a> Tree<'a> {
                 action: p.action,
                 command,
                 offset: p.offset + usize::from(!repeat),
+                completion: OnceCell::new(),
             };
             if let Some(c) = self.choice(key, next, subject, false)? {
                 result.push(c);
@@ -506,7 +525,7 @@ impl<'a> Tree<'a> {
         if let Some(n) = self.nodes.get(cursor) {
             return Ok(n.clone());
         }
-        let node = if cursor.is_empty() {
+        let mut node = if cursor.is_empty() {
             let mut choices = vec![];
             for i in 0..self.actions.len() {
                 if let Some(c) = self.choice(ChoiceKey::Root(i), self.start(i), None, true)? {
@@ -518,6 +537,7 @@ impl<'a> Tree<'a> {
                 prefix: None,
                 stage: "action",
                 choices,
+                mask: vec![],
             }
         } else {
             let parent = self.node(&cursor[..cursor.len() - 1])?;
@@ -531,8 +551,12 @@ impl<'a> Tree<'a> {
                 prefix: Some(p.command.clone()),
                 stage: self.actions[p.action].steps[p.offset].kind,
                 choices: self.expand(p)?,
+                mask: vec![],
             }
         };
+        node.mask = node.choices.iter().map(|choice| {
+            choice.next.as_ref().map_or(Ok(true), |p| self.can_complete(p))
+        }).collect::<Result<_, String>>()?;
         // TS 的 Map 返回同一不可变节点；这里共享所有权，避免深拷贝整组候选。
         let node = Rc::new(node);
         self.nodes.insert(cursor.to_vec(), node.clone());
@@ -553,6 +577,47 @@ impl<'a> Tree<'a> {
 #[cfg(test)]
 mod key_tests {
     use super::*;
+
+    #[test]
+    fn empty_fixed_prefix_keeps_indices_and_uncertain_attacks() {
+        let cat = crate::catalog::embedded().unwrap();
+        let mut state = crate::runtime::create(73127, false, &cat).unwrap();
+        state.phase = "play".into();
+        state.summon_slots = 0.0;
+        state.turns.insert("1".into(), 3.0);
+        state.turns.insert("2".into(), 3.0);
+        let mut source = crate::resolution::template(&state, "1", 1,
+            Point { x: 4.0, y: 4.0 }, "source", &cat);
+        source.born = 0.0;
+        let mut friend = source.fork();
+        friend.id = "friend".into();
+        friend.x = 4.0;
+        friend.y = 5.0;
+        let mut enemy = source.fork();
+        enemy.id = "enemy".into();
+        enemy.owner = 2;
+        enemy.x = 5.0;
+        state.units = vec![source, friend, enemy];
+        let before = serde_json::to_value(&state).unwrap();
+        let view = crate::runtime::public_view(&state, 1).unwrap();
+        let mut tree = Tree::from_view(&view, &cat).unwrap();
+        let root = tree.node(&[]).unwrap();
+        let attack = root.choices.iter().position(|c| c.command.kind == "attack" &&
+            c.command.unit_id.as_deref() == Some("source")).unwrap();
+        let targets = tree.node(&[attack]).unwrap();
+        let ally = targets.choices.iter().position(|c|
+            c.command.target_id.as_deref() == Some("friend")).unwrap();
+        assert!(!targets.enabled(ally));
+        assert!(!crate::encoding::encode(&tree, &targets).unwrap().candidate_mask[ally]);
+        assert!(tree.node(&[attack, ally]).unwrap().choices.is_empty());
+        let hostile = targets.choices.iter().position(|c|
+            c.command.target_id.as_deref() == Some("enemy")).unwrap();
+        assert!(targets.enabled(hostile));
+        assert!(tree.node(&[attack, hostile]).unwrap().choices.iter().any(|c| c.status == "uncertain"));
+        let clock = root.choices.iter().position(|c| c.command.kind == "clock").unwrap();
+        assert!(!root.enabled(clock));
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    }
 
     #[test]
     fn deferred_choice_keys_preserve_wire_and_path_commit_semantics() {

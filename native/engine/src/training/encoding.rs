@@ -1439,7 +1439,9 @@ fn encode_mode(
     entity_mask.resize(e.entities.len(), true);
     candidate_mask.resize(candidates.len(), true);
     entity_mask.fill(true);
-    candidate_mask.fill(true);
+    for (i, enabled) in candidate_mask.iter_mut().enumerate() {
+        *enabled = node.enabled(i);
+    }
     workspace.identities = e.identities;
     workspace.input = Input {
         entity_mask,

@@ -164,7 +164,9 @@ impl<'a> Game<'a> {
             }
             let count = node.choices.len() + usize::from(pass);
             let excluded = search.excluded.entry(search.cursor.clone()).or_default();
-            let remaining: Vec<_> = (0..count).filter(|i| !excluded.contains(i)).collect();
+            let remaining: Vec<_> = (0..count)
+                .filter(|i| !excluded.contains(i) && (*i == node.choices.len() || node.enabled(*i)))
+                .collect();
             if remaining.is_empty() {
                 search.excluded.remove(&search.cursor);
                 let Some(index) = search.cursor.pop() else {
@@ -186,7 +188,11 @@ impl<'a> Game<'a> {
             } else if let Some(probs) = probabilities.take() {
                 if probs.len() != count
                     || probs.iter().any(|v| !v.is_finite() || *v < 0.0)
-                    || excluded.iter().any(|&i| probs[i] != 0.0)
+                    || probs.iter().enumerate().any(|(i, p)| {
+                        *p != 0.0
+                            && (excluded.contains(&i)
+                                || (i < node.choices.len() && !node.enabled(i)))
+                    })
                 {
                     return Err("invalid probability support".into());
                 }

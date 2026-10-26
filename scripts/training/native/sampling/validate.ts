@@ -79,9 +79,11 @@ try {
         job.command &&
         createTrainingInspector(observation, actor)(job.command).status !== 'invalid'
       ) {
-        for (const { node } of tree.trace(job.command))
+        for (const { node, selected } of tree.trace(job.command)) {
+          assert.notEqual(node.mask?.[selected], false, `${name}: legal command masked`);
           if (!cursors.some((c) => JSON.stringify(c) === JSON.stringify(node.cursor)))
             cursors.push(node.cursor);
+        }
       }
       const expected = cursors.map((c) => tree.node(c));
       const got = await client.request({

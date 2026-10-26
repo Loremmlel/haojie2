@@ -57,6 +57,7 @@ fn small_tree_failure_backtrack_and_retry_keep_probability_and_rng() {
         cursor: vec![],
         prefix: None,
         stage: "action",
+        mask: vec![],
         choices: vec![
             branch,
             choice("invalid", "attack", "uncertain"),
@@ -68,6 +69,7 @@ fn small_tree_failure_backtrack_and_retry_keep_probability_and_rng() {
         cursor: vec![0],
         prefix: None,
         stage: "unit",
+        mask: vec![],
         choices: vec![],
     });
     // 从已选中空子树的边界开始；回溯后必须恢复根并永久排除该子树。
@@ -101,4 +103,23 @@ fn small_tree_failure_backtrack_and_retry_keep_probability_and_rng() {
     assert_eq!(game.saved.microsteps, 2);
     assert!(game.saved.commands >= 1);
     assert!(game.saved.root_id > 1);
+    // 只剩一个非空候选时直接推进，原始下标保留且不消耗策略随机数。
+    game.saved.state = serde_json::from_value(original).unwrap();
+    game.saved.search = None;
+    game.tree = None;
+    game.start_root(&cat).unwrap();
+    game.tree.as_mut().unwrap().inject_node(Node {
+        cursor: vec![],
+        prefix: None,
+        stage: "action",
+        choices: vec![
+            choice("masked", "end", "available"),
+            choice("forced", "end", "available"),
+        ],
+        mask: vec![false, true],
+    });
+    let random = game.saved.random;
+    game.advance(None, &cat).unwrap();
+    assert_eq!(game.saved.random, random);
+    assert_eq!(game.saved.microsteps, 2);
 }

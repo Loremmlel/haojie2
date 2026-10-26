@@ -49,6 +49,7 @@ export interface ActionNode {
   prefix?: Command;
   stage: string;
   choices: ActionChoice[];
+  mask?: boolean[];
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -94,7 +95,7 @@ function canonicalEngineCommand(observation: Observation, actor: Player, input: 
 
 /**
  * 在同一公开局面上惰性展开动作参数，游标只包含逐层下标；不修改局面、不采样正式随机数。
- * 中间parameter是公开选择域，不承诺存在合法补全；叶子才经共享公开预检过滤。
+ * 原参数域及下标保持不变；mask 提前排除已证明没有合法补全的有限参数前缀。
  * 路径逐格延伸并显式确认，材料逐个选择；没有教师评分裁剪、实体上限或静默截断。
  * 调用者遇到空分支须回溯，预算耗尽须明确暂停，不能改成自动结束回合。
  */
@@ -102,6 +103,7 @@ export class TrainingActionTree {
   readonly position;
   readonly actions: TrainingAction[];
   readonly #nodes = new Map<string, ActionNode>();
+  readonly #completion = new WeakMap<Prefix, boolean>();
   readonly #inspect;
   readonly #initialInspections = new WeakMap<
     Command,
@@ -211,6 +213,19 @@ export class TrainingActionTree {
     ];
     if (command.type === 'attack' && !command.path) steps.push({ kind: 'direction', label: '' });
     return { action, command, steps };
+  }
+
+  #canComplete(prefix: Prefix): boolean {
+    const cached = this.#completion.get(prefix);
+    if (cached !== undefined) return cached;
+    // 只前瞻最后一个固定参数；路径、材料及尚未补齐的多参数前缀保守保留。
+    const possible =
+      prefix.steps.length !== 1 ||
+      prefix.steps[0].kind === 'path' ||
+      prefix.steps[0].kind === 'material' ||
+      this.#expand(prefix).length > 0;
+    this.#completion.set(prefix, possible);
+    return possible;
   }
 
   #expand(prefix: Prefix): ActionChoice[] {
@@ -344,6 +359,7 @@ export class TrainingActionTree {
         choices: this.#expand(next),
       };
     }
+    node.mask = node.choices.map((choice) => !choice.next || this.#canComplete(choice.next));
     this.#nodes.set(key, node);
     return node;
   }

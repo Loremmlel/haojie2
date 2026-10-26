@@ -720,6 +720,10 @@ public:
         g.snapshot.clear();
         g.parked = false;
         *g.pause = false;
+        // 原始下标保持兼容；恢复时由 Rust 刷新当前未采样节点的空前缀掩码。
+        // 已记录的行为节点及其历史掩码不改写。
+        g.current.reset();
+        g.root.reset();
       }
       if (!g.current) {
         Bytes b = id_packet(g.id);

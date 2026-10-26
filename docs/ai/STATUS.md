@@ -6,6 +6,8 @@
 
 Colab 默认拉取 main、从头开始，按 CPU/GPU/空闲显存自动配置；保留 Web 面板、Drive 保存恢复、停止和手工／定期 AI 测评。本地已验证真实终局学习和数值修复，原始验收数见[功能验证](../../training/native/VALIDATION.md)。更新后的 L4 实际训练由 Colab 启动，性能实验未重启。
 
+TS/Rust 公开动作树已用相同掩码跳过确定为空的最后一个固定参数前缀，原候选下标和完整合法叶子保留。多参数、材料和可延伸路径仍按原流程展开；恢复只刷新尚未采样的节点，不改历史输入和行为概率。冻结 BF16 模型的本地采样对照及积压量见[功能验证](../../training/native/VALIDATION.md)。
+
 - [训练入口](../../training/README.md)
 - [运行与恢复](../../training/native/README.md)
 - [架构约束](../../training/native/architecture/DECISION.md)

@@ -215,6 +215,52 @@ test('公开根动作被改写后重新预检，根叶子命令保留独立副�
   assert.equal(action.command.type, 'summon', '修改返回的命令不能改写动作列表');
 });
 
+test('空参数前缀提前置零，原下标、友方治疗、随机攻击与完整合法叶子保持', () => {
+  const s = fixture();
+  const source = add(s, 1, 1, 4, 4);
+  const friend = add(s, 26, 1, 4, 5);
+  friend.hp -= 10;
+  const enemy = add(s, 26, 2, 5, 4);
+  const healer = add(s, 2, 1, 3, 5);
+  const observation = observe(s, 1),
+    before = structuredClone(observation);
+  const tree = new TrainingActionTree(observation, 1);
+  const root = tree.node();
+  const attack = root.choices.findIndex(
+    (c) => c.command.type === 'attack' && c.command.unitId === source.id,
+  );
+  const targets = tree.node([attack]);
+  const invalid = targets.choices.findIndex((c) => c.command.targetId === friend.id);
+  assert.ok(invalid >= 0, '保留原来存在的候选及其下标');
+  assert.equal(targets.mask![invalid], false);
+  assert.equal(createSamplingEncoder(observation, 1)(targets).candidate_mask[invalid], false);
+  assert.equal(tree.node([attack, invalid]).choices.length, 0);
+  const clock = root.choices.findIndex((c) => c.command.type === 'clock');
+  assert.ok(clock >= 0);
+  assert.equal(root.mask![clock], false, '没有可用时钟目标的根也应跳过');
+  for (const command of [
+    { type: 'attack' as const, unitId: source.id, targetId: enemy.id },
+    { type: 'attack' as const, unitId: healer.id, targetId: friend.id },
+  ])
+    for (const { node, selected } of tree.trace(command))
+      assert.equal(node.mask![selected], true, '随机攻击与合法友方治疗均保留');
+  const leaves = (masked: boolean) => {
+    const result: string[] = [];
+    const visit = (cursor: number[]) => {
+      const node = tree.node(cursor);
+      for (const [i, choice] of node.choices.entries()) {
+        if (masked && !node.mask![i]) continue;
+        if (choice.next) visit([...cursor, i]);
+        else result.push(JSON.stringify(choice.command));
+      }
+    };
+    visit([]);
+    return result.sort();
+  };
+  assert.deepEqual(leaves(true), leaves(false), '完整合法叶子及重复项均不减少');
+  assert.deepEqual(observation, before);
+});
+
 test('移动与部署点域保留逐命令预检顺序和冲撞后果，公共阶段失败仍为空域', () => {
   const s = fixture();
   const normal = add(s, 1, 1, 2, 5);
