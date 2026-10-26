@@ -17,7 +17,7 @@ class EvaluationControl:
             python,
             device,
         )
-        self.settings = {"minutes": 30, "pairs": 1, "seconds": 120}
+        self.settings = {"minutes": 30, "pairs": 1, "seconds": 120, "temperature": 0.5}
         self.next_due = time.time() + 1800
         self.job = self.child = self.log = None
         self.pending = False
@@ -38,8 +38,12 @@ class EvaluationControl:
         ):
             if type(value.get(key)) is not int or not low <= value[key] <= high:
                 raise ValueError(f"{key} 须为 {low}–{high} 的整数")
+        temperature = value.get("temperature", self.settings["temperature"])
+        if type(temperature) not in (int, float) or not 0 <= temperature <= 2:
+            raise ValueError("测评温度须为 0–2，0 为贪心选招")
         with self.lock:
             self.settings = {key: value[key] for key in ("minutes", "pairs", "seconds")}
+            self.settings["temperature"] = temperature
             self.next_due = time.time() + value["minutes"] * 60
             self.message = (
                 "测评计划已更新。"
@@ -123,6 +127,8 @@ class EvaluationControl:
                         str(self.settings["pairs"]),
                         "--seconds",
                         str(self.settings["seconds"]),
+                        "--temperature",
+                        str(self.settings["temperature"]),
                         "--",
                         *self.native,
                     ],

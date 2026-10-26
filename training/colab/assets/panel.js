@@ -347,7 +347,7 @@
       };
       const rules = { classic: '经典', shrine: '神龛' }[report?.rules];
       find('[data-eval-status]').textContent =
-        `${evaluation.message} ${next}${report ? ` · ${phase[report.phase] || report.phase}${rules ? ` · ${rules}` : ''} · 模型更新 ${number(report.updates)} · 第 ${number(report.current)} / ${report.games.length} 局${report.error ? ` · ${report.error}` : ''}` : ''}`;
+        `${evaluation.message} ${next}${report ? ` · ${phase[report.phase] || report.phase}${rules ? ` · ${rules}` : ''}${finite(report.temperature) ? ` · 温度 ${number(report.temperature, 1)}` : ''} · 模型更新 ${number(report.updates)} · 第 ${number(report.current)} / ${report.games.length} 局${report.error ? ` · ${report.error}` : ''}` : ''}`;
       const body = find('[data-eval-results]');
       body.replaceChildren();
       for (const [key, label] of [
@@ -470,10 +470,15 @@
     event.preventDefault();
     const value = {};
     for (const input of event.currentTarget.querySelectorAll('input')) {
-      if (!input.checkValidity() || !Number.isInteger(input.valueAsNumber)) {
+      if (!input.checkValidity()) {
         input.setAttribute('aria-invalid', 'true');
         input.focus();
-        notice('请填写范围内的整数测评参数。', true);
+        notice(
+          input.name === 'temperature'
+            ? '测评温度须为 0–2，步长 0.1。'
+            : '请填写范围内的整数测评参数。',
+          true,
+        );
         return;
       }
       input.removeAttribute('aria-invalid');

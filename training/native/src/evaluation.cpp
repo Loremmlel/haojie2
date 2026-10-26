@@ -2,15 +2,49 @@
 #include "engine.h"
 #include "host/hardware.h"
 #include "runtime.h"
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <thread>
 
 namespace hj {
+namespace {
+// 只调整测评动作分布；不改冻结模型、搜索先验或训练行为概率。
+void temper(std::vector<uint16_t> &mass, double temperature) {
+  if (mass.empty() || temperature == 1)
+    return;
+  auto maximum = *std::max_element(mass.begin(), mass.end());
+  if (temperature == 0) {
+    bool selected = false;
+    for (auto &bits : mass) {
+      bool choose = !selected && bits == maximum;
+      bits = c10::BFloat16(choose ? 1.0f : 0.0f).x;
+      selected |= choose;
+    }
+    return;
+  }
+  c10::BFloat16 scale;
+  scale.x = maximum;
+  std::vector<double> weights;
+  double sum = 0;
+  for (auto bits : mass) {
+    c10::BFloat16 value;
+    value.x = bits;
+    auto weight = std::pow(double(float(value)) / float(scale), 1 / temperature);
+    weights.push_back(weight);
+    sum += weight;
+  }
+  for (size_t i = 0; i < mass.size(); ++i)
+    mass[i] = c10::BFloat16(float(weights[i] / sum)).x;
+}
+} // namespace
 // 独立测评进程只加载已提交权重，不创建优化器、训练轨迹或发布新版本。
 void evaluate(const std::filesystem::path &checkpoint, const std::string &requested,
-              std::optional<uint64_t> override_simulations) {
+              std::optional<uint64_t> override_simulations, double temperature) {
+  TORCH_CHECK(std::isfinite(temperature) && temperature >= 0 && temperature <= 2,
+              "evaluation temperature must be in [0, 2]; 0 selects greedily");
   torch::NoGradGuard guard;
   torch::Device device(hardware(requested).device);
   Network model(DefaultWidth);
@@ -78,8 +112,8 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
   bool started = false;
   std::cout << "{\"updates\":" << version << ",\"rules\":\""
             << (trained_shrine ? "shrine" : "classic")
-            << "\",\"search_budget\":" << search_simulations << ",\"identity\":" << hj_identity()
-            << "}" << std::endl;
+            << "\",\"search_budget\":" << search_simulations << ",\"temperature\":" << temperature
+            << ",\"identity\":" << hj_identity() << "}" << std::endl;
   std::string line;
   while (std::getline(std::cin, line)) {
     if (line == "quit")
@@ -115,6 +149,7 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
                      handle.get(), 1, frame.actor, frame.node, policy, search_service,
                      search_simulations, search_depth, [] { return false; }, &search_plan)
                      .mass;
+          temper(mass, temperature);
         }
         put<uint32_t>(request, uint32_t(mass.size()));
         raw(request, mass.data(), mass.size() * sizeof(uint16_t));
@@ -134,6 +169,17 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
 }
 void evaluation_checks(const torch::Device &device) {
   torch::NoGradGuard guard;
+  std::vector<uint16_t> original{c10::BFloat16(0.5f).x, c10::BFloat16(0.25f).x, 0};
+  auto mass = original;
+  temper(mass, 1);
+  TORCH_CHECK(mass == original, "unit temperature changed policy mass");
+  temper(mass, 0.5);
+  TORCH_CHECK(mass[0] == c10::BFloat16(0.8f).x && mass[1] == c10::BFloat16(0.2f).x && mass[2] == 0,
+              "evaluation temperature did not sharpen masked policy");
+  mass = {original[1], original[0], original[0], 0};
+  temper(mass, 0);
+  TORCH_CHECK(mass == std::vector<uint16_t>({0, c10::BFloat16(1.0f).x, 0, 0}),
+              "greedy evaluation must select the first maximum");
   // 只生成初始化权重夹具，检查加载与推理协议，不创建优化器或学习转换。
   auto path = std::filesystem::temp_directory_path() /
               ("haojie-evaluation-check-" +
@@ -175,6 +221,7 @@ void evaluation_checks(const torch::Device &device) {
       TORCH_CHECK(output.str().find("\"updates\":42") != std::string::npos &&
                       output.str().find("\"search_budget\":" + std::to_string(budget)) !=
                           std::string::npos &&
+                      output.str().find("\"temperature\":0.5") != std::string::npos &&
                       output.str().find(shrine ? "\"rules\":\"shrine\""
                                                : "\"rules\":\"classic\"") != std::string::npos &&
                       output.str().find("\"observation\"") != std::string::npos,
@@ -185,10 +232,11 @@ void evaluation_checks(const torch::Device &device) {
         output.str("");
         std::cin.rdbuf(input.rdbuf());
         std::cout.rdbuf(output.rdbuf());
-        evaluate(path, device.str(), 0);
+        evaluate(path, device.str(), 0, 0);
         std::cin.rdbuf(old_in);
         std::cout.rdbuf(old_out);
         TORCH_CHECK(output.str().find("\"search_budget\":0") != std::string::npos &&
+                        output.str().find("\"temperature\":0,") != std::string::npos &&
                         output.str().find("\"observation\"") != std::string::npos,
                     "evaluation could not disable checkpoint search");
       }

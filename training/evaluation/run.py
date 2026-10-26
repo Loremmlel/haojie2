@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import queue
+import random
 import subprocess
 import threading
 import time
@@ -20,7 +21,7 @@ def write_json(path, value):
     os.replace(temporary, path)
 
 
-def schedule(pairs, rules):
+def schedule(pairs, rules, seed=None):
     if rules not in ("classic", "shrine"):
         raise ValueError("检查点未提供有效训练模式，无法安排测评")
     return [
@@ -28,10 +29,10 @@ def schedule(pairs, rules):
             "difficulty": level,
             "side": side,
             "rules": rules,
-            "seed": 3_000_001_000 + pair * 2 + int(rules == "shrine"),
+            "seed": game_seed,
             "result": "pending",
         }
-        for pair in range(pairs)
+        for game_seed in random.Random(seed).sample(range(1, 2**32), pairs)
         for side in (1, 2)
         for level in ("easy", "medium", "hard")
     ]
@@ -56,9 +57,18 @@ def summarize(games):
 
 
 class Native:
-    def __init__(self, command, checkpoint, device, log):
+    def __init__(self, command, checkpoint, device, log, temperature):
         self.process = subprocess.Popen(
-            [*command, "evaluate", "--checkpoint", str(checkpoint), "--device", device],
+            [
+                *command,
+                "evaluate",
+                "--checkpoint",
+                str(checkpoint),
+                "--device",
+                device,
+                "--temperature",
+                str(temperature),
+            ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=log,
@@ -103,7 +113,20 @@ class Native:
         self.process.stdout.close()
 
 
-def run(command, checkpoint, device, directory, pairs=1, seconds=120):
+def run(
+    command,
+    checkpoint,
+    device,
+    directory,
+    pairs=1,
+    seconds=120,
+    temperature=0.5,
+    seed=None,
+):
+    if type(temperature) not in (int, float) or not 0 <= temperature <= 2:
+        raise ValueError("测评温度须为 0–2，0 为贪心选招")
+    if seed is None:
+        seed = random.randrange(1, 2**32)
     directory.mkdir(parents=True, exist_ok=True)
     plan = []
     report = {
@@ -112,6 +135,8 @@ def run(command, checkpoint, device, directory, pairs=1, seconds=120):
         "games": plan,
         "created": time.time(),
         "seconds_per_game": seconds,
+        "temperature": temperature,
+        "seed": seed,
         "max_commands": 20000,
         "max_plies": 1000,
     }
@@ -128,12 +153,12 @@ def run(command, checkpoint, device, directory, pairs=1, seconds=120):
     publish()
     try:
         with (directory / "native.log").open("w", encoding="utf-8") as log:
-            native = Native(command, checkpoint, device, log)
+            native = Native(command, checkpoint, device, log, temperature)
             deadline = time.monotonic() + 300
             report.update(
                 native.receive(lambda: cancelled() or time.monotonic() >= deadline)
             )
-            plan = schedule(pairs, report.get("rules"))
+            plan = schedule(pairs, report.get("rules"), seed)
             report["games"] = plan
             report["phase"] = "running"
             for index, game in enumerate(plan):
@@ -235,9 +260,22 @@ if __name__ == "__main__":
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--pairs", type=int, default=1)
     parser.add_argument("--seconds", type=int, default=120)
+    parser.add_argument("--temperature", type=float, default=0.5)
+    parser.add_argument("--seed", type=int)
     parser.add_argument("native", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if not 1 <= args.pairs <= 20 or not 1 <= args.seconds <= 3600:
         parser.error("pairs 1–20; seconds 1–3600")
+    if not 0 <= args.temperature <= 2:
+        parser.error("temperature 0–2; 0 selects greedily")
     command = args.native[1:] if args.native[:1] == ["--"] else args.native
-    run(command, args.checkpoint, args.device, args.directory, args.pairs, args.seconds)
+    run(
+        command,
+        args.checkpoint,
+        args.device,
+        args.directory,
+        args.pairs,
+        args.seconds,
+        args.temperature,
+        args.seed,
+    )

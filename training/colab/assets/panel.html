@@ -113,7 +113,9 @@
   </p>
   <section class="evaluation" aria-label="AI 棋力测评">
     <h2>AI 棋力测评</h2>
-    <p>按检查点的训练模式，对战简单、普通、困难 AI，交换先后手。每组 6 局。</p>
+    <p>
+      按检查点的训练模式，对战简单、普通、困难 AI。每轮随机种子，同组交换先后手共用种子，每组 6 局。
+    </p>
     <div class="toolbar">
       <button type="button" data-eval-action="evaluate" disabled>立即测评</button>
       <button type="button" data-eval-action="eval_cancel" disabled>取消测评</button>
@@ -134,8 +136,22 @@
       <label
         >每局时限（秒）<input name="seconds" type="number" min="1" max="3600" value="120" required
       /></label>
+      <label
+        >测评温度<input
+          name="temperature"
+          type="number"
+          min="0"
+          max="2"
+          step="0.1"
+          value="0.5"
+          required
+          aria-describedby="eval-temperature-help"
+      /></label>
       <button type="submit">应用测评计划</button>
     </form>
+    <p id="eval-temperature-help">
+      温度默认 0.5，越低越偏向高概率动作；0 为贪心选招，1 为原概率采样。修改后从下一轮测评生效。
+    </p>
     <p data-eval-status role="status">等待测评执行器</p>
     <div class="table-scroll">
       <table>

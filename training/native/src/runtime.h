@@ -55,7 +55,7 @@ public:
 };
 void run(const Settings &);
 void evaluate(const std::filesystem::path &, const std::string &,
-              std::optional<uint64_t> search_simulations = {});
+              std::optional<uint64_t> search_simulations = {}, double temperature = 0.5);
 void evaluation_checks(const torch::Device &);
 std::string describe_configuration(Settings);
 void runtime_checks();

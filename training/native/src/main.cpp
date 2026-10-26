@@ -63,7 +63,7 @@ int command_main(int argc, char **argv) {
                                           "--samples",
                                           "--checkpoint"};
     for (const auto &[key, value] : options)
-      if (!supported.count(key))
+      if (!supported.count(key) && !(command == "evaluate" && key == "--temperature"))
         throw std::runtime_error("unknown option " + key);
     auto directory = std::filesystem::path(text("--directory"));
     if (command == "status") {
@@ -96,7 +96,7 @@ int command_main(int argc, char **argv) {
              "PATH\nhaojie-train check [--device cpu|cuda]\n"
              "haojie-train configure [--device auto|cuda|cpu] [--resume CHECKPOINT]\n"
              "haojie-train evaluate --checkpoint PATH [--device cpu|cuda] "
-             "[--search-simulations N]\n";
+             "[--search-simulations N] [--temperature 0.5]\n";
       return 0;
     }
     at::set_num_threads(int(number("--threads", 1)));
@@ -105,10 +105,16 @@ int command_main(int argc, char **argv) {
     c10::set_default_dtype(c10::scalarTypeToTypeMeta(torch::kBFloat16));
     torch::manual_seed(number("--seed", 1));
     if (command == "evaluate") {
+      auto temperature_text = text("--temperature", "0.5");
+      size_t end = 0;
+      double temperature = std::stod(temperature_text, &end);
+      if (end != temperature_text.size())
+        throw std::runtime_error("invalid evaluation temperature");
       hj::evaluate(text("--checkpoint"), text("--device", "cuda"),
                    options.count("--search-simulations")
                        ? std::optional<uint64_t>(number("--search-simulations", 0))
-                       : std::nullopt);
+                       : std::nullopt,
+                   temperature);
       return 0;
     }
     if (command == "check-search") {

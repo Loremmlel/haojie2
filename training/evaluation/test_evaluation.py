@@ -184,6 +184,8 @@ class EvaluationTests(unittest.TestCase):
                     )
                     report = control.status()["report"]
                     self.assertEqual(report["rules"], "classic")
+                    self.assertEqual(report["temperature"], 0.5)
+                    self.assertIsInstance(report["seed"], int)
                     self.assertEqual(len(report["games"]), 6)
                     self.assertTrue(
                         all(g["rules"] == "classic" for g in report["games"])
@@ -203,7 +205,9 @@ class EvaluationTests(unittest.TestCase):
 
     def test_schedule_and_unfinished_denominator(self):
         for rules in ("classic", "shrine"):
-            plan = schedule(2, rules)
+            plan = schedule(2, rules, seed=73)
+            self.assertEqual(plan, schedule(2, rules, seed=73))
+            self.assertNotEqual(plan, schedule(2, rules, seed=74))
             self.assertEqual(len(plan), 12)
             for level in ("easy", "medium", "hard"):
                 rows = [g for g in plan if g["difficulty"] == level]
@@ -231,8 +235,14 @@ class EvaluationTests(unittest.TestCase):
             tempfile.TemporaryDirectory() as temporary,
             patch("training.evaluation.run.Native", return_value=native),
             patch("training.evaluation.run.Teacher", return_value=teacher),
+            patch("training.evaluation.run.random.randrange", return_value=73127),
         ):
             report = run([], Path("fixture"), "cpu", Path(temporary))
+            self.assertEqual(report["seed"], 73127)
+            self.assertEqual(
+                [g["seed"] for g in report["games"]],
+                [g["seed"] for g in schedule(1, "classic", seed=73127)],
+            )
             self.assertEqual(len(report["games"]), 6)
             self.assertTrue(all(g["result"] == "unfinished" for g in report["games"]))
             self.assertTrue(all(g["reason"] == "time-budget" for g in report["games"]))
@@ -249,10 +259,21 @@ class EvaluationTests(unittest.TestCase):
                 native.request.return_value = {"winner": 1, "commands": 3}
                 teacher = Mock(manifest={"sha256": "fixture"}, budget={})
                 with (
-                    patch("training.evaluation.run.Native", return_value=native),
+                    patch(
+                        "training.evaluation.run.Native", return_value=native
+                    ) as factory,
                     patch("training.evaluation.run.Teacher", return_value=teacher),
                 ):
-                    report = run([], Path("fixture"), "cpu", Path(temporary))
+                    report = run(
+                        [],
+                        Path("fixture"),
+                        "cpu",
+                        Path(temporary),
+                        temperature=0.3,
+                        seed=73,
+                    )
+                self.assertEqual(factory.call_args.args[-1], 0.3)
+                self.assertEqual(report["temperature"], 0.3)
                 self.assertEqual(report["phase"], "finished")
                 self.assertEqual(report["rules"], rules)
                 self.assertEqual(len(native.request.call_args_list), 6)
@@ -293,7 +314,12 @@ class EvaluationTests(unittest.TestCase):
                 temporary, Mock(poll=Mock(return_value=None)), [], "python", "cpu"
             )
             try:
-                control.configure({"minutes": 1, "pairs": 1, "seconds": 10})
+                control.configure(
+                    {"minutes": 1, "pairs": 1, "seconds": 10, "temperature": 0.7}
+                )
+                self.assertEqual(control.settings["temperature"], 0.7)
+                with self.assertRaises(ValueError):
+                    control.configure({**control.settings, "temperature": float("nan")})
                 control.next_due = 0
                 deadline = time.monotonic() + 3
                 while not launch.called and time.monotonic() < deadline:

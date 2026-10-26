@@ -35,7 +35,7 @@ try {
       checkpoint: '/content/run/checkpoint.pt',
       log: '',
       evaluation: {
-        settings: { minutes: 30, pairs: 1, seconds: 120 },
+        settings: { minutes: 30, pairs: 1, seconds: 120, temperature: 0.5 },
         pending: false,
         active: false,
         next_due: Date.now() / 1000 + 1800,
@@ -45,6 +45,7 @@ try {
           phase: 'finished',
           updates: 120,
           rules: 'classic',
+          temperature: 0.5,
           current: 6,
           games: Array.from({ length: 6 }, () => ({ rules: 'classic', result: 'unfinished' })),
           summary: {
@@ -179,15 +180,25 @@ try {
   await page.getByRole('button', { name: '立即测评', exact: true }).click();
   await page.waitForFunction(() => window.calls.some((call) => call[2] === 'evaluate'));
   await page.getByLabel('间隔（分钟，0 关闭）', { exact: true }).fill('0');
+  const temperature = page.getByLabel('测评温度', { exact: true });
+  assert.equal(await temperature.inputValue(), '0.5');
+  await temperature.fill('2.1');
+  await page.getByRole('button', { name: '应用测评计划', exact: true }).click();
+  assert.equal(await temperature.getAttribute('aria-invalid'), 'true');
+  assert.equal(await temperature.evaluate((element) => element === document.activeElement), true);
+  await temperature.fill('0.3');
   await page.getByRole('button', { name: '应用测评计划', exact: true }).click();
   await page.waitForFunction(() =>
-    window.calls.some((call) => call[2] === 'eval_config' && call[3].minutes === 0),
+    window.calls.some(
+      (call) => call[2] === 'eval_config' && call[3].minutes === 0 && call[3].temperature === 0.3,
+    ),
   );
   assert.equal(
     await page.locator('[data-eval-results]').getByText('50%', { exact: true }).count(),
     1,
   );
   assert.match(await page.locator('[data-eval-status]').textContent(), /经典.*第 6 \/ 6 局/);
+  assert.match(await page.locator('[data-eval-status]').textContent(), /温度 0\.5/);
   await page.evaluate(() => {
     window.reply.evaluation.report.rules = 'shrine';
   });
