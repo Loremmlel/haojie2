@@ -932,7 +932,23 @@ TrainResult learn_episodes(Network &model, Optimizer &optimizer, const std::vect
     auto corrected = chosen + (part(device_logps) - chosen.detach());
     auto policy_logp = torch::where(adv.ne(0), corrected, torch::zeros_like(corrected));
     auto error = (output.second - value_targets).square();
-    auto loss = (-policy_logp * adv + 0.5 * error - 0.01 * table.entropy).mean();
+    // 搜索访问分布蒸馏到原策略头；旧检查点轨迹没有搜索标签时保持原 V-trace 损失。
+    std::vector<BF> search_targets;
+    std::vector<int64_t> search_lengths;
+    for (auto &node : nodes) {
+      search_lengths.push_back(node->mask.size());
+      for (size_t i = 0; i < node->mask.size(); ++i) {
+        BF target(0.0f);
+        if (!node->search_target.empty())
+          target.x = node->search_target[i];
+        search_targets.push_back(target);
+      }
+    }
+    auto target = bf_tensor(search_targets, 1, device).view({-1});
+    auto search_policy =
+        segments(torch::where(target.gt(0), -table.logp * target, torch::zeros_like(target)), "sum",
+                 indices(search_lengths, device));
+    auto loss = (-policy_logp * adv + search_policy + 0.5 * error - 0.01 * table.entropy).mean();
     loss.backward();
     torch::NoGradGuard guard;
     double weight = double(size) / count;
@@ -1209,6 +1225,28 @@ void model_checks(const torch::Device &device) {
     TORCH_CHECK(rejected && torch::equal(original, split->packed_weights) &&
                     split_optimizer.steps == 1,
                 "unfinished episode entered training or changed parameters");
+  }
+  {
+    // 相同实体引用下，候选差分必须反传到上下文和注意力，防止共享偏置被 softmax 消掉。
+    Network distilled(32);
+    distilled->to(device);
+    copy_weights(model, distilled);
+    {
+      torch::NoGradGuard guard;
+      distilled->value->at<torch::nn::LinearImpl>(2).weight.zero_();
+      distilled->value->at<torch::nn::LinearImpl>(2).bias.zero_();
+    }
+    auto searched = std::make_shared<Node>(*n);
+    searched->search_target = {BF(0.0f).x, BF(1.0f).x, BF(0.0f).x};
+    Optimizer search_optimizer(distilled);
+    auto before =
+        canonical_logps(probabilities(distilled->forward({searched}).first, {searched})[0]);
+    Block episode{{Step{searched, 0, before[0], 0, true, 0}}, {}};
+    auto result = learn_episodes(distilled, search_optimizer, {episode}, 1);
+    auto after =
+        canonical_logps(probabilities(distilled->forward({searched}).first, {searched})[0]);
+    TORCH_CHECK(after[1] > before[1] && result.terminal_games == 1 && search_optimizer.steps == 1,
+                "MCTS visits did not improve the corresponding policy action");
   }
   {
     // 相同实体引用下，候选差分必须反传到上下文和注意力，防止共享偏置被 softmax 消掉。

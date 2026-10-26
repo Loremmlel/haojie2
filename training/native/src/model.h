@@ -64,6 +64,7 @@ struct CpuWeights {
   T rows, continuous, row_bias, actions, action_bias;
   T context, context_bias, query, query_bias, query_out, query_out_bias;
   T key, key_bias, key_out, key_out_bias, prior, prior_bias;
+  T value, value_bias, value_out, value_out_bias;
 };
 using CpuSnapshot = std::shared_ptr<const CpuWeights>;
 class CpuPolicy {
@@ -75,7 +76,7 @@ public:
   ~CpuPolicy();
   void clear();
   static CpuSnapshot snapshot(Network &, uint64_t version);
-  std::vector<uint16_t> score(const Node &, const CpuSnapshot &);
+  std::vector<uint16_t> score(const Node &, const CpuSnapshot &, double *value = nullptr);
 };
 void cpu_policy_checks(const torch::Device &);
 struct UpdateResult {

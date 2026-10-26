@@ -17,6 +17,8 @@ struct Settings {
            width = DefaultWidth, publish = 8;
   uint64_t memory_mb = 4096, updates = 0, samples = 0;
   uint64_t max_game_steps = 262144;
+  uint64_t search_simulations = 64, search_depth = 64;
+  uint64_t history_size = 8, history_interval = 64, history_percent = 20;
   uint64_t threads = 1;
   uint64_t workset_games = 0, game_samples = 256;
   double seconds = 0, save_seconds = 300;
@@ -38,6 +40,10 @@ struct InferenceFlight {
 struct InferenceStats {
   uint64_t replays = 0, fallbacks = 0, input_bytes = 0, capacity_bytes = 0;
   uint64_t tokens = 0, token_capacity = 0;
+};
+struct RootStats {
+  uint64_t nodes = 0, batches = 0;
+  double seconds = 0;
 };
 class InferenceEngine {
   struct Impl;

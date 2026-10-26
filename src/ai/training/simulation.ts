@@ -6,6 +6,7 @@ import { imagined, observe } from '../observation';
 import { distribution } from '../simulation/simulate';
 import type { Observation } from '../types';
 import { trainingPosition } from './queries';
+import { searchRandom } from './mcts';
 
 /** 独立模拟序列；调用方传入实验采样编号，不能使用正式对局的 seed/rng。 */
 export function simulationRandomSource(sampleSeed: number) {
@@ -40,6 +41,18 @@ export function sampleTrainingTransition(
 ) {
   const { state, command } = prepare(observation, actor, input);
   return observe(applyCommand(state, command, simulationRandomSource(sampleSeed)));
+}
+
+/** 原生搜索对应的独立 xorshift 场景；只复用正式规则，绝不读取真实对局随机序列。 */
+export function sampleSearchTransition(
+  observation: Observation,
+  actor: Player,
+  input: unknown,
+  sampleSeed: number,
+) {
+  const { state, command } = prepare(observation, actor, input);
+  const random = searchRandom(sampleSeed);
+  return observe(applyCommand(state, command, () => random() / 4294967296));
 }
 
 /** 小分支精确枚举，大分支明确标记 sampled，调用方不能把采样结果当成完整概率树。 */

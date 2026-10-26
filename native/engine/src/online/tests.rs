@@ -35,6 +35,7 @@ fn small_tree_failure_backtrack_and_retry_keep_probability_and_rng() {
         },
         tree: None,
         sent_root: 0,
+        last_path: vec![],
     };
     game.start_root(&cat).unwrap();
     let tree = game.tree.as_mut().unwrap();
@@ -122,4 +123,22 @@ fn small_tree_failure_backtrack_and_retry_keep_probability_and_rng() {
     game.advance(None, &cat).unwrap();
     assert_eq!(game.saved.random, random);
     assert_eq!(game.saved.microsteps, 2);
+    let before = serde_json::to_value(&game.saved.state).unwrap();
+    let random = game.saved.random;
+    game.saved.search = None;
+    game.tree = None;
+    game.start_root(&cat).unwrap();
+    game.tree.as_mut().unwrap().inject_node(Node {
+        cursor: vec![],
+        prefix: None,
+        stage: "action",
+        choices: vec![],
+        mask: vec![],
+    });
+    assert_eq!(
+        game.advance(None, &cat).unwrap_err(),
+        "no legal action at root"
+    );
+    assert_eq!(serde_json::to_value(&game.saved.state).unwrap(), before);
+    assert_eq!(game.saved.random, random);
 }

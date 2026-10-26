@@ -85,6 +85,15 @@ struct GraphWriter {
       put_array(out, n->mask);
     }
   }
+  Bytes search_data() const {
+    Bytes out;
+    put<uint64_t>(out, nodes.values.size());
+    for (auto &node : nodes.values) {
+      put_array(out, node->cursor);
+      put_array(out, node->search_target);
+    }
+    return out;
+  }
 };
 
 struct GraphReader {
@@ -92,6 +101,31 @@ struct GraphReader {
   std::vector<ActionRef> actions;
   std::vector<std::shared_ptr<Root>> roots;
   std::vector<std::shared_ptr<Node>> nodes;
+  void search_data(const T &tensor) {
+    TORCH_CHECK(tensor.scalar_type() == torch::kUInt8 && tensor.dim() == 1,
+                "invalid search target table");
+    Reader reader(tensor.data_ptr<uint8_t>(), tensor.numel());
+    TORCH_CHECK(reader.get<uint64_t>() == nodes.size(), "search target node count differs");
+    for (auto &node : nodes) {
+      node->cursor = get_array<uint32_t>(reader);
+      node->search_target = get_array<uint16_t>(reader);
+      TORCH_CHECK(node->search_target.empty() || node->search_target.size() == node->mask.size(),
+                  "search target candidate count differs");
+      double sum = 0;
+      for (size_t i = 0; i < node->search_target.size(); ++i) {
+        c10::BFloat16 value;
+        value.x = node->search_target[i];
+        TORCH_CHECK(std::isfinite(float(value)) && float(value) >= 0 &&
+                        (node->mask[i] || float(value) == 0),
+                    "invalid search target support");
+        sum += float(value);
+      }
+      TORCH_CHECK(node->search_target.empty() || std::abs(sum - 1) < 0.02,
+                  "search targets do not sum to one");
+      node->account_input();
+    }
+    reader.end();
+  }
   static uint64_t count(Reader &r, size_t minimum) {
     auto n = r.get<uint64_t>();
     if (n > r.left / minimum)

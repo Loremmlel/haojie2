@@ -5,10 +5,6 @@
 #include <thread>
 
 namespace hj {
-struct RootStats {
-  uint64_t nodes = 0, batches = 0;
-  double seconds = 0;
-};
 // 根请求独立于控制与学习回执；完成后把匹配的头部快照直接交还所属 lane。
 class RootService {
   struct Slot {

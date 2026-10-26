@@ -1,3 +1,4 @@
+#include "actor/search.h"
 #include "host/hardware.h"
 #include "runtime.h"
 #include <ATen/Context.h>
@@ -60,8 +61,10 @@ int main(int argc, char **argv) {
     if (command == "help") {
       std::cout
           << "haojie-train run --directory PATH [--resume CHECKPOINT] [--device auto|cuda|cpu] "
-             "[--concurrency N] [--workers N] [--batch N] [--chunk 16] [--updates N] "
-             "[--seconds N] [--max-game-steps N]\nhaojie-train status|resize|budget|save|stop --directory "
+             "[--concurrency N] [--workers N] [--batch N] [--search-simulations 64] "
+             "[--search-depth 64] [--history-percent 20] [--updates N] "
+             "[--seconds N] [--max-game-steps N]\nhaojie-train status|resize|budget|save|stop "
+             "--directory "
              "PATH\nhaojie-train check [--device cpu|cuda]\n"
              "haojie-train configure [--device auto|cuda|cpu] [--resume CHECKPOINT]\n"
              "haojie-train workset --directory PATH [--games 16] [--game-samples 256] "
@@ -77,6 +80,10 @@ int main(int argc, char **argv) {
       hj::evaluate(text("--checkpoint"), text("--device", "cuda"));
       return 0;
     }
+    if (command == "check-search") {
+      hj::search_checks(torch::Device(text("--device", "cpu")));
+      return 0;
+    }
     if (command == "check") {
       hj::hardware_checks();
       hj::model_checks(torch::Device(text("--device", "cpu")));
@@ -84,6 +91,7 @@ int main(int argc, char **argv) {
       hj::learning_checks(torch::Device(text("--device", "cpu")));
       hj::runtime_checks();
       hj::evaluation_checks(torch::Device(text("--device", "cpu")));
+      hj::search_checks(torch::Device(text("--device", "cpu")));
       return 0;
     }
     if ((command != "run" && command != "workset" && command != "diagnose" &&
@@ -130,14 +138,20 @@ int main(int argc, char **argv) {
     s.publish = number("--publish", 8);
     s.memory_mb = number("--memory-mb", 4096);
     s.max_game_steps = number("--max-game-steps", 262144);
+    s.search_simulations = number("--search-simulations", 64);
+    s.search_depth = number("--search-depth", 64);
+    s.history_size = number("--history-size", 8);
+    s.history_interval = number("--history-interval", 64);
+    s.history_percent = number("--history-percent", 20);
     s.updates = number("--updates", 0);
     s.seconds = std::stod(text("--seconds", "0"));
     s.save_seconds = std::stod(text("--save-seconds", "300"));
     s.shrine = options.count("--shrine");
     s.samples = number("--samples", 0);
     if (!s.workers || (!s.chunk && !s.terminal_training()) || !s.batch || !s.inference_batch ||
-        !s.width || !s.publish || !s.max_game_steps || s.memory_mb < 128 || s.seconds < 0 ||
-        s.save_seconds < 0)
+        !s.width || !s.publish || !s.max_game_steps || !s.search_simulations || !s.search_depth ||
+        !s.history_size || !s.history_interval || s.history_percent > 100 || s.memory_mb < 128 ||
+        s.seconds < 0 || s.save_seconds < 0)
       throw std::runtime_error("invalid training budget");
     if (command == "configure")
       std::cout << hj::describe_configuration(s);

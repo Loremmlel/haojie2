@@ -1,3 +1,4 @@
+#include "actor/search.h"
 #include "engine.h"
 #include "host/hardware.h"
 #include "runtime.h"
@@ -16,6 +17,7 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
   model->pack_weights();
   uint64_t version;
   bool trained_shrine;
+  uint64_t search_simulations = 64, search_depth = 64;
   {
     torch::serialize::InputArchive archive;
     std::ifstream file(checkpoint, std::ios::binary);
@@ -26,6 +28,15 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
     TORCH_CHECK(config.scalar_type() == torch::kInt64 && config.dim() == 1 && config.numel() == 13,
                 "invalid checkpoint configuration");
     trained_shrine = config[9].item<int64_t>() != 0;
+    T selfplay;
+    if (archive.try_read("selfplay_config", selfplay)) {
+      TORCH_CHECK(selfplay.scalar_type() == torch::kInt64 && selfplay.dim() == 1 &&
+                      selfplay.numel() == 5 && selfplay[0].item<int64_t>() > 0 &&
+                      selfplay[1].item<int64_t>() > 0,
+                  "invalid search configuration");
+      search_simulations = selfplay[0].item<int64_t>();
+      search_depth = selfplay[1].item<int64_t>();
+    }
     archive.read("state", state);
     TORCH_CHECK(state.scalar_type() == torch::kUInt8 && state.dim() == 1,
                 "invalid checkpoint metadata");
@@ -45,10 +56,10 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
     model->packed_weights.copy_(weights.to(device));
   }
   model->eval();
-  auto weights = CpuPolicy::snapshot(model, version);
-  InferenceEngine inference(model, device, [] {}, 1, 1);
-  CpuPolicy policy;
+  auto policy = std::make_shared<FrozenPolicy>(model, version);
+  SearchService search_service(device, DefaultWidth, 1);
   InputPool inputs;
+  SearchPlan search_plan;
   std::shared_ptr<Root> root;
   std::unique_ptr<void, decltype(&hj_actor_close)> handle(hj_actor_create(), hj_actor_close);
   TORCH_CHECK(handle, "cannot create evaluation actor");
@@ -77,7 +88,7 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
       if (started)
         call(5, id);
       root.reset();
-      policy.clear();
+      search_plan.clear();
       auto request = id;
       put(request, seed);
       put(request, side);
@@ -96,13 +107,10 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
         request = id;
         std::vector<uint16_t> mass;
         if (frame.kind == 0) {
-          if (!model->cache_valid(*root)) {
-            auto flight = inference.submit(0, {frame.node}, version);
-            while (!flight->complete.load())
-              std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            inference.finish(flight);
-          }
-          mass = policy.score(*frame.node, weights);
+          mass = search_actor(
+                     handle.get(), 1, frame.actor, frame.node, policy, search_service,
+                     search_simulations, search_depth, [] { return false; }, &search_plan)
+                     .mass;
         }
         put<uint32_t>(request, uint32_t(mass.size()));
         raw(request, mass.data(), mass.size() * sizeof(uint16_t));
@@ -146,6 +154,9 @@ void evaluation_checks(const torch::Device &device) {
           torch::from_blob(metadata.data(), {int64_t(metadata.size())}, torch::kUInt8).clone());
       std::vector<int64_t> config = {DefaultWidth, 1, 16, 512, 1, 1, 1024, 1, 1, shrine, 0, -1, 0};
       archive.write("config", torch::tensor(config, torch::kInt64));
+      archive.write("selfplay_config",
+                    torch::tensor({int64_t(2), int64_t(8), int64_t(8), int64_t(64), int64_t(20)},
+                                  torch::kInt64));
       archive.save_to(path.string());
       std::string mode = std::to_string(shrine);
       std::istringstream input("start 73127 1 " + mode + "\nadvance\nstart 73127 2 " + mode +

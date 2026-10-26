@@ -186,11 +186,14 @@ struct Node {
   std::vector<ActionRef> candidates;
   std::vector<int32_t> sources, targets;
   std::vector<uint8_t> mask;
+  std::vector<uint32_t> cursor;
+  std::vector<uint16_t> search_target;
   StorageBytes storage;
   size_t bytes() const {
     size_t total = sizeof(Node) + context.capacity() * sizeof(RowRef) +
                    candidates.capacity() * sizeof(candidates[0]) + sources.capacity() * 4 +
-                   targets.capacity() * 4 + mask.capacity();
+                   targets.capacity() * 4 + mask.capacity() + cursor.capacity() * 4 +
+                   search_target.capacity() * 2;
     return total;
   }
   void account_input() {

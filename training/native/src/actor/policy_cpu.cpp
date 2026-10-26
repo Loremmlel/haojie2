@@ -202,7 +202,9 @@ CpuSnapshot CpuPolicy::snapshot(Network &model, uint64_t version) {
   auto &query_out = model->query->at<torch::nn::LinearImpl>(2);
   auto &key = model->key->at<torch::nn::LinearImpl>(0);
   auto &key_out = model->key->at<torch::nn::LinearImpl>(2);
-  std::array<T, 17> sources{model->entity->bits->weight,
+  auto &value = model->value->at<torch::nn::LinearImpl>(0);
+  auto &value_out = model->value->at<torch::nn::LinearImpl>(2);
+  std::array<T, 21> sources{model->entity->bits->weight,
                             model->entity->continuous->weight,
                             model->entity->continuous->bias,
                             model->action->bits->weight,
@@ -218,13 +220,18 @@ CpuSnapshot CpuPolicy::snapshot(Network &model, uint64_t version) {
                             key_out.weight,
                             key_out.bias,
                             model->prior->weight,
-                            model->prior->bias};
-  std::array<T *, 17> destinations{&out->rows,         &out->continuous,     &out->row_bias,
+                            model->prior->bias,
+                            value.weight,
+                            value.bias,
+                            value_out.weight,
+                            value_out.bias};
+  std::array<T *, 21> destinations{&out->rows,         &out->continuous,     &out->row_bias,
                                    &out->actions,      &out->action_bias,    &out->context,
                                    &out->context_bias, &out->query,          &out->query_bias,
                                    &out->query_out,    &out->query_out_bias, &out->key,
                                    &out->key_bias,     &out->key_out,        &out->key_out_bias,
-                                   &out->prior,        &out->prior_bias};
+                                   &out->prior,        &out->prior_bias,     &out->value,
+                                   &out->value_bias,   &out->value_out,      &out->value_out_bias};
   std::vector<T> pieces;
   for (auto &source : sources)
     pieces.push_back(source.reshape({-1}));
@@ -245,7 +252,8 @@ CpuSnapshot CpuPolicy::snapshot(Network &model, uint64_t version) {
   }
   return out;
 }
-std::vector<uint16_t> CpuPolicy::score(const Node &node, const CpuSnapshot &weights) {
+std::vector<uint16_t> CpuPolicy::score(const Node &node, const CpuSnapshot &weights,
+                                       double *value) {
   RECORD_FUNCTION("haojie::cpu_policy", std::vector<c10::IValue>());
   auto &s = *impl;
   if (s.current != weights) {
@@ -305,6 +313,18 @@ std::vector<uint16_t> CpuPolicy::score(const Node &node, const CpuSnapshot &weig
   auto root = context.data_ptr<BF>();
   for (int64_t j = 0; j < width; ++j)
     ctx[j] = gelu(BF(float(root[j]) + float(projected[j])));
+  if (value) {
+    Vector hidden(width);
+    linear(ctx.data(), w.value, w.value_bias, 0, width, hidden.data(), width);
+    for (auto &x : hidden)
+      x = gelu(x);
+    BF output;
+    linear(hidden.data(), w.value_out, w.value_out_bias, 0, width, &output, 1);
+    *value = float(BF(std::tanh(float(output))));
+  }
+  // 假想分支的空根只取价值估计作搜索截止，不补造成终局或向实局返回空分布。
+  if (std::none_of(node.mask.begin(), node.mask.end(), [](auto v) { return v != 0; }))
+    return {};
   linear(ctx.data(), w.query, w.query_bias, 0, width, query_hidden.data(), width);
   for (auto &x : query_hidden)
     x = gelu(x);

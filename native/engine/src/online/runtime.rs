@@ -29,7 +29,7 @@ pub extern "C" fn hj_identity() -> *const std::ffi::c_char {
     ID.get_or_init(|| std::ffi::CString::new(crate::identity::describe().to_string()).unwrap())
         .as_ptr()
 }
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Search {
     cursor: Vec<usize>,
     #[serde(with = "exclusions")]
@@ -70,10 +70,31 @@ struct SavedGame {
     reported_terminal: bool,
     waiting: bool,
 }
+impl SavedGame {
+    fn branch(&self) -> Self {
+        Self {
+            id: self.id,
+            state: self.state.fork(),
+            random: self.random,
+            learner: self.learner,
+            opponent: self.opponent,
+            root_id: self.root_id,
+            commands: self.commands,
+            microsteps: self.microsteps,
+            failures: self.failures,
+            backtracks: self.backtracks,
+            offer_interrupt: self.offer_interrupt,
+            search: self.search.clone(),
+            reported_terminal: self.reported_terminal,
+            waiting: self.waiting,
+        }
+    }
+}
 struct Game<'a> {
     saved: SavedGame,
     tree: Option<Tree<'a>>,
     sent_root: u64,
+    last_path: Vec<usize>,
 }
 impl<'a> Game<'a> {
     fn start_root(&mut self, cat: &'a crate::model::Catalog) -> Result<(), String> {
@@ -194,7 +215,19 @@ impl<'a> Game<'a> {
                                 || (i < node.choices.len() && !node.enabled(i)))
                     })
                 {
-                    return Err("invalid probability support".into());
+                    return Err(format!(
+                        "invalid probability support: received {}, expected {}, cursor {:?}, excluded {:?}, nonzero {:?}",
+                        probs.len(),
+                        count,
+                        search.cursor,
+                        excluded,
+                        probs
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, p)| **p != 0.0)
+                            .map(|(i, _)| i)
+                            .collect::<Vec<_>>()
+                    ));
                 }
                 let sum: f64 = probs.iter().sum();
                 if sum <= 0.0 {
@@ -221,6 +254,7 @@ impl<'a> Game<'a> {
             };
             let search = self.saved.search.as_mut().unwrap();
             if pass && index == node.choices.len() {
+                self.last_path = vec![index];
                 self.finish_root(None);
                 continue;
             }
@@ -236,7 +270,11 @@ impl<'a> Game<'a> {
                 choice.status,
                 cat,
             )? {
-                Ok(next) => self.finish_root(Some(next)),
+                Ok(next) => {
+                    self.last_path = search.cursor.clone();
+                    self.last_path.push(index);
+                    self.finish_root(Some(next));
+                }
                 Err(_) => {
                     search
                         .excluded

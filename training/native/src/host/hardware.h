@@ -222,8 +222,7 @@ inline void select_configuration(Settings &s, const Hardware &h) {
       std::max<uint64_t>(1, std::min(limit, s.concurrency)));
   if (s.resume.empty())
     set("--batch", s.batch, batch);
-  set("--memory-mb", s.memory_mb,
-      std::max<uint64_t>(h.ram_available / (3 * 1024 * 1024), 128));
+  set("--memory-mb", s.memory_mb, std::max<uint64_t>(h.ram_available / (3 * 1024 * 1024), 128));
   set("--threads", s.threads, h.gpu_total ? 1 : std::min<uint64_t>(h.cores, 8));
 }
 inline std::string configuration_json(const Settings &s, const Hardware &h) {
@@ -237,8 +236,13 @@ inline std::string configuration_json(const Settings &s, const Hardware &h) {
       << ",\"workers\":" << s.workers << ",\"concurrency\":" << s.concurrency
       << ",\"batch\":" << s.batch << ",\"inference_batch\":" << s.inference_batch
       << ",\"threads\":" << s.threads << ",\"memory_mb\":" << s.memory_mb
-      << ",\"max_game_steps\":" << s.max_game_steps
-      << ",\"training_method\":\"terminal-vtrace\",\"batch_unit\":\"memory-microbatch\""
+      << ",\"max_game_steps\":" << s.max_game_steps << ",\"rules\":\""
+      << (s.shrine ? "shrine" : "classic") << "\""
+      << ",\"search_simulations\":" << s.search_simulations
+      << ",\"search_depth\":" << s.search_depth << ",\"history_size\":" << s.history_size
+      << ",\"history_interval\":" << s.history_interval
+      << ",\"history_percent\":" << s.history_percent
+      << ",\"training_method\":\"terminal-vtrace-mcts\",\"batch_unit\":\"memory-microbatch\""
       << ",\"checkpoint_batch_preserved\":" << (s.resume.empty() ? "false" : "true") << "}\n";
   return out.str();
 }

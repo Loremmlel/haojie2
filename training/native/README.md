@@ -29,6 +29,28 @@ GPU 空闲显存达到 4/6/10/18 GiB 时，起始学习 batch 分别为 64/128/2
 
 状态 JSON 的 `discarded_games` / `discarded_steps` 与 `discarded_long_games` / `discarded_stale_games` / `discarded_memory_games` 单独记录淘汰总量及原因；不计入 `completed_games` 或 `terminal_games_consumed`，已经真实终局但因长度上限被拒收的局仍属于 `completed_games`。`memory_backpressure` 标识完整终局占用导致的采样暂停。`produced = consumed + stale_steps + discarded_steps + ready_steps + partial_steps + learning_steps`，未决转换另计。
 
+## 搜索与对手
+
+正式训练和冻结评测都使用完整命令级随机 MCTS：网络提供参数先验和价值，PUCT 选择命令，执行公开规则后继续搜索本方连续操作、对手行动和反应。默认每个命令根 64 次模拟、最深 64 个决策边；参数补全不冒充对抗搜索深度。渐进扩宽从未裁剪的动作树采样完整命令，机会后继使用独立 xorshift 场景，不读取正式 RNG。每个参数节点使用 95% 条件访问分布加 5% 原策略分布，再按真实 BF16 质量采样并保存实际行为概率。
+
+同一命令的参数选择复用访问数，并固定该次搜索的模型；探索到尚未访问的前缀时再搜索。非终局叶使用网络价值估计，搜索截止不会写成平局或终局奖励。神龛暗选阶段保留公开策略采样，不补造对手的秘密选择；揭示后的神龛对局照常搜索。单次命令补全最多请求 4096 次非强制参数采样，超过时退回完整原策略，计入 `search_parameter_fallbacks`；假想分支遇到空根同样回退原策略，计入 `search_empty_fallbacks`，两者均不丢弃实局。
+
+搜索访问分布作为额外策略交叉熵，随完整终局一起学习；价值和策略梯度仍按真实终局做整局 V-trace，只有真实终局才能入队。`training_method=terminal-vtrace-mcts`；原模型结构、15,184,130 个参数及 BF16 优化器保持不变。TS 参照入口为 `src/ai/training/command-search.ts`，原生入口为 `src/actor/search.cpp`，共用 PUCT、渐进扩宽、随机后继、同方连续行动符号及条件访问分布流程。
+
+对手默认按新局编号分层安排 80% 当前自对弈、20% 历史对手；没有更早模型时先用当前策略。历史池默认保留 8 份、每 64 次更新加入一份，从比当前版本更早的池成员中均匀选择。历史对手开局选定后整局固定；当前策略在下一条完整命令更新版本。训练席位继续交替先后手，仅该席位的轨迹参与学习。80/20 参考 [OpenAI Five 论文附录 N](https://cdn.openai.com/dota-2.pdf)，是实验起点。
+
+| 参数                   | 默认 | 含义                                 |
+| ---------------------- | ---- | ------------------------------------ |
+| `--search-simulations` | 64   | 每个命令根的模拟次数                 |
+| `--search-depth`       | 64   | 完整命令／可选中断决策边的深度上限   |
+| `--history-size`       | 8    | 池内历史模型数上限                   |
+| `--history-interval`   | 64   | 历史模型发布间隔，按学习更新计       |
+| `--history-percent`    | 20   | 新局使用历史对手的目标百分比，0 关闭 |
+
+这些参数写入配置与检查点，恢复时默认沿用，也可显式覆盖。缩小历史池不会更换已有对局的对手。`search_simulations`、`search_expanded`、`search_max_depth`、`search_opponent_nodes`、`search_model_queries` 和 `historical_games_admitted` 记录本次运行的实际搜索及历史对手准入；`history_pool_size` 是当前池规模。搜索推理的编码图、token 与 CPU 解码时间计入原有资源指标。
+
+已知的 `no legal action at root` 只隔离故障局，保存到运行目录 `failed-games/game-ID.json`，整局轨迹淘汰并计入 `discarded_error_games`，随后补开新局。故障局不计胜负、不补奖励；设备、协议及其他未识别错误仍按原有失败保存流程上报。诊断文件包含规则恢复状态，只保存在运行目录，不作为模型输入。
+
 ## Colab
 
 打开 [训练笔记本](https://colab.research.google.com/github/Loremmlel/haojie2/blob/main/training/colab/train.ipynb)，选择 L4、A100 或更新的原生 BF16 GPU，依次点击三个单元的运行按钮，也可选择“全部运行”。安装默认拉取 `main` 最新版，固定使用 PyTorch/LibTorch 2.14.0 cu126 及匹配的 CUDA 头文件；Python 仅用于安装和笔记本控制。T4/P100 会明确拒绝启动，保持 BF16 全链路。
@@ -53,7 +75,9 @@ pwsh -File training/native/run.ps1 stop --directory E:/Training/haojie/run
 pwsh -File training/native/run.ps1 run --directory E:/Training/haojie/restored --resume E:/Training/haojie/run/checkpoint.pt
 ```
 
-默认每 300 秒保存，`--save-seconds 0` 关闭定时保存。保存先停在一致边界，冻结模型、五组 BF16 优化器状态、权威局面、两类 RNG、路径、排除 frontier、未决转换、部分轨迹和 ready 块，再后台原子写入。恢复沿用档内训练语义；并发、worker、推理上限、设备和宿主内存预算可以覆盖。`v3` 指检查点及状态 JSON 的数据格式，不是 main 提交版本或训练方法；重构前的短块训练和当前完整终局训练都使用过这个标签。原始状态和配置布局保持不变，新增淘汰计数及长度上限使用可选字段；此前 `chunk=0` 的完整终局 v3 可直接恢复，默认使用新的长度上限，首次准入前回收过期或过长的旧局。短块 v3 仍拒绝正式续训。新检查点保留淘汰计数与长度上限，恢复时可用 `--max-game-steps` 覆盖。
+默认每 300 秒保存，`--save-seconds 0` 关闭定时保存。保存先停在一致边界，冻结模型、五组 BF16 优化器状态、权威局面、两类 RNG、路径、排除 frontier、未决转换、部分轨迹和 ready 块，再后台原子写入。历史池、仍被对局引用的已退池模型、对手绑定和搜索访问标签一并保存。保存边界两侧都清空临时搜索缓存，从同一公开前缀和冻结参数重建；不改变正式 RNG 或已记录的行为概率。
+
+`v3` 指检查点及状态 JSON 的数据格式，不是 main 提交版本或训练方法。原始状态和 13 项配置布局保持不变，新元数据使用可选字段。此前 `chunk=0` 的完整终局 v3 可直接恢复模型、优化器、有效未结束轨迹及 ready；旧样本没有搜索标签时继续使用原 V-trace 项，新动作开始搜索并记录访问分布。短块 v3 仍拒绝正式续训。无需删除已有完整终局检查点。并发、worker、推理上限、设备、内存预算、`--max-game-steps` 和上述搜索／历史池参数可以显式覆盖。
 
 每次 `checkpoint.pt` 原子落盘后立即发布对应冻结状态的 `saved.json`，作为面板和后台测评的保存回执；运行中手动保存、定时保存与停止保存共用同一路径。
 

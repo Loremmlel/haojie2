@@ -1,4 +1,5 @@
 #include "runtime.h"
+#include "actor/history.h"
 #include "actor/roots.h"
 #include "diagnostics/gemm.h"
 #include "diagnostics/service.h"
@@ -104,8 +105,8 @@ Discard unfinished_limit(const Game &game, uint64_t version, uint64_t limit) {
   if (game.partial.size() >= limit)
     return Discard::Long;
   const Step *oldest = !game.partial.empty() ? &game.partial.front()
-                       : game.pending      ? &*game.pending
-                                           : nullptr;
+                       : game.pending        ? &*game.pending
+                                             : nullptr;
   if (oldest) {
     if (version >= oldest->version && version - oldest->version > LagLimit)
       return Discard::Stale;
@@ -213,6 +214,7 @@ class Lane {
   std::atomic<CpuSnapshot> &weights;
   std::function<bool(Job &)> request_root;
   std::atomic<uint64_t> &cache_hits;
+  std::function<SearchResult(void *, Job &, const std::function<bool()> &)> search;
   std::thread thread;
   static bool host_ready(const Root &root, const CpuSnapshot &weights) {
     return weights && root.host_valid(weights->owner, weights->revision);
@@ -240,9 +242,10 @@ class Lane {
 
 public:
   Lane(Mailbox &out, std::atomic<bool> &paused, std::atomic<CpuSnapshot> &weights,
-       std::function<bool(Job &)> request_root, std::atomic<uint64_t> &cache_hits)
+       std::function<bool(Job &)> request_root, std::atomic<uint64_t> &cache_hits,
+       std::function<SearchResult(void *, Job &, const std::function<bool()> &)> search = {})
       : output(out), paused(paused), weights(weights), request_root(std::move(request_root)),
-        cache_hits(cache_hits), thread([this] {
+        cache_hits(cache_hits), search(std::move(search)), thread([this] {
           void *actor = hj_actor_create();
           CpuPolicy policy;
           InputPool inputs;
@@ -277,7 +280,7 @@ public:
                 if (job.node) {
                   if (!job.weights)
                     job.weights = this->weights.load();
-                  if (!host_ready(*job.node->root, job.weights)) {
+                  if (!this->search && !host_ready(*job.node->root, job.weights)) {
                     auto bytes = job.bytes.capacity();
                     job.state->flow->store(Flow::RootQueued);
                     if (this->request_root(job)) {
@@ -289,17 +292,41 @@ public:
                     output.push(std::move(e));
                     continue;
                   }
+                  auto start = Clock::now();
+                  std::vector<uint16_t> mass;
+                  uint64_t version = job.weights->version;
+                  if (this->search) {
+                    auto cancelled = [&] { return this->paused || *job.state->pause || closing; };
+                    try {
+                      auto result = this->search(actor, job, cancelled);
+                      mass = std::move(result.mass);
+                      version = result.version;
+                      if (job.state->actor == job.state->learner) {
+                        job.node->search_target = std::move(result.target);
+                        job.node->account_input();
+                      }
+                    } catch (const std::exception &) {
+                      if (!cancelled())
+                        throw;
+                    }
+                    if (cancelled()) {
+                      e.kind = 0;
+                      output.bytes -= job.bytes.capacity();
+                      output.push(std::move(e));
+                      continue;
+                    }
+                  } else {
+                    mass = policy.score(*job.node, job.weights);
+                  }
                   {
                     std::lock_guard lock(*job.state->progress_mutex);
                     job.state->sent = job.node;
                     job.state->sent_training = job.state->actor == job.state->learner;
-                    job.state->sent_version = job.weights->version;
+                    job.state->sent_version = version;
                   }
                   if (!job.root_reply)
                     ++this->cache_hits;
                   job.root_reply = false;
-                  auto start = Clock::now();
-                  auto mass = policy.score(*job.node, job.weights);
                   policy_ms = elapsed(start) * 1000;
                   diagnostic::record("policy", job.game, policy_ms);
                   {
@@ -320,9 +347,21 @@ public:
                 auto rules_started = diagnostic::now();
                 int status = hj_actor_call(actor, job.op, input->data(), input->size(), &p, &n);
                 diagnostic::record("rules", job.game, diagnostic::now() - rules_started, job.op);
-                if (status)
+                if (status) {
                   e.error = std::string(reinterpret_cast<const char *>(p), n);
-                else {
+                  // 仅隔离已知的单局空根；协议、设备和其他规则错误仍上报宿主。
+                  if (e.error == "no legal action at root") {
+                    Bytes id;
+                    put(id, job.game);
+                    if (!hj_actor_call(actor, 3, id.data(), id.size(), &p, &n)) {
+                      e.bytes.assign(p, p + n);
+                      e.kind = 4;
+                      --active_games;
+                      policy.clear();
+                      inputs.trim();
+                    }
+                  }
+                } else {
                   if (job.op == 1) {
                     auto &g = *job.state;
                     bool again = false, completed = false;
@@ -478,11 +517,28 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
     s.save_seconds = double(c[12]) / 1000000;
   T limits;
   if (archive->try_read("trajectory_limits", limits)) {
-    TORCH_CHECK(limits.scalar_type() == torch::kInt64 && limits.dim() == 1 &&
-                    limits.numel() == 1 && limits[0].item<int64_t>() > 0,
+    TORCH_CHECK(limits.scalar_type() == torch::kInt64 && limits.dim() == 1 && limits.numel() == 1 &&
+                    limits[0].item<int64_t>() > 0,
                 "invalid trajectory limit");
     if (!s.supplied.count("--max-game-steps"))
       s.max_game_steps = limits[0].item<int64_t>();
+  }
+  T selfplay;
+  if (archive->try_read("selfplay_config", selfplay)) {
+    TORCH_CHECK(selfplay.scalar_type() == torch::kInt64 && selfplay.dim() == 1 &&
+                    selfplay.numel() == 5,
+                "invalid self-play configuration");
+    std::array<uint64_t *, 5> fields{&s.search_simulations, &s.search_depth, &s.history_size,
+                                     &s.history_interval, &s.history_percent};
+    std::array<const char *, 5> names{"--search-simulations", "--search-depth", "--history-size",
+                                      "--history-interval", "--history-percent"};
+    for (size_t i = 0; i < fields.size(); ++i) {
+      auto value = selfplay[i].item<int64_t>();
+      TORCH_CHECK(value >= (i == 4 ? 0 : 1) && (i != 4 || value <= 100),
+                  "invalid self-play budget");
+      if (!s.supplied.count(names[i]))
+        *fields[i] = value;
+    }
   }
   return {std::move(s), std::move(archive)};
 }
@@ -537,6 +593,11 @@ class Session {
   std::unique_ptr<RootService> roots;
   std::unique_ptr<LearningEngine> learning_engine;
   std::unique_ptr<Workset> workset;
+  OpponentHistory history;
+  std::unique_ptr<SearchService> search_service;
+  std::atomic<uint64_t> search_simulations{0}, search_expanded{0}, search_opponent_nodes{0},
+      search_max_depth{0}, search_parameter_fallbacks{0}, search_empty_fallbacks{0};
+  uint64_t historical_games = 0;
 
 public:
   explicit Session(std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resumed)
@@ -567,8 +628,31 @@ public:
                          settings.diagnostic != "episodes" && i < settings.workers;
          ++i)
       lanes.push_back(std::make_unique<Lane>(
-          mailbox, sampling_paused, cpu_weights, [this](Job &job) { return roots->submit(job); },
-          actor->cache_hits));
+          mailbox, sampling_paused, cpu_weights,
+          [this](Job &job) { return roots && roots->submit(job); }, actor->cache_hits,
+          settings.terminal_training()
+              ? std::function<SearchResult(void *, Job &, const std::function<bool()> &)>(
+                    [this](void *handle, Job &job, const std::function<bool()> &cancelled) {
+                      auto &game = *job.state;
+                      auto policy = game.actor != game.learner && game.opponent
+                                        ? game.opponent
+                                        : history.latest.load();
+                      auto result =
+                          search_actor(handle, game.id, game.actor, job.node, policy,
+                                       *search_service, settings.search_simulations,
+                                       settings.search_depth, cancelled, &game.search_plan);
+                      search_simulations += result.simulations;
+                      search_expanded += result.expanded;
+                      search_opponent_nodes += result.opponent_nodes;
+                      search_parameter_fallbacks += result.parameter_limit;
+                      search_empty_fallbacks += result.empty_branch;
+                      auto old_depth = search_max_depth.load();
+                      while (old_depth < result.depth &&
+                             !search_max_depth.compare_exchange_weak(old_depth, result.depth)) {
+                      }
+                      return result;
+                    })
+              : std::function<SearchResult(void *, Job &, const std::function<bool()> &)>()));
     auto diagnostic_batch = settings.batch;
     if (resumed.second)
       restore(*resumed.second);
@@ -583,6 +667,21 @@ public:
     // 主线程的初始化完成后，持久流才可读取模型和优化器。
     synchronize(learner->parameters()[0].device());
     cpu_weights.store(CpuPolicy::snapshot(actor, actor_version.load()));
+    if (settings.terminal_training()) {
+      history.limit = settings.history_size;
+      history.interval = settings.history_interval;
+      history.percent = settings.history_percent;
+      if (resumed.second) {
+        auto bindings = history.load(*resumed.second, actor, actor_version.load());
+        for (auto &[id, policy] : bindings) {
+          TORCH_CHECK(games.count(id), "historical opponent references missing game");
+          games.at(id).opponent = policy;
+        }
+      }
+      history.publish(std::make_shared<FrozenPolicy>(actor, actor_version.load()));
+      search_service = std::make_unique<SearchService>(
+          device, settings.width, std::min(settings.workers, settings.inference_batch));
+    }
     if (settings.diagnostic == "inference" || settings.diagnostic == "service" ||
         settings.diagnostic == "gemm" || settings.diagnostic == "episodes")
       return;
@@ -590,11 +689,12 @@ public:
       learning_engine = std::make_unique<LearningEngine>(learner, optimizer, settings.batch);
     if (settings.diagnostic == "learner")
       return;
-    roots = std::make_unique<RootService>(
-        actor, device, sampling_paused, publishing, cpu_weights, actor_weights, mailbox,
-        settings.inference_batch,
-        [this](Job job) { lanes[job.game % lanes.size()]->submit(std::move(job)); },
-        settings.root_slots);
+    if (!settings.terminal_training())
+      roots = std::make_unique<RootService>(
+          actor, device, sampling_paused, publishing, cpu_weights, actor_weights, mailbox,
+          settings.inference_batch,
+          [this](Job job) { lanes[job.game % lanes.size()]->submit(std::move(job)); },
+          settings.root_slots);
     learning_executor =
         std::make_unique<Executor>(mailbox, learner->parameters()[0].device(), false);
     preparation_executor =
@@ -612,6 +712,7 @@ public:
       roots->stop();
     for (auto &lane : lanes)
       lane.reset();
+    search_service.reset();
     roots.reset();
   }
   void submit(Game &g, uint32_t op, Bytes b) {
@@ -704,12 +805,29 @@ public:
   }
   void event(Event e) {
     accrue_activity();
-    if (!e.error.empty())
-      throw std::runtime_error(e.error);
     auto found = games.find(e.game);
     if (found == games.end())
       throw std::runtime_error("unknown lane event");
     auto &g = found->second;
+    if (e.kind == 4 && e.error == "no legal action at root") {
+      auto progress_mutex = g.progress_mutex;
+      std::lock_guard lock(*progress_mutex);
+      progress_locked(g);
+      auto directory = settings.directory / "failed-games";
+      fs::create_directories(directory);
+      auto path = directory / ("game-" + std::to_string(g.id) + ".json");
+      atomic_text(path, std::string(e.bytes.begin(), e.bytes.end()));
+      counters.discarded_steps += g.partial.size();
+      ++counters.discarded_games;
+      ++counters.discarded_error_games;
+      std::cerr << "discarded game " << g.id << ": " << e.error << "; saved " << path << '\n';
+      // 删除整局的未完成轨迹；不补奖励，也不记为真实终局。
+      g.flow->store(Flow::Idle);
+      games.erase(found);
+      return;
+    }
+    if (!e.error.empty())
+      throw std::runtime_error(e.error);
     {
       std::lock_guard lock(*g.progress_mutex);
       progress_locked(g);
@@ -723,6 +841,7 @@ public:
         // 原始下标保持兼容；恢复时由 Rust 刷新当前未采样节点的空前缀掩码。
         // 已记录的行为节点及其历史掩码不改写。
         g.current.reset();
+        g.search_plan.clear();
         g.root.reset();
       }
       if (!g.current) {
@@ -758,6 +877,7 @@ public:
         g.current.reset();
         if (g.root)
           g.root->clear_cache();
+        g.search_plan.clear();
         g.root.reset();
       }
     } else if (e.op == 5)
@@ -819,13 +939,17 @@ public:
     // 前向与反向不持推理锁。只在整批推理结束后发布，并等待拷贝完成再交权。
     publishing = true;
     std::unique_lock lock(actor_weights);
-    roots->wait_reads();
+    if (roots)
+      roots->wait_reads();
     copy_weights(learner, actor);
     synchronize(device);
     cpu_weights.store(CpuPolicy::snapshot(actor, optimizer.steps));
+    if (settings.terminal_training())
+      history.publish(std::make_shared<FrozenPolicy>(actor, optimizer.steps));
     actor_version = published = optimizer.steps;
     publishing = false;
-    roots->wake();
+    if (roots)
+      roots->wake();
   }
   void train() {
     RECORD_FUNCTION("haojie::train", std::vector<c10::IValue>());
@@ -836,7 +960,7 @@ public:
       train_terminal();
       return;
     }
-    if (settings.defer_learning && roots->queued())
+    if (settings.defer_learning && roots && roots->queued())
       return;
     if (next_learning.empty()) {
       if (ready.empty())
@@ -921,8 +1045,8 @@ public:
       return;
     // 完成局独立取走；长局、停放局与更新次数不参与就绪条件。
     // 批次达到计算小批大小即提交已有完整局，不把整个队列合成一次大更新。
-    in_learning = terminal_batch(ready, committed_updates, settings.batch,
-                                 settings.max_game_steps, counters);
+    in_learning =
+        terminal_batch(ready, committed_updates, settings.batch, settings.max_game_steps, counters);
     if (in_learning.empty())
       return;
     learn_start = Clock::now();
@@ -949,7 +1073,8 @@ public:
   }
   void resume_sampling() {
     sampling_paused = quiescing || memory_paused;
-    roots->wake();
+    if (roots)
+      roots->wake();
     if (sampling_paused)
       return;
     for (auto &entry : games) {
@@ -1006,7 +1131,8 @@ public:
     }
     // 先收回全部 lane 和设备槽的所有权，不能释放仍被在途推理引用的轨迹。
     sampling_paused = true;
-    roots->wake();
+    if (roots)
+      roots->wake();
     settle();
     collect_learning();
     std::vector<std::pair<uint64_t, Discard>> rejected;
@@ -1079,6 +1205,10 @@ public:
       Game game;
       game.id = next_id++;
       game.learner = uint32_t(1 + (game.id & 1));
+      if (settings.terminal_training()) {
+        game.opponent = history.choose(game.id, uint32_t(settings.seed));
+        historical_games += bool(game.opponent);
+      }
       auto id = game.id;
       games.emplace(id, std::move(game));
       if (workset)
@@ -1115,7 +1245,8 @@ public:
       inputs.trim();
     if (ready_paused || managed() > budget * 3 / 4) {
       sampling_paused = true;
-      roots->wake();
+      if (roots)
+        roots->wake();
       for (auto &p : games) {
         auto &g = p.second;
         std::lock_guard lock(*g.progress_mutex);
@@ -1130,7 +1261,8 @@ public:
     }
     if (sampling_paused && !quiescing) {
       sampling_paused = false;
-      roots->wake();
+      if (roots)
+        roots->wake();
       for (auto &entry : games) {
         auto &g = entry.second;
         if (g.idle() && !g.parked && !g.parking) {
@@ -1196,8 +1328,8 @@ public:
             phase == Flow::RootQueued || (phase == Flow::Idle && bool(p.second.current));
       }
     }
-    auto graph = roots->stats();
-    auto encoder = roots->progress();
+    auto graph = search_service ? search_service->stats() : roots->stats();
+    auto encoder = search_service ? search_service->progress() : roots->progress();
     peak_managed = std::max(peak_managed, used);
     double wall = elapsed(start);
     std::ostringstream o;
@@ -1233,7 +1365,8 @@ public:
     for (auto &b : next_learning)
       learning_steps += b.steps.size();
     if (counters.consumed + counters.stale_steps + counters.discarded_steps + ready_steps() +
-            partial + learning_steps != counters.produced)
+            partial + learning_steps !=
+        counters.produced)
       throw std::runtime_error("trajectory accounting differs");
     o << learning_steps;
     o << ",\n  \"lag_limit\": " << LagLimit
@@ -1248,6 +1381,8 @@ public:
       << counters.discarded_stale_games - delta.discarded_stale_games
       << ",\n  \"discarded_memory_games\": "
       << counters.discarded_memory_games - delta.discarded_memory_games
+      << ",\n  \"discarded_error_games\": "
+      << counters.discarded_error_games - delta.discarded_error_games
       << ",\n  \"outstanding_steps\": "
       << counters.produced - counters.consumed - counters.stale_steps - counters.discarded_steps +
              pending
@@ -1259,6 +1394,16 @@ public:
       << ",\n  \"ready_backpressure\": " << (ready_paused ? "true" : "false")
       << ",\n  \"memory_backpressure\": " << (memory_paused ? "true" : "false")
       << ",\n  \"max_game_steps\": " << settings.max_game_steps;
+    o << ",\n  \"search_simulations\": " << search_simulations.load()
+      << ",\n  \"search_expanded\": " << search_expanded.load()
+      << ",\n  \"search_max_depth\": " << search_max_depth.load()
+      << ",\n  \"search_opponent_nodes\": " << search_opponent_nodes.load()
+      << ",\n  \"search_budget\": " << settings.search_simulations
+      << ",\n  \"search_parameter_fallbacks\": " << search_parameter_fallbacks.load()
+      << ",\n  \"search_empty_fallbacks\": " << search_empty_fallbacks.load()
+      << ",\n  \"search_model_queries\": " << (search_service ? search_service->queries.load() : 0)
+      << ",\n  \"history_pool_size\": " << history.snapshots().size()
+      << ",\n  \"historical_games_admitted\": " << historical_games;
     if (diagnostic::enabled) {
       uint64_t maximum = 0, total = 0, count = 0;
       for (auto &block : ready)
@@ -1278,15 +1423,15 @@ public:
       o << "null";
     o << ",\n  \"loss_update\": " << committed_updates;
     o << ",\n  \"training_method\": \""
-      << (settings.terminal_training() ? "terminal-vtrace" : "diagnostic-unroll") << "\""
+      << (settings.terminal_training() ? "terminal-vtrace-mcts" : "diagnostic-unroll") << "\""
       << ",\n  \"terminal_games_consumed\": " << terminal_games_consumed;
     if (latest_terminal)
       o << ",\n  \"latest_value_mse\": " << latest_terminal->value_mse
         << ",\n  \"latest_policy_entropy\": " << latest_terminal->policy_entropy
         << ",\n  \"latest_gradient_norm\": " << latest_terminal->gradient_norm;
     o << ",\n  \"inference_nodes\": " << infer_nodes << ",\n  \"encoder_nodes\": " << encoder.nodes
-      << ",\n  \"encoder_batches\": " << encoder.batches
-      << ",\n  \"policy_cpu_seconds\": " << inference_seconds
+      << ",\n  \"encoder_batches\": " << encoder.batches << ",\n  \"policy_cpu_seconds\": "
+      << (search_service ? search_service->policy_seconds() : inference_seconds)
       << ",\n  \"encoder_seconds\": " << encoder.seconds
       << ",\n  \"graph_replays\": " << graph.replays
       << ",\n  \"graph_fallbacks\": " << graph.fallbacks
@@ -1294,9 +1439,11 @@ public:
       << ",\n  \"input_capacity_bytes\": " << graph.capacity_bytes
       << ",\n  \"encoded_tokens_actual\": " << graph.tokens
       << ",\n  \"encoded_tokens_capacity\": " << graph.token_capacity
-      << ",\n  \"peak_active\": " << peak_active
-      << ",\n  \"encoded_roots\": " << actor->encoded_roots
-      << ",\n  \"root_cache_hits\": " << actor->cache_hits
+      << ",\n  \"peak_active\": " << peak_active << ",\n  \"encoded_roots\": "
+      << (search_service ? encoder.nodes : actor->encoded_roots.load())
+      << ",\n  \"root_cache_hits\": "
+      << (search_service ? search_service->queries.load() - encoder.nodes
+                         : actor->cache_hits.load())
       << ",\n  \"learner_encoded_roots\": " << learner->encoded_roots
       << ",\n  \"learner_encoded_tokens\": " << learner->computed_tokens
       << ",\n  \"learner_scored_candidates\": " << learner->scored_candidates
@@ -1324,7 +1471,8 @@ public:
   void checkpoint(bool resume = true) {
     quiescing = true;
     sampling_paused = true;
-    roots->wake();
+    if (roots)
+      roots->wake();
     settle();
     collect_learning(true);
     if (prepared_learning.valid())
@@ -1339,6 +1487,9 @@ public:
         submit(p.second, 2, id_packet(p.first));
     settle();
     Bytes state;
+    // 冻结点两侧都从相同公开前缀重建搜索；缓存不改变恢复后的策略或正式随机序列。
+    for (auto &[id, game] : games)
+      game.search_plan.clear();
     put<uint64_t>(state, 0x484a4e4154495633ull);
     std::string identity = hj_identity();
     put_bytes(state, Bytes(identity.begin(), identity.end()));
@@ -1392,16 +1543,34 @@ public:
                                    int64_t(device.index()),
                                    int64_t(std::llround(settings.save_seconds * 1000000))};
     archive->write("config", torch::tensor(config, torch::kInt64));
+    archive->write(
+        "selfplay_config",
+        torch::tensor({int64_t(settings.search_simulations), int64_t(settings.search_depth),
+                       int64_t(settings.history_size), int64_t(settings.history_interval),
+                       int64_t(settings.history_percent)},
+                      torch::kInt64));
+    if (settings.terminal_training()) {
+      std::vector<std::pair<uint64_t, Frozen>> bindings;
+      for (auto &[id, game] : games)
+        if (game.opponent)
+          bindings.emplace_back(id, game.opponent);
+      history.save(*archive, bindings);
+    }
+    auto search_data = graph.search_data();
+    archive->write(
+        "search_targets",
+        torch::from_blob(search_data.data(), {int64_t(search_data.size())}, torch::kUInt8).clone());
     archive->write("stale_counts",
                    torch::tensor({int64_t(counters.stale_steps), int64_t(counters.stale_games)},
                                  torch::kInt64));
     // 新元数据为可选字段，旧 v3 的二进制状态和配置布局保持不变。
-    archive->write("discard_counts",
-                   torch::tensor({int64_t(counters.discarded_steps),
-                                  int64_t(counters.discarded_games),
-                                  int64_t(counters.discarded_long_games),
-                                  int64_t(counters.discarded_stale_games),
-                                  int64_t(counters.discarded_memory_games)}, torch::kInt64));
+    archive->write(
+        "discard_counts",
+        torch::tensor(
+            {int64_t(counters.discarded_steps), int64_t(counters.discarded_games),
+             int64_t(counters.discarded_long_games), int64_t(counters.discarded_stale_games),
+             int64_t(counters.discarded_memory_games), int64_t(counters.discarded_error_games)},
+            torch::kInt64));
     archive->write("trajectory_limits",
                    torch::tensor({int64_t(settings.max_game_steps)}, torch::kInt64));
     auto state_owner = std::make_shared<Bytes>(std::move(state));
@@ -1443,15 +1612,19 @@ public:
     T discard_counts;
     if (archive.try_read("discard_counts", discard_counts)) {
       TORCH_CHECK(discard_counts.scalar_type() == torch::kInt64 && discard_counts.dim() == 1 &&
-                      discard_counts.numel() == 5 && discard_counts.ge(0).all().item<bool>(),
+                      (discard_counts.numel() == 5 || discard_counts.numel() == 6) &&
+                      discard_counts.ge(0).all().item<bool>(),
                   "invalid discarded trajectory counters");
       counters.discarded_steps = discard_counts[0].item<int64_t>();
       counters.discarded_games = discard_counts[1].item<int64_t>();
       counters.discarded_long_games = discard_counts[2].item<int64_t>();
       counters.discarded_stale_games = discard_counts[3].item<int64_t>();
       counters.discarded_memory_games = discard_counts[4].item<int64_t>();
-      TORCH_CHECK(counters.discarded_games == counters.discarded_long_games +
-                      counters.discarded_stale_games + counters.discarded_memory_games,
+      if (discard_counts.numel() == 6)
+        counters.discarded_error_games = discard_counts[5].item<int64_t>();
+      TORCH_CHECK(counters.discarded_games ==
+                      counters.discarded_long_games + counters.discarded_stale_games +
+                          counters.discarded_memory_games + counters.discarded_error_games,
                   "discarded trajectory reasons differ");
     }
     T stale_counts;
@@ -1488,6 +1661,9 @@ public:
     counters.backtracks = r.get<uint64_t>();
     counters.failures = r.get<uint64_t>();
     GraphReader graph(r, inputs);
+    T search_data;
+    if (archive.try_read("search_targets", search_data))
+      graph.search_data(search_data);
     auto count = r.get<uint64_t>();
     for (uint64_t i = 0; i < count; ++i) {
       Game g;
@@ -1913,6 +2089,7 @@ Frame parse(Reader r, std::shared_ptr<Root> &cached, InputPool &pool) {
     n->targets = r.array<int32_t>(candidates);
     n->mask = r.array<uint8_t>(candidates);
     auto path = r.array<uint32_t>(cursor);
+    n->cursor = path;
     std::vector<Frontier> excluded;
     for (uint32_t i = 0; i < facts; ++i) {
       auto path = r.array<uint32_t>(r.get<uint32_t>());
@@ -2133,7 +2310,8 @@ void runtime_checks() {
     session.resize();
     TORCH_CHECK(session.games.size() == 2, "learning in flight blocked game admission");
     session.sampling_paused = true;
-    session.roots->wake();
+    if (session.roots)
+      session.roots->wake();
     session.settle();
     session.collect_learning(true);
     TORCH_CHECK(session.consumed_lag_max == 64 && session.counters.consumed == 66 &&
@@ -2171,9 +2349,26 @@ void runtime_checks() {
     settings.resume = directory / "legacy.pt";
     Session compatible(resume_settings(settings));
     TORCH_CHECK(compatible.counters.discarded_games == 0 &&
-                    compatible.games.at(1).partial.size() == 1 &&
-                    compatible.optimizer.steps == 66,
+                    compatible.games.at(1).partial.size() == 1 && compatible.optimizer.steps == 66,
                 "legacy v3 checkpoint no longer restores");
+    {
+      auto snapshot = compatible.games.at(1).snapshot;
+      auto completed = compatible.counters.finished;
+      compatible.settings.directory = directory / "isolated";
+      compatible.event({1, 1, snapshot, "no legal action at root", 4});
+      TORCH_CHECK(!compatible.games.count(1) && compatible.counters.discarded_error_games == 1 &&
+                      compatible.counters.finished == completed &&
+                      fs::exists(compatible.settings.directory / "failed-games/game-1.json"),
+                  "empty root stopped training, fabricated terminal or lost diagnostic state");
+      compatible.checkpoint(false);
+      if (compatible.writer.valid())
+        compatible.writer.get();
+      auto reload = compatible.settings;
+      reload.resume = compatible.settings.directory / "checkpoint.pt";
+      Session recovered(resume_settings(reload));
+      TORCH_CHECK(recovered.counters.discarded_error_games == 1 && !recovered.games.count(1),
+                  "empty-root discard did not persist");
+    }
     // 正好 K=64 的未结束轨迹保留，K=65 即提前整局释放，不伪造终局。
     restored.quiescing = true;
     auto &old = restored.games.at(1);
@@ -2256,6 +2451,8 @@ void runtime_checks() {
     settings.max_game_steps = 8192;
     settings.supplied.insert("--max-game-steps");
     TORCH_CHECK(resume_settings(settings).first.max_game_steps == 8192);
+    TORCH_CHECK(fs::equivalent(directory.parent_path(), fs::temp_directory_path()));
+    fs::remove_all(directory / "isolated");
     fs::remove(directory / "legacy.pt");
     fs::remove(directory / "checkpoint.pt");
     fs::remove(directory / "saved.json");
@@ -2271,10 +2468,11 @@ void runtime_checks() {
     settings.chunk = 0;
     settings.max_game_steps = 8;
     settings.seconds = 3;
+    settings.search_simulations = settings.search_depth = 1;
     settings.save_seconds = 0;
-    settings.directory = fs::temp_directory_path() /
-                         ("haojie-discard-check-" +
-                          std::to_string(Clock::now().time_since_epoch().count()));
+    settings.directory =
+        fs::temp_directory_path() /
+        ("haojie-discard-check-" + std::to_string(Clock::now().time_since_epoch().count()));
     fs::create_directory(settings.directory);
     {
       Session live({settings, {}});
