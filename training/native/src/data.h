@@ -116,6 +116,7 @@ struct Root {
   // 当前 actor 的实体仿射项及根上下文投影；检查点只保存原始输入，恢复后重建。
   T cached_tokens, cached_context, host_tokens, host_context;
   mutable std::mutex cache_mutex;
+  mutable std::mutex prediction_mutex;
   uint64_t cached_revision = 0;
   const void *cached_owner = nullptr;
   StorageBytes input_storage, cache_storage;

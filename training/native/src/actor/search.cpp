@@ -3,6 +3,7 @@
 #include "history.h"
 #include "mcts.h"
 #include "storage/checkpoint.h"
+#include <barrier>
 #include <c10/core/StreamGuard.h>
 #include <c10/core/impl/VirtualGuardImpl.h>
 #include <iostream>
@@ -30,83 +31,119 @@ SearchService::SearchService(const torch::Device &device, uint64_t width, uint64
   model->to(device);
   model->pack_weights();
   encoder = std::make_unique<InferenceEngine>(
-      model, device, [this] { changed.notify_all(); }, 1, max_roots);
+      model, device,
+      [this] {
+        std::lock_guard lock(mutex);
+        ++revision;
+        changed.notify_one();
+      },
+      2, max_roots);
   thread = std::thread([this, device] {
     torch::NoGradGuard guard;
-    CpuPolicy decoder;
+    struct Slot {
+      std::shared_ptr<InferenceFlight> flight;
+      std::vector<Request> requests;
+      Frozen policy;
+    };
+    std::array<Slot, 2> slots;
     Frozen loaded;
     std::optional<c10::Stream> stream;
     if (device.is_cuda())
       stream = c10::impl::VirtualGuardImpl(device.type()).getStreamFromGlobalPool(device, false);
     c10::OptionalStreamGuard stream_guard(stream);
     for (;;) {
-      std::vector<Request> batch;
+      uint64_t observed;
       {
-        std::unique_lock lock(mutex);
-        changed.wait(lock, [&] { return closing || !requests.empty(); });
-        if (requests.empty())
-          break;
-        auto policy = requests.front().policy;
-        size_t tokens = 0;
-        for (auto it = requests.begin(); it != requests.end() && batch.size() < batch_limit;) {
-          if (it->policy != policy || (tokens && tokens + it->node->root->rows.size() > 8192)) {
-            ++it;
-            continue;
-          }
-          tokens += it->node->root->rows.size() + 1;
-          batch.push_back(std::move(*it));
-          it = requests.erase(it);
-        }
+        std::lock_guard lock(mutex);
+        observed = revision;
       }
-      try {
-        std::vector<std::shared_ptr<Node>> nodes;
-        for (auto &request : batch)
-          nodes.push_back(request.node);
-        auto policy = batch.front().policy;
-        std::vector<std::shared_ptr<Node>> missing;
-        for (auto &node : nodes)
-          if (!node->root->host_valid(policy->cpu->owner, policy->cpu->revision))
-            missing.push_back(node);
-        if (!missing.empty()) {
-          if (loaded != policy) {
-            copy_weights(policy->model, model);
+      bool progressed = false;
+      for (auto &slot : slots) {
+        if (!slot.flight || !slot.flight->complete.load(std::memory_order_acquire))
+          continue;
+        running -= slot.requests.size();
+        try {
+          encoder->finish(slot.flight);
+          encoded_nodes += slot.flight->nodes.size();
+          ++encoded_batches;
+          encoding_ns += uint64_t(std::llround(slot.flight->seconds * 1e9));
+          for (auto &node : slot.flight->nodes) {
+            std::lock_guard lock(node->root->cache_mutex);
+            node->root->cached_owner = slot.policy->cpu->owner;
+            node->root->cached_revision = slot.policy->cpu->revision;
+          }
+          for (auto &request : slot.requests)
+            request.result.set_value();
+        } catch (...) {
+          for (auto &request : slot.requests)
+            request.result.set_exception(std::current_exception());
+        }
+        slot.requests.clear();
+        slot.policy.reset();
+        slot.flight.reset();
+        progressed = true;
+      }
+      for (size_t index = 0; index < slots.size(); ++index) {
+        auto &slot = slots[index];
+        if (slot.flight)
+          continue;
+        bool active =
+            std::any_of(slots.begin(), slots.end(), [](auto &s) { return bool(s.flight); });
+        {
+          std::lock_guard lock(mutex);
+          if (requests.empty())
+            continue;
+          // 队首另一版本等待时先排空旧槽，不能持续补入当前模型而饿死历史对手。
+          if (active && requests.front().policy != loaded)
+            continue;
+          // 同模型的两槽可重叠；换权重前先完成所有旧槽，避免图读取另一版本。
+          slot.policy = active ? loaded : requests.front().policy;
+          size_t tokens = 0;
+          for (auto it = requests.begin();
+               it != requests.end() && slot.requests.size() < batch_limit;) {
+            auto cost = it->node->root->rows.size() + 1;
+            if (it->policy != slot.policy || (tokens && tokens + cost > 8192)) {
+              ++it;
+              continue;
+            }
+            tokens += cost;
+            slot.requests.push_back(std::move(*it));
+            it = requests.erase(it);
+          }
+          waiting -= slot.requests.size();
+        }
+        if (slot.requests.empty()) {
+          slot.policy.reset();
+          continue;
+        }
+        progressed = true;
+        try {
+          std::vector<std::shared_ptr<Node>> missing;
+          for (auto &request : slot.requests)
+            missing.push_back(request.node);
+          if (loaded != slot.policy) {
+            copy_weights(slot.policy->model, model);
             if (device.is_cuda())
               c10::impl::VirtualGuardImpl(device.type())
                   .synchronizeStream(c10::impl::VirtualGuardImpl(device.type()).getStream(device));
-            loaded = policy;
+            loaded = slot.policy;
           }
-          auto flight = encoder->submit(0, missing, policy->version);
-          {
-            std::unique_lock lock(mutex);
-            while (!flight->complete.load(std::memory_order_acquire))
-              changed.wait_for(lock, std::chrono::milliseconds(10));
-          }
-          encoder->finish(flight);
-          encoded_nodes += missing.size();
-          ++encoded_batches;
-          encoding_ns += uint64_t(std::llround(flight->seconds * 1e9));
-          for (auto &node : missing) {
-            std::lock_guard lock(node->root->cache_mutex);
-            node->root->cached_owner = policy->cpu->owner;
-            node->root->cached_revision = policy->cpu->revision;
-          }
+          slot.flight = encoder->submit(index, std::move(missing), slot.policy->version);
+          running += slot.requests.size();
+        } catch (...) {
+          for (auto &request : slot.requests)
+            request.result.set_exception(std::current_exception());
+          slot.requests.clear();
+          slot.policy.reset();
         }
-        std::vector<SearchPrediction> predictions;
-        auto decode_start = std::chrono::steady_clock::now();
-        for (size_t i = 0; i < batch.size(); ++i) {
-          double value;
-          auto mass = decoder.score(*nodes[i], policy->cpu, &value);
-          predictions.push_back({std::move(mass), value});
-        }
-        decoding_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                           std::chrono::steady_clock::now() - decode_start)
-                           .count();
-        for (size_t i = 0; i < batch.size(); ++i)
-          batch[i].result.set_value(std::move(predictions[i]));
-      } catch (...) {
-        for (auto &request : batch)
-          request.result.set_exception(std::current_exception());
       }
+      if (progressed)
+        continue;
+      std::unique_lock lock(mutex);
+      if (closing && requests.empty() &&
+          std::none_of(slots.begin(), slots.end(), [](auto &s) { return bool(s.flight); }))
+        break;
+      changed.wait(lock, [&] { return revision != observed; });
     }
   });
 }
@@ -114,21 +151,39 @@ SearchService::~SearchService() {
   {
     std::lock_guard lock(mutex);
     closing = true;
-  }
-  changed.notify_all();
-  thread.join();
-}
-SearchPrediction SearchService::predict(const Frozen &policy, const std::shared_ptr<Node> &node) {
-  ++queries;
-  Request request{policy, node};
-  auto result = request.result.get_future();
-  {
-    std::lock_guard lock(mutex);
-    TORCH_CHECK(!closing, "search service closed");
-    requests.push_back(std::move(request));
+    ++revision;
   }
   changed.notify_one();
-  return result.get();
+  thread.join();
+}
+SearchPrediction SearchService::predict(const Frozen &policy, const std::shared_ptr<Node> &node,
+                                        bool with_value) {
+  torch::NoGradGuard guard;
+  ++queries;
+  // 同根的版本切换与读取互斥，独立对局仍在各 lane 并行解码。
+  std::unique_lock root_lock(node->root->prediction_mutex);
+  if (!node->root->host_valid(policy->cpu->owner, policy->cpu->revision)) {
+    Request request{policy, node};
+    auto result = request.result.get_future();
+    {
+      std::lock_guard lock(mutex);
+      TORCH_CHECK(!closing, "search service closed");
+      requests.push_back(std::move(request));
+      ++waiting;
+      ++revision;
+    }
+    changed.notify_one();
+    result.get();
+  }
+  // 编码完成即交回调用线程；缓存命中不排队，CPU 策略头不阻塞下一批 GPU 编码。
+  thread_local CpuPolicy decoder;
+  auto start = std::chrono::steady_clock::now();
+  SearchPrediction result;
+  result.mass = decoder.score(*node, policy->cpu, with_value ? &result.value : nullptr);
+  decoding_ns +=
+      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start)
+          .count();
+  return result;
 }
 namespace {
 struct PublicState {
@@ -353,7 +408,7 @@ SearchResult search_actor(void *actor, uint64_t game, uint32_t perspective,
       plan && plan->root == node->root->id && plan->actor == perspective ? plan->policy : policy;
   SearchResult result;
   result.version = selected_policy->version;
-  auto base = service.predict(selected_policy, node);
+  auto base = service.predict(selected_policy, node, simulations != 0);
   result.mass = base.mass;
   // 关闭搜索时直接返回冻结策略，不创建模拟 actor，也不生成搜索监督标签。
   if (!simulations)
@@ -623,6 +678,93 @@ void search_checks(const torch::Device &device) {
   reader.end();
   TORCH_CHECK(node->search_target == result.target && node->cursor == frame.node->cursor,
               "checkpoint lost MCTS visits or parameter prefix");
+  if (device.is_cuda()) {
+    // 固定真实公开输入、384 宽模型和查询数，计时不包含模型初始化与图捕获。
+    std::vector<std::shared_ptr<Node>> work;
+    for (size_t i = 0; i < 128; ++i) {
+      auto f = parse(call(1, request), root, inputs);
+      TORCH_CHECK(f.kind == 0, "sampling workset ended before its fixed query count");
+      if (i % 8 == 0)
+        work.push_back(f.node);
+      request = id;
+      put<uint32_t>(request, f.node->mask.size());
+      for (auto valid : f.node->mask)
+        put(request, c10::BFloat16(float(valid)).x);
+    }
+    Network wide(DefaultWidth);
+    wide->to(device);
+    wide->pack_weights();
+    auto current = std::make_shared<FrozenPolicy>(wide, 100);
+    auto historical = std::make_shared<FrozenPolicy>(wide, 36);
+    SearchService sampling(device, DefaultWidth, 8);
+    for (int trial = 0; trial < 3; ++trial) {
+      std::barrier start(9);
+      std::vector<std::future<void>> workers;
+      auto queries = sampling.queries.load();
+      auto encoded = sampling.progress().nodes;
+      for (size_t lane = 0; lane < 8; ++lane)
+        workers.push_back(std::async(std::launch::async, [&, lane] {
+          torch::NoGradGuard guard;
+          auto selected = lane < 2 ? historical : current;
+          std::vector<std::shared_ptr<Node>> nodes;
+          for (auto &source : work) {
+            auto n = std::make_shared<Node>(*source);
+            n->root = std::make_shared<Root>(*source->root);
+            n->root->game = lane + 100;
+            nodes.push_back(std::move(n));
+          }
+          start.arrive_and_wait();
+          for (size_t i = 0; i < 128; ++i) {
+            auto &n = nodes[i % nodes.size()];
+            if (i % 4 == 0)
+              n->root->clear_cache();
+            auto prediction = sampling.predict(selected, n);
+            TORCH_CHECK(prediction.mass.size() == n->mask.size() &&
+                            n->root->host_valid(selected->cpu->owner, selected->cpu->revision),
+                        "parallel inference lost its frozen policy binding");
+            for (size_t j = 0; j < n->mask.size(); ++j)
+              TORCH_CHECK(n->mask[j] || prediction.mass[j] == 0,
+                          "parallel inference changed the legal support");
+          }
+        }));
+      auto begin = std::chrono::steady_clock::now();
+      start.arrive_and_wait();
+      for (auto &worker : workers)
+        worker.get();
+      auto seconds =
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+      TORCH_CHECK(sampling.queries - queries == 1024 && sampling.progress().nodes - encoded == 352,
+                  "fixed sampling workload changed");
+      std::cout << "sampling fixed workload: trial=" << trial
+                << " queries=1024 roots=352 seconds=" << seconds
+                << " queries_per_second=" << 1024 / seconds << "\n";
+    }
+  }
+  {
+    // 多线程交替读取同根的不同版本，校验版本互斥与解码概率，不共享可变 CPU 缓存。
+    auto other = std::make_shared<FrozenPolicy>(model, 16);
+    std::array<Frozen, 2> versions{policy, other};
+    std::array<SearchPrediction, 2> expected;
+    for (size_t i = 0; i < versions.size(); ++i)
+      expected[i] = service.predict(versions[i], frame.node);
+    std::vector<std::future<void>> checks;
+    for (size_t lane = 0; lane < 8; ++lane)
+      checks.push_back(std::async(std::launch::async, [&, lane] {
+        for (size_t i = 0; i < 8; ++i) {
+          auto version = (i + lane) % versions.size();
+          auto actual = service.predict(versions[version], frame.node);
+          TORCH_CHECK(actual.mass == expected[version].mass &&
+                          actual.value == expected[version].value,
+                      "concurrent frozen policy changed canonical behavior probability");
+        }
+      }));
+    for (auto &check : checks)
+      check.get();
+    auto no_value = service.predict(policy, frame.node, false);
+    TORCH_CHECK(no_value.mass == expected[0].mass && no_value.value == 0 &&
+                    service.queued_roots() == 0 && service.running_roots() == 0,
+                "direct policy computed a value or left inference requests outstanding");
+  }
   std::cout << "public command MCTS, opponent reply, stochastic backup and formal RNG isolation: "
                "passed\n";
 }

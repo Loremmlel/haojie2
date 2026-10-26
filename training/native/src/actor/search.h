@@ -18,28 +18,36 @@ struct SearchPrediction {
   std::vector<uint16_t> mass;
   double value = 0;
 };
-// lane 只提交公开叶子；集中合批执行冻结模型，避免每条 CPU lane 各自启动 GPU 推理。
+// 集中合批编码公开根，策略头回到各调用 lane 并行执行。
 class SearchService {
   struct Request {
     Frozen policy;
     std::shared_ptr<Node> node;
-    std::promise<SearchPrediction> result;
+    std::promise<void> result;
   };
   std::mutex mutex;
   std::condition_variable changed;
   std::deque<Request> requests;
   bool closing = false;
+  uint64_t revision = 0;
   uint64_t batch_limit;
   Network model{nullptr};
   std::unique_ptr<InferenceEngine> encoder;
   std::atomic<uint64_t> encoded_nodes{0}, encoded_batches{0}, encoding_ns{0}, decoding_ns{0};
+  std::atomic<uint64_t> waiting{0}, running{0};
   std::thread thread;
 
 public:
   explicit SearchService(const torch::Device &, uint64_t width = DefaultWidth,
                          uint64_t max_roots = 64);
   ~SearchService();
-  SearchPrediction predict(const Frozen &, const std::shared_ptr<Node> &);
+  SearchPrediction predict(const Frozen &, const std::shared_ptr<Node> &, bool with_value = true);
+  uint64_t queued_roots() const {
+    return waiting.load();
+  }
+  uint64_t running_roots() const {
+    return running.load();
+  }
   std::atomic<uint64_t> queries{0};
   InferenceStats stats() const {
     return encoder->stats();

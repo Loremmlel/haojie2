@@ -964,8 +964,7 @@ public:
     for (auto &entry : games)
       progress_locked(entry.second);
     auto delta = window ? initial : Counters{};
-    uint64_t partial = 0, pending = 0, busy = 0, parked = 0, advancing = 0, inference_waiting = 0,
-             inference_running = 0;
+    uint64_t partial = 0, pending = 0, busy = 0, parked = 0, advancing = 0;
     for (auto &p : games) {
       partial += p.second.partial.size();
       pending += bool(p.second.pending);
@@ -974,9 +973,10 @@ public:
       parked += p.second.parked;
       if (!p.second.parked) {
         advancing += elapsed(p.second.last_advance) < 1;
-        inference_waiting += phase == Flow::Idle && bool(p.second.current);
       }
     }
+    auto inference_waiting = search_service->queued_roots();
+    auto inference_running = search_service->running_roots();
     auto graph = search_service->stats();
     auto encoder = search_service->progress();
     peak_managed = std::max(peak_managed, used);
