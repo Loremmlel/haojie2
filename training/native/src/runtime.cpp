@@ -534,7 +534,7 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
                                       "--history-interval", "--history-percent"};
     for (size_t i = 0; i < fields.size(); ++i) {
       auto value = selfplay[i].item<int64_t>();
-      TORCH_CHECK(value >= (i == 4 ? 0 : 1) && (i != 4 || value <= 100),
+      TORCH_CHECK(value >= (i == 0 || i == 4 ? 0 : 1) && (i != 4 || value <= 100),
                   "invalid self-play budget");
       if (!s.supplied.count(names[i]))
         *fields[i] = value;
@@ -1423,7 +1423,10 @@ public:
       o << "null";
     o << ",\n  \"loss_update\": " << committed_updates;
     o << ",\n  \"training_method\": \""
-      << (settings.terminal_training() ? "terminal-vtrace-mcts" : "diagnostic-unroll") << "\""
+      << (settings.terminal_training()
+              ? (settings.search_simulations ? "terminal-vtrace-mcts" : "terminal-vtrace")
+              : "diagnostic-unroll")
+      << "\""
       << ",\n  \"terminal_games_consumed\": " << terminal_games_consumed;
     if (latest_terminal)
       o << ",\n  \"latest_value_mse\": " << latest_terminal->value_mse
@@ -2253,6 +2256,7 @@ void runtime_checks() {
   {
     Settings settings;
     settings.device = "cpu";
+    TORCH_CHECK(settings.search_simulations == 0, "MCTS must be disabled by default");
     settings.width = 32;
     settings.workers = settings.inference_batch = settings.batch = settings.publish = 1;
     settings.concurrency = settings.chunk = 0;
@@ -2323,8 +2327,16 @@ void runtime_checks() {
         ("haojie-async-check-" + std::to_string(Clock::now().time_since_epoch().count()));
     fs::create_directory(directory);
     session.settings.directory = directory;
+    session.settings.search_simulations = 4;
     session.checkpoint(false);
     session.writer.get();
+    auto search_settings = settings;
+    search_settings.resume = directory / "checkpoint.pt";
+    TORCH_CHECK(resume_settings(search_settings).first.search_simulations == 4,
+                "resume lost an explicitly enabled search budget");
+    search_settings.supplied.insert("--search-simulations");
+    TORCH_CHECK(resume_settings(search_settings).first.search_simulations == 0,
+                "explicit zero did not disable search from an old checkpoint");
     auto archive = std::make_shared<torch::serialize::InputArchive>();
     std::ifstream file(directory / "checkpoint.pt", std::ios::binary);
     archive->load_from(file, torch::kCPU);

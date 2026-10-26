@@ -64,7 +64,9 @@ export async function searchTrainingCommand(
     plan?: CommandSearchPlan;
   } = {},
 ) {
-  const simulations = options.simulations ?? 64;
+  const simulations = options.simulations ?? 0;
+  if (!Number.isSafeInteger(simulations) || simulations < 0)
+    throw new Error('搜索预算须为非负整数，0 关闭搜索。');
   const depth = options.depth ?? 64;
   const cancelled = options.cancelled ?? (() => false);
   let perspective: Player;
@@ -143,10 +145,19 @@ export async function searchTrainingCommand(
     options.excluded ?? new Map(),
     true,
   );
+  if (root.cutoff) throw new Error('no legal action at root');
+  if (!simulations || observation.phase === 'shrine-draft')
+    return {
+      mass: root.state.prediction.mass,
+      target: [],
+      simulations: 0,
+      expanded: 0,
+      deepest: 0,
+      opponentNodes: 0,
+    };
   const seed =
     options.seed ??
     publicSearchSeed(encodePosition(observation, root.actor).globals, root.state.cursor);
-  if (root.cutoff) throw new Error('no legal action at root');
   const plan = options.plan;
   if (plan?.observation === observation && plan.model === model && plan.actor === root.actor) {
     const q = await query(root.state, root.state.cursor, options.excluded ?? new Map());
@@ -167,15 +178,6 @@ export async function searchTrainingCommand(
         plan,
       };
   }
-  if (observation.phase === 'shrine-draft')
-    return {
-      mass: root.state.prediction.mass,
-      target: [],
-      simulations: 0,
-      expanded: 0,
-      deepest: 0,
-      opponentNodes: 0,
-    };
   let result;
   try {
     result = await searchCommands(

@@ -2,6 +2,7 @@
 #include "model.h"
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -17,7 +18,7 @@ struct Settings {
            width = DefaultWidth, publish = 8;
   uint64_t memory_mb = 4096, updates = 0, samples = 0;
   uint64_t max_game_steps = 262144;
-  uint64_t search_simulations = 64, search_depth = 64;
+  uint64_t search_simulations = 0, search_depth = 64;
   uint64_t history_size = 8, history_interval = 64, history_percent = 20;
   uint64_t threads = 1;
   uint64_t workset_games = 0, game_samples = 256;
@@ -60,7 +61,8 @@ public:
   InferenceStats stats() const;
 };
 void run(const Settings &);
-void evaluate(const std::filesystem::path &, const std::string &);
+void evaluate(const std::filesystem::path &, const std::string &,
+              std::optional<uint64_t> search_simulations = {});
 void evaluation_checks(const torch::Device &);
 std::string describe_configuration(Settings);
 void runtime_checks();

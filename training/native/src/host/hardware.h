@@ -241,8 +241,9 @@ inline std::string configuration_json(const Settings &s, const Hardware &h) {
       << ",\"search_simulations\":" << s.search_simulations
       << ",\"search_depth\":" << s.search_depth << ",\"history_size\":" << s.history_size
       << ",\"history_interval\":" << s.history_interval
-      << ",\"history_percent\":" << s.history_percent
-      << ",\"training_method\":\"terminal-vtrace-mcts\",\"batch_unit\":\"memory-microbatch\""
+      << ",\"history_percent\":" << s.history_percent << ",\"training_method\":\""
+      << (s.search_simulations ? "terminal-vtrace-mcts" : "terminal-vtrace")
+      << "\",\"batch_unit\":\"memory-microbatch\""
       << ",\"checkpoint_batch_preserved\":" << (s.resume.empty() ? "false" : "true") << "}\n";
   return out.str();
 }

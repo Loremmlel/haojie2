@@ -146,3 +146,26 @@ test('强制动作族之后重新计算参数先验，不把一项根分布用�
   assert.equal(result.simulations, 16);
   assert.equal(result.target.length, 1);
 });
+
+test('默认及显式零预算只查询原策略一次，不复用搜索访问标签', async () => {
+  const observation = observe(fixture(), 1);
+  let queries = 0;
+  let mass: number[] = [];
+  const model: SearchModel = async ({ node }) => {
+    ++queries;
+    mass = node.mask!.map((enabled, i) => (enabled ? i + 1 : 0));
+    return { mass, value: 0 };
+  };
+  for (const options of [{}, { simulations: 0 }]) {
+    queries = 0;
+    const result = await searchTrainingCommand(observation, model, {
+      ...options,
+      plan: { observation, model, actor: 1, actions: [{ action: [0], visits: 64, prior: 1 }] },
+    });
+    assert.equal(queries, 1);
+    assert.deepEqual(result.mass, mass);
+    assert.deepEqual(result.target, []);
+    assert.equal(result.simulations, 0);
+    assert.equal(result.expanded, 0);
+  }
+});

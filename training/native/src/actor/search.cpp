@@ -347,12 +347,17 @@ SearchResult search_actor(void *actor, uint64_t game, uint32_t perspective,
                           const std::shared_ptr<Node> &node, const Frozen &policy,
                           SearchService &service, uint64_t simulations, uint64_t depth,
                           const std::function<bool()> &cancelled, SearchPlan *plan) {
+  if (!simulations && plan)
+    plan->clear();
   auto selected_policy =
       plan && plan->root == node->root->id && plan->actor == perspective ? plan->policy : policy;
   SearchResult result;
   result.version = selected_policy->version;
   auto base = service.predict(selected_policy, node);
   result.mass = base.mass;
+  // 关闭搜索时直接返回冻结策略，不创建模拟 actor，也不生成搜索监督标签。
+  if (!simulations)
+    return result;
   auto condition = [&](const auto &paths) {
     std::vector<double> counts(base.mass.size(), 0);
     double total = 0;
@@ -579,6 +584,13 @@ void search_checks(const torch::Device &device) {
   TORCH_CHECK(cached.simulations == 0 && cached.mass == result.mass &&
                   cached.target == result.target,
               "parameter continuation did not reuse the complete-command visits");
+  auto queries = service.queries.load();
+  auto direct = search_actor(
+      actor.get(), 1, frame.actor, frame.node, policy, service, 0, 8, [] { return false; }, &plan);
+  TORCH_CHECK(direct.mass == predicted.mass && direct.target.empty() && direct.simulations == 0 &&
+                  direct.expanded == 0 && direct.depth == 0 && !plan.policy &&
+                  service.queries.load() == queries + 1 && call(2, id) == before,
+              "disabled MCTS simulated, retained cached visits or changed the raw policy");
   plan.clear();
   auto restarted = search_actor(
       actor.get(), 1, frame.actor, frame.node, policy, service, 4, 8, [] { return false; }, &plan);

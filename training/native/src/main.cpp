@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
     if (command == "help") {
       std::cout
           << "haojie-train run --directory PATH [--resume CHECKPOINT] [--device auto|cuda|cpu] "
-             "[--concurrency N] [--workers N] [--batch N] [--search-simulations 64] "
+             "[--concurrency N] [--workers N] [--batch N] [--search-simulations 0] "
              "[--search-depth 64] [--history-percent 20] [--updates N] "
              "[--seconds N] [--max-game-steps N]\nhaojie-train status|resize|budget|save|stop "
              "--directory "
@@ -77,7 +77,10 @@ int main(int argc, char **argv) {
     c10::set_default_dtype(c10::scalarTypeToTypeMeta(torch::kBFloat16));
     torch::manual_seed(number("--seed", 1));
     if (command == "evaluate") {
-      hj::evaluate(text("--checkpoint"), text("--device", "cuda"));
+      hj::evaluate(text("--checkpoint"), text("--device", "cuda"),
+                   options.count("--search-simulations")
+                       ? std::optional<uint64_t>(number("--search-simulations", 0))
+                       : std::nullopt);
       return 0;
     }
     if (command == "check-search") {
@@ -138,7 +141,7 @@ int main(int argc, char **argv) {
     s.publish = number("--publish", 8);
     s.memory_mb = number("--memory-mb", 4096);
     s.max_game_steps = number("--max-game-steps", 262144);
-    s.search_simulations = number("--search-simulations", 64);
+    s.search_simulations = number("--search-simulations", 0);
     s.search_depth = number("--search-depth", 64);
     s.history_size = number("--history-size", 8);
     s.history_interval = number("--history-interval", 64);
@@ -149,9 +152,9 @@ int main(int argc, char **argv) {
     s.shrine = options.count("--shrine");
     s.samples = number("--samples", 0);
     if (!s.workers || (!s.chunk && !s.terminal_training()) || !s.batch || !s.inference_batch ||
-        !s.width || !s.publish || !s.max_game_steps || !s.search_simulations || !s.search_depth ||
-        !s.history_size || !s.history_interval || s.history_percent > 100 || s.memory_mb < 128 ||
-        s.seconds < 0 || s.save_seconds < 0)
+        !s.width || !s.publish || !s.max_game_steps || !s.search_depth || !s.history_size ||
+        !s.history_interval || s.history_percent > 100 || s.memory_mb < 128 || s.seconds < 0 ||
+        s.save_seconds < 0)
       throw std::runtime_error("invalid training budget");
     if (command == "configure")
       std::cout << hj::describe_configuration(s);

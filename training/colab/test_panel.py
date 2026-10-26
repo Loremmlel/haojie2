@@ -136,6 +136,9 @@ class PanelTests(unittest.TestCase):
         widgets.Dropdown.side_effect = lambda **args: SimpleNamespace(
             value=args["options"][0][1], disabled=False, observe=Mock()
         )
+        widgets.IntText.side_effect = lambda **args: SimpleNamespace(
+            value=args["value"], disabled=False, observe=Mock()
+        )
         widgets.Output.side_effect = MagicMock
         fake = Mock()
         fake.check_output.return_value = '{"concurrency":8,"batch":512}'
@@ -160,13 +163,22 @@ class PanelTests(unittest.TestCase):
             patch("builtins.print"),
         ):
             exec(cells["configuration"], namespace)
-            self.assertEqual(namespace["ARGS"], ["--device", "cuda"])
+            self.assertEqual(
+                namespace["ARGS"], ["--device", "cuda", "--search-simulations", "0"]
+            )
             # 下拉选旧档与新训练均重算配置，不创建进程。
             picker = namespace["checkpoint_picker"]
             for selection in (str(old), "", str(latest)):
                 picker.value = selection
                 namespace["prepare_training"]()
                 self.assertEqual("--resume" in namespace["ARGS"], bool(selection))
+                self.assertEqual(namespace["ARGS"][2:4], ["--search-simulations", "0"])
+            search = namespace["search_picker"]
+            search.value = 64
+            namespace["prepare_training"]()
+            self.assertEqual(namespace["ARGS"][2:4], ["--search-simulations", "64"])
+            search.value = 0
+            namespace["prepare_training"]()
             exec(cells["start"], namespace)
             fake.Popen.assert_not_called()
             button = namespace["start_button"]
@@ -175,6 +187,7 @@ class PanelTests(unittest.TestCase):
             self.assertEqual(fake.Popen.call_args.args[0][-2:], ["--resume", str(latest)])
             self.assertNotEqual(namespace["RUN"], latest.parent)
             self.assertTrue(picker.disabled)
+            self.assertTrue(search.disabled)
             show.assert_called_once()
             namespace["start_training"](button)
             exec(cells["start"], namespace)
@@ -190,7 +203,9 @@ class PanelTests(unittest.TestCase):
             latest.unlink()
             exec(cells["configuration"], namespace)
             self.assertEqual(namespace["checkpoint_picker"].value, "")
-            self.assertEqual(namespace["ARGS"], ["--device", "cuda"])
+            self.assertEqual(
+                namespace["ARGS"], ["--device", "cuda", "--search-simulations", "0"]
+            )
 
     def test_panel_is_embedded(self):
         markup = self.panel.render()

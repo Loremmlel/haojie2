@@ -9,7 +9,8 @@
 
 namespace hj {
 // 独立测评进程只加载已提交权重，不创建优化器、训练轨迹或发布新版本。
-void evaluate(const std::filesystem::path &checkpoint, const std::string &requested) {
+void evaluate(const std::filesystem::path &checkpoint, const std::string &requested,
+              std::optional<uint64_t> override_simulations) {
   torch::NoGradGuard guard;
   torch::Device device(hardware(requested).device);
   Network model(DefaultWidth);
@@ -17,7 +18,7 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
   model->pack_weights();
   uint64_t version;
   bool trained_shrine;
-  uint64_t search_simulations = 64, search_depth = 64;
+  uint64_t search_simulations = 0, search_depth = 64;
   {
     torch::serialize::InputArchive archive;
     std::ifstream file(checkpoint, std::ios::binary);
@@ -31,7 +32,7 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
     T selfplay;
     if (archive.try_read("selfplay_config", selfplay)) {
       TORCH_CHECK(selfplay.scalar_type() == torch::kInt64 && selfplay.dim() == 1 &&
-                      selfplay.numel() == 5 && selfplay[0].item<int64_t>() > 0 &&
+                      selfplay.numel() == 5 && selfplay[0].item<int64_t>() >= 0 &&
                       selfplay[1].item<int64_t>() > 0,
                   "invalid search configuration");
       search_simulations = selfplay[0].item<int64_t>();
@@ -55,6 +56,8 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
                 "invalid BF16 weights");
     model->packed_weights.copy_(weights.to(device));
   }
+  if (override_simulations)
+    search_simulations = *override_simulations;
   model->eval();
   auto policy = std::make_shared<FrozenPolicy>(model, version);
   SearchService search_service(device, DefaultWidth, 1);
@@ -74,8 +77,9 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
   put<uint64_t>(id, 1);
   bool started = false;
   std::cout << "{\"updates\":" << version << ",\"rules\":\""
-            << (trained_shrine ? "shrine" : "classic") << "\",\"identity\":" << hj_identity() << "}"
-            << std::endl;
+            << (trained_shrine ? "shrine" : "classic")
+            << "\",\"search_budget\":" << search_simulations << ",\"identity\":" << hj_identity()
+            << "}" << std::endl;
   std::string line;
   while (std::getline(std::cin, line)) {
     if (line == "quit")
@@ -154,9 +158,10 @@ void evaluation_checks(const torch::Device &device) {
           torch::from_blob(metadata.data(), {int64_t(metadata.size())}, torch::kUInt8).clone());
       std::vector<int64_t> config = {DefaultWidth, 1, 16, 512, 1, 1, 1024, 1, 1, shrine, 0, -1, 0};
       archive.write("config", torch::tensor(config, torch::kInt64));
-      archive.write("selfplay_config",
-                    torch::tensor({int64_t(2), int64_t(8), int64_t(8), int64_t(64), int64_t(20)},
-                                  torch::kInt64));
+      auto budget = shrine ? 2 : 0;
+      archive.write("selfplay_config", torch::tensor({int64_t(budget), int64_t(8), int64_t(8),
+                                                      int64_t(64), int64_t(20)},
+                                                     torch::kInt64));
       archive.save_to(path.string());
       std::string mode = std::to_string(shrine);
       std::istringstream input("start 73127 1 " + mode + "\nadvance\nstart 73127 2 " + mode +
@@ -168,10 +173,25 @@ void evaluation_checks(const torch::Device &device) {
       std::cin.rdbuf(old_in);
       std::cout.rdbuf(old_out);
       TORCH_CHECK(output.str().find("\"updates\":42") != std::string::npos &&
+                      output.str().find("\"search_budget\":" + std::to_string(budget)) !=
+                          std::string::npos &&
                       output.str().find(shrine ? "\"rules\":\"shrine\""
                                                : "\"rules\":\"classic\"") != std::string::npos &&
                       output.str().find("\"observation\"") != std::string::npos,
                   "evaluation checkpoint rules or public response missing");
+      if (budget) {
+        input.clear();
+        input.seekg(0);
+        output.str("");
+        std::cin.rdbuf(input.rdbuf());
+        std::cout.rdbuf(output.rdbuf());
+        evaluate(path, device.str(), 0);
+        std::cin.rdbuf(old_in);
+        std::cout.rdbuf(old_out);
+        TORCH_CHECK(output.str().find("\"search_budget\":0") != std::string::npos &&
+                        output.str().find("\"observation\"") != std::string::npos,
+                    "evaluation could not disable checkpoint search");
+      }
     }
     std::filesystem::remove(path);
   } catch (...) {
