@@ -42,8 +42,9 @@ try {
         report: {
           phase: 'finished',
           updates: 120,
-          current: 12,
-          games: Array.from({ length: 12 }, () => ({ result: 'unfinished' })),
+          rules: 'classic',
+          current: 6,
+          games: Array.from({ length: 6 }, () => ({ rules: 'classic', result: 'unfinished' })),
           summary: {
             easy: {
               win: 1,
@@ -158,6 +159,13 @@ try {
   assert.equal(
     await page.locator('[data-eval-results]').getByText('50%', { exact: true }).count(),
     1,
+  );
+  assert.match(await page.locator('[data-eval-status]').textContent(), /经典.*第 6 \/ 6 局/);
+  await page.evaluate(() => {
+    window.reply.evaluation.report.rules = 'shrine';
+  });
+  await page.waitForFunction(() =>
+    document.querySelector('[data-eval-status]').textContent.includes('神龛'),
   );
   await page.evaluate(() => {
     window.reply.evaluation.active = true;

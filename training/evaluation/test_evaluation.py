@@ -23,8 +23,10 @@ class EvaluationTests(unittest.TestCase):
         import torch
 
         root = Path(__file__).resolve().parents[2]
-        binary = root / "artifacts/cpp-training-build" / (
-            "Release/haojie-train.exe" if os.name == "nt" else "haojie-train"
+        binary = (
+            root
+            / "artifacts/cpp-training-build"
+            / ("Release/haojie-train.exe" if os.name == "nt" else "haojie-train")
         )
         libraries = [
             Path(torch.__file__).parent / "lib",
@@ -44,9 +46,22 @@ class EvaluationTests(unittest.TestCase):
             with open(Path(temporary) / "native.log", "w", encoding="utf-8") as log:
                 process = subprocess.Popen(
                     [
-                        str(binary), "run", "--directory", str(directory),
-                        "--device", "cpu", "--concurrency", "0", "--workers", "1",
-                        "--threads", "1", "--seconds", "45", "--save-seconds", "0",
+                        str(binary),
+                        "run",
+                        "--directory",
+                        str(directory),
+                        "--device",
+                        "cpu",
+                        "--concurrency",
+                        "0",
+                        "--workers",
+                        "1",
+                        "--threads",
+                        "1",
+                        "--seconds",
+                        "45",
+                        "--save-seconds",
+                        "0",
                     ],
                     stdout=log,
                     stderr=log,
@@ -74,7 +89,15 @@ class EvaluationTests(unittest.TestCase):
                     self.assertFalse((directory / "window.json").exists())
                     control.request()
                     wait_for(
-                        lambda: (control.status()["report"] or {}).get("phase") == "running"
+                        lambda: (
+                            (control.status()["report"] or {}).get("phase") == "running"
+                        )
+                    )
+                    report = control.status()["report"]
+                    self.assertEqual(report["rules"], "classic")
+                    self.assertEqual(len(report["games"]), 6)
+                    self.assertTrue(
+                        all(g["rules"] == "classic" for g in report["games"])
                     )
                     self.assertFalse(control.pending)
                     self.assertIsNone(process.poll())
@@ -90,16 +113,17 @@ class EvaluationTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 0)
 
     def test_schedule_and_unfinished_denominator(self):
-        plan = schedule(2)
-        self.assertEqual(len(plan), 24)
-        for level in ("easy", "medium", "hard"):
-            rows = [g for g in plan if g["difficulty"] == level]
-            self.assertEqual({g["side"] for g in rows}, {1, 2})
-            self.assertEqual({g["rules"] for g in rows}, {"classic", "shrine"})
-            for seed in {g["seed"] for g in rows}:
-                self.assertEqual(
-                    sorted(g["side"] for g in rows if g["seed"] == seed), [1, 2]
-                )
+        for rules in ("classic", "shrine"):
+            plan = schedule(2, rules)
+            self.assertEqual(len(plan), 12)
+            for level in ("easy", "medium", "hard"):
+                rows = [g for g in plan if g["difficulty"] == level]
+                self.assertEqual({g["side"] for g in rows}, {1, 2})
+                self.assertEqual({g["rules"] for g in rows}, {rules})
+                for seed in {g["seed"] for g in rows}:
+                    self.assertEqual(
+                        sorted(g["side"] for g in rows if g["seed"] == seed), [1, 2]
+                    )
         plan[0]["result"] = "win"
         plan[3]["result"] = "unfinished"
         result = summarize(plan)
@@ -108,7 +132,7 @@ class EvaluationTests(unittest.TestCase):
 
     def test_cancelled_and_timeout_games_remain_unknown(self):
         native = Mock()
-        native.receive.return_value = {"updates": 42}
+        native.receive.return_value = {"updates": 42, "rules": "classic"}
         native.request.side_effect = InterruptedError()
         native.inflight = False
         teacher = Mock()
@@ -120,13 +144,56 @@ class EvaluationTests(unittest.TestCase):
             patch("training.evaluation.run.Teacher", return_value=teacher),
         ):
             report = run([], Path("fixture"), "cpu", Path(temporary))
-            self.assertEqual(len(report["games"]), 12)
+            self.assertEqual(len(report["games"]), 6)
             self.assertTrue(all(g["result"] == "unfinished" for g in report["games"]))
             self.assertTrue(all(g["reason"] == "time-budget" for g in report["games"]))
             self.assertTrue(
                 all(v["win_rate"] is None for v in report["summary"].values())
             )
             native.close.assert_called_once()
+
+    def test_runner_uses_frozen_checkpoint_rules(self):
+        for rules in ("classic", "shrine"):
+            with self.subTest(rules=rules), tempfile.TemporaryDirectory() as temporary:
+                native = Mock()
+                native.receive.return_value = {"updates": 42, "rules": rules}
+                native.request.return_value = {"winner": 1, "commands": 3}
+                teacher = Mock(manifest={"sha256": "fixture"}, budget={})
+                with (
+                    patch("training.evaluation.run.Native", return_value=native),
+                    patch("training.evaluation.run.Teacher", return_value=teacher),
+                ):
+                    report = run([], Path("fixture"), "cpu", Path(temporary))
+                self.assertEqual(report["phase"], "finished")
+                self.assertEqual(report["rules"], rules)
+                self.assertEqual(len(native.request.call_args_list), 6)
+                self.assertTrue(
+                    all(
+                        call.args[0].split()[-1] == str(int(rules == "shrine"))
+                        for call in native.request.call_args_list
+                    )
+                )
+                self.assertTrue(
+                    all(
+                        counts["win"] == counts["loss"] == 1
+                        for counts in report["summary"].values()
+                    )
+                )
+
+    def test_unknown_checkpoint_rules_do_not_start_games(self):
+        native = Mock()
+        native.receive.return_value = {"updates": 42}
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch("training.evaluation.run.Native", return_value=native),
+            patch("training.evaluation.run.Teacher") as teacher,
+        ):
+            report = run([], Path("fixture"), "cpu", Path(temporary))
+        self.assertEqual(report["phase"], "failed")
+        self.assertIn("训练模式", report["error"])
+        self.assertEqual(report["games"], [])
+        native.request.assert_not_called()
+        teacher.assert_not_called()
 
     def test_background_schedule_without_browser_and_cancel(self):
         with (

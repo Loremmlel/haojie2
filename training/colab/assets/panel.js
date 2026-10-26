@@ -195,8 +195,9 @@
         cancelled: '已取消',
         failed: '测评失败',
       };
+      const rules = { classic: '经典', shrine: '神龛' }[report?.rules];
       find('[data-eval-status]').textContent =
-        `${evaluation.message} ${next}${report ? ` · ${phase[report.phase] || report.phase} · 模型更新 ${number(report.updates)} · 第 ${number(report.current)} / ${report.games.length} 局${report.error ? ` · ${report.error}` : ''}` : ''}`;
+        `${evaluation.message} ${next}${report ? ` · ${phase[report.phase] || report.phase}${rules ? ` · ${rules}` : ''} · 模型更新 ${number(report.updates)} · 第 ${number(report.current)} / ${report.games.length} 局${report.error ? ` · ${report.error}` : ''}` : ''}`;
       const body = find('[data-eval-results]');
       body.replaceChildren();
       for (const [key, label] of [

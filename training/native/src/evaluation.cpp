@@ -15,12 +15,17 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
   model->to(device);
   model->pack_weights();
   uint64_t version;
+  bool trained_shrine;
   {
     torch::serialize::InputArchive archive;
     std::ifstream file(checkpoint, std::ios::binary);
     TORCH_CHECK(file, "evaluation checkpoint is missing");
     archive.load_from(file, torch::kCPU);
-    T state, weights;
+    T state, weights, config;
+    archive.read("config", config);
+    TORCH_CHECK(config.scalar_type() == torch::kInt64 && config.dim() == 1 && config.numel() == 13,
+                "invalid checkpoint configuration");
+    trained_shrine = config[9].item<int64_t>() != 0;
     archive.read("state", state);
     TORCH_CHECK(state.scalar_type() == torch::kUInt8 && state.dim() == 1,
                 "invalid checkpoint metadata");
@@ -57,7 +62,9 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
   Bytes id;
   put<uint64_t>(id, 1);
   bool started = false;
-  std::cout << "{\"updates\":" << version << ",\"identity\":" << hj_identity() << "}" << std::endl;
+  std::cout << "{\"updates\":" << version << ",\"rules\":\""
+            << (trained_shrine ? "shrine" : "classic") << "\",\"identity\":" << hj_identity() << "}"
+            << std::endl;
   std::string line;
   while (std::getline(std::cin, line)) {
     if (line == "quit")
@@ -66,6 +73,7 @@ void evaluate(const std::filesystem::path &checkpoint, const std::string &reques
       uint32_t seed, side, shrine;
       std::istringstream in(line.substr(6));
       TORCH_CHECK(bool(in >> seed >> side >> shrine), "invalid evaluation start");
+      TORCH_CHECK(shrine == uint32_t(trained_shrine), "evaluation rules differ from checkpoint");
       if (started)
         call(5, id);
       root.reset();
@@ -130,22 +138,30 @@ void evaluation_checks(const torch::Device &device) {
     put_bytes(metadata, Bytes(identity.begin(), identity.end()));
     for (uint64_t n : std::array<uint64_t, 8>{DefaultWidth, 1, 16, 512, 1, 40, 40, 42})
       put(metadata, n);
-    torch::serialize::OutputArchive archive;
-    archive.write("weights", fixture->packed_weights);
-    archive.write(
-        "state",
-        torch::from_blob(metadata.data(), {int64_t(metadata.size())}, torch::kUInt8).clone());
-    archive.save_to(path.string());
-    std::istringstream input("start 73127 1 0\nadvance\nstart 73127 2 1\nadvance\nquit\n");
-    std::ostringstream output;
-    std::cin.rdbuf(input.rdbuf());
-    std::cout.rdbuf(output.rdbuf());
-    evaluate(path, device.str());
-    std::cin.rdbuf(old_in);
-    std::cout.rdbuf(old_out);
-    TORCH_CHECK(output.str().find("\"updates\":42") != std::string::npos &&
-                    output.str().find("\"observation\"") != std::string::npos,
-                "evaluation checkpoint or public response missing");
+    for (int64_t shrine : {0, 1}) {
+      torch::serialize::OutputArchive archive;
+      archive.write("weights", fixture->packed_weights);
+      archive.write(
+          "state",
+          torch::from_blob(metadata.data(), {int64_t(metadata.size())}, torch::kUInt8).clone());
+      std::vector<int64_t> config = {DefaultWidth, 1, 16, 512, 1, 1, 1024, 1, 1, shrine, 0, -1, 0};
+      archive.write("config", torch::tensor(config, torch::kInt64));
+      archive.save_to(path.string());
+      std::string mode = std::to_string(shrine);
+      std::istringstream input("start 73127 1 " + mode + "\nadvance\nstart 73127 2 " + mode +
+                               "\nadvance\nquit\n");
+      std::ostringstream output;
+      std::cin.rdbuf(input.rdbuf());
+      std::cout.rdbuf(output.rdbuf());
+      evaluate(path, device.str());
+      std::cin.rdbuf(old_in);
+      std::cout.rdbuf(old_out);
+      TORCH_CHECK(output.str().find("\"updates\":42") != std::string::npos &&
+                      output.str().find(shrine ? "\"rules\":\"shrine\""
+                                               : "\"rules\":\"classic\"") != std::string::npos &&
+                      output.str().find("\"observation\"") != std::string::npos,
+                  "evaluation checkpoint rules or public response missing");
+    }
     std::filesystem::remove(path);
   } catch (...) {
     std::cin.rdbuf(old_in);

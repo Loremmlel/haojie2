@@ -20,17 +20,18 @@ def write_json(path, value):
     os.replace(temporary, path)
 
 
-def schedule(pairs):
+def schedule(pairs, rules):
+    if rules not in ("classic", "shrine"):
+        raise ValueError("检查点未提供有效训练模式，无法安排测评")
     return [
         {
             "difficulty": level,
             "side": side,
             "rules": rules,
-            "seed": 3_000_001_000 + pair * 2 + ri,
+            "seed": 3_000_001_000 + pair * 2 + int(rules == "shrine"),
             "result": "pending",
         }
         for pair in range(pairs)
-        for ri, rules in enumerate(("classic", "shrine"))
         for side in (1, 2)
         for level in ("easy", "medium", "hard")
     ]
@@ -104,7 +105,7 @@ class Native:
 
 def run(command, checkpoint, device, directory, pairs=1, seconds=120):
     directory.mkdir(parents=True, exist_ok=True)
-    plan = schedule(pairs)
+    plan = []
     report = {
         "phase": "initializing",
         "checkpoint": str(checkpoint),
@@ -132,6 +133,8 @@ def run(command, checkpoint, device, directory, pairs=1, seconds=120):
             report.update(
                 native.receive(lambda: cancelled() or time.monotonic() >= deadline)
             )
+            plan = schedule(pairs, report.get("rules"))
+            report["games"] = plan
             report["phase"] = "running"
             for index, game in enumerate(plan):
                 if cancelled():
