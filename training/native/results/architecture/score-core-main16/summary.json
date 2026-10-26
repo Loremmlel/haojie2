@@ -1,8 +1,0 @@
-{
-  "window_gain_percent": 106.68208186696764,
-  "full_wall_gain_percent": 130.8518311370703,
-  "source_archive": "artifacts/architecture-audit-20261024/graph-core-source.tar.gz",
-  "source_archive_sha256": "3573ca0d66c1d073538f77d28e8bb4e3d98cdf1fda56150903021ad28b728970",
-  "source_hashes_verified": true,
-  "concurrency": 16
-}

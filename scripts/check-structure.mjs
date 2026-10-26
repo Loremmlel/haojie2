@@ -4,6 +4,7 @@ import { join } from 'node:path';
 // 只统计项目维护文件；依赖、版本库及测试/构建产物不属于人工组织范围。
 const excluded = new Set([
   '.git',
+  '.codex-remote-attachments',
   'node_modules',
   'dist',
   'build',

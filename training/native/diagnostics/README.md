@@ -10,4 +10,6 @@
 
 CUDA event 包含区间内调度等待与宿主提交空隙；逐内核并集另用 `--profile PATH`。根/s、actor 决策/s、正式命令/s、K 内实际消费转换/s 分开报告。失败或中断窗口不补造结果。
 
-`workset` 与 `benchmark.ps1` 用同一组正式种子、实际行为概率和固定消费配额；使用 `--replay` 时逐局行为与正式停放状态须逐字节相同。保留的参考工作集位于 `artifacts/architecture-audit-20261024/scaling-workset/concurrency-1-repeat-1/workset/`。
+`workset` 与本目录 `benchmark.ps1 -Games N` 用同一组正式种子、实际行为概率和固定消费配额；使用 `--replay` 时逐局行为与正式停放状态须逐字节相同。保留的参考工作集位于 `artifacts/architecture-audit-20261024/scaling-workset/concurrency-1-repeat-1/workset/`。
+
+`summarize_trace.py` 汇总 Kineto 时间线，`verify_workset.py` 核对参考与实测工作集；两者只读取既有诊断数据。已经失效的旧 Python 训练宿主对照脚本不再维护，旧架构结果通过[历史索引](../../../docs/ai/HISTORY.md)查阅。

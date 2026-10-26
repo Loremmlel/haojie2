@@ -6,11 +6,11 @@ import { createDecisionEncoder } from '../../../../src/ai/training/encoding/deci
 import { observe } from '../../../../src/ai/observation';
 import { createTrainingInspector } from '../../../../src/ai/training/queries';
 import { createGame } from '../../../../src/engine/commands/game';
-import { nativeClient } from '../client';
-import { fixtures } from '../fixtures';
-import { combatFixtures } from '../combat-fixtures';
-import { preparationFixtures } from '../preparation-fixtures';
-import { completeFixtures } from '../complete-fixtures';
+import { nativeClient } from '../validation/client';
+import { fixtures } from '../fixtures/movement';
+import { combatFixtures } from '../fixtures/combat';
+import { preparationFixtures } from '../fixtures/preparation';
+import { completeFixtures } from '../fixtures/phases';
 import { freeze } from './artifacts';
 
 const { values } = parseArgs({

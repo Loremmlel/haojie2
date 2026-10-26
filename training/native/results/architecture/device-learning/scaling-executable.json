@@ -1,9 +1,0 @@
-{
-  "inference_batch": 12,
-  "source_hashes_scope": "current-worktree",
-  "external_snapshot": false,
-  "batch": 64,
-  "publish": 64,
-  "sha256": "11e1d0907815335f1202ee0cd52b14cd01fe401954365a4ab4b1b7e5e3ab7f41",
-  "executable": "E:\\Code\\haojie2\\artifacts\\cpp-training-build\\Release\\haojie-train.exe"
-}

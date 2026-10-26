@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixtures } from '../../scripts/training/native/fixtures';
-import { combatFixtures } from '../../scripts/training/native/combat-fixtures';
-import { completeFixtures } from '../../scripts/training/native/complete-fixtures';
-import { preparationFixtures } from '../../scripts/training/native/preparation-fixtures';
+import { fixtures } from '../../scripts/training/native/fixtures/movement';
+import { combatFixtures } from '../../scripts/training/native/fixtures/combat';
+import { completeFixtures } from '../../scripts/training/native/fixtures/phases';
+import { preparationFixtures } from '../../scripts/training/native/fixtures/preparation';
 import {
   applyCommand,
   applyRuntimeCommand,

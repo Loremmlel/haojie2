@@ -1,9 +1,0 @@
-{
-  "batch": 32,
-  "sha256": "05e28e8393aee6d08343f216ac3b7c4b108f63ec792231569d9f921812729adc",
-  "publish": 128,
-  "inference_batch": 12,
-  "external_snapshot": true,
-  "source_hashes_scope": "current-worktree",
-  "executable": "E:\\Code\\haojie2\\artifacts\\architecture-audit-20261024\\packed-handoff-final-native-bin\\haojie-train.exe"
-}

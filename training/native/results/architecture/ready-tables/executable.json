@@ -1,9 +1,0 @@
-{
-  "source_hashes_scope": "current-worktree",
-  "external_snapshot": true,
-  "inference_batch": 12,
-  "sha256": "4124faff183d9ee053ddefcfe7a69301f15dd786f339acd6ceebe13b85092ffc",
-  "publish": 128,
-  "batch": 32,
-  "executable": "E:\\Code\\haojie2\\artifacts\\architecture-audit-20261024\\ready-tables-native-bin\\haojie-train.exe"
-}

@@ -97,7 +97,7 @@ jobs:
           $engine = if ($IsWindows) { 'artifacts/native-target/release/haojie-engine.exe' } else { 'artifacts/native-target/release/haojie-engine' }
           python scripts/training/native/ci/verify.py --engine $engine
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          node --import tsx scripts/training/native/validate.ts --executable $engine --fixtures-only --output artifacts/native-rules
+          node --import tsx scripts/training/native/validation/run.ts --executable $engine --fixtures-only --output artifacts/native-rules
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           node --import tsx scripts/training/native/sampling/validate.ts --executable $engine --output artifacts/native-encoding
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -106,7 +106,7 @@ jobs:
           node --import tsx scripts/training/native/ci/hashes.ts --executable $engine --output artifacts/native-hashes.json
           exit $LASTEXITCODE
       - name: Package native source
-        run: python scripts/training/native/pipeline/package.py --output artifacts/native-package/source.tar.gz
+        run: python scripts/training/native/ci/package.py --output artifacts/native-package/source.tar.gz
       - uses: actions/upload-artifact@v4
         if: always()
         with:

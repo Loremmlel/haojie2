@@ -2,12 +2,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { nativeClient } from '../client';
+import { nativeClient } from '../validation/client';
 import { nativeHash } from '../pipeline/hash';
-import { fixtures } from '../fixtures';
-import { combatFixtures } from '../combat-fixtures';
-import { preparationFixtures } from '../preparation-fixtures';
-import { completeFixtures } from '../complete-fixtures';
+import { fixtures } from '../fixtures/movement';
+import { combatFixtures } from '../fixtures/combat';
+import { preparationFixtures } from '../fixtures/preparation';
+import { completeFixtures } from '../fixtures/phases';
 
 const { values } = parseArgs({
   options: {

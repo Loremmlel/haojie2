@@ -1,9 +1,0 @@
-{
-  "external_snapshot": true,
-  "inference_batch": 12,
-  "batch": 64,
-  "sha256": "cd665385d03714a61805990fbe29d6556915254f5ab357ac39dbd55b14ad951d",
-  "source_hashes_scope": "current-worktree",
-  "publish": 64,
-  "executable": "E:\\Code\\haojie2\\artifacts\\architecture-audit-20261024\\cohort-native-bin\\haojie-train.exe"
-}

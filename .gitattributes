@@ -1,9 +1,6 @@
 # 发行页面与构建结果按字节核对，检出时保持生成器使用的 LF。
 /index.html text eol=lf
-# 跨平台构建入口保持 LF；实测原始 JSON 不做换行转换。
+# 跨平台构建入口保持 LF。
 /training/native/*.sh text eol=lf
 /training/colab/*.sh text eol=lf
-/training/native/results/** -text whitespace=cr-at-eol
-# 中断采样可能留下未写完的 CSV 行，原始证据保留尾部空白。
-/training/native/results/**/*.csv -whitespace
 training/evaluation/assets/teacher.js text eol=lf

@@ -1,8 +1,0 @@
-{
-  "concurrency": 12,
-  "checks": "passed",
-  "peak_device_memory_mib": 2946.0,
-  "saved_active": 12,
-  "restored_consumed": 128,
-  "checkpoint_created": true
-}

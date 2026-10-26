@@ -10,3 +10,4 @@ __pycache__/
 *.egg-info/
 /training/build/
 .ruff_cache/
+/.codex-remote-attachments/

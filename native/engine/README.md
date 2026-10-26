@@ -26,4 +26,4 @@ cargo clippy --locked --all-targets --manifest-path native/engine/Cargo.toml --t
 
 所有正式命令通过共享规则内核提交。公开树只接收白名单观察；正式 RNG 仅供规则执行，采样 RNG 独立保存。模型发布由 C++ 宿主统一管理，不绑定长根或训练数据。
 
-TS/Rust 的状态、候选及规范公开编码对应由 `scripts/training/native/validate.ts` 和 `sampling/validate.ts` 验证。类型化训练行在编码源头保留整数、布尔与存在位；连续值才转为 BF16。历史记录只审核；本机测量见[验收记录](../../training/native/VALIDATION.md)。
+TS/Rust 的状态、候选及规范公开编码对应由 `scripts/training/native/validation/run.ts` 和 `scripts/training/native/sampling/validate.ts` 验证，共用 `fixtures/` 中的规则夹具。类型化训练行在编码源头保留整数、布尔与存在位；连续值才转为 BF16。历史记录只审核；验证方法和历史测量入口见[验收记录](../../training/native/VALIDATION.md)。

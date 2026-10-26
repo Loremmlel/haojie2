@@ -1,6 +1,6 @@
 # 浩劫 3.0 · 神龛 / haojie2
 
-原生训练见[快速启动](training/README.md)，当前本机结果见[实测记录](training/native/VALIDATION.md)。
+原生训练见[快速启动](training/README.md)，维护前先按任务查看[当前状态](docs/ai/STATUS.md)。
 
 React + TypeScript 回合制战棋，支持经典 / 神龛模式、同屏双人和三档本地 AI。游戏发行物是一个可离线打开的 HTML，React、样式、棋子、特效和 AI Worker 全部内联。
 
@@ -58,10 +58,14 @@ pwsh -File training/native/run.ps1 run --directory artifacts/native/run
 | `native/engine/`                         | Rust 规则实现、动作树、编码与原生采样协议 |
 | `training/native/`                       | C++ BF16 模型、连续学习器和原生调度宿主   |
 | `scripts/`                               | 构建、CLI、数据工具和原生差分验证         |
+| `scripts/training/native/fixtures/`      | TS / Rust 共用的规则差分夹具              |
+| `training/native/diagnostics/`           | 与正式训练分开的固定工作量和性能诊断      |
 | `tests/`、`training/native/validate.ps1` | 游戏、浏览器、规则差分及训练验证          |
 | `docs/`                                  | 当前接口、规则与维护说明                  |
 
 职责与接入边界见[架构说明](docs/ARCHITECTURE.md)；TS / Rust 的状态所有权和采样对应见[运行内核](docs/ai/RUNTIME.md)。
+
+旧架构脚本、撤回版本和测量证据通过[历史索引](docs/ai/HISTORY.md)按固定 Git 版本查阅。`artifacts/` 存放本地模型、轨迹、构建和诊断产物，不提交仓库；已有本地文件不因目录整理删除。
 
 ## 嵌入现有网站
 

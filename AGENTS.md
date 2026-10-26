@@ -2,6 +2,8 @@
 
 本文件只列全局硬约束。详细且仍有效的工程与规则约束见[维护约束](docs/maintenance/ENGINEERING-CONSTRAINTS.md)；当前 AI/训练状态只读[状态入口](docs/ai/STATUS.md)，历史进度见[归档记录](https://github.com/Loremmlel/haojie2/blob/fcf37e73f91629965255b6fa4a5da1c80e7fa71a/docs/ai/history/TRAINING-PROGRESS.md)。实施规则以[现行规则](docs/RULES.md)和较新的作者反馈为准；来源优先级为作者回复 > 新增段落的明确修改 > 一般规则 > 旧版猜测。旧文中的“当前”“下一步”只对应其记录日期，不自动授权新工作。
 
+按任务读取对应模块和文档：规则改动查规则／作者反馈，训练改动先读状态入口和运行说明，追溯旧实验再按历史索引读取固定版本。`artifacts/`、依赖、构建目录和用户附件不作为日常源码搜索范围；忽略它们不构成删除授权。
+
 ## 游戏和公开边界
 
 - 生产只生成一个可离线打开的 HTML；禁止运行时 CDN、图片/字体服务器、分包和隐式请求。`src/engine/index.ts` 不依赖 React、DOM、存储、音频、时钟或网络；`src/index.ts` 提供 React 组件。

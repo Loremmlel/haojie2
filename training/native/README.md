@@ -97,12 +97,12 @@ pwsh -File training/native/run.ps1 run --directory E:/Training/haojie/restored -
 
 实际消费仍检查策略滞后上限 K=64。完整对局中任一行为版本超过上限，则整局跳过学习，记录为 `stale_games/stale_steps`，继续消费后面的新鲜对局。没有按更新次数触发的全局等待，没有长局计时截断；停放局恢复后继续真实对局，最终是否可学习按实际版本差决定。
 
-CPU lane 公平轮转，根请求由两个 GPU 槽集中处理；缓存、迟到结果及 CPU 头绑定实际快照版本。推理图按配置捕获，最多 128 根/8192 token，超容量执行完整普通前向。完整终局学习按计算小批执行普通前向/反向，只有一个优化更新在途；旧短块学习图只供固定工作集诊断。
+CPU lane 公平轮转，正式策略服务使用一个有界编码槽集中处理当前及历史冻结模型；诊断根服务保留两个槽。缓存、迟到结果及 CPU 头绑定实际快照版本。推理图按配置捕获，超容量执行完整普通前向。完整终局学习按计算小批执行普通前向/反向，只有一个优化更新在途；旧短块学习图只供固定工作集诊断。
 
 `--memory-mb` 管理宿主轨迹与缓存，CUDA 分配器另使用物理显存的 90% 预算。固定转换数不等于固定 token 数；不得把本机容量经验当作所有训练卡的性能结论。
 
-`status.json` 为最新快照；`window.json` 在退出排空前冻结；`saved.json` 为保存后的累计状态。`consumed_within_lag` 与 `consumed_lag_max` 报告 K 内消费及实际最大滞后；`stale_games/stale_steps` 单列过期未学习的数据。恢复后的速率与窗口计数重新计时，检查点保留累计过期计数。累计守恒为 `produced = consumed + stale_steps + ready + partial + learning`。
+`status.json` 为最新快照；`window.json` 在退出排空前冻结；`saved.json` 为保存后的累计状态。`consumed_within_lag` 与 `consumed_lag_max` 报告 K 内消费及实际最大滞后；`stale_games/stale_steps` 单列过期未学习的数据。恢复后的速率与窗口计数重新计时，检查点保留累计过期计数。累计守恒为 `produced = consumed + stale_steps + discarded_steps + ready + partial + learning`。
 
-`training_method=terminal-vtrace` 标识正式方法；`terminal_games_consumed` 是本次进程已学习的终局数。`latest_value_mse` 对照真实终局结果，`latest_policy_entropy` 和 `latest_gradient_norm` 用于检查退化；这些原始指标可在控制台 JSON 中查看。首次终局前 updates/consumed 为零属于正常采集阶段。完整更新期间保存/停止等待原子边界；宿主轨迹超预算时先保存并退出，保留未结束局。
+`training_method=terminal-vtrace` 标识默认直接策略，开启搜索时为 `terminal-vtrace-mcts`；`terminal_games_consumed` 是本次进程已学习的终局数。`latest_value_mse` 对照真实终局结果，`latest_policy_entropy` 和 `latest_gradient_norm` 用于检查退化；这些原始指标可在控制台 JSON 中查看。首次终局前 updates/consumed 为零属于正常采集阶段。完整更新期间保存/停止等待原子边界；宿主轨迹接近预算时按前述内存回收规则整局淘汰或暂停采样。
 
 功能检查见[验证入口](VALIDATION.md)。独立的固定工作集与分解测量工具见[诊断入口](diagnostics/README.md)，不作为正常训练入口。
