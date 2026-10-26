@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +40,8 @@ class PanelTests(unittest.TestCase):
         }
         (self.run / "status.json").write_text(json.dumps(metrics), encoding="utf-8")
         self.panel.sampled = None
+        with patch("training.colab.panel.time.monotonic", return_value=seconds):
+            self.panel.sample()
         return self.panel.call(self.panel.identity)
 
     def test_observation_rates_and_native_loss(self):
@@ -110,11 +113,69 @@ class PanelTests(unittest.TestCase):
         self.assertIn("native failure", failed["log"])
 
     def test_history_is_bounded_and_restart_does_not_join_series(self):
-        for index in range(370):
+        for index in range(730):
             self.status(index + 1)
-        self.assertEqual(len(self.panel.history), 360)
+        self.assertEqual(len(self.panel.history), 720)
         self.status(0.5)
         self.assertEqual(len(self.panel.history), 1)
+
+    def test_sampling_does_not_depend_on_snapshot_requests(self):
+        self.status()
+        self.panel.resources.reset_mock()
+        self.panel.snapshot()
+        self.panel.snapshot()
+        self.panel.resources.sample.assert_not_called()
+        self.assertEqual(len(self.panel.history), 1)
+        sampler = Panel(self.run, self.process)
+        self.addCleanup(sampler.close)
+        twice = threading.Event()
+        calls = []
+
+        def resource():
+            calls.append(1)
+            if len(calls) == 2:
+                metrics = json.loads((self.run / "status.json").read_text())
+                metrics["seconds"] = 15
+                (self.run / "status.json").write_text(json.dumps(metrics))
+                with sampler.lock:
+                    sampler.sampled -= 5
+                twice.set()
+            return {"gpu": 70}
+
+        sampler.resources = Mock()
+        sampler.resources.sample.side_effect = resource
+        with patch.object(
+            sampler, "snapshot", side_effect=AssertionError("不应请求网页快照")
+        ):
+            sampler.start()
+            self.assertTrue(twice.wait(3))
+            sampler.close()
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertEqual(len(sampler.history), 2)
+        self.assertFalse(sampler.thread.is_alive())
+
+    def test_resource_window_uses_elapsed_time(self):
+        self.status(10)
+        for stamp, gpu in ((11, 100), (12, 100), (15, 0)):
+            self.panel.resources.sample.return_value = {"gpu": gpu}
+            with patch("training.colab.panel.time.monotonic", return_value=stamp):
+                self.panel.sample()
+        self.assertEqual(self.panel.history[-1]["gpu"], 40)
+        self.assertIn("gap", self.panel.history[-1])
+
+    def test_stale_state_keeps_resources_and_restarts_rate_baseline(self):
+        self.status(10)
+        os.utime(self.run / "status.json", (1, 1))
+        with patch("training.colab.panel.time.monotonic", return_value=30):
+            self.panel.sample()
+        gap = self.panel.history[-1]
+        self.assertEqual(gap["gap"], "状态文件更新延迟")
+        self.assertEqual(gap["gpu"], 70)
+        self.assertNotIn("ready", gap)
+        resumed = self.status(35, inference_nodes=3000)
+        self.assertNotIn("actor", resumed["history"][-1])
+        next_sample = self.status(40, inference_nodes=3500)
+        self.assertEqual(next_sample["history"][-1]["actor"], 100)
 
     def test_notebook_click_to_resume_and_start(self):
         notebook = json.loads(
@@ -153,11 +214,14 @@ class PanelTests(unittest.TestCase):
             "NATIVE": ["native-test"],
         }
         with (
-            patch.dict("sys.modules", {
-                "google.colab": Mock(),
-                "ipywidgets": widgets,
-                "IPython.display": Mock(),
-            }),
+            patch.dict(
+                "sys.modules",
+                {
+                    "google.colab": Mock(),
+                    "ipywidgets": widgets,
+                    "IPython.display": Mock(),
+                },
+            ),
             patch("importlib.reload"),
             patch("training.colab.panel.show") as show,
             patch("builtins.print"),
@@ -184,7 +248,9 @@ class PanelTests(unittest.TestCase):
             button = namespace["start_button"]
             button.on_click.call_args.args[0](button)
             fake.Popen.assert_called_once()
-            self.assertEqual(fake.Popen.call_args.args[0][-2:], ["--resume", str(latest)])
+            self.assertEqual(
+                fake.Popen.call_args.args[0][-2:], ["--resume", str(latest)]
+            )
             self.assertNotEqual(namespace["RUN"], latest.parent)
             self.assertTrue(picker.disabled)
             self.assertTrue(search.disabled)

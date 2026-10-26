@@ -4,6 +4,7 @@ import json
 import math
 import os
 import subprocess
+import threading
 import time
 import uuid
 from collections import deque
@@ -95,21 +96,28 @@ class Panel:
         self.configuration = configuration or {}
         self.identity = uuid.uuid4().hex
         self.resources = Resources(self.configuration.get("device", "cpu"))
-        self.history = deque(maxlen=360)
+        self.history = deque(maxlen=720)
         self.previous = None
         self.sampled = None
         self.last_resource = {}
+        self.resource_window = []
+        self.origin = None
+        self.observed_at = None
+        self.sample_error = None
+        self.lock = threading.RLock()
+        self.closed = threading.Event()
+        self.thread = None
         self.saved_before = None
         self.stopping = False
         self.evaluation = None
 
-    def snapshot(self):
+    def read_state(self):
+        """读取宿主状态；文件时间与资源采集时间分开，不将旧状态当成新观测。"""
         run = self.directory
         source = run / (
             "window.json" if (run / "window.json").exists() else "status.json"
         )
         metrics = read_json(source) or {}
-        configuration = read_json(run / "configuration.json") or self.configuration
         code = self.process.poll() if self.process is not None else None
         failure = tail(run / "failure.txt")
         if failure or code not in (None, 0):
@@ -126,30 +134,74 @@ class Panel:
             phase = "stale"
         else:
             phase = "running"
-        saved = run / "saved.json"
-        saved_at = saved.stat().st_mtime if saved.exists() else None
-        save_pending = self.saved_before is not None
-        if save_pending and saved_at is not None and saved_at > self.saved_before:
-            self.saved_before = None
-            save_pending = False
+        age = max(0, time.time() - source.stat().st_mtime) if metrics else None
+        return metrics, phase, age, code, failure
+
+    def sample(self):
+        """后台单次观测：资源每秒采集，五秒入图；缺测后重新建立速率基线。"""
+        resource = self.resources.sample()
+        try:
+            metrics, phase, age, _, _ = self.read_state()
+            error = None
+        except (OSError, ValueError, KeyError) as exc:
+            metrics, phase, age = {}, "unknown", None
+            error = str(exc)
         now = time.monotonic()
-        if self.sampled is None or now - self.sampled >= 4.5:
-            self.last_resource = self.resources.sample()
-            self.sampled = now
-            if metrics and phase in ("running", "stopping", "stopped"):
-                point = {
-                    "seconds": metrics["seconds"],
-                    "updates": metrics.get("loss_update"),
-                    "loss": metrics.get("latest_loss"),
-                    "ready": metrics.get("ready_steps"),
-                    "lag": metrics.get("consumed_lag_max"),
-                    **self.last_resource,
-                }
+        with self.lock:
+            self.last_resource = resource
+            self.observed_at = time.time()
+            self.sample_error = error
+            self.resource_window.append((now, resource))
+            if (
+                self.sampled is not None
+                and now - self.sampled < 5
+                and phase not in ("stopped", "failed")
+            ):
+                return
+            seconds = metrics.get("seconds")
+            if (
+                self.previous
+                and seconds is not None
+                and seconds < self.previous["seconds"]
+            ):
+                self.history.clear()
+                self.previous = None
+                self.origin = None
+            if self.origin is None and seconds is not None:
+                self.origin = now - seconds
+            if self.origin is None:
+                self.resource_window.clear()
+                return
+            point = {"seconds": now - self.origin, **resource}
+            for field in ("cpu", "gpu"):
+                total = weighted = 0
+                previous = self.sampled
+                for stamp, reading in self.resource_window:
+                    weight = max(0, stamp - previous) if previous is not None else 1
+                    if field in reading:
+                        total += weight
+                        weighted += reading[field] * weight
+                    previous = stamp
+                if total:
+                    point[field] = weighted / total
+            self.resource_window.clear()
+            fresh = (
+                metrics
+                and phase in ("running", "stopping", "stopped")
+                and (not self.previous or seconds > self.previous["seconds"])
+            )
+            if fresh:
+                point.update(
+                    {
+                        "updates": metrics.get("loss_update"),
+                        "loss": metrics.get("latest_loss"),
+                        "ready": metrics.get("ready_steps"),
+                    }
+                )
                 if self.previous:
-                    interval = metrics["seconds"] - self.previous["seconds"]
-                    if interval < 0:
-                        self.history.clear()
-                    elif interval > 0:
+                    interval = seconds - self.previous["seconds"]
+                    if 0 < interval <= 15:
+                        point["interval"] = interval
                         for name, key in (
                             ("actor", "inference_nodes"),
                             ("commands", "commands"),
@@ -159,16 +211,76 @@ class Panel:
                                 point[name] = (
                                     max(0, metrics[key] - self.previous[key]) / interval
                                 )
-                if not self.history or point["seconds"] != self.history[-1]["seconds"]:
-                    self.history.append(point)
                 self.previous = metrics
+            else:
+                point["gap"] = (
+                    "状态文件读取失败"
+                    if error
+                    else "状态文件更新延迟"
+                    if age is not None and age > 15
+                    else "等待新的训练状态"
+                )
+                # 保留最后的宿主时间用于识别重复状态，恢复时不跨缺口计算速率。
+            if self.history and self.history[-1].get("gap"):
+                for field in ("actor", "commands", "consume", "interval"):
+                    point.pop(field, None)
+            self.history.append(point)
+            self.sampled = now
+
+    def start(self):
+        """采样线程归面板运行所有；网页关闭或暂停刷新不会停止它。"""
+        if self.thread and self.thread.is_alive():
+            return
+        self.closed.clear()
+
+        def loop():
+            while not self.closed.is_set():
+                started = time.monotonic()
+                try:
+                    self.sample()
+                except (OSError, ValueError, KeyError) as error:
+                    with self.lock:
+                        self.sample_error = str(error)
+                if self.process is not None and self.process.poll() is not None:
+                    break
+                self.closed.wait(max(0.05, 1 - (time.monotonic() - started)))
+
+        self.thread = threading.Thread(
+            target=loop, name="haojie-panel-sampler", daemon=True
+        )
+        self.thread.start()
+
+    def close(self):
+        self.closed.set()
+        if self.thread:
+            self.thread.join(timeout=3)
+        if self.evaluation:
+            self.evaluation.close()
+
+    def snapshot(self):
+        run = self.directory
+        metrics, phase, age, code, failure = self.read_state()
+        configuration = read_json(run / "configuration.json") or self.configuration
+        saved = run / "saved.json"
+        saved_at = saved.stat().st_mtime if saved.exists() else None
+        save_pending = self.saved_before is not None
+        if save_pending and saved_at is not None and saved_at > self.saved_before:
+            self.saved_before = None
+            save_pending = False
+        with self.lock:
+            history = list(self.history)
+            resources = self.last_resource.copy()
+            sampled_at, sample_error = self.observed_at, self.sample_error
         return {
             "phase": phase,
             "metrics": metrics,
             "configuration": configuration,
             "evaluation": self.evaluation.status() if self.evaluation else None,
-            "history": list(self.history),
-            "resources": self.last_resource,
+            "history": history,
+            "resources": resources,
+            "sampled_at": sampled_at,
+            "sample_error": sample_error,
+            "status_age": age,
             "saved_at": saved_at,
             "save_pending": save_pending,
             "checkpoint": str(run / "checkpoint.pt"),
@@ -270,8 +382,8 @@ def show(directory, process=None, configuration=None, native=None, python=None):
     from IPython.display import HTML, JSON, display
 
     if _current is None or _current.directory != Path(directory):
-        if _current and _current.evaluation:
-            _current.evaluation.close()
+        if _current:
+            _current.close()
         _current = Panel(directory, process, configuration)
     else:
         _current.identity = uuid.uuid4().hex
@@ -291,5 +403,6 @@ def show(directory, process=None, configuration=None, native=None, python=None):
     output.register_callback(
         "haojie.native_panel", lambda *args: JSON(_current.call(*args))
     )
+    _current.start()
     display(HTML(_current.render()))
     return _current

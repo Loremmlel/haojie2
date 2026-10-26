@@ -33,11 +33,11 @@
   <div class="readings">
     <article>
       <span>滞后上限内消费</span><strong data-value="consume">—</strong
-      ><small>转换 / 秒 · 最近采样区间</small>
+      ><small>转换 / 秒 · 最近 30 秒</small>
     </article>
     <article>
       <span>Actor 决策</span><strong data-value="actor">—</strong
-      ><small>决策 / 秒 · 最近采样区间</small>
+      ><small>决策 / 秒 · 最近 30 秒</small>
     </article>
     <article>
       <span>学习更新</span><strong data-value="updates">—</strong
@@ -50,23 +50,33 @@
       <span>Ready 积压</span><strong data-value="ready">—</strong><small>等待学习的转换</small>
     </article>
     <article>
-      <span>最大消费滞后</span><strong data-value="lag">—</strong
+      <span>运行最大消费滞后</span><strong data-value="lag">—</strong
       ><small data-value="lag_limit">等待版本上限</small>
     </article>
   </div>
   <p class="snapshot" data-summary>启动后将显示设备、活动局数和保存状态。</p>
+  <div class="plot-controls" role="group" aria-label="图表显示">
+    <label for="range-__PANEL_ID__">时间范围</label>
+    <select id="range-__PANEL_ID__" data-range>
+      <option value="10">最近 10 分钟</option>
+      <option value="30" selected>最近 30 分钟</option>
+      <option value="60">最近 60 分钟</option>
+    </select>
+    <label class="raw-toggle"><input type="checkbox" data-original />显示原始波动</label>
+    <span>吞吐与利用率：30 秒均值 · 损失：EMA 趋势</span>
+  </div>
   <div class="plots">
     <section>
       <h2>采集与学习吞吐</h2>
       <p class="legend">
         <span class="teal">● 决策 / 秒</span><span class="ember">● 消费 / 秒</span
-        ><span class="gold">● 正式命令 / 秒</span>
+        ><span><span class="gold" aria-hidden="true">●</span> 正式命令 / 秒</span>
       </p>
       <div data-chart="throughput"></div>
     </section>
     <section>
       <h2>最近学习总损失</h2>
-      <p>每次状态采样读取最近一次已提交更新</p>
+      <p>按实际观测到的更新去重 · 淡线显示原始损失</p>
       <div data-chart="loss"></div>
     </section>
     <section>
@@ -75,9 +85,14 @@
       <div data-chart="ready"></div>
     </section>
     <section>
-      <h2>策略滞后</h2>
-      <p>本轮已消费转换的最大版本差</p>
-      <div data-chart="lag"></div>
+      <h2>采样状态</h2>
+      <p>后台采样独立于页面刷新</p>
+      <strong class="quality" data-quality>等待后台观测</strong>
+      <p data-sample-age>尚无采样时间</p>
+      <ul class="gap-list" data-gaps></ul>
+      <p class="help">
+        灰色区域表示训练状态缺测；资源曲线单独采集。保存等待期间也可能出现状态延迟。
+      </p>
     </section>
     <section>
       <h2>CPU / GPU 利用率</h2>
@@ -93,7 +108,8 @@
     </section>
   </div>
   <p class="help">
-    保留最近 360 个观测点。空读数留白；重新展示同一运行保留曲线。关闭面板后训练进程继续运行。
+    后台每秒采集资源，每 5 秒记录一次，最多保留 720
+    点。缺测留白并重新开始趋势计算；关闭面板后继续采样，重开同一运行保留曲线。
   </p>
   <section class="evaluation" aria-label="AI 棋力测评">
     <h2>AI 棋力测评</h2>

@@ -29,6 +29,8 @@ try {
       can_stop: true,
       save_pending: false,
       saved_at: null,
+      sampled_at: Date.now() / 1000,
+      status_age: 1,
       directory: '/content/drive/MyDrive/haojie-training/test',
       checkpoint: '/content/run/checkpoint.pt',
       log: '',
@@ -73,6 +75,7 @@ try {
       resources: { gpu: 80, vram: 8.1, vram_total: 22.5, power: 66 },
       history: Array.from({ length: 30 }, (_, i) => ({
         seconds: i * 5,
+        interval: 5,
         updates: i * 4,
         loss: 0.8 / (1 + i / 10),
         actor: 12000 + Math.sin(i) * 700,
@@ -105,8 +108,32 @@ try {
   });
   await page.setContent(html);
   await page.getByText('训练运行中', { exact: true }).waitFor();
-  assert.equal(await page.locator('svg').count(), 6);
-  assert.equal(await page.locator('[data-value="consume"]').innerText(), '5,580');
+  assert.equal(await page.locator('svg').count(), 5);
+  assert.equal(await page.locator('[data-value="consume"]').innerText(), '5,530');
+  assert.ok((await page.locator('svg circle').count()) <= 9);
+  assert.equal(await page.locator('[data-chart="throughput"] .original').count(), 0);
+  await page.getByLabel('显示原始波动', { exact: true }).check();
+  assert.equal(await page.locator('[data-chart="throughput"] .original').count(), 3);
+  await page.getByLabel('显示原始波动', { exact: true }).uncheck();
+  // 不等间隔的观测必须按时长聚合，不能把三个速率做普通平均。
+  await page.evaluate(() => {
+    window.initialHistory = window.reply.history;
+    window.reply.history = [
+      { seconds: 0 },
+      { seconds: 5, interval: 5, consume: 0 },
+      { seconds: 20, interval: 15, consume: 100 },
+      { seconds: 30, interval: 10, consume: 0 },
+    ];
+  });
+  await page.waitForFunction(
+    () => document.querySelector('[data-value="consume"]').textContent === '50',
+  );
+  await page.evaluate(() => {
+    window.reply.history = window.initialHistory;
+  });
+  await page.waitForFunction(
+    () => document.querySelector('[data-value="consume"]').textContent === '5,530',
+  );
   const input = page.getByLabel('并发局数', { exact: true });
   await input.fill('32');
   await page.getByText('原始状态（展开时固定快照）', { exact: true }).click();
@@ -138,7 +165,7 @@ try {
   });
   await page.getByRole('button', { name: '恢复刷新', exact: true }).click();
   await page.getByText('状态未知', { exact: true }).waitFor();
-  assert.equal(await page.locator('svg').count(), 6);
+  assert.equal(await page.locator('svg').count(), 5);
   assert.equal(
     await page.getByRole('button', { name: '保存检查点', exact: true }).isDisabled(),
     true,
@@ -177,6 +204,43 @@ try {
   await page.waitForFunction(() => window.calls.some((call) => call[2] === 'eval_cancel'));
   await page.getByRole('button', { name: '保存并停止', exact: true }).click();
   await page.waitForFunction(() => window.calls.some((call) => call[2] === 'stop'));
+  await page.evaluate(() => {
+    window.reply.history = Array.from({ length: 720 }, (_, i) => {
+      const row = {
+        seconds: i * 5,
+        interval: 5,
+        updates: Math.floor(i / 2),
+        loss: 1.8 - i / 1800 + Math.sin(Math.floor(i / 2) * 2) * 0.2,
+        actor: 12000 + Math.sin(i * 2) * 5000,
+        commands: 1800 + Math.sin(i) * 600,
+        consume: i % 6 === 0 ? 12000 : 0,
+        ready: i % 45 === 0 ? 3000 : 80,
+        cpu: 35 + Math.sin(i * 2) * 20,
+        gpu: i % 8 < 2 ? 100 : 5,
+        ram: 5 + i / 600,
+        vram: 8 + i / 900,
+      };
+      if (i >= 530 && i <= 535) {
+        for (const field of ['actor', 'commands', 'consume', 'loss', 'ready', 'updates'])
+          delete row[field];
+        row.gap = i === 530 ? '等待新的训练状态' : '状态文件更新延迟';
+      }
+      return row;
+    });
+  });
+  await page.getByText('所选范围内 1 段缺测', { exact: true }).waitFor();
+  assert.match(await page.locator('[data-gaps]').textContent(), /状态文件更新延迟.*35 秒/);
+  assert.ok((await page.locator('[data-chart="throughput"] rect.missing').count()) > 0);
+  assert.ok((await page.locator('svg circle').count()) <= 9);
+  await page.getByLabel('时间范围', { exact: true }).selectOption('10');
+  await page.getByText('所选范围采样连续', { exact: true }).waitFor();
+  assert.equal(await page.locator('[data-chart="throughput"] rect.missing').count(), 0);
+  assert.equal(await page.getByLabel('时间范围', { exact: true }).inputValue(), '10');
+  await page.getByLabel('时间范围', { exact: true }).selectOption('30');
+  await page.getByLabel('时间范围', { exact: true }).focus();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await page.getByLabel('时间范围', { exact: true }).selectOption('30');
   await page.screenshot({ path: join(temporary, 'desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -188,7 +252,7 @@ try {
     window.reply.phase = 'not_started';
   });
   await page.getByText('尚未启动', { exact: true }).waitFor();
-  assert.equal(await page.getByText('等待实际数据', { exact: true }).count(), 6);
+  assert.equal(await page.getByText('等待实际数据', { exact: true }).count(), 5);
   await page.evaluate(() => {
     window.mode = 'closed';
   });
@@ -196,7 +260,7 @@ try {
   assert.equal(await page.locator('[data-refresh]').isDisabled(), true);
   assert.deepEqual(errors, []);
   console.log(
-    'Native Colab panel: charts, controls, draft/focus, frozen JSON, offline/reconnect, empty/old panel and 390px passed.',
+    'Native Colab panel: weighted trends, raw overlay, gaps/ranges, controls, draft/focus, offline/reconnect, empty/old panel and 390px passed.',
   );
   if (process.env.PANEL_SCREENSHOTS) console.log(`Screenshots: ${temporary}`);
 } finally {

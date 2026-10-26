@@ -61,7 +61,8 @@
   margin-left: auto;
 }
 .hj-native button,
-.hj-native input {
+.hj-native input,
+.hj-native select {
   font: inherit;
   color: var(--ink);
   background: var(--panel);
@@ -89,7 +90,7 @@
 .hj-native button.stop:hover:not(:disabled) {
   background: var(--ember-soft);
 }
-.hj-native :is(button, input, summary):focus-visible {
+.hj-native :is(button, input, select, summary):focus-visible {
   outline: 3px solid var(--teal);
   outline-offset: 3px;
 }
@@ -134,6 +135,48 @@
   margin: 14px 0;
   overflow-wrap: anywhere;
 }
+.hj-native .plot-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 18px 0 12px;
+  font-size: 12px;
+}
+.hj-native .plot-controls select,
+.hj-native .raw-toggle {
+  cursor: pointer;
+}
+.hj-native .plot-controls select:hover {
+  background: var(--teal-soft);
+}
+.hj-native .raw-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+}
+.hj-native .raw-toggle input {
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--teal);
+}
+.hj-native .plot-controls > span {
+  color: var(--ink);
+}
+.hj-native .quality {
+  display: block;
+  margin-top: 20px;
+  font-size: 22px;
+  color: var(--teal);
+}
+.hj-native .gap-list {
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.8;
+}
 .hj-native .plots {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -168,17 +211,17 @@
   color: var(--ember);
 }
 .hj-native .gold {
-  color: var(--ink);
+  color: var(--gold);
 }
 .hj-native [data-chart] {
-  height: 190px;
+  height: 220px;
   display: grid;
   align-content: center;
 }
 .hj-native svg {
   display: block;
   width: 100%;
-  height: 190px;
+  height: 220px;
   overflow: visible;
 }
 .hj-native svg text {
@@ -227,6 +270,9 @@
   }
   .hj-native .plots {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .hj-native svg text {
+    font-size: 14px;
   }
   .hj-native article {
     padding: 12px 6px;

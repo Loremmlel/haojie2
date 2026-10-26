@@ -55,9 +55,96 @@
         element.disabled = disabled;
       });
   }
-  function chart(key, history, series, unit, xKey = 'seconds', percent = false) {
+  const escape = (value) =>
+    String(value).replace(
+      /[&<>"']/g,
+      (c) =>
+        ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;',
+        })[c],
+    );
+
+  // 速率按计数区间的实际时长加权，资源按观测间隔加权；不跨缺测续算。
+  function average(history, fields) {
+    return history.map((row, i) => {
+      const result = { ...row };
+      for (const field of fields) {
+        if (!finite(row[field])) continue;
+        let sum = 0,
+          duration = 0;
+        for (let j = i; j >= 0; j--) {
+          const sample = history[j],
+            delta = sample.seconds - history[j - 1]?.seconds;
+          if (!finite(sample[field]) || sample.seconds <= row.seconds - 30) break;
+          const observed = finite(delta) && delta <= 15 ? delta : 5;
+          const interval = ['cpu', 'gpu'].includes(field)
+            ? observed
+            : (sample.interval ?? observed);
+          const weight = Math.max(0, Math.min(interval, sample.seconds - (row.seconds - 30)));
+          sum += sample[field] * weight;
+          duration += weight;
+          if (delta > 15) break;
+        }
+        result[field] = duration ? sum / duration : undefined;
+      }
+      return result;
+    });
+  }
+
+  function lossHistory(history) {
+    let update, trend, previous;
+    return history.flatMap((row) => {
+      const interrupted =
+        row.gap ||
+        !finite(row.loss) ||
+        !finite(row.updates) ||
+        (previous !== undefined && row.seconds - previous > 15);
+      previous = row.seconds;
+      if (interrupted) {
+        update = trend = undefined;
+        if (!finite(row.loss) || !finite(row.updates) || row.gap)
+          return [{ ...row, loss: undefined }];
+      }
+      if (row.updates === update) return [];
+      update = row.updates;
+      trend = trend === undefined ? row.loss : trend * 0.8 + row.loss * 0.2;
+      const point = { ...row, original: row.loss, loss: trend };
+      return interrupted ? [{ ...row, loss: undefined }, point] : [point];
+    });
+  }
+
+  function gaps(history) {
+    const result = [];
+    let active;
+    history.forEach((row, i) => {
+      const previous = history[i - 1];
+      if (previous && row.seconds - previous.seconds > 15 && !active)
+        result.push({ start: previous.seconds, end: row.seconds, reason: '后台采样间隔过长' });
+      if (row.gap && !active)
+        active = { start: previous?.seconds ?? row.seconds, end: row.seconds, reason: row.gap };
+      if (active) {
+        active.end = row.seconds;
+        if (row.gap && row.gap !== '等待新的训练状态') active.reason = row.gap;
+        if (!row.gap) {
+          result.push(active);
+          active = undefined;
+        }
+      }
+    });
+    if (active) result.push(active);
+    return result;
+  }
+
+  function chart(key, history, series, unit, options = {}) {
+    const { xKey = 'seconds', percent = false, step = false, raw = [], missing = [] } = options;
     const target = find(`[data-chart="${key}"]`);
-    const values = history.flatMap((row) => series.map(([field]) => row[field])).filter(finite);
+    const values = [...history, ...raw]
+      .flatMap((row) => series.map(([field]) => row[field]))
+      .filter(finite);
     if (!values.length) {
       target.innerHTML = '<p class="empty">等待实际数据</p>';
       return;
@@ -65,39 +152,138 @@
     const xs = history.map((row) => row[xKey]).filter(finite);
     const lowX = Math.min(...xs),
       highX = Math.max(...xs);
-    const lowY = Math.min(0, ...values),
-      highY = Math.max(percent ? 100 : 0.01, ...values);
-    let paths = '';
-    for (const [field, color] of series) {
-      let points = [],
-        previous;
-      const flush = () => {
-        if (points.length)
-          paths += `<polyline fill="none" stroke="var(--${color})" stroke-width="2" points="${points.join(' ')}"/>`;
-        points = [];
-      };
-      for (const row of history) {
-        if (!finite(row[field]) || !finite(row[xKey])) {
-          flush();
-          previous = undefined;
-          continue;
-        }
-        if (previous !== undefined && row.seconds - previous > 15) flush();
-        previous = row.seconds;
-        const x = 48 + ((row[xKey] - lowX) / Math.max(1, highX - lowX)) * 428;
-        const y = 150 - ((row[field] - lowY) / (highY - lowY)) * 125;
-        points.push(`${x.toFixed(2)},${y.toFixed(2)}`);
-        paths += `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="1.7" fill="var(--${color})"><title>${number(row[field], 3)}</title></circle>`;
-      }
-      flush();
+    const min = Math.min(...values),
+      max = Math.max(...values);
+    const padding = Math.max((max - min) * 0.12, Math.abs(max) * 0.02, 0.01);
+    const lowY = key === 'loss' ? min - padding : 0,
+      highY = percent ? 100 : max + padding;
+    const x = (value) => 60 + ((value - lowX) / Math.max(1, highX - lowX)) * 424;
+    const y = (value) => 176 - ((value - lowY) / (highY - lowY)) * 148;
+    let paths = '',
+      grid = '';
+    for (let i = 0; i <= 4; i++) {
+      const value = lowY + ((highY - lowY) * i) / 4;
+      grid += `<path d="M60 ${y(value)}H484" stroke="var(--line)"/>
+        <text x="51" y="${y(value) + 4}" text-anchor="end">${number(value, 2)}</text>`;
+      const tick = lowX + ((highX - lowX) * i) / 4;
+      grid += `<text x="${x(tick)}" y="198" text-anchor="${i === 0 ? 'start' : i === 4 ? 'end' : 'middle'}">${number(tick / (xKey === 'seconds' ? 60 : 1), 1)}</text>`;
     }
+    const shades =
+      xKey === 'seconds'
+        ? missing
+            .map(
+              (gap) =>
+                `<rect class="missing" x="${x(gap.start)}" y="28" width="${Math.max(1, x(gap.end) - x(gap.start))}" height="148" fill="var(--muted)" opacity="0.18"><title>${escape(gap.reason)} · ${number(gap.end - gap.start, 1)} 秒</title></rect>`,
+            )
+            .join('')
+        : '';
+    const draw = (rows, opacity, original = false) => {
+      for (const [field, color] of series) {
+        let points = [],
+          previous,
+          last;
+        const flush = () => {
+          if (points.length)
+            paths += `<polyline class="${original ? 'original' : 'trend'}" fill="none" stroke="var(--${color})" opacity="${opacity}" stroke-width="${original ? 1 : 2}" stroke-linejoin="round" stroke-linecap="round" points="${points.join(' ')}"/>`;
+          points = [];
+        };
+        for (const row of rows) {
+          if (!finite(row[field]) || !finite(row[xKey])) {
+            flush();
+            previous = last = undefined;
+            continue;
+          }
+          if (xKey === 'seconds' && previous && row.seconds - previous.seconds > 15) {
+            flush();
+            previous = undefined;
+          }
+          const cx = x(row[xKey]).toFixed(2),
+            cy = y(row[field]).toFixed(2);
+          if (step && previous) points.push(`${cx},${y(previous[field]).toFixed(2)}`);
+          points.push(`${cx},${cy}`);
+          previous = row;
+          last = { cx, cy, value: row[field] };
+        }
+        flush();
+        if (last && !original)
+          paths += `<circle cx="${last.cx}" cy="${last.cy}" r="2.5" fill="var(--${color})"><title>${number(last.value, 3)} ${unit}</title></circle>`;
+      }
+    };
+    if (raw.length) draw(raw, 0.2, true);
+    draw(history, 1);
     const label = xKey === 'seconds' ? '运行时间 / 分钟' : '累计学习更新';
-    const scale = xKey === 'seconds' ? 60 : 1;
-    target.innerHTML = `<svg viewBox="0 0 500 190" role="img" aria-label="${target.parentElement.querySelector('h2').textContent}">
-      <path d="M48 25V150H476" fill="none" stroke="var(--line)"/>
-      <text x="1" y="16">${unit}</text><text x="1" y="35">${number(highY, 2)}</text><text x="1" y="153">${number(lowY, 2)}</text>
-      <text x="48" y="170">${number(lowX / scale, 1)}</text><text x="476" y="170" text-anchor="end">${number(highX / scale, 1)}</text>
-      <text x="260" y="187" text-anchor="middle">${label}</text>${paths}</svg>`;
+    target.innerHTML = `<svg viewBox="0 0 500 220" role="img" aria-label="${escape(target.parentElement.querySelector('h2').textContent)}">
+      <text x="60" y="16">${unit}</text>${shades}${grid}
+      <text x="272" y="218" text-anchor="middle">${label}</text>${paths}</svg>`;
+  }
+
+  function plots() {
+    const all = status.history,
+      last = all.at(-1)?.seconds ?? 0;
+    const visible = (row) => row.seconds >= last - Number(find('[data-range]').value) * 60;
+    const history = all.filter(visible);
+    const smoothed = average(all, ['actor', 'commands', 'consume', 'cpu', 'gpu']).filter(visible);
+    const missing = gaps(history),
+      raw = find('[data-original]').checked ? history : [];
+    chart(
+      'throughput',
+      smoothed,
+      [
+        ['actor', 'teal'],
+        ['consume', 'ember'],
+        ['commands', 'gold'],
+      ],
+      '每秒',
+      { raw, missing },
+    );
+    const losses = lossHistory(all).filter(visible);
+    chart('loss', losses, [['loss', 'teal']], '总损失', {
+      xKey: 'updates',
+      raw: losses.map((row) => ({ ...row, loss: row.original })),
+    });
+    chart('ready', history, [['ready', 'teal']], '转换', { step: true, missing });
+    chart(
+      'utilization',
+      smoothed,
+      [
+        ['cpu', 'teal'],
+        ['gpu', 'ember'],
+      ],
+      '%',
+      { percent: true, raw, missing },
+    );
+    chart(
+      'memory',
+      history,
+      [
+        ['ram', 'teal'],
+        ['vram', 'ember'],
+      ],
+      'GiB',
+      { missing },
+    );
+    const latest = average(all.slice(-8), ['actor', 'consume']).at(-1) || {};
+    find('[data-value="consume"]').textContent = number(latest.consume, 1);
+    find('[data-value="actor"]').textContent = number(latest.actor, 1);
+    find('[data-quality]').textContent = !all.length
+      ? '等待后台观测'
+      : all.at(-1).gap
+        ? '训练状态缺测中'
+        : missing.length
+          ? `所选范围内 ${missing.length} 段缺测`
+          : '所选范围采样连续';
+    find('[data-sample-age]').textContent =
+      `训练状态：${number(status.status_age, 1)} 秒前 · 后台采样：${status.sampled_at ? new Date(status.sampled_at * 1000).toLocaleTimeString('zh-CN') : '等待采样'}${status.sample_error ? ' · 采样读取异常' : ''}`;
+    find('[data-gaps]').replaceChildren(
+      ...missing
+        .slice(-3)
+        .reverse()
+        .map((gap) => {
+          const item = document.createElement('li');
+          item.textContent = `${number(gap.start / 60, 1)}–${number(gap.end / 60, 1)} 分钟 · ${gap.reason} · ${number(gap.end - gap.start, 1)} 秒`;
+          return item;
+        }),
+    );
   }
   function update(reply) {
     if (reply.closed) {
@@ -112,14 +298,10 @@
     const previous = status;
     status = reply;
     const m = reply.metrics,
-      c = reply.configuration,
-      history = reply.history;
-    const latest = history.at(-1) || {};
+      c = reply.configuration;
     const set = (key, value) => {
       find(`[data-value="${key}"]`).textContent = value;
     };
-    set('consume', number(latest.consume, 1));
-    set('actor', number(latest.actor, 1));
     set('updates', number(m.updates));
     set('games', number(m.completed_games));
     set('ready', number(m.ready_steps));
@@ -127,7 +309,7 @@
     set('batch', `计算小批 ${number(m.batch ?? c.batch)} 条 · 整局提交更新`);
     set('lag_limit', `上限 ${number(m.lag_limit)} 次更新`);
     find('[data-state]').textContent = phases[reply.phase] || '状态未知';
-    find('[data-updated]').textContent = `读取于 ${new Date().toLocaleTimeString('zh-CN')}`;
+    find('[data-updated]').textContent = `状态文件 ${number(reply.status_age, 1)} 秒前更新`;
     const target = m.target_concurrency ?? c.concurrency;
     if (!draft) find('input').value = finite(target) ? target : '';
     const saved = reply.saved_at
@@ -136,39 +318,7 @@
     const r = reply.resources;
     find('[data-summary]').textContent =
       `${c.gpu || c.device || '等待设备'} · ${number(c.workers)} 个 lane · 活动 ${number(m.active)} / 目标 ${number(target)} 局 · 已停放 ${number(m.parked)} 局 · 终局排队 ${number(m.ready_games)} 局 · 显存 ${number(r.vram, 1)} / ${number(r.vram_total, 1)} GiB · GPU ${number(r.power, 1)} W · 最近保存：${saved}${reply.save_pending ? '（保存请求处理中）' : ''}${m.stale_games ? ` · 过期未学习 ${number(m.stale_games)} 局 / ${number(m.stale_steps)} 条` : ''}${m.training_method === 'terminal-vtrace' && !m.updates ? ' · 本轮尚无新终局更新' : ''}`;
-    chart(
-      'throughput',
-      history,
-      [
-        ['actor', 'teal'],
-        ['consume', 'ember'],
-        ['commands', 'gold'],
-      ],
-      '每秒',
-    );
-    chart('loss', history, [['loss', 'teal']], '总损失', 'updates');
-    chart('ready', history, [['ready', 'teal']], '转换');
-    chart('lag', history, [['lag', 'ember']], '版本差');
-    chart(
-      'utilization',
-      history,
-      [
-        ['cpu', 'teal'],
-        ['gpu', 'ember'],
-      ],
-      '%',
-      'seconds',
-      true,
-    );
-    chart(
-      'memory',
-      history,
-      [
-        ['ram', 'teal'],
-        ['vram', 'ember'],
-      ],
-      'GiB',
-    );
+    plots();
     if (!find('[data-raw]').open) find('[data-json]').textContent = JSON.stringify(m, null, 2);
     if (!find('[data-config]').open)
       find('[data-configuration]').textContent = JSON.stringify(
@@ -238,7 +388,7 @@
       notice(
         reply.phase === 'not_started'
           ? '请在启动单元中开始训练，随后重新展示此面板。'
-          : '已连接，每 5 秒更新；速率使用相邻状态的差值。',
+          : '已连接；后台持续采样，页面每 5 秒刷新，速率显示最近 30 秒均值。',
       );
     buttons();
   }
@@ -343,5 +493,9 @@
       notice('已暂停面板刷新，训练继续运行。');
     }
   });
+  for (const selector of ['[data-range]', '[data-original]'])
+    find(selector).addEventListener('change', () => {
+      if (status) plots();
+    });
   poll();
 })();
