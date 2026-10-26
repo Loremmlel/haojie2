@@ -454,9 +454,7 @@ struct Upload {
   template <class V> void put(const Table &t, const std::vector<V> &v) {
     put(t, v.data(), v.size());
   }
-  void done() {
-    std::memcpy(host, fields.data(), fields.size() * sizeof(Field));
-  }
+  void done() { std::memcpy(host, fields.data(), fields.size() * sizeof(Field)); }
 };
 struct Layout {
   size_t next = 0;
@@ -553,12 +551,19 @@ int64_t token_bucket(int64_t n) {
   auto c = std::max<int64_t>(8, capacity(n));
   return c >= 128 && n <= c * 3 / 4 ? c * 3 / 4 : c;
 }
+struct DeviceKernelCache {
+  std::mutex mutex;
+  std::map<int, std::shared_ptr<DeviceKernels>> devices;
+};
+DeviceKernelCache &device_kernel_cache() {
+  static DeviceKernelCache cache;
+  return cache;
+}
 std::shared_ptr<DeviceKernels> device_kernels(const torch::Device &device) {
-  static std::mutex mutex;
-  static std::map<int, std::shared_ptr<DeviceKernels>> devices;
-  std::lock_guard lock(mutex);
+  auto &cache = device_kernel_cache();
+  std::lock_guard lock(cache.mutex);
   auto index = device.index() < 0 ? 0 : device.index();
-  auto &entry = devices[index];
+  auto &entry = cache.devices[index];
   if (!entry) {
     c10::cuda::CUDAGuard guard(device);
     entry = std::make_shared<DeviceKernels>();
@@ -614,6 +619,22 @@ void primitive_checks(const torch::Device &device) {
 }
 #endif
 } // namespace
+
+void release_device_kernels() {
+#ifdef HJ_CUDA
+  // 调用者须先结束模型命令及全部工作线程，在 CUDA 运行时全局析构前释放模块和锁页内存。
+  auto &cache = device_kernel_cache();
+  std::lock_guard lock(cache.mutex);
+  if (!cache.devices.empty())
+    std::cerr << "Shutdown: releasing CUDA kernels.\n";
+  for (auto &[index, kernels] : cache.devices) {
+    c10::cuda::CUDAGuard guard(torch::Device(torch::kCUDA, index));
+    cuda_check(cudaDeviceSynchronize());
+    kernels.reset();
+  }
+  cache.devices.clear();
+#endif
+}
 
 UpdateKernel make_update_kernel(const torch::Device &device) {
 #ifdef HJ_CUDA
@@ -937,8 +958,13 @@ void inference_checks(const torch::Device &device) {
   torch::NoGradGuard guard;
   cpu_policy_checks(device);
 #ifdef HJ_CUDA
-  if (device.is_cuda())
+  if (device.is_cuda()) {
+    // 退出边界应真正释放缓存所有权；随后再次使用同一设备仍须能重建并执行算子。
+    std::weak_ptr<DeviceKernels> previous = device_kernels(device);
+    release_device_kernels();
+    TORCH_CHECK(previous.expired(), "CUDA kernel cache retained resources after release");
     primitive_checks(device);
+  }
 #endif
   InputPool inputs;
   Network actor(32);

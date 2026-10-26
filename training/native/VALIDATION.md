@@ -27,6 +27,10 @@ node scripts/training/native/teacher/build.mjs --check
 
 Python 控制与测评检查使用已构建的原生程序和 `mini-racer`，覆盖保存回执、冻结测评、训练模式、Colab 搜索配置及取消／超时；依赖由 `training/colab/setup.sh` 安装。只有安装／面板和现有 TS 对手执行依赖 Python，训练宿主独立运行。
 
+CUDA 可用时，Python 回归还会以两个活动局实际发送“保存并停止”，从生成的完整检查点恢复到新目录后再次停止，核对两次退出码、检查点／回执、`wall.json` 和退出清理日志。原生 CUDA `check` 同时验证设备内核缓存可显式释放，并在同一进程重建后继续执行完整算子检查。
+
+2026-10-26 在 Windows、PyTorch/LibTorch 2.14.0 cu130、RTX 3060 Laptop 上，原生 CPU／CUDA `check` 和 18 项 Python 检查通过，两次真实 CUDA 保存停止均返回 0，恢复与日志刷新通过。Windows 旧程序未复现 Colab 的 `-11`；本次修正退出缓存生命周期并补充诊断，Colab/Linux 退出和致命信号栈仍待更新后实机验证。
+
 原生规则、公开候选与编码另验：
 
 ```sh

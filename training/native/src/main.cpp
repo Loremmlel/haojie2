@@ -3,11 +3,13 @@
 #include "runtime.h"
 #include <ATen/Context.h>
 #include <ATen/Parallel.h>
+#include <c10/util/signal_handler.h>
 #include <fstream>
 #include <iostream>
 #include <map>
 
-int main(int argc, char **argv) {
+namespace {
+int command_main(int argc, char **argv) {
   try {
     std::string command = argc > 1 ? argv[1] : "help";
     std::map<std::string, std::string> options;
@@ -163,4 +165,23 @@ int main(int argc, char **argv) {
     std::cerr << error.what() << "\n";
     return 1;
   }
+}
+} // namespace
+
+int main(int argc, char **argv) {
+  // 原生崩溃不会走 C++ 异常捕获；文件输出即时刷新，Linux 复用 LibTorch 的致命信号栈。
+  std::cout << std::unitbuf;
+#if defined(C10_SUPPORTS_FATAL_SIGNAL_HANDLERS)
+  c10::FatalSignalHandler::getInstance().setPrintStackTracesOnFatalSignal(true);
+#endif
+  auto code = command_main(argc, argv);
+  try {
+    hj::release_device_kernels();
+    if (argc > 1 && std::string(argv[1]) == "run")
+      std::cerr << "Native shutdown complete.\n";
+  } catch (const std::exception &error) {
+    std::cerr << "Native shutdown failed: " << error.what() << '\n';
+    return 1;
+  }
+  return code;
 }

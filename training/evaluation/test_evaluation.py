@@ -1,4 +1,4 @@
-"""边界与控制测试；原生零并发宿主验证保存回执和测评启动，不执行学习。"""
+"""边界与控制测试；原生宿主验证保存停止、恢复、退出与测评启动。"""
 
 import ctypes
 import json
@@ -19,6 +19,95 @@ from training.colab.panel import Panel
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_cuda_save_stop_and_restore_exit_cleanly(self):
+        import torch
+
+        if not torch.cuda.is_available():
+            self.skipTest("需要 CUDA 验证设备资源退出")
+        root = Path(__file__).resolve().parents[2]
+        build = root / "artifacts/cpp-training-build"
+        binary = build / (
+            "Release/haojie-train.exe" if os.name == "nt" else "haojie-train"
+        )
+        environment = os.environ.copy()
+        environment["PATH"] = os.pathsep.join(
+            [
+                str(Path(torch.__file__).parent / "lib"),
+                str(root / "artifacts/native-target/release"),
+                environment.get("PATH", ""),
+            ]
+        )
+        configuration = subprocess.check_output(
+            [str(binary), "configure", "--device", "cpu"],
+            env=environment,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertIn("batch", json.loads(configuration))
+        with tempfile.TemporaryDirectory(prefix="haojie-cuda-stop-") as temporary:
+            previous = None
+            for name in ("initial", "restored"):
+                directory = Path(temporary) / name
+                log_path = Path(temporary) / f"{name}.log"
+                arguments = [
+                    str(binary),
+                    "run",
+                    "--directory",
+                    str(directory),
+                    "--device",
+                    "cuda",
+                    "--concurrency",
+                    "2",
+                    "--workers",
+                    "1",
+                    "--inference-batch",
+                    "1",
+                    "--threads",
+                    "1",
+                    "--save-seconds",
+                    "0",
+                ]
+                if previous:
+                    arguments += ["--resume", str(previous / "checkpoint.pt")]
+                with log_path.open("w", encoding="utf-8") as log:
+                    process = subprocess.Popen(
+                        arguments,
+                        stdout=log,
+                        stderr=log,
+                        env=environment,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                        if os.name == "nt"
+                        else 0,
+                    )
+                    try:
+                        deadline = time.monotonic() + 60
+                        while not (directory / "status.json").exists():
+                            self.assertIsNone(
+                                process.poll(), log_path.read_text(encoding="utf-8")
+                            )
+                            if time.monotonic() >= deadline:
+                                self.fail("CUDA 宿主初始化超时")
+                            time.sleep(0.1)
+                        self.assertGreater(
+                            log_path.stat().st_size, 0, "运行日志应在退出前可读"
+                        )
+                        panel = Panel(directory, process, {"device": "cuda"})
+                        self.assertNotIn("error", panel.call(panel.identity, "stop"))
+                        process.wait(timeout=60)
+                    finally:
+                        if process.poll() is None:
+                            process.terminate()
+                            process.wait(timeout=10)
+                output = log_path.read_text(encoding="utf-8")
+                self.assertEqual(process.returncode, 0, output)
+                for file in ("checkpoint.pt", "saved.json", "wall.json"):
+                    self.assertTrue((directory / file).exists(), file)
+                self.assertIn("Native shutdown complete.", output)
+                self.assertIn("Shutdown: releasing CUDA kernels.", output)
+                self.assertFalse((directory / "failure.txt").exists())
+                previous = directory
+
     def test_running_native_save_receipt_and_evaluation(self):
         import torch
 

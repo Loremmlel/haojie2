@@ -578,10 +578,13 @@ public:
   }
   ~Session() {
     sampling_paused = true;
+    std::cerr << "Shutdown: joining learner and actor threads.\n";
     learning_executor.reset();
     for (auto &lane : lanes)
       lane.reset();
+    std::cerr << "Shutdown: releasing inference service.\n";
     search_service.reset();
+    std::cerr << "Shutdown: session workers released.\n";
   }
   void submit(Game &g, uint32_t op, Bytes b) {
     if (!g.idle())

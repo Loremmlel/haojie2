@@ -60,5 +60,6 @@ void evaluation_checks(const torch::Device &);
 std::string describe_configuration(Settings);
 void runtime_checks();
 void inference_checks(const torch::Device &);
+void release_device_kernels();
 void atomic_text(const std::filesystem::path &, const std::string &);
 } // namespace hj
