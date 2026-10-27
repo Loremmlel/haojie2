@@ -4,6 +4,7 @@ use crate::resolution::Resolution;
 use serde_json::{Value, json};
 
 const PUBLIC_FIELDS: &[&str] = &[
+    "transitUnitId",
     "baseEffects",
     "heads",
     "hands",
@@ -132,6 +133,7 @@ pub fn observe(s: &State, viewer: usize) -> Result<Value, String> {
     }
     let mut output = json!({"version":s.version,"serial":s.serial,"ply":s.ply,"active":s.active,"phase":s.phase,"summonSlots":s.summon_slots,"turns":s.turns,"bases":s.bases,"units":s.units,"pending":s.pending,"siphons":s.siphons,"deployRows":{"1":crate::geometry::deployment_rows(s,1),"2":crate::geometry::deployment_rows(s,2)}});
     for key in [
+        "transitUnitId",
         "baseEffects",
         "heads",
         "hands",

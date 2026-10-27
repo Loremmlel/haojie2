@@ -16,6 +16,8 @@ struct Settings {
   uint64_t chunk = 0, publish = 1;
   uint64_t memory_mb = 4096, updates = 0, samples = 0;
   uint64_t max_game_steps = 262144;
+  uint64_t update_games = 4;
+  double update_wait_seconds = 30;
   uint64_t search_simulations = 0, search_depth = 64;
   uint64_t history_size = 8, history_interval = 64, history_percent = 20;
   uint64_t threads = 1;

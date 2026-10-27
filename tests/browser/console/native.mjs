@@ -153,6 +153,23 @@ try {
   await page.waitForFunction(() =>
     window.calls.some((call) => call[2] === 'resize' && call[3] === 32),
   );
+  const workers = page.getByLabel('Worker 数', { exact: true });
+  await workers.fill('12');
+  await workers.press('Enter');
+  await page.waitForFunction(() =>
+    window.calls.some((call) => call[2] === 'workers' && call[3] === 12),
+  );
+  await workers.fill('0');
+  await workers.press('Enter');
+  assert.equal(await workers.getAttribute('aria-invalid'), 'true');
+  await page.evaluate(() => {
+    window.reply.metrics.workers = 12;
+  });
+  await workers.fill('12');
+  await workers.press('Enter');
+  await page.waitForFunction(() =>
+    document.querySelector('[data-summary]').textContent.includes('12 个 Worker'),
+  );
   await input.fill('129');
   await input.press('Enter');
   assert.equal(await input.getAttribute('aria-invalid'), 'true');

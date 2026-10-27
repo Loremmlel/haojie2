@@ -38,6 +38,7 @@ function fields(s: GameState, viewer: Player = decisionOwner(s)): Observation {
     active: s.active,
     phase: s.phase,
     summonSlots: s.summonSlots,
+    ...(s.transitUnitId ? { transitUnitId: s.transitUnitId } : {}),
     turns: s.turns,
     bases: s.bases,
     baseEffects: s.baseEffects,

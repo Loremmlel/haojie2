@@ -62,7 +62,7 @@ class EvaluationTests(unittest.TestCase):
                     "--workers",
                     "1",
                     "--inference-batch",
-                    "1",
+                    "2",
                     "--threads",
                     "1",
                     "--save-seconds",
@@ -93,6 +93,17 @@ class EvaluationTests(unittest.TestCase):
                             log_path.stat().st_size, 0, "运行日志应在退出前可读"
                         )
                         panel = Panel(directory, process, {"device": "cuda"})
+                        before = panel.snapshot()["metrics"]["commands"]
+                        self.assertNotIn("error", panel.call(panel.identity, "workers", 3))
+                        deadline = time.monotonic() + 30
+                        while True:
+                            state = panel.snapshot()["metrics"]
+                            if state.get("workers") == 3 and state["commands"] > before:
+                                break
+                            self.assertIsNone(process.poll(), log_path.read_text(encoding="utf-8"))
+                            if time.monotonic() >= deadline:
+                                self.fail("CUDA Worker 迁移后未继续采集")
+                            time.sleep(0.1)
                         self.assertNotIn("error", panel.call(panel.identity, "stop"))
                         process.wait(timeout=60)
                     finally:
@@ -106,6 +117,9 @@ class EvaluationTests(unittest.TestCase):
                 self.assertIn("Native shutdown complete.", output)
                 self.assertIn("Shutdown: releasing CUDA kernels.", output)
                 self.assertFalse((directory / "failure.txt").exists())
+                saved = json.loads((directory / "saved.json").read_text(encoding="utf-8"))
+                self.assertEqual(saved["workers"], 3)
+                self.assertEqual(saved["update_games"], 4)
                 previous = directory
 
     def test_running_native_save_receipt_and_evaluation(self):

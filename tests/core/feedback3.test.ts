@@ -307,6 +307,30 @@ for (const active of [1, 2] as const)
     assert.equal(applyCommand(escaped, { type: 'end' }).active, other);
   });
 
+test('同阵营冲撞保留实际穿行者，重叠顺序和存档往返不抢走移动权限', () => {
+  for (const size of [1, 2] as const)
+    for (const reversed of [false, true]) {
+      const s = fixture();
+      const stationary = add(s, 'u12p', 1, 4, 6);
+      stationary.size = size;
+      stationary.mode = 'move';
+      stationary.moves = 1;
+      const mover = readyRunner(s, 'u12p', 3, 6);
+      if (reversed) s.units.reverse();
+      const entered = applyCommand(s, { type: 'move', unitId: mover.id, x: 4, y: 6 });
+      assert.equal(entered.transitUnitId, mover.id);
+      assert.equal(s.transitUnitId, undefined);
+      rejected(entered, { type: 'move', unitId: stationary.id, x: 4, y: 5 });
+      rejected(entered, { type: 'end' });
+      const restored: GameState = JSON.parse(JSON.stringify(entered));
+      assert.ok(validState(restored));
+      const escaped = applyCommand(restored, { type: 'move', unitId: mover.id, x: 3, y: 6 });
+      assert.equal(escaped.transitUnitId, undefined);
+      assert.equal(unit(escaped, stationary.id).moves, 1);
+      assert.equal(commandError(escaped, { type: 'end' }), null);
+    }
+});
+
 test('feedback3 soul mage: 40HP, self/base endpoints, operation-consuming once per actual turn, persists while frozen', () => {
   const s = fixture(),
     mage = add(s, 'u14', 1, 5, 4);

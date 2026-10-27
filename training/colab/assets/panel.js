@@ -22,6 +22,7 @@
     timer,
     status,
     draft = false,
+    workersDraft = false,
     evaluationDraft = false,
     disconnected = false;
   let queue = Promise.resolve();
@@ -41,7 +42,8 @@
           closed ||
           disconnected ||
           !(element.dataset.action === 'stop' ? status?.can_stop : status?.can_control) ||
-          (element.dataset.action === 'save' && status?.save_pending);
+          (element.dataset.action === 'save' && status?.save_pending) ||
+          (element.closest('[data-workers-form]') && status?.workers_pending);
       });
     const evaluation = status?.evaluation;
     const disabled = busy || closed || disconnected || !evaluation;
@@ -306,18 +308,23 @@
     set('games', number(m.completed_games));
     set('ready', number(m.ready_steps));
     set('lag', number(m.consumed_lag_max));
-    set('batch', `计算小批 ${number(m.batch ?? c.batch)} 条 · 整局提交更新`);
+    set(
+      'batch',
+      `计算小批 ${number(m.batch ?? c.batch)} 条 · 每批最多 ${number(m.update_games ?? c.update_games ?? 1)} 局`,
+    );
     set('lag_limit', `上限 ${number(m.lag_limit)} 次更新`);
     find('[data-state]').textContent = phases[reply.phase] || '状态未知';
     find('[data-updated]').textContent = `状态文件 ${number(reply.status_age, 1)} 秒前更新`;
     const target = m.target_concurrency ?? c.concurrency;
     if (!draft) find('input').value = finite(target) ? target : '';
+    const workers = m.workers ?? c.workers;
+    if (!workersDraft) find('[data-workers]').value = finite(workers) ? workers : '';
     const saved = reply.saved_at
       ? new Date(reply.saved_at * 1000).toLocaleString('zh-CN')
       : '尚未保存';
     const r = reply.resources;
     find('[data-summary]').textContent =
-      `${c.gpu || c.device || '等待设备'} · ${number(c.workers)} 个 lane · 活动 ${number(m.active)} / 目标 ${number(target)} 局 · 已停放 ${number(m.parked)} 局 · 终局排队 ${number(m.ready_games)} 局 · 显存 ${number(r.vram, 1)} / ${number(r.vram_total, 1)} GiB · GPU ${number(r.power, 1)} W · 最近保存：${saved}${reply.save_pending ? '（保存请求处理中）' : ''}${m.stale_games ? ` · 过期未学习 ${number(m.stale_games)} 局 / ${number(m.stale_steps)} 条` : ''}${m.training_method === 'terminal-vtrace' && !m.updates ? ' · 本轮尚无新终局更新' : ''}`;
+      `${c.gpu || c.device || '等待设备'} · ${number(workers)} 个 Worker · 活动 ${number(m.active)} / 目标 ${number(target)} 局 · 已停放 ${number(m.parked)} 局 · 终局排队 ${number(m.ready_games)} 局 · 显存 ${number(r.vram, 1)} / ${number(r.vram_total, 1)} GiB · GPU ${number(r.power, 1)} W · 最近保存：${saved}${reply.save_pending ? '（保存请求处理中）' : ''}${m.stale_games ? ` · 过期未学习 ${number(m.stale_games)} 局 / ${number(m.stale_steps)} 条` : ''}${m.training_method === 'terminal-vtrace' && !m.updates ? ' · 本轮尚无新终局更新' : ''}`;
     plots();
     if (!find('[data-raw]').open) find('[data-json]').textContent = JSON.stringify(m, null, 2);
     if (!find('[data-config]').open)
@@ -436,6 +443,7 @@
       const reply = await call(action, value);
       update(reply);
       if (action === 'resize' && !reply.error && !reply.closed) draft = false;
+      if (action === 'workers' && !reply.error && !reply.closed) workersDraft = false;
       if (action === 'eval_config' && !reply.error && !reply.closed) evaluationDraft = false;
     } catch (error) {
       notice(`请求结果未知，请读取最新状态后确认。${error.message}`, true);
@@ -447,6 +455,22 @@
   find('input').addEventListener('input', () => {
     draft = true;
     find('input').removeAttribute('aria-invalid');
+  });
+  find('[data-workers]').addEventListener('input', () => {
+    workersDraft = true;
+    find('[data-workers]').removeAttribute('aria-invalid');
+  });
+  find('[data-workers-form]').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const input = find('[data-workers]'),
+      value = input.valueAsNumber;
+    if (!Number.isInteger(value) || value < 1 || value > 128) {
+      input.setAttribute('aria-invalid', 'true');
+      input.focus();
+      notice('Worker 数须为 1–128 的整数。', true);
+      return;
+    }
+    submit('workers', value);
   });
   find('form').addEventListener('submit', (event) => {
     event.preventDefault();

@@ -202,6 +202,8 @@ export interface GamePosition {
   summonOffer?: { owner: Player; groups: Card[][]; count: 2 };
   clockFrames?: Record<Player, { current?: ClockFrame; previous?: ClockFrame }>;
   summonSlots: number;
+  /** 实际进入过渡占位的冲撞者；不能从重叠单位的数组顺序推断。 */
+  transitUnitId?: string;
   turns: Record<Player, number>;
   bases: Record<Player, number>;
   baseEffects: Record<Player, Effect[]>;

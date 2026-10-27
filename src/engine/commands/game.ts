@@ -109,6 +109,7 @@ function projectedAttacker(
   return { u, stats };
 }
 function transitUnit(s: GamePosition) {
+  if (s.transitUnitId) return s.units.find((u) => u.id === s.transitUnitId);
   return s.units.find(
     (u) =>
       u.owner === s.active &&
@@ -483,6 +484,18 @@ function transition<S extends GamePosition>(
       default:
         throw new RuleError('无法识别的游戏命令。');
     }
+    // 冲撞归属随实际移动更新；反应导致离开占位或死亡时立即释放。
+    const movingId = c.type === 'move' ? c.unitId : s.transitUnitId;
+    const moving = movingId ? s.units.find((u) => u.id === movingId) : undefined;
+    if (
+      moving &&
+      moving.owner === s.active &&
+      moving.mode === 'move' &&
+      (hasTrait(moving, 'u12p') || hasTrait(moving, 'u12')) &&
+      !emptyFor(s, moving)
+    )
+      s.transitUnitId = moving.id;
+    else delete s.transitUnitId;
     // 预检只消费合法性与随机边界；动作后的纯派生同步结果会被丢弃。
     if (preview) return s;
     syncBanners(s);

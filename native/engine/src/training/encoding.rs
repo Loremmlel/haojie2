@@ -136,7 +136,14 @@ pub struct TypedRow {
     pub continuous: [u16; 52],
 }
 impl Default for TypedRow {
-    fn default() -> Self { Self { ids: [0; 60], present: 0, integers: 0, continuous: [0; 52] } }
+    fn default() -> Self {
+        Self {
+            ids: [0; 60],
+            present: 0,
+            integers: 0,
+            continuous: [0; 52],
+        }
+    }
 }
 impl TypedRow {
     fn number(&mut self, at: usize, raw: f64) {
@@ -147,12 +154,19 @@ impl TypedRow {
         if raw.fract() == 0.0 && raw >= i64::MIN as f64 && raw < -(i64::MIN as f64) {
             self.integers |= 1 << at;
             self.ids[8 + at] = raw as i64;
-        } else { self.continuous[at] = bf16_bits(numeric(raw)); }
+        } else {
+            self.continuous[at] = bf16_bits(numeric(raw));
+        }
     }
     pub fn write(&self, out: &mut Vec<u8>) {
-        for id in self.ids { out.extend(id.to_le_bytes()); }
-        out.extend(self.present.to_le_bytes());out.extend(self.integers.to_le_bytes());
-        for value in self.continuous { out.extend(value.to_le_bytes()); }
+        for id in self.ids {
+            out.extend(id.to_le_bytes());
+        }
+        out.extend(self.present.to_le_bytes());
+        out.extend(self.integers.to_le_bytes());
+        for value in self.continuous {
+            out.extend(value.to_le_bytes());
+        }
     }
 }
 impl EntityRows {
@@ -344,7 +358,8 @@ impl Encoder<'_> {
         {
             typed.ids[2 + i] = self.reference_id(id)? as i64;
         }
-        typed.ids[6] = self.reference_id(meta.group.map(|g| format!("group:{g}")).as_deref())? as i64;
+        typed.ids[6] =
+            self.reference_id(meta.group.map(|g| format!("group:{g}")).as_deref())? as i64;
         typed.ids[7] = meta.order as i64;
         if meta.selectable
             && let Some(id) = meta.id
@@ -828,6 +843,7 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
                 "shrineDraft",
                 "shrineSetupDone",
                 "regularSummons",
+                "transitUnitId",
                 "summonOffer",
                 "clockFrames",
                 "summonSlots",
@@ -1162,6 +1178,12 @@ fn encode_base(tree: &Tree<'_>) -> Result<BaseEncoding, String> {
     for (i, value) in fields.into_iter().enumerate() {
         globals.number(i, value);
     }
+    if let Some(id) = s.extra.get("transitUnitId").and_then(Value::as_str) {
+        globals.number(
+            27,
+            s.units.iter().position(|u| u.id == id).map_or(0, |i| i + 1) as f64,
+        );
+    }
     Ok(BaseEncoding {
         entities: Rc::new(e.entities.tail),
         kinds: e.kinds,
@@ -1409,9 +1431,7 @@ fn encode_mode(
         row[56] = e.reference_id(c.second_id.as_deref())? as i64;
         row[57] = e.reference_id(c.death_id.as_deref())? as i64;
         row[58] = i64::from(choice.key.is_commit_path());
-        row[59] = c
-            .player
-            .map_or(0, |p| if p == viewer { 1 } else { -1 });
+        row[59] = c.player.map_or(0, |p| if p == viewer { 1 } else { -1 });
         if let Some(p) = c.path.as_deref().unwrap_or(&[]).last() {
             row[60] = p.x as i64;
             row[61] = p.y as i64;

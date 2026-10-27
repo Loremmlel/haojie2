@@ -67,6 +67,7 @@ const OBSERVATION_FIELDS = [
   'summonOffer',
   'clockFrames',
   'summonSlots',
+  'transitUnitId',
   'turns',
   'bases',
   'baseEffects',
@@ -521,6 +522,7 @@ function encodeBasePosition(observation: Observation, viewer: Player) {
     draft?.revealed ?? false,
     s.summonOffer?.count ?? 0,
     s.summonOffer ? owner(s.summonOffer.owner) : 0,
+    s.transitUnitId ? s.units.findIndex((u) => u.id === s.transitUnitId) + 1 : undefined,
   ]);
   return { ...rows, globals };
 }

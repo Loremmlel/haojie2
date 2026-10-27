@@ -274,6 +274,18 @@ function shrineFields(
   if (s.mode !== undefined && s.mode !== 'shrine') return false;
   if (s.regularSummons !== undefined && !int(s.regularSummons, 0, 2)) return false;
   if (
+    s.transitUnitId !== undefined &&
+    (typeof s.transitUnitId !== 'string' ||
+      !s.units.some(
+        (u: Unit) =>
+          u.id === s.transitUnitId &&
+          u.owner === s.active &&
+          u.mode === 'move' &&
+          (hasTrait(u, 'u12') || hasTrait(u, 'u12p')),
+      ))
+  )
+    return false;
+  if (
     s.shrineSetupDone !== undefined &&
     (!list(s.shrineSetupDone, 2) ||
       !s.shrineSetupDone.every(player) ||

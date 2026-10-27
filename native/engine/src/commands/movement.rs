@@ -84,6 +84,13 @@ pub fn stage(s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
     stage_with_transit(s, c, || transit(s, catalog).map(str::to_owned))
 }
 pub fn transit<'a>(s: &'a State, catalog: &Catalog) -> Option<&'a str> {
+    if let Some(id) = s
+        .extra
+        .get("transitUnitId")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Some(id);
+    }
     s.units
         .iter()
         .find(|u| {
@@ -93,6 +100,31 @@ pub fn transit<'a>(s: &'a State, catalog: &Catalog) -> Option<&'a str> {
                 && !empty_for(s, u, catalog)
         })
         .map(|u| u.id.as_str())
+}
+/// 正式移动指定过渡占位归属；反应、死亡或回到空地后清除。
+pub fn refresh_transit(s: &mut State, c: &Command, catalog: &Catalog) {
+    let id = if c.kind == "move" {
+        c.unit_id.as_deref()
+    } else {
+        s.extra
+            .get("transitUnitId")
+            .and_then(serde_json::Value::as_str)
+    };
+    let moving = id
+        .and_then(|id| s.unit(id))
+        .filter(|u| {
+            u.owner == s.active
+                && u.mode == "move"
+                && (u.has("u12") || u.has("u12p"))
+                && !empty_for(s, u, catalog)
+        })
+        .map(|u| u.id.clone());
+    if let Some(id) = moving {
+        s.extra
+            .insert("transitUnitId".into(), serde_json::json!(id));
+    } else {
+        s.extra.remove("transitUnitId");
+    }
 }
 pub fn stage_with_transit(
     s: &State,
@@ -500,6 +532,63 @@ pub fn apply(previous: &State, c: &Command, catalog: &Catalog) -> Result<State, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn friendly_runner_transit_survives_serialization_and_array_order() {
+        let catalog = crate::catalog::embedded().unwrap();
+        for size in [1.0, 2.0] {
+            for reversed in [false, true] {
+                let mut s = crate::runtime::create(731280053, false, &catalog).unwrap();
+                s.phase = "play".into();
+                s.summon_slots = 0.0;
+                s.ply = 5.0;
+                s.turns.insert("1".into(), 3.0);
+                s.turns.insert("2".into(), 2.0);
+                let mut stationary = crate::resolution::template(
+                    &s,
+                    "u12p",
+                    1,
+                    Point { x: 4.0, y: 6.0 },
+                    "stationary",
+                    &catalog,
+                );
+                stationary.size = size;
+                stationary.born = 0.0;
+                stationary.mode = "move".into();
+                stationary.moves = 1.0;
+                let mut mover = crate::resolution::template(
+                    &s,
+                    "u12p",
+                    1,
+                    Point { x: 3.0, y: 6.0 },
+                    "mover",
+                    &catalog,
+                );
+                mover.born = 0.0;
+                mover.reserve.charge = 1.0;
+                mover.reserve.ready_charge = 1.0;
+                mover.reserve.charge_type = crate::model::ChargeMode::Move;
+                s.units = vec![stationary, mover];
+                if reversed {
+                    s.units.reverse();
+                }
+                let mut c = Command::new("move");
+                c.unit_id = Some("mover".into());
+                c.x = Some(4.0);
+                c.y = Some(6.0);
+                let entered = crate::command::apply_runtime(&s, &c, &catalog).unwrap();
+                assert_eq!(transit(&entered, &catalog), Some("mover"));
+                let restored: State =
+                    serde_json::from_slice(&serde_json::to_vec(&entered).unwrap()).unwrap();
+                c.x = Some(3.0);
+                let escaped = crate::command::apply_runtime(&restored, &c, &catalog).unwrap();
+                assert_eq!(transit(&escaped, &catalog), None);
+                assert!(!escaped.extra.contains_key("transitUnitId"));
+                assert_eq!(escaped.unit("stationary").unwrap().moves, 1.0);
+                assert!(crate::lifecycle::prepare_end(&escaped, &catalog).is_ok());
+            }
+        }
+    }
 
     #[test]
     fn inactive_movement_mode_cannot_capture_the_current_runners_transit() {

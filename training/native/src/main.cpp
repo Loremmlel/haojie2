@@ -51,6 +51,8 @@ int command_main(int argc, char **argv) {
                                           "--width",
                                           "--memory-mb",
                                           "--max-game-steps",
+                                          "--update-games",
+                                          "--update-wait-seconds",
                                           "--search-simulations",
                                           "--search-depth",
                                           "--history-size",
@@ -77,12 +79,16 @@ int command_main(int argc, char **argv) {
       std::cout << in.rdbuf();
       return 0;
     }
-    if (command == "resize" || command == "budget" || command == "save" || command == "stop") {
+    if (command == "resize" || command == "workers" || command == "budget" || command == "save" ||
+        command == "stop") {
       if (directory.empty() || !std::filesystem::exists(directory))
         throw std::runtime_error("run directory required");
-      auto payload = command == "resize"   ? std::to_string(number("--concurrency", 12))
-                     : command == "budget" ? std::to_string(number("--memory-mb", 4096))
-                                           : "1";
+      if (command == "workers" && (!number("--workers", 8) || number("--workers", 8) > 128))
+        throw std::runtime_error("workers must be between 1 and 128");
+      auto payload = command == "resize"    ? std::to_string(number("--concurrency", 12))
+                     : command == "workers" ? std::to_string(number("--workers", 8))
+                     : command == "budget"  ? std::to_string(number("--memory-mb", 4096))
+                                            : "1";
       hj::atomic_text(directory / command, payload);
       return 0;
     }
@@ -91,7 +97,8 @@ int command_main(int argc, char **argv) {
           << "haojie-train run --directory PATH [--resume CHECKPOINT] [--device auto|cuda|cpu] "
              "[--concurrency N] [--workers N] [--batch N] [--search-simulations 0] "
              "[--search-depth 64] [--history-percent 20] [--updates N] "
-             "[--seconds N] [--max-game-steps N]\nhaojie-train status|resize|budget|save|stop "
+             "[--seconds N] [--max-game-steps N] [--update-games 4] [--update-wait-seconds "
+             "30]\nhaojie-train status|resize|workers|budget|save|stop "
              "--directory "
              "PATH\nhaojie-train check [--device cpu|cuda]\n"
              "haojie-train configure [--device auto|cuda|cpu] [--resume CHECKPOINT]\n"
@@ -148,6 +155,8 @@ int command_main(int argc, char **argv) {
     s.width = number("--width", hj::DefaultWidth);
     s.memory_mb = number("--memory-mb", 4096);
     s.max_game_steps = number("--max-game-steps", 262144);
+    s.update_games = number("--update-games", 4);
+    s.update_wait_seconds = std::stod(text("--update-wait-seconds", "30"));
     s.search_simulations = number("--search-simulations", 0);
     s.search_depth = number("--search-depth", 64);
     s.history_size = number("--history-size", 8);
@@ -158,7 +167,8 @@ int command_main(int argc, char **argv) {
     s.save_seconds = std::stod(text("--save-seconds", "300"));
     s.shrine = options.count("--shrine");
     s.samples = number("--samples", 0);
-    if (!s.workers || !s.batch || !s.inference_batch || !s.width || !s.publish ||
+    if (!s.workers || s.workers > 128 || !s.update_games || !std::isfinite(s.update_wait_seconds) ||
+        s.update_wait_seconds < 0 || !s.batch || !s.inference_batch || !s.width || !s.publish ||
         !s.max_game_steps || !s.search_depth || !s.history_size || !s.history_interval ||
         s.history_percent > 100 || s.memory_mb < 128 || s.seconds < 0 || s.save_seconds < 0)
       throw std::runtime_error("invalid training budget");

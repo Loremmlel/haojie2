@@ -238,6 +238,8 @@ inline std::string configuration_json(const Settings &s, const Hardware &h) {
       << ",\"threads\":" << s.threads << ",\"memory_mb\":" << s.memory_mb
       << ",\"max_game_steps\":" << s.max_game_steps << ",\"rules\":\""
       << (s.shrine ? "shrine" : "classic") << "\""
+      << ",\"update_games\":" << s.update_games
+      << ",\"update_wait_seconds\":" << s.update_wait_seconds
       << ",\"search_simulations\":" << s.search_simulations
       << ",\"search_depth\":" << s.search_depth << ",\"history_size\":" << s.history_size
       << ",\"history_interval\":" << s.history_interval

@@ -66,7 +66,7 @@ pub fn execute(s: &State, c: &Command, catalog: &Catalog, preview: bool) -> Resu
     } else {
         crate::profile::Phase::Settlement
     });
-    match c.kind.as_str() {
+    let mut next = match c.kind.as_str() {
         "attack" | "react" => combat::apply(s, c, catalog, preview),
         "move"
             if s.unit(c.unit_id.as_deref().unwrap_or(""))
@@ -77,7 +77,9 @@ pub fn execute(s: &State, c: &Command, catalog: &Catalog, preview: bool) -> Resu
         "move" | "finish-mode" => movement::apply(s, c, catalog),
         _ if COMMANDS.contains(&c.kind.as_str()) => preparation::apply(s, c, catalog, preview),
         _ => Err(Failure::Unsupported("command-kind")),
-    }
+    }?;
+    movement::refresh_transit(&mut next, c, catalog);
+    Ok(next)
 }
 pub fn apply_runtime(s: &State, c: &Command, catalog: &Catalog) -> Result<State, Failure> {
     movement::stage(s, c, catalog)?;

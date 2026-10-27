@@ -114,8 +114,7 @@ bool terminal_queue_full(size_t queued, uint64_t concurrency) {
 std::vector<Block> terminal_batch(std::deque<Block> &ready, uint64_t version, uint64_t batch,
                                   uint64_t max_game_steps, Counters &counters) {
   std::vector<Block> result;
-  uint64_t count = 0;
-  while (!ready.empty() && count < batch) {
+  while (!ready.empty() && result.size() < batch) {
     auto &episode = ready.front();
     TORCH_CHECK(!episode.bootstrap && !episode.steps.empty() && episode.steps.back().terminal,
                 "terminal queue contains an unfinished game");
@@ -132,7 +131,6 @@ std::vector<Block> terminal_batch(std::deque<Block> &ready, uint64_t version, ui
       counters.stale_steps += episode.steps.size();
       ++counters.stale_games;
     } else {
-      count += episode.steps.size();
       result.push_back(std::move(episode));
     }
     ready.pop_front();
@@ -450,6 +448,17 @@ std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resume_sett
       s.max_game_steps = limits[0].item<int64_t>();
   }
   T selfplay;
+  T update_batch;
+  if (archive->try_read("update_batch", update_batch)) {
+    TORCH_CHECK(update_batch.scalar_type() == torch::kInt64 && update_batch.dim() == 1 &&
+                    update_batch.numel() == 2 && update_batch[0].item<int64_t>() > 0 &&
+                    update_batch[1].item<int64_t>() >= 0,
+                "invalid update batch");
+    if (!s.supplied.count("--update-games"))
+      s.update_games = update_batch[0].item<int64_t>();
+    if (!s.supplied.count("--update-wait-seconds"))
+      s.update_wait_seconds = double(update_batch[1].item<int64_t>()) / 1000000;
+  }
   if (archive->try_read("selfplay_config", selfplay)) {
     TORCH_CHECK(selfplay.scalar_type() == torch::kInt64 && selfplay.dim() == 1 &&
                     selfplay.numel() == 5,
@@ -506,6 +515,7 @@ class Session {
   std::optional<TrainResult> latest_terminal;
   uint64_t terminal_games_consumed = 0;
   Clock::time_point learn_start;
+  std::optional<Clock::time_point> ready_since;
   std::unique_ptr<Executor> learning_executor;
   OpponentHistory history;
   std::unique_ptr<SearchService> search_service;
@@ -513,23 +523,7 @@ class Session {
       search_max_depth{0}, search_parameter_fallbacks{0}, search_empty_fallbacks{0};
   uint64_t historical_games = 0;
 
-public:
-  explicit Session(std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resumed)
-      : settings(std::move(resumed.first)), device(settings.device), learner(settings.width),
-        actor(settings.width), optimizer(learner) {
-    learner->to(device);
-#ifdef HJ_CUDA
-    if (device.is_cuda()) {
-      // 先建立明确设备预算，分配器才会按阈值回收空闲缓存；留出驱动和外部驻留余量。
-      c10::CachingAllocator::setAllocatorSettings("garbage_collection_threshold:0.7");
-      c10::cuda::CUDACachingAllocator::setMemoryFraction(0.9,
-                                                         device.index() < 0 ? 0 : device.index());
-    }
-#endif
-    actor->to(device);
-    // 优化器在设备迁移后重建，浮点参数及状态始终为 BF16。
-    optimizer = Optimizer(learner);
-    copy_weights(learner, actor);
+  void start_lanes() {
     for (uint64_t i = 0; i < settings.workers; ++i)
       lanes.push_back(std::make_unique<Lane>(
           mailbox, sampling_paused,
@@ -551,6 +545,25 @@ public:
             }
             return result;
           }));
+  }
+
+public:
+  explicit Session(std::pair<Settings, std::shared_ptr<torch::serialize::InputArchive>> resumed)
+      : settings(std::move(resumed.first)), device(settings.device), learner(settings.width),
+        actor(settings.width), optimizer(learner) {
+    learner->to(device);
+#ifdef HJ_CUDA
+    if (device.is_cuda()) {
+      // 分配器给驱动与外部驻留余量保留一成显存。
+      c10::CachingAllocator::setAllocatorSettings("garbage_collection_threshold:0.7");
+      c10::cuda::CUDACachingAllocator::setMemoryFraction(0.9,
+                                                         device.index() < 0 ? 0 : device.index());
+    }
+#endif
+    actor->to(device);
+    optimizer = Optimizer(learner);
+    copy_weights(learner, actor);
+    start_lanes();
     if (resumed.second)
       restore(*resumed.second);
     for (auto &block : ready)
@@ -568,8 +581,8 @@ public:
       }
     }
     history.publish(std::make_shared<FrozenPolicy>(actor, actor_version.load()));
-    search_service = std::make_unique<SearchService>(
-        device, settings.width, std::min(settings.workers, settings.inference_batch));
+    search_service =
+        std::make_unique<SearchService>(device, settings.width, settings.inference_batch);
     learning_executor = std::make_unique<Executor>(mailbox, device, false);
     initial = counters;
     initial_updates = committed_updates = optimizer.steps;
@@ -579,9 +592,12 @@ public:
   ~Session() {
     sampling_paused = true;
     std::cerr << "Shutdown: joining learner and actor threads.\n";
+    std::cerr << "Shutdown: waiting for learner.\n";
     learning_executor.reset();
-    for (auto &lane : lanes)
-      lane.reset();
+    for (size_t i = 0; i < lanes.size(); ++i) {
+      std::cerr << "Shutdown: waiting for actor lane " << i << ".\n";
+      lanes[i].reset();
+    }
     std::cerr << "Shutdown: releasing inference service.\n";
     search_service.reset();
     std::cerr << "Shutdown: session workers released.\n";
@@ -652,6 +668,8 @@ public:
     counters.finished += std::exchange(g.progress.finished, 0);
     infer_nodes += std::exchange(g.scored, 0);
     while (!g.completed.empty()) {
+      if (ready.empty())
+        ready_since = Clock::now();
       ready.push_back(std::move(g.completed.front()));
       g.completed.pop_front();
     }
@@ -787,10 +805,22 @@ public:
     collect_learning();
     if (learning.valid())
       return;
-    // 完成局独立取走；长局、停放局与更新次数不参与就绪条件。
-    // 批次达到计算小批大小即提交已有完整局，不把整个队列合成一次大更新。
+    if (ready.empty()) {
+      ready_since.reset();
+      return;
+    }
+    if (!ready_since)
+      ready_since = Clock::now();
+    // 更新批量与显存小批独立；不等未结束局，暂停采集或内存压力时立即消费。
+    auto target = settings.concurrency ? std::min(settings.update_games, settings.concurrency)
+                                       : settings.update_games;
+    if (ready.size() < target && settings.concurrency && !memory_paused &&
+        elapsed(*ready_since) < settings.update_wait_seconds)
+      return;
     in_learning =
-        terminal_batch(ready, committed_updates, settings.batch, settings.max_game_steps, counters);
+        terminal_batch(ready, committed_updates, target, settings.max_game_steps, counters);
+    if (ready.empty())
+      ready_since.reset();
     if (in_learning.empty())
       return;
     learn_start = Clock::now();
@@ -952,6 +982,31 @@ public:
     }
     peak_active = std::max(peak_active, running);
   }
+  void change_workers(uint64_t count) {
+    TORCH_CHECK(count > 0 && count <= 128, "workers must be between 1 and 128");
+    if (count == settings.workers)
+      return;
+    auto previous_quiescing = quiescing;
+    quiescing = true;
+    sampling_paused = true;
+    settle();
+    std::vector<uint64_t> active_ids;
+    for (auto &[id, game] : games)
+      if (!game.parked) {
+        active_ids.push_back(id);
+        submit(game, 3, id_packet(id));
+      }
+    settle();
+    // Rust 状态先在原属线程序列化并释放，再按新 lane 数恢复；RNG 与轨迹不变。
+    lanes.clear();
+    settings.workers = count;
+    start_lanes();
+    for (auto id : active_ids)
+      submit(games.at(id), 4, games.at(id).snapshot);
+    settle();
+    quiescing = previous_quiescing;
+    resume_sampling();
+  }
   void sampling_budget() {
     peak_ready = std::max(peak_ready, ready_steps());
     ready_paused = terminal_queue_full(ready.size(), settings.concurrency);
@@ -1005,8 +1060,13 @@ public:
       o << "null";
     o << ",\n  \"completed_games\": " << counters.finished - delta.finished
       << ",\n  \"admitted_total\": " << next_id - 1 << ",\n  \"active\": " << active()
-      << ",\n  \"target_concurrency\": " << settings.concurrency << ",\n  \"parked\": " << parked
-      << ",\n  \"busy\": " << busy << ",\n  \"advancing_1s\": " << advancing
+      << ",\n  \"target_concurrency\": " << settings.concurrency
+      << ",\n  \"workers\": " << settings.workers
+      << ",\n  \"inference_batch\": " << settings.inference_batch
+      << ",\n  \"update_games\": " << settings.update_games
+      << ",\n  \"update_wait_seconds\": " << settings.update_wait_seconds
+      << ",\n  \"parked\": " << parked << ",\n  \"busy\": " << busy
+      << ",\n  \"advancing_1s\": " << advancing
       << ",\n  \"inference_waiting\": " << inference_waiting
       << ",\n  \"inference_running\": " << inference_running
       << ",\n  \"ready_steps\": " << ready_steps() << ",\n  \"partial_steps\": " << partial
@@ -1164,6 +1224,10 @@ public:
                                    int64_t(device.index()),
                                    int64_t(std::llround(settings.save_seconds * 1000000))};
     archive->write("config", torch::tensor(config, torch::kInt64));
+    archive->write("update_batch",
+                   torch::tensor({int64_t(settings.update_games),
+                                  int64_t(std::llround(settings.update_wait_seconds * 1000000))},
+                                 torch::kInt64));
     archive->write(
         "selfplay_config",
         torch::tensor({int64_t(settings.search_simulations), int64_t(settings.search_depth),
@@ -1351,6 +1415,12 @@ public:
           fs::remove(resize_path);
         }
         auto budget_path = settings.directory / "budget";
+        auto workers_path = settings.directory / "workers";
+        if (fs::exists(workers_path)) {
+          change_workers(std::stoull(read_text(workers_path)));
+          fs::remove(workers_path);
+          atomic_text(settings.directory / "status.json", metrics(true));
+        }
         if (fs::exists(budget_path)) {
           auto n = std::stoull(read_text(budget_path));
           if (n < 128)
@@ -1399,11 +1469,10 @@ public:
         return future.valid() &&
                future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
       };
-      if (learning.valid() || ready_steps() < settings.batch)
-        mailbox.changed.wait_for(lock, std::chrono::milliseconds(20), [&] {
-          return !mailbox.events.empty() || mailbox.revision.load() != observed_revision ||
-                 learning_commit.has_value() || completed(learning);
-        });
+      mailbox.changed.wait_for(lock, std::chrono::milliseconds(20), [&] {
+        return !mailbox.events.empty() || mailbox.revision.load() != observed_revision ||
+               learning_commit.has_value() || completed(learning);
+      });
     }
     // 测量窗口在退出排空之前冻结，恢复累计计数不会进入本轮速率。
     collect_learning();
@@ -1517,7 +1586,14 @@ void run(const Settings &settings) {
     }
     Session session(std::move(resumed));
     double init = elapsed(full_started);
-    session.execute();
+    try {
+      session.execute();
+    } catch (const std::exception &e) {
+      // 先记录触发退出的异常；线程回收卡住时也保留原始诊断。
+      std::cerr << "Training failed before shutdown: " << e.what() << '\n';
+      atomic_text(settings.directory / "failure.txt", e.what());
+      throw;
+    }
     std::ostringstream wall;
     wall << "{\"full_pipeline_seconds\":" << elapsed(full_started)
          << ",\"initialization_seconds\":" << init << "}\n";
@@ -1644,6 +1720,7 @@ void runtime_checks() {
     TORCH_CHECK(settings.search_simulations == 0, "MCTS must be disabled by default");
     settings.width = 32;
     settings.workers = settings.inference_batch = settings.batch = settings.publish = 1;
+    settings.update_games = 1;
     settings.concurrency = settings.chunk = 0;
     settings.supplied.insert("--device");
     Session session({settings, {}});
@@ -1652,6 +1729,31 @@ void runtime_checks() {
     auto episode = [&](uint64_t version) {
       return Block{{Step{f.node, action, logps[action], version, true, 1}}, {}};
     };
+    {
+      auto grouped_settings = settings;
+      grouped_settings.concurrency = grouped_settings.update_games = 4;
+      Session grouped({grouped_settings, {}});
+      grouped.ready.push_back(episode(0));
+      grouped.counters.produced = 1;
+      grouped.train();
+      TORCH_CHECK(!grouped.learning.valid() && grouped.ready.size() == 1,
+                  "first terminal bypassed update batching");
+      for (int i = 0; i < 3; ++i)
+        grouped.ready.push_back(episode(0));
+      grouped.counters.produced += 3;
+      grouped.train();
+      grouped.collect_learning(true);
+      TORCH_CHECK(grouped.committed_updates == 1 && grouped.counters.consumed == 4 &&
+                      grouped.terminal_games_consumed == 4 && grouped.ready.empty(),
+                  "four complete games did not share one optimizer update");
+      grouped.ready.push_back(episode(1));
+      ++grouped.counters.produced;
+      grouped.ready_since = Clock::now() - std::chrono::seconds(31);
+      grouped.train();
+      grouped.collect_learning(true);
+      TORCH_CHECK(grouped.committed_updates == 2 && grouped.counters.consumed == 5,
+                  "partial update batch ignored maximum wait");
+    }
     {
       auto boundary = episode(0), oversized = episode(0);
       boundary.steps.assign(4, Step{f.node, action, logps[action], 0, false, 0});
@@ -1704,6 +1806,25 @@ void runtime_checks() {
     TORCH_CHECK(session.consumed_lag_max == 64 && session.counters.consumed == 66 &&
                     session.games.at(1).partial.size() == 1,
                 "lag boundary or parked trajectory changed");
+    session.quiescing = true;
+    std::map<uint64_t, Bytes> before_workers;
+    for (auto &[id, game] : session.games)
+      session.submit(game, 2, Session::id_packet(id));
+    session.settle();
+    for (auto &[id, game] : session.games)
+      before_workers[id] = game.snapshot;
+    for (auto count : {3u, 1u}) {
+      session.change_workers(count);
+      for (auto &[id, game] : session.games)
+        session.submit(game, 2, Session::id_packet(id));
+      session.settle();
+      for (auto &[id, game] : session.games)
+        TORCH_CHECK(game.snapshot == before_workers.at(id),
+                    "worker migration changed actor state or RNG");
+      TORCH_CHECK(session.settings.workers == count && session.counters.consumed == 66 &&
+                      session.games.at(1).partial.size() == 1,
+                  "worker migration lost trajectories");
+    }
     TORCH_CHECK(!terminal_queue_full(1, 2) && terminal_queue_full(2, 2));
     auto directory =
         fs::temp_directory_path() /
@@ -1711,10 +1832,15 @@ void runtime_checks() {
     fs::create_directory(directory);
     session.settings.directory = directory;
     session.settings.search_simulations = 4;
+    session.settings.update_games = 3;
+    session.settings.update_wait_seconds = 7.5;
     session.checkpoint(false);
     session.writer.get();
     auto search_settings = settings;
     search_settings.resume = directory / "checkpoint.pt";
+    auto resumed_batch = resume_settings(search_settings).first;
+    TORCH_CHECK(resumed_batch.update_games == 3 && resumed_batch.update_wait_seconds == 7.5,
+                "checkpoint lost update batching settings");
     TORCH_CHECK(resume_settings(search_settings).first.search_simulations == 4,
                 "resume lost an explicitly enabled search budget");
     search_settings.supplied.insert("--search-simulations");

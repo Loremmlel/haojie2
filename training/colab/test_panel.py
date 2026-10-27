@@ -69,6 +69,13 @@ class PanelTests(unittest.TestCase):
         self.assertFalse((self.run / "resize").exists())
         self.panel.call(self.panel.identity, "resize", 0)
         self.assertEqual((self.run / "resize").read_text(), "0")
+        for value in (0, -1, 129, True, 1.5, "8"):
+            self.assertIn("error", self.panel.call(self.panel.identity, "workers", value))
+        self.assertFalse((self.run / "workers").exists())
+        self.panel.call(self.panel.identity, "workers", 12)
+        self.assertEqual((self.run / "workers").read_text(), "12")
+        self.assertTrue(self.panel.snapshot()["workers_pending"])
+        self.assertIn("error", self.panel.call(self.panel.identity, "workers", 8))
         requested = self.panel.call(self.panel.identity, "save")
         self.assertTrue(requested["save_pending"])
         self.assertIsNone(requested["saved_at"])
@@ -242,7 +249,9 @@ class PanelTests(unittest.TestCase):
             namespace["prepare_training"]()
             self.assertEqual(namespace["ARGS"][2:4], ["--search-simulations", "64"])
             search.value = 0
+            namespace["workers_picker"].value = 12
             namespace["prepare_training"]()
+            self.assertEqual(namespace["ARGS"][4:6], ["--workers", "12"])
             exec(cells["start"], namespace)
             fake.Popen.assert_not_called()
             button = namespace["start_button"]

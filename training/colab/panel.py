@@ -283,6 +283,7 @@ class Panel:
             "status_age": age,
             "saved_at": saved_at,
             "save_pending": save_pending,
+            "workers_pending": (run / "workers").exists(),
             "checkpoint": str(run / "checkpoint.pt"),
             "directory": str(run),
             "log": failure or tail(run.with_suffix(".log")),
@@ -306,6 +307,7 @@ class Panel:
                 "save",
                 "stop",
                 "resize",
+                "workers",
                 "evaluate",
                 "eval_cancel",
                 "eval_config",
@@ -330,12 +332,16 @@ class Panel:
                 raise ValueError("当前状态无法提交控制，请等待初始化完成或查看日志。")
             if action == "resize" and (type(value) is not int or not 0 <= value <= 128):
                 raise ValueError("并发局数须为 0–128 的整数")
+            if action == "workers" and (type(value) is not int or not 1 <= value <= 128):
+                raise ValueError("Worker 数须为 1–128 的整数")
+            if action == "workers" and status["workers_pending"]:
+                raise ValueError("Worker 请求正在处理，请等待宿主应用。")
             if action == "save" and self.saved_before is not None:
                 raise ValueError("保存请求正在处理，请等待保存完成。")
             target = self.directory / action
             temporary = target.with_suffix(".tmp")
             temporary.write_text(
-                str(value) if action == "resize" else "1", encoding="utf-8"
+                str(value) if action in ("resize", "workers") else "1", encoding="utf-8"
             )
             os.replace(temporary, target)
             if action in ("save", "stop"):
@@ -352,6 +358,7 @@ class Panel:
                 "save": "保存请求已送达，等待检查点写入完成。",
                 "stop": "停止请求已送达，正在保存并退出。",
                 "resize": f"并发请求已送达：{value} 局，等待宿主应用。",
+                "workers": f"Worker 请求已送达：{value} 个，等待规则边界迁移。",
             }[action]
             return result
         except (OSError, ValueError, KeyError) as error:

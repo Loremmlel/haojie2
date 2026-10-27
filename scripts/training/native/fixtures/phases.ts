@@ -265,5 +265,32 @@ export function completeFixtures(): { name: string; job: Job }[] {
       { type: 'end' },
     ]);
   }
+  for (const size of [1, 2] as const)
+    for (const reversed of [false, true]) {
+      const s = fixture();
+      const stationary = add(s, 'u12p', 1, 4, 6);
+      stationary.size = size;
+      stationary.mode = 'move';
+      stationary.moves = 1;
+      const mover = add(s, 'u12p', 1, 3, 6);
+      mover.charge = mover.readyCharge = 1;
+      mover.chargeType = 'move';
+      if (reversed) s.units.reverse();
+      const command: Command = { type: 'move', unitId: mover.id, x: 4, y: 6 };
+      cases.push({
+        name: `complete-transit-friendly-entry-${size}-${reversed}`,
+        job: { state: s, probes: [command], command },
+      });
+      const entered = applyCommand(s, command);
+      const escape: Command = { type: 'move', unitId: mover.id, x: 3, y: 6 };
+      cases.push({
+        name: `complete-transit-friendly-escape-${size}-${reversed}`,
+        job: {
+          state: entered,
+          probes: [escape, { type: 'end' }, { type: 'move', unitId: stationary.id, x: 4, y: 5 }],
+          command: escape,
+        },
+      });
+    }
   return cases;
 }

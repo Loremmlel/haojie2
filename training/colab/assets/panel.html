@@ -25,9 +25,24 @@
       />
       <button type="submit" disabled>应用并发量</button>
     </form>
+    <form data-workers-form novalidate>
+      <label for="workers-__PANEL_ID__">Worker 数</label>
+      <input
+        id="workers-__PANEL_ID__"
+        data-workers
+        type="number"
+        min="1"
+        max="128"
+        step="1"
+        aria-describedby="concurrency-help-__PANEL_ID__"
+        disabled
+      />
+      <button type="submit" disabled>应用 Worker 数</button>
+    </form>
   </div>
   <p class="help" id="concurrency-help-__PANEL_ID__">
-    0 会停放采集；扩大并发时恢复原局。暂停刷新只暂停面板。
+    并发 0 会停放采集；扩大并发时恢复原局。调整 Worker
+    会短暂停采并迁移原局，状态中显示实际数量。暂停刷新只暂停面板。
   </p>
   <p data-notice role="status" aria-live="polite">正在读取原生训练状态…</p>
   <div class="readings">

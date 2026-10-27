@@ -189,6 +189,7 @@ export function getPlayerView(s: GameState, viewer: Player): PlayerView {
     active: s.active,
     phase: s.phase,
     summonSlots: s.summonSlots,
+    ...(s.transitUnitId ? { transitUnitId: s.transitUnitId } : {}),
     turns: pair(s.turns, (v) => v),
     bases: pair(s.bases, (v) => v),
     baseEffects: pair(s.baseEffects, (v) => v.map(effect)),
