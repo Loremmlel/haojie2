@@ -18,7 +18,7 @@ from training.haojie.native import Environment
 from training.haojie.native_pool import NativePool
 from training.haojie.runtime.config import Config
 from training.haojie.runtime.trainer import Trainer
-from training.haojie.runtime.storage import GameWriter
+from training.haojie.runtime.storage import GameBuffer
 from training.tests.test_training import bundle
 
 
@@ -89,14 +89,16 @@ def oracle_command(environment, rng, config, game):
         "root": root,
         "policy": policy,
         "sample": (
-            root.bundle,
-            decisions,
-            root.info["actor"],
-            root.info["ply"],
-            version,
-        )
-        if decisions
-        else None,
+            (
+                root.bundle,
+                decisions,
+                root.info["actor"],
+                root.info["ply"],
+                version,
+            )
+            if decisions
+            else None
+        ),
         "rng": copy.deepcopy(rng.bit_generator.state),
     }
 
@@ -444,7 +446,7 @@ class PipelineTests(unittest.TestCase):
                 save_seconds=0,
             )
             trainer = Trainer(directory, config)
-            writer = GameWriter(directory, {"id": 999, "opponent": "demo"})
+            writer = GameBuffer({"id": 999, "opponent": "demo"})
             writer.sample(
                 bundle(),
                 [

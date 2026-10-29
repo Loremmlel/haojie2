@@ -14,11 +14,9 @@ from .runtime.config import Config
 
 def load(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
-    if saved.get("format") == "haojie-classic-training-v1":
-        raise ValueError("模型格式不兼容，当前需要分层解码 v2")
-    weights = (
-        saved["model"] if saved.get("format") == "haojie-classic-training-v2" else saved
-    )
+    if "format" in saved and saved["format"] != "haojie-classic-training-v3":
+        raise ValueError("评测只接受 v3 检查点或历史池权重")
+    weights = saved["model"] if "format" in saved else saved
     network = Network().to(device)
     network.load_state_dict(weights)
     return network.eval()
@@ -128,11 +126,11 @@ def evaluate(args):
                     category = (
                         "unknown"
                         if winner is None
-                        else "draws"
-                        if winner == "draw"
-                        else "wins"
-                        if winner == learner
-                        else "losses"
+                        else (
+                            "draws"
+                            if winner == "draw"
+                            else "wins" if winner == learner else "losses"
+                        )
                     )
                     summary[category] += 1
                     record = {

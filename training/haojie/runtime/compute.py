@@ -53,17 +53,26 @@ class Compute:
             if len(self.inference_models) >= 3:
                 self.inference_models.pop(next(iter(self.inference_models)))
             network = Network().to(self.device)
-            network.load_state_dict(
-                torch.load(
-                    self.models / f"model-{version:08d}.pt",
-                    map_location="cpu",
-                    weights_only=True,
-                )
-            )
+            network.load_state_dict(self.weights.get(version))
             self.inference_models[version] = network.eval()
+            self.weights.prune(self.live_versions())
         network = self.inference_models.pop(version)
         self.inference_models[version] = network
         return network
+
+    def live_versions(self):
+        return (
+            {self.published}
+            | {v for _, v in self.bindings.values()}
+            | set(self.pending_versions.values())
+        )
+
+    def prune_models(self):
+        live = self.live_versions()
+        self.weights.prune(live)
+        for version in list(self.inference_models):
+            if version not in live and version not in self.weights.history:
+                del self.inference_models[version]
 
     def infer(self, jobs):
         with self.profile.stage("inference.activate"):

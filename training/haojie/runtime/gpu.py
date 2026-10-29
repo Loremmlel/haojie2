@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 
 from .compute import Compute
-
+from .storage import Weights
 
 GPU_KEYS = (
     "updates",
@@ -38,14 +38,15 @@ class Executor(Compute):
         self.stats = {k: initial["stats"].get(k, 0) for k in GPU_KEYS if k != "loss"}
         self.contexts, self.inference_models, self.bindings = {}, {}, {}
         self.published = initial["published"]
-        self.retained = set(initial["retained"])
+        self.pending_versions = initial.get("pending_versions", {})
+        self.weights = Weights(self.models, initial["weights"], initial["history"])
         self.queue_seconds = initial["stats"].get("inference_queue_seconds", 0.0)
         self.queued_requests = initial["stats"].get("inference_queue_requests", 0)
 
     def resolve(self, owner, message):
         previous = self.bindings.get(owner)
         if previous is not None and previous[0] != message["root"]:
-            self.release(owner)
+            self.contexts = {k: v for k, v in self.contexts.items() if k[0] != owner}
         if message["model"] != "current":
             version = int(message["model"])
         elif previous is not None and previous[0] == message["root"]:
@@ -53,27 +54,24 @@ class Executor(Compute):
         else:
             version = self.published
         self.bindings[owner] = message["root"], version
+        self.pending_versions.pop(owner, None)
+        if previous != self.bindings[owner]:
+            self.prune_models()
         return version
 
     def release(self, owner):
         self.bindings.pop(owner, None)
+        self.pending_versions.pop(owner, None)
         self.contexts = {k: v for k, v in self.contexts.items() if k[0] != owner}
+        self.prune_models()
 
-    def publish(self, version, retained):
+    def publish(self, version):
         self.published = version
-        self.retained = set(retained)
-        path = self.models / f"model-{version:08d}.pt"
-        if not path.exists():
-            torch.save(
-                {k: v.detach().cpu() for k, v in self.model.state_dict().items()}, path
-            )
+        self.weights.publish(version, self.model)
         self.inference_models[version] = copy.deepcopy(self.model).eval()
         while len(self.inference_models) > 3:
             self.inference_models.pop(next(iter(self.inference_models)))
-        protected = self.retained | {version} | {v for _, v in self.bindings.values()}
-        for candidate in self.models.glob("model-*.pt"):
-            if int(candidate.stem.split("-")[1]) not in protected:
-                candidate.unlink()
+        self.prune_models()
 
     def report(self):
         host_stats = (
@@ -86,14 +84,15 @@ class Executor(Compute):
             **self.stats,
             "inference_queue_seconds": self.queue_seconds,
             "inference_queue_requests": self.queued_requests,
-            "cuda_peak_bytes": torch.cuda.max_memory_allocated()
-            if self.device.type == "cuda"
-            else 0,
-            "cuda_peak_reserved_bytes": torch.cuda.max_memory_reserved()
-            if self.device.type == "cuda"
-            else 0,
+            "cuda_peak_bytes": (
+                torch.cuda.max_memory_allocated() if self.device.type == "cuda" else 0
+            ),
+            "cuda_peak_reserved_bytes": (
+                torch.cuda.max_memory_reserved() if self.device.type == "cuda" else 0
+            ),
             "pinned_host_bytes": host_stats.get("allocated_bytes.current"),
             "pinned_host_peak_bytes": host_stats.get("allocated_bytes.peak"),
+            "cpu_weight_versions": len(self.weights.states),
         }
         if self.profile.enabled:
             result["profile_gpu"] = self.profile.report()
@@ -113,10 +112,11 @@ class Executor(Compute):
             "model": cpu(self.model.state_dict()),
             "optimizer": cpu(self.optimizer.state_dict()),
             "torch_rng": torch.get_rng_state(),
-            "cuda_rng": torch.cuda.get_rng_state_all()
-            if self.device.type == "cuda"
-            else None,
+            "cuda_rng": (
+                torch.cuda.get_rng_state_all() if self.device.type == "cuda" else None
+            ),
             "stats": self.report(),
+            "weights": self.weights.snapshot(self.live_versions()),
         }
 
 
@@ -143,8 +143,8 @@ def infer_batch(executor, batch):
 class Local:
     """协调线程只提交直接数组引用，GPU 主线程在批次边界执行。"""
 
-    def __init__(self, pool, retained):
-        self.pool, self.retained = pool, retained
+    def __init__(self, pool):
+        self.pool = pool
         self.commands = Queue(maxsize=4)
         self.pending = None
         self.completed = deque()
@@ -176,7 +176,7 @@ class Local:
             self.pending = None
 
     def publish(self, version):
-        self.call("publish", version=version, retained=list(self.retained()))
+        self.call("publish", version=version)
 
     def infer(self, jobs):
         return self.call("infer", jobs=jobs)
@@ -200,7 +200,10 @@ class Local:
                 executor.update(payload["batch"])
                 result = {"stats": executor.report(), "samples": len(payload["batch"])}
             elif op == "publish":
-                executor.publish(payload["version"], payload["retained"])
+                executor.publish(payload["version"])
+                result = None
+            elif op == "archive":
+                executor.weights.archive(payload["version"])
                 result = None
             elif op == "infer":
                 result = executor.infer(payload["jobs"])

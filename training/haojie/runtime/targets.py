@@ -1,7 +1,5 @@
 """以独立完整对局留出集校准截断软目标；估计值始终与真实胜负分开。"""
 
-import json
-from pathlib import Path
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -26,8 +24,7 @@ class Calibration:
             "validation": self.validation,
         }
 
-    def observe(self, path, minimum):
-        meta = json.loads(Path(path).read_text(encoding="utf-8"))
+    def observe(self, meta, minimum):
         winner = meta["winner"]
         if winner is None or meta["game"]["opponent"] != "self":
             return

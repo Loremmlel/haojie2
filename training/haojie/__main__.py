@@ -40,11 +40,10 @@ def main():
                 map_location="cpu",
                 weights_only=False,
             )
-            if saved.get("format") != "haojie-classic-training-v2":
-                raise ValueError(
-                    "分层解码 v2 使用新模型和样本格式；请新建训练目录，旧结果保留"
-                )
+            if saved.get("format") != "haojie-classic-training-v3":
+                raise ValueError("续训只接受 haojie-classic-training-v3 检查点")
             config = Config(**saved["config"])
+            del saved
             config.seconds = config.games = config.updates = 0
         else:
             config = Config(workers=min(defaults.workers, cpu_limit()))

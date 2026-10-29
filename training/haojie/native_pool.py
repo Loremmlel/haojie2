@@ -248,7 +248,12 @@ class NativePool:
             raise RuntimeError(f"原生线程池操作失败: {status}")
 
     def assign(self, lane, game, restored=None, rng=None):
-        previous = copy.deepcopy(restored) if restored else None
+        # 回放缓冲只属于 Python；不得复制数组或将其送入原生 JSON 控制协议。
+        previous = (
+            copy.deepcopy({k: v for k, v in restored.items() if k != "buffer"})
+            if restored
+            else None
+        )
         rng = (
             rng
             if rng is not None
@@ -260,9 +265,6 @@ class NativePool:
         rng = rng_transport(rng, True)
         if previous is not None:
             previous["rng"] = rng
-            previous["steps"] = previous.pop("metadata", {}).get(
-                "steps", previous.get("steps", 0)
-            )
         return self.control("assign", lane=lane, game=game, rng=rng, restored=previous)
 
     def take_requests(self, max_batch=32, wait_ms=2, profile=None):

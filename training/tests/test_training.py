@@ -1,6 +1,5 @@
 """验收分层概率、图复用、原生 BF16、真实/软目标边界和阶段恢复。"""
 
-import json
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -11,7 +10,7 @@ import torch
 from training.haojie.native import Environment
 from training.haojie.model import Network, collate_states, collate_options
 from training.haojie.opponents import Opponents
-from training.haojie.runtime.storage import GameWriter, Replay, atomic_json
+from training.haojie.runtime.storage import GameBuffer, Replay
 from training.haojie.runtime.config import Config
 from training.haojie.runtime.trainer import Trainer
 from training.haojie.runtime.targets import Calibration
@@ -140,7 +139,7 @@ class TrainingTests(unittest.TestCase):
                 ),
                 2,
             )
-            writer = GameWriter(directory, {"id": 0, "opponent": "self"})
+            writer = GameBuffer({"id": 0, "opponent": "self"})
             writer.sample(state, [(options, target, 1.0)], 1, 1, 0)
             writer.transition(
                 {"ply": 1, "winner": None, "metrics": [0.0] * 4}, {"type": "end"}
@@ -155,6 +154,7 @@ class TrainingTests(unittest.TestCase):
             trainer.learn()
             self.assertFalse(torch.equal(before, trainer.model.value[2].weight))
             trainer.pool.add(0, 1)
+            trainer.archive(0)
             trainer.publish()
             self.assertFalse(
                 torch.equal(
@@ -177,7 +177,7 @@ class TrainingTests(unittest.TestCase):
 
     def test_unknown_soft_and_terminal_labels(self):
         with tempfile.TemporaryDirectory() as directory:
-            writer = GameWriter(directory, {"id": 0, "opponent": "self"})
+            writer = GameBuffer({"id": 0, "opponent": "self"})
             decisions = [
                 (np.zeros((2, 704), np.float32), np.array([0.3, 0.7], np.float32), 1.0)
             ]
@@ -216,18 +216,16 @@ class TrainingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             calibration = Calibration()
             self.assertIsNone(calibration.predict([1, 0, 0, 0], 1))
-            path = Path(directory) / "game.json"
             for i in range(10):
                 sign = 1 if i % 2 else -1
-                atomic_json(
-                    path,
+                calibration.observe(
                     {
                         "winner": 1 if sign > 0 else 2,
                         "game": {"id": i, "opponent": "self"},
                         "timeline": [[1, sign, 0.2 * sign, sign, 0.1 * sign]],
                     },
+                    5,
                 )
-                calibration.observe(path, 5)
             self.assertIsNotNone(calibration.weights)
             self.assertEqual(calibration.weights.dtype, torch.bfloat16)
             self.assertEqual(calibration.validation["heldout_games"], 2)
@@ -240,22 +238,21 @@ class TrainingTests(unittest.TestCase):
                 Path(directory) / "run", Config(device="cpu", warmup_games=0)
             )
             trainer.stats["selfplay_terminal"] = trainer.config.bootstrap_after_games
-            writer = GameWriter(
-                trainer.directory, {"id": 0, "seed": 91, "opponent": "self"}
-            )
+            writer = GameBuffer({"id": 0, "seed": 91, "opponent": "self"})
             writer.metadata["status"] = "truncated"
             writer.flush()
             with Environment(91) as env:
-                atomic_json(writer.path / "environment.json", env.call("snapshot"))
+                environment = env.call("snapshot")
                 info = env.call("info")
             event = {
                 "game": writer.game,
-                "path": str(writer.path / "game.json"),
+                "data": writer.data,
+                "environment": environment,
                 "actor": info["actor"],
                 "metrics": info["metrics"],
             }
             trainer.boundary_target(event)
-            meta = json.loads((writer.path / "game.json").read_text())
+            meta = writer.metadata
             self.assertIsNone(meta["winner"])
             self.assertEqual(meta["soft_target"]["kind"], "bootstrap")
             self.assertLess(abs(meta["soft_target"]["value"]), 1)
@@ -268,7 +265,7 @@ class TrainingTests(unittest.TestCase):
             self.assertEqual(game["opponent"], "demo")
             self.assertEqual(game["ply_limit"], 0)
             self.assertIsNone(trainer.game())
-            writer = GameWriter(directory, game)
+            writer = GameBuffer(game)
             writer.sample(
                 bundle(),
                 [
@@ -285,7 +282,7 @@ class TrainingTests(unittest.TestCase):
             writer.transition(
                 {"ply": 1, "winner": 1, "metrics": [0.0] * 4}, {"type": "end"}
             )
-            trainer.event({"type": "data", "path": writer.flush()})
+            trainer.event({"type": "data", "data": writer.flush()})
             trainer.learn()
             self.assertEqual(trainer.stats["updates"], 0)
             trainer.event(
@@ -293,7 +290,7 @@ class TrainingTests(unittest.TestCase):
                     "type": "done",
                     "game": game,
                     "winner": 1,
-                    "path": str(writer.path / "game.json"),
+                    "data": writer.data,
                 }
             )
             self.assertEqual(trainer.phase, "imitation")

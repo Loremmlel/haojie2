@@ -209,7 +209,9 @@ class ProfilingTests(unittest.TestCase):
             optimizer=Mock(),
             config=object(),
             published=9,
-            checkpoint_versions=set(),
+            pending_versions={},
+            weights=Mock(),
+            live_versions=Mock(return_value={9}),
             pool=SimpleNamespace(entries=[]),
             directory="unused",
         )

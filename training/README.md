@@ -42,22 +42,27 @@ training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/c
 training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/classic-main --resume
 ```
 
-每 300 秒自动保存，`--save-seconds` 可调整。保存先暂停原生推进，收回已发出的神经响应并排空正式记录，再通过屏障取得恢复状态。恢复模型、AdamW、随机数、预训练阶段/进度、校准器、历史池、数据进度、手工 AI 预算与缓存计划，以及所有尚未完成的对局。未完成搜索按原命令起点和固定模型重新计算。恢复保持原 worker/lane 映射，旧 v2 中的 worker 数现在对应 Rust 线程数。
+每 300 秒自动保存，`--save-seconds` 可调整。保存先暂停原生推进，收回已发出的神经响应并排空正式记录，再通过屏障取得恢复状态。恢复模型、AdamW、随机数、预训练阶段/进度、校准器、历史池、数据进度、手工 AI 预算与缓存计划，以及所有尚未完成的对局。未完成搜索按原命令起点和固定模型重新计算。恢复保持原 worker/lane 映射。
 
-当前检查点为 `haojie-classic-training-v2`，样本为 `autoregressive-v2`；启动训练须使用新目录，续训只接受该格式。
+续训、评测和基准只接受 `haojie-classic-training-v3` 检查点，评测也可读取历史池权重。没有旧格式导入或迁移；新训练使用新目录。网络和监督仍为当前的分层解码 v2。
 
-每局每 64 条命令写一个不可变片段。正常采集默认完成 **50 个单方回合**后截断；开局随机保留 **25% 完整局**免除此回合上限，示范局全部保留。`--max-ply` 和 `--full-game-fraction` 可调整，前者为 0 时关闭回合截断。完整局分配随每局保存，恢复不重抽；调整默认值只影响新分配对局。没有回合上限字段的现有 v2 在途局继续按原方式运行。全部对局仍受 20,000 条命令硬上限保护。
+回放在内存中完成，默认最多 **128 局、4096 MiB 张量**（`--replay-games`、`--replay-mib`），超限按最早入池整局淘汰。元数据和终局标签直接更新共享内存对象，训练抽样不读取文件。预算不含原生环境、在途待打包样本、命令和时间线元数据；单个片段超过预算会报错，需增大预算。状态输出提供 `replay_bytes`、`replay_games` 和 `replay_limit_bytes`。
 
-截断保存 `environment.json`，分别记录 `ply_limit` / `command_limit` 原因，胜负为 unknown。自对弈累计至少 16 个真实终局且校准器通过留出检验后，可附加低权重截断软价值；到 128 个真实终局后改用冻结发布模型自举。软值限制 ±0.98，权重 0.25，与真实胜负分字段记录。此前截断局屏蔽价值损失。正常暂停的在途局随 `--resume` 继续；自然终局通过同一局元数据关联真实标签。详见[目标定义](../docs/ai/TRAINING.md#奖励与截断)。
+普通发布权重只在内存：当前版本和在途搜索引用版本存活，其余临时版本回收。历史权重有 **256 MiB CPU 缓存**和最多 **3 个 GPU 模型缓存**；活跃版本可超过 CPU 缓存预算，以保证搜索不中途换权重。只有进入历史池的模型单独落盘，历史池仍按原来的跨时期策略保存和抽取。
+
+每次保存只原子替换一个 `checkpoint.pt`，包含当前模型/优化器、必要临时权重、有限回放、在途对局和随机数等完整恢复状态。运行时不再写逐局文件或追加结果日志；异常中断从最近成功保存点恢复。保存期间磁盘会暂时同时存在旧检查点和新临时文件。
+
+每局每 64 条命令将样本打包送入内存回放。正常采集默认完成 **50 个单方回合**后截断；开局随机保留 **25% 完整局**免除此回合上限，示范局全部保留。`--max-ply` 和 `--full-game-fraction` 可调整，前者为 0 时关闭回合截断。完整局分配随每局保存，恢复不重抽；调整默认值只影响新分配对局。全部对局仍受 20,000 条命令硬上限保护。
+
+截断边界局面直接在内存中完成自举，分别记录 `ply_limit` / `command_limit` 原因，胜负为 unknown。自对弈累计至少 16 个真实终局且校准器通过留出检验后，可附加低权重截断软价值；到 128 个真实终局后改用冻结发布模型自举。软值限制 ±0.98，权重 0.25，与真实胜负分字段记录。此前截断局屏蔽价值损失。正常暂停的在途局随 `--resume` 继续；自然终局通过同一局元数据关联真实标签。详见[目标定义](../docs/ai/TRAINING.md#奖励与截断)。
 
 ## 结果与评测
 
 运行目录包含：
 
-- `checkpoint.pt`：完整恢复点；`models/`：发布的推理模型与历史对手。
-- `games/<id>/`：完整命令片段、实体/局部记录/几何张量、条件策略标签、元数据及必要的超限快照。
+- `checkpoint.pt`：唯一滚动恢复点，包含有限内存回放和在途状态；`models/`：仅历史池权重。
 - `status.json`：阶段、更新、自然终局、两类截断、真实/软价值采样、主干/解码次数、推理/学习耗时与显存峰值。
-- `results.jsonl`：逐局结果；原生运行时失败时保留 `failed-native.json`。
+- `failed-native.json`：运行失败时覆盖保存的诊断。日常不生成逐局目录和累计结果文件。
 
 ```powershell
 training/.venv/Scripts/python.exe -m training.haojie evaluate --checkpoint artifacts/classic-main/checkpoint.pt --opponent easy --output artifacts/classic-main/eval-easy.jsonl --games 20
@@ -68,20 +73,20 @@ training/.venv/Scripts/python.exe -m training.haojie evaluate --checkpoint artif
 ## 验证和性能
 
 ```powershell
-training/.venv/Scripts/python.exe -B -m unittest training.tests.test_training training.tests.test_pipeline training.tests.test_profiling -v
-training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-alignment-20261029/phased-closure/checkpoint.pt --baseline artifacts/classic-native-pool-20261029/baseline --output artifacts/classic-native-pool-20261029/benchmark --tasks 256 --commands 8 --trials 3
+training/.venv/Scripts/python.exe -B -m unittest training.tests.test_training training.tests.test_pipeline training.tests.test_profiling training.tests.test_storage -v
+training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-main/checkpoint.pt --output artifacts/classic-memory-benchmark --tasks 256 --commands 8 --trials 3
 node --import tsx scripts/native/learning/validate.ts artifacts/native-target/release/haojie-engine.exe --evaluation --candidates --search --decoder
 node --import tsx scripts/native/learning/teacher-validation.ts artifacts/native-target/release/haojie-engine.exe 64
 ```
 
 正确性测试从 Git 提交 `7cc4ba9` 读取冻结的 Python 搜索，核对原生搜索的请求、命令、访问统计、监督和 RNG，并验证暂停恢复、阶段和 BF16。
 
-统一基准需要四局已有轨迹，逐局抽取四个中后期起点；默认连续分配 256 个窗口，每个推进 8 条命令，保持 64 局在途，执行正式 64/16 搜索和同量 BF16 学习。与提交 `7cc4ba9` 的独立源码和 DLL 交错三轮，使用冻结反馈核对相同工作量。外部 CPU/GPU 采样另需 `psutil` 和 `nvidia-smi`；利用率只统计预热后仍有待分配窗口的满供给区间。`--output` 必须是新目录，保留报告和采样；运行用临时目录自动清理，源检查点和轨迹只读。线程职责、数组生命周期和验收顺序见[运行时架构](../docs/ai/TRAINING-RUNTIME.md)。
+统一基准从 v3 检查点的四局回放中各抽取四个中后期起点；默认连续分配 256 个窗口，每个推进 8 条命令，保持 64 局在途，执行正式 64/16 搜索和同量 BF16 学习。使用冻结反馈核对工作量，支持当前运行时的线程数或插桩开关对照；已删除旧文件及旧多进程架构适配。外部 CPU/GPU 采样另需 `psutil` 和 `nvidia-smi`；利用率只统计预热后仍有待分配窗口的满供给区间。`--output` 必须是新目录，保留报告和采样；运行用临时目录自动清理，源检查点只读。线程职责、数组生命周期和验收顺序见[运行时架构](../docs/ai/TRAINING-RUNTIME.md)。
 
 比较当前单进程的线程数时使用 `--compare-workers 4 8`，固定总在途为 64 局，即 4×16 与 8×8；`--batch 16` 固定学习批量。可用已有 `--feedback` 跳过重新录制。Windows 采样另需 `pwsh.exe`，记录受测 PID 的共享/专用 GPU 内存，保留各适配器实例；无有效计数时记 null。本机复现命令：
 
 ```powershell
-training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-alignment-20261029/phased-closure/checkpoint.pt --compare-workers 4 8 --batch 16 --feedback artifacts/classic-native-pool-20261029/benchmark/feedback.pkl --output artifacts/classic-workers-20261029/benchmark --tasks 256 --commands 8 --trials 3
+training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-main/checkpoint.pt --compare-workers 4 8 --batch 16 --output artifacts/classic-workers-benchmark --tasks 256 --commands 8 --trials 3
 ```
 
 分段诊断默认关闭。运行前设置 `$env:HAOJIE_PROFILE = '1'`，`status.json` 会增加 `profile_native`、`profile_gpu` 和 `profile_coordinator`。Rust 按线程记录搜索控制、规则推进、合法动作解码、几何与状态编码等阶段；Python 分开记录组批、主机提交、传输等待、学习、回放与保存。嵌套阶段同时保留包含子段和排除子段的时间，比较占比使用后者。Windows 原生 CPU 周期只用于阶段占比；CUDA 抽样流区间包含提交间隙，实际 kernel 执行时间另用短 trace 确认。诊断后用 `Remove-Item Env:HAOJIE_PROFILE` 关闭。
@@ -89,7 +94,7 @@ training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoi
 以下命令固定 8×8、batch 16，复用冻结反馈，以 OFF/ON、ON/OFF 两组比较插桩开销：
 
 ```powershell
-training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-alignment-20261029/phased-closure/checkpoint.pt --compare-profile --batch 16 --feedback artifacts/classic-native-pool-20261029/benchmark/feedback.pkl --output artifacts/classic-profile-20261029/benchmark --tasks 256 --commands 8
+training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-main/checkpoint.pt --compare-profile --batch 16 --feedback artifacts/classic-memory-benchmark/feedback.pkl --output artifacts/classic-profile-benchmark --tasks 256 --commands 8
 ```
 
 独立短 trace 使用 `$env:HAOJIE_TRACE = 'artifacts/profile/gpu-trace.json'`；默认 GPU 循环第 64–95 次采集 CPU/CUDA 活动及阶段标签。也可设置 `$env:HAOJIE_TRACE_START_SECONDS = '20'`，运行满 20 秒后再采集 32 个完整循环，避开启动阶段。输出 Chrome trace 和同名 `.meta.json` 开始/结束计数，CUDA API 的提交、拷贝和同步调用可分别归因。需要支持 CUDA profiler 的 PyTorch 环境。这个窗口含 profiler 开销，单独用于归因；上述 OFF/ON 基准会清除子进程的 trace 设置。使用后移除 `HAOJIE_TRACE` 和自行设置的 `HAOJIE_TRACE_START_SECONDS` 环境变量。具体计量口径见[分段诊断](../docs/ai/TRAINING-RUNTIME.md#分段诊断口径)，本机结论见[状态入口](../docs/ai/STATUS.md#当前-8-线程瓶颈诊断)。

@@ -13,7 +13,7 @@ from ..native_pool import Request, search_values
 from ..native import Environment
 from .targets import Calibration
 from ..opponents import Opponents
-from .storage import Replay, atomic_json
+from .storage import Replay, Weights, atomic_json, clean_storage
 from .compute import Compute
 
 
@@ -27,7 +27,8 @@ class Trainer(Compute):
         self.models.mkdir(exist_ok=True)
         self.initialize_network("cpu")
         self.rng = np.random.default_rng(config.seed)
-        self.replay = Replay(config.replay_games)
+        self.replay = Replay(config.replay_games, max_bytes=config.replay_mib * 1024**2)
+        self.weights = Weights(self.models)
         self.pool = Opponents()
         self.published = 0
         self.inference_models = {}
@@ -37,11 +38,10 @@ class Trainer(Compute):
         self.imitation_updates = 0
         self.calibration = Calibration()
         self.bindings = {}
-        self.seen_samples = {}
         self.credit = 0.0
         self.next_game = 0
         self.saved_workers = None
-        self.checkpoint_versions = set()
+        self.pending_versions = {}
         self.stop_requested = False
         self.stats = {
             "updates": 0,
@@ -67,8 +67,8 @@ class Trainer(Compute):
         if resume:
             # 仅加载用户指定目录中本程序写出的完整恢复快照。
             saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
-            if saved["format"] != "haojie-classic-training-v2":
-                raise ValueError("训练格式已改为分层解码 v2，请保留旧目录并启动新训练")
+            if saved["format"] != "haojie-classic-training-v3":
+                raise ValueError("续训只接受 haojie-classic-training-v3 检查点")
             old_config = saved["config"]
             for key in ("workers", "games_per_worker"):
                 if old_config[key] != getattr(config, key):
@@ -92,27 +92,24 @@ class Trainer(Compute):
             self.demonstration_inflight = saved["demonstration_inflight"]
             self.imitation_updates = saved["imitation_updates"]
             self.calibration = Calibration(saved["calibration"])
-            self.replay = Replay(config.replay_games, saved["replay"])
             self.pool = Opponents(saved["pool"])
             self.published, self.next_game = saved["published"], saved["next_game"]
-            self.seen_samples, self.credit = saved["seen_samples"], saved["credit"]
+            self.credit = saved["credit"]
             self.saved_workers = saved["workers"]
-            self.checkpoint_versions = {saved["published"]} | {
-                lane["root_version"]
-                for lanes in self.saved_workers.values()
+            self.pending_versions = {
+                (0, worker * config.games_per_worker + lane["lane"]): lane[
+                    "root_version"
+                ]
+                for worker, lanes in self.saved_workers.items()
                 for lane in lanes
                 if lane["root_version"] is not None and lane["root_version"] >= 0
             }
-            # 检查点后的数据文件保留；当前恢复分支只关联已提交的元数据前缀。
-            for lanes in self.saved_workers.values():
-                for lane in lanes:
-                    atomic_json(
-                        self.directory
-                        / "games"
-                        / str(lane["game"]["id"])
-                        / "game.json",
-                        lane["metadata"],
-                    )
+            self.replay = Replay(
+                config.replay_games, saved["replay"], config.replay_mib * 1024**2
+            )
+            self.weights = Weights(
+                self.models, saved["weights"], (e["version"] for e in self.pool.entries)
+            )
         else:
             if checkpoint.exists() or any(self.models.iterdir()):
                 raise ValueError("目录已有训练，请使用 --resume 或新目录")
@@ -123,22 +120,14 @@ class Trainer(Compute):
         if hasattr(self, "remote"):
             self.remote.publish(self.published)
             return
-        state = {
-            key: value.detach().cpu().clone()
-            for key, value in self.model.state_dict().items()
-        }
-        path = self.models / f"model-{self.published:08d}.pt"
-        if not path.exists():
-            torch.save(state, path)
-        retained = (
-            {self.published}
-            | self.checkpoint_versions
-            | {v for _, v in self.bindings.values()}
-            | {e["version"] for e in self.pool.entries}
-        )
-        for candidate in self.models.glob("model-*.pt"):
-            if int(candidate.stem.split("-")[1]) not in retained:
-                candidate.unlink()
+        self.weights.publish(self.published, self.model)
+        self.prune_models()
+
+    def archive(self, version):
+        if hasattr(self, "remote"):
+            self.remote.call("archive", version=version)
+        else:
+            self.weights.archive(version)
 
     def game(self):
         if self.phase == "imitation":
@@ -192,6 +181,8 @@ class Trainer(Compute):
         else:
             version = self.published
         self.bindings[binding] = (request["root"], version)
+        self.pending_versions.pop(binding, None)
+        self.prune_models()
         return version
 
     def infer(self, jobs):
@@ -220,11 +211,10 @@ class Trainer(Compute):
 
     def event(self, event):
         if event["type"] == "data":
-            path = event["path"]
-            self.replay.add(path)
-            meta = json.loads(Path(path).read_text(encoding="utf-8"))
-            fresh = meta["samples"] - self.seen_samples.get(path, 0)
-            self.seen_samples[path] = meta["samples"]
+            data = event["data"]
+            self.replay.add(data)
+            fresh = data["metadata"]["samples"] - data["credited"]
+            data["credited"] = data["metadata"]["samples"]
             self.credit += fresh * self.config.sample_reuse
             self.stats["samples"] += fresh
         elif event["type"] == "done":
@@ -251,18 +241,15 @@ class Trainer(Compute):
                         < self.config.bootstrap_after_games
                     ):
                         self.calibration.observe(
-                            event["path"], self.config.calibration_games
+                            event["data"]["metadata"], self.config.calibration_games
                         )
                 if game["opponent"] == "history":
                     self.pool.record(
                         game["version"], event["winner"] == 3 - game["learner"]
                     )
                 if self.stats["completed"] % self.config.history_games == 0:
+                    self.archive(self.published)
                     self.pool.add(self.published, self.stats["completed"])
-            with (self.directory / "results.jsonl").open(
-                "a", encoding="utf-8"
-            ) as stream:
-                stream.write(json.dumps(event, ensure_ascii=False) + "\n")
             if (
                 self.phase == "collect"
                 and self.stats["demonstrations"] >= self.config.warmup_games
@@ -278,11 +265,7 @@ class Trainer(Compute):
             with Environment(event["game"]["seed"]) as env:
                 env.call(
                     "restore",
-                    snapshot=json.loads(
-                        (Path(event["path"]).parent / "environment.json").read_text(
-                            encoding="utf-8"
-                        )
-                    ),
+                    snapshot=event["environment"],
                 )
                 info, bundle = env.encode()
                 owner = ("boundary", event["game"]["id"])
@@ -305,29 +288,23 @@ class Trainer(Compute):
             "version": version,
             "source_games": self.stats["selfplay_terminal"],
         }
-        metadata = json.loads(Path(event["path"]).read_text(encoding="utf-8"))
+        metadata = event["data"]["metadata"]
         metadata["soft_target"] = target
-        atomic_json(event["path"], metadata)
         event["soft_target"] = target
         self.credit += self.config.batch
 
-    def checkpoint(self, workers):
+    def checkpoint(self, workers, weights=None):
         # 学习与原生线程均已暂停；未完成搜索在恢复时用原命令 RNG 重算。
         for lanes in workers.values():
             for lane in lanes:
                 self.event(
                     {
                         "type": "data",
-                        "path": str(
-                            self.directory
-                            / "games"
-                            / str(lane["game"]["id"])
-                            / "game.json"
-                        ),
+                        "data": lane["buffer"],
                     }
                 )
         payload = {
-            "format": "haojie-classic-training-v2",
+            "format": "haojie-classic-training-v3",
             "config": asdict(self.config),
             "phase": self.phase,
             "demonstration_inflight": self.demonstration_inflight,
@@ -337,27 +314,28 @@ class Trainer(Compute):
             "optimizer": self.optimizer.state_dict(),
             "rng": self.rng.bit_generator.state,
             "torch_rng": getattr(self, "remote_torch_rng", torch.get_rng_state()),
-            "cuda_rng": torch.cuda.get_rng_state_all()
-            if self.device.type == "cuda"
-            else getattr(self, "remote_cuda_rng", None),
+            "cuda_rng": (
+                torch.cuda.get_rng_state_all()
+                if self.device.type == "cuda"
+                else getattr(self, "remote_cuda_rng", None)
+            ),
             "stats": self.stats,
             "pool": self.pool.entries,
             "replay": self.replay.games,
             "published": self.published,
             "next_game": self.next_game,
-            "seen_samples": self.seen_samples,
+            "weights": (
+                self.weights.snapshot(self.live_versions())
+                if weights is None
+                else weights
+            ),
             "credit": self.credit,
             "workers": workers,
         }
         path = self.directory / "checkpoint.pt"
         torch.save(payload, path.with_suffix(".tmp"))
         os.replace(path.with_suffix(".tmp"), path)
-        self.checkpoint_versions = {self.published} | {
-            lane["root_version"]
-            for lanes in workers.values()
-            for lane in lanes
-            if lane["root_version"] is not None and lane["root_version"] >= 0
-        }
+        clean_storage(self.directory, {e["version"] for e in self.pool.entries})
 
     def run(self):
         from .pipeline import run
@@ -376,6 +354,9 @@ class Trainer(Compute):
             "commands_per_second": (self.stats["commands"] - initial["commands"])
             / max(elapsed, 0.001),
             "published": self.published,
+            "replay_bytes": self.replay.bytes,
+            "replay_games": len(self.replay.games),
+            "replay_limit_bytes": self.replay.max_bytes,
             **extra,
         }
         if self.device.type == "cuda":

@@ -3,7 +3,6 @@
 import argparse
 import copy
 from dataclasses import asdict
-import importlib
 import json
 import os
 from pathlib import Path
@@ -15,56 +14,46 @@ import sys
 import tempfile
 import threading
 import time
-import types
 
 import numpy as np
 
 
 def starting_positions(directory):
+    import torch
+
     positions = []
-    paths = sorted(
-        (directory / "games").glob("*/game.json"), key=lambda p: int(p.parent.name)
+    saved = torch.load(
+        directory / "checkpoint.pt", map_location="cpu", weights_only=False
     )
-    for path in paths[:4]:
-        meta = json.loads(path.read_text(encoding="utf-8"))
+    if saved["format"] != "haojie-classic-training-v3":
+        raise ValueError("基准只接受 v3 检查点")
+    games = saved["replay"][:4]
+    for game in games:
+        meta = game["metadata"]
         boundaries = {
             int(meta["steps"] * fraction) for fraction in (0.25, 0.5, 0.75, 0.9)
         }
         with Environment(meta["game"]["seed"]) as env:
             step = 0
-            for name in meta["command_segments"]:
-                for line in (
-                    (path.parent / name).read_text(encoding="utf-8").splitlines()
-                ):
-                    result = env.call("apply", command=json.loads(line))
-                    if result.get("rejected"):
-                        raise RuntimeError(f"基准源轨迹重放失败: {path} {step}")
-                    step += 1
-                    if step in boundaries and result["winner"] is None:
-                        positions.append(
-                            {
-                                "source_game": meta["game"]["id"],
-                                "source_step": step,
-                                "ply": result["ply"],
-                                "environment": env.call("snapshot"),
-                            }
-                        )
+            for command in game["commands"]:
+                result = env.call("apply", command=command)
+                if result.get("rejected"):
+                    raise RuntimeError(
+                        f"基准源轨迹重放失败: {meta['game']['id']} {step}"
+                    )
+                step += 1
+                if step in boundaries and result["winner"] is None:
+                    positions.append(
+                        {
+                            "source_game": meta["game"]["id"],
+                            "source_step": step,
+                            "ply": result["ply"],
+                            "environment": env.call("snapshot"),
+                        }
+                    )
     if len(positions) != 16:
         raise ValueError("基准需要四局已有轨迹，每局可提取四个非终局起点")
-    return positions, [str(p) for p in paths[:4]]
-
-
-def legacy_modules():
-    root = Path(os.environ["HAOJIE_BENCH_BASELINE"])
-    name = "haojie_benchmark_baseline"
-    if name not in sys.modules:
-        module = types.ModuleType(name)
-        module.__path__ = [str(root / "source" / "training")]
-        sys.modules[name] = module
-    return {
-        key: importlib.import_module(name + ".haojie.runtime." + key)
-        for key in ("trainer", "pipeline", "gpu", "worker", "storage")
-    }
+    return positions, games
 
 
 def write_json(path, value):
@@ -117,22 +106,6 @@ def starting_lane(game, starts):
     }
 
 
-def legacy_worker(*args):
-    modules = legacy_modules()
-    from_cache = pickle.loads(Path(os.environ["HAOJIE_BENCH_STARTS"]).read_bytes())
-    lane = modules["worker"].Lane
-    initialize = lane.__init__
-
-    def restored(self, directory, config, game, previous=None):
-        snapshot = starting_lane(game, from_cache)
-        snapshot["metadata"] = modules["storage"].GameWriter(directory, game).metadata
-        initialize(self, directory, config, game, snapshot)
-
-    lane.__init__ = restored
-    role(f"actor-{args[0]}")
-    modules["worker"].worker(*args)
-
-
 class Feedback:
     def __init__(self, executor_class, record):
         self.record = record
@@ -144,16 +117,13 @@ class Feedback:
         def controlled(executor, jobs):
             outputs = original(executor, jobs)
             for i, (_, request, owner) in enumerate(jobs):
-                root = executor.bindings[owner][0]
-                game, step = (
-                    map(int, root.split(":")) if isinstance(root, str) else root
-                )
+                game, step = executor.bindings[owner][0]
                 cursor = self.positions.get((game, step), 0)
                 self.positions[game, step] = cursor + 1
                 key = game % 16, step, cursor
                 descriptor = (
                     request.op,
-                    getattr(request, "key", request.context),
+                    request.context,
                     tuple((v.shape, v.dtype.str) for v in request.arrays),
                 )
                 if record and key not in self.values:
@@ -171,18 +141,6 @@ class Feedback:
     def finish(self):
         if self.record:
             self.path.write_bytes(pickle.dumps(self.values))
-
-
-def legacy_gpu(*args):
-    modules = legacy_modules()
-    feedback = Feedback(
-        modules["gpu"].Executor, os.environ["HAOJIE_BENCH_CAPTURE"] == "1"
-    )
-    role("gpu")
-    try:
-        modules["gpu"].serve(*args)
-    finally:
-        feedback.finish()
 
 
 def equal_tree(actual, expected, path="root"):
@@ -207,20 +165,11 @@ def equal_tree(actual, expected, path="root"):
         raise AssertionError(f"{path}: {actual!r} != {expected!r}")
 
 
-def records(directory, count):
+def records(count, buffered):
     cases, traces = {}, {}
     for number in range(count):
-        path = Path(directory) / "games" / str(number)
-        meta = json.loads((path / "game.json").read_text(encoding="utf-8"))
-        trace = [
-            json.loads(line)
-            for name in meta["command_segments"]
-            for line in (path / name).read_text(encoding="utf-8").splitlines()
-        ]
-        chunks = []
-        for name in meta["chunks"]:
-            with np.load(path / name, allow_pickle=False) as data:
-                chunks.append({k: data[k] for k in data.files})
+        game = buffered[number]
+        meta, trace, chunks = game["metadata"], game["commands"], game["chunks"]
         case = {
             "commands": trace,
             "winner": meta["winner"],
@@ -245,15 +194,10 @@ def execute(args):
 
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=False)
-    baseline = Path(args.baseline).resolve()
     os.environ.update(
-        HAOJIE_BENCH_BASELINE=str(baseline),
         HAOJIE_BENCH_OUTPUT=str(output),
         HAOJIE_BENCH_FEEDBACK=str(Path(args.feedback).resolve()),
-        HAOJIE_BENCH_CAPTURE=str(int(args.capture)),
     )
-    if args.execute == "baseline":
-        os.environ["HAOJIE_ENGINE"] = str(baseline / "haojie_native.dll")
     starts, replay = starting_positions(Path(args.checkpoint).resolve().parent)
     saved = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     updates = args.tasks * args.commands // args.batch
@@ -273,52 +217,40 @@ def execute(args):
     sampler = None
     feedback = None
     with tempfile.TemporaryDirectory(prefix="haojie-steady-workload-") as directory:
-        starts_file = Path(directory) / "starts.pkl"
-        starts_file.write_bytes(pickle.dumps(starts))
-        os.environ["HAOJIE_BENCH_STARTS"] = str(starts_file)
-        if args.execute == "baseline":
-            modules = legacy_modules()
-            modules["pipeline"].worker = legacy_worker
-            modules["pipeline"].serve = legacy_gpu
-            trainer = modules["trainer"].Trainer(directory, config)
-            replay_class = modules["storage"].Replay
+        from training.haojie.runtime.trainer import Trainer
+        from training.haojie.runtime.storage import Replay
+        from training.haojie.runtime import pipeline, gpu
+        from training.haojie.native_pool import NativePool
+
+        assign = NativePool.assign
+        status = NativePool.status
+
+        def seeded(self, lane, game, restored=None, **kwargs):
+            return assign(self, lane, game, starting_lane(game, starts), **kwargs)
+
+        def tracked_status(self):
+            result = status(self)
+            for index, tid in enumerate(result.get("threads", [])):
+                if tid:
+                    role(f"rust-{index}", tid)
+            return result
+
+        run_coordinator = pipeline.Coordinator.run
+
+        def coordinated(self):
             role("coordinator")
-        else:
-            from training.haojie.runtime.trainer import Trainer
-            from training.haojie.runtime.storage import Replay
-            from training.haojie.runtime import pipeline, gpu
-            from training.haojie.native_pool import NativePool
+            return run_coordinator(self)
 
-            assign = NativePool.assign
-            status = NativePool.status
-
-            def seeded(self, lane, game, restored=None, **kwargs):
-                return assign(self, lane, game, starting_lane(game, starts), **kwargs)
-
-            def tracked_status(self):
-                result = status(self)
-                for index, tid in enumerate(result.get("threads", [])):
-                    if tid:
-                        role(f"rust-{index}", tid)
-                return result
-
-            run_coordinator = pipeline.Coordinator.run
-
-            def coordinated(self):
-                role("coordinator")
-                return run_coordinator(self)
-
-            NativePool.assign, NativePool.status = seeded, tracked_status
-            pipeline.Coordinator.run = coordinated
-            feedback = Feedback(gpu.Executor, args.capture)
-            trainer = Trainer(directory, config)
-            replay_class = Replay
-            role("gpu")
+        NativePool.assign, NativePool.status = seeded, tracked_status
+        pipeline.Coordinator.run = coordinated
+        feedback = Feedback(gpu.Executor, args.capture)
+        trainer = Trainer(directory, config)
+        role("gpu")
         trainer.model.load_state_dict(saved["model"])
         trainer.restore_optimizer(copy.deepcopy(saved["optimizer"]))
-        torch.save(trainer.model.state_dict(), trainer.models / "model-00000000.pt")
+        trainer.publish()
 
-        class FixedReplay(replay_class):
+        class FixedReplay(Replay):
             def add(self, path):
                 pass
 
@@ -346,7 +278,7 @@ def execute(args):
 
         class Stats(dict):
             def __reduce__(self):
-                # 旧架构 spawn 只接收普通统计字典，回调留在协调进程。
+                # 检查点只保存普通统计字典，采样进度回调不落盘。
                 return dict, (dict(self),)
 
             def update(self, *values, **keywords):
@@ -378,11 +310,13 @@ def execute(args):
             }
 
         old_event = trainer.event
+        buffered = {}
 
         def event(message):
             credit = trainer.credit
             old_event(message)
             if message["type"] == "done":
+                buffered[message["game"]["id"]] = copy.deepcopy(message["data"])
                 # 基准的学习量固定，真实终局奖励仍通过冻结源回放进入学习。
                 trainer.credit = credit
                 state["completed"] += 1
@@ -408,7 +342,7 @@ def execute(args):
             elapsed = time.perf_counter() - started
             if trainer.stats["updates"] != updates:
                 raise AssertionError("学习更新数量改变")
-            signature = records(directory, args.tasks)
+            signature = records(args.tasks, buffered)
             signature["learning_rng"] = trainer.rng.bit_generator.state
             signature["counts"] = {
                 k: trainer.stats[k]
@@ -424,7 +358,7 @@ def execute(args):
             }
             (output / "signature.pkl").write_bytes(pickle.dumps(signature))
             result = {
-                "backend": args.execute,
+                "backend": "native",
                 "profile_enabled": os.environ.get("HAOJIE_PROFILE", "0") == "1",
                 "trace_path": os.environ.get("HAOJIE_TRACE"),
                 "config": asdict(config),
@@ -678,9 +612,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint")
     parser.add_argument(
-        "--baseline", default="artifacts/classic-native-pool-20261029/baseline"
-    )
-    parser.add_argument(
         "--output", default="artifacts/classic-native-pool-20261029/benchmark"
     )
     parser.add_argument("--tasks", type=int, default=256)
@@ -691,7 +622,7 @@ def main():
     comparison = parser.add_mutually_exclusive_group()
     comparison.add_argument("--compare-workers", type=int, nargs=2, metavar=("A", "B"))
     comparison.add_argument("--compare-profile", action="store_true")
-    parser.add_argument("--execute", choices=("baseline", "native"))
+    parser.add_argument("--execute", action="store_true")
     parser.add_argument("--feedback")
     parser.add_argument("--capture", action="store_true")
     parser.add_argument("--sample")
@@ -728,18 +659,15 @@ def main():
     feedback = Path(args.feedback).resolve() if args.feedback else root / "feedback.pkl"
     reference = None
 
-    def invoke(backend, workers, target, profile=False, capture=False):
+    def invoke(workers, target, profile=False, capture=False):
         command = [
             sys.executable,
             "-B",
             "-m",
             "training.tests.bench_pipeline",
             "--execute",
-            backend,
             "--checkpoint",
             str(Path(args.checkpoint).resolve()),
-            "--baseline",
-            str(Path(args.baseline).resolve()),
             "--output",
             str(target),
             "--feedback",
@@ -763,18 +691,16 @@ def main():
 
     if args.compare_profile:
         variants = [
-            ("profile-off", "native", 8, False),
-            ("profile-on", "native", 8, True),
+            ("profile-off", 8, False),
+            ("profile-on", 8, True),
         ]
     elif args.compare_workers:
-        variants = [(f"native-{n}", "native", n, False) for n in args.compare_workers]
+        variants = [(f"native-{n}", n, False) for n in args.compare_workers]
     else:
-        variants = [
-            (name, name, args.workers, False) for name in ("baseline", "native")
-        ]
+        variants = [("native", args.workers, False)]
     if not args.feedback:
-        _, backend, workers, profile = variants[0]
-        captured = invoke(backend, workers, root / "capture", profile, capture=True)
+        _, workers, profile = variants[0]
+        captured = invoke(workers, root / "capture", profile, capture=True)
         print(json.dumps({"event": "captured", **captured}), flush=True)
     else:
         print(
@@ -782,9 +708,9 @@ def main():
         )
     for trial in range(args.trials):
         ordered = variants if trial % 2 == 0 else list(reversed(variants))
-        for label, backend, workers, profile in ordered:
+        for label, workers, profile in ordered:
             target = root / f"{trial}-{label}"
-            result = invoke(backend, workers, target, profile)
+            result = invoke(workers, target, profile)
             signature = pickle.loads((target / "signature.pkl").read_bytes())
             if reference is None:
                 reference = signature

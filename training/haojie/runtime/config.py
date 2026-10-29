@@ -36,6 +36,7 @@ class Config:
     publish_updates: int = 16
     history_games: int = 64
     replay_games: int = 128
+    replay_mib: int = 4096
     chunk_commands: int = 64
     max_commands: int = 20000
     max_ply: int = 50
@@ -66,6 +67,7 @@ class Config:
             "publish_updates",
             "history_games",
             "replay_games",
+            "replay_mib",
             "chunk_commands",
             "max_commands",
         ):

@@ -12,7 +12,7 @@ import torch
 from ..native_pool import NativePool
 from ..profiling import Profile, TraceWindow
 from .gpu import Executor, Local, infer_batch
-from .storage import GameWriter, atomic_json
+from .storage import GameBuffer, atomic_json
 
 
 class Coordinator:
@@ -29,21 +29,13 @@ class Coordinator:
         self.error = None
         self.thread_id = None
         self.profile = Profile()
-        self.local = Local(pool, self.retained)
-
-    def retained(self):
-        trainer = self.trainer
-        return (
-            trainer.checkpoint_versions
-            | {e["version"] for e in trainer.pool.entries}
-            | {game["version"] for game in self.active.values() if "version" in game}
-        )
+        self.local = Local(pool)
 
     def assign(self, lane, game, restored=None):
         with self.profile.stage("coordinator.assign"):
             self.active[lane] = game
-            self.writers[lane] = GameWriter(
-                self.trainer.directory, game, restored["metadata"] if restored else None
+            self.writers[lane] = GameBuffer(
+                game, restored["buffer"] if restored else None
             )
             self.pool.assign(lane, game, restored)
 
@@ -91,9 +83,8 @@ class Coordinator:
             if done and info["winner"] is None:
                 writer.metadata["status"] = "truncated"
                 writer.metadata["truncation"] = record["truncation"]
-                atomic_json(writer.path / "environment.json", record["environment"])
             if done or writer.metadata["steps"] % config.chunk_commands == 0:
-                trainer.event({"type": "data", "path": writer.flush()})
+                trainer.event({"type": "data", "data": writer.flush()})
             if done:
                 trainer.event(
                     {
@@ -102,7 +93,8 @@ class Coordinator:
                         "winner": info["winner"],
                         "steps": writer.metadata["steps"],
                         "ply": info["ply"],
-                        "path": str(writer.path / "game.json"),
+                        "data": writer.data,
+                        "environment": record.get("environment"),
                         "actor": info["actor"],
                         "metrics": info["metrics"],
                         "truncation": record.get("truncation"),
@@ -150,8 +142,7 @@ class Coordinator:
         for value in self.pool.snapshot():
             lane = value["lane"]
             writer = self.writers[lane]
-            writer.flush()
-            value["metadata"] = writer.metadata
+            value["buffer"] = writer.flush()
             value["lane"] = lane % self.trainer.config.games_per_worker
             snapshots[lane // self.trainer.config.games_per_worker].append(value)
         state = self.local.call("snapshot")
@@ -162,7 +153,7 @@ class Coordinator:
         trainer.remote_cuda_rng = state["cuda_rng"]
         trainer.stats.update(state["stats"])
         self.native_stats()
-        trainer.checkpoint(snapshots)
+        trainer.checkpoint(snapshots, state["weights"])
 
     def run(self):
         trainer, config = self.trainer, self.trainer.config
@@ -179,6 +170,10 @@ class Coordinator:
                 game = restored["game"] if restored else trainer.game()
                 if game is not None:
                     self.assign(lane, game, restored)
+            # 缓冲已转交在途局；恢复点不再额外延长旧回放的内存生命周期。
+            trainer.saved_workers = None
+            previous.clear()
+            restored = None
             print(
                 json.dumps(
                     {
@@ -271,11 +266,14 @@ def run(trainer):
         "cuda_rng": getattr(trainer, "remote_cuda_rng", None),
         "stats": trainer.stats,
         "published": trainer.published,
-        "retained": list(
-            trainer.checkpoint_versions | {e["version"] for e in trainer.pool.entries}
-        ),
+        "history": [e["version"] for e in trainer.pool.entries],
+        "weights": trainer.weights.snapshot(trainer.live_versions()),
+        "pending_versions": dict(trainer.pending_versions),
     }
     executor = Executor(trainer.directory, trainer.config, initial)
+    trainer.weights.states.clear()
+    trainer.pending_versions.clear()
+    del initial
     trace = TraceWindow(executor.profile, executor.device)
     pool = NativePool(trainer.config)
     previous = signal.signal(
@@ -316,5 +314,6 @@ def run(trainer):
         thread.join()
         pool.close()
         trace.close(executor.stats)
+        trainer.weights = executor.weights
         del trainer.remote
         signal.signal(signal.SIGINT, previous)
