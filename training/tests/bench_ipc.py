@@ -39,13 +39,25 @@ def child(mode, connection, incoming, outgoing, name, count, rounds):
 def run(mode, count, rounds):
     ctx = mp.get_context("spawn")
     parent, remote = ctx.Pipe()
-    incoming, outgoing = (ctx.Queue(1), ctx.Queue(1)) if mode == "queue" else (None, None)
+    incoming, outgoing = (
+        (ctx.Queue(1), ctx.Queue(1)) if mode == "queue" else (None, None)
+    )
     slot = Slot(size=count * 4) if mode == "shared" else None
     value = np.zeros(count, np.float32)
     if slot:
         slot.array(count)[:] = value
-    process = ctx.Process(target=child, args=(mode, remote, incoming, outgoing,
-                                            slot.name if slot else None, count, rounds))
+    process = ctx.Process(
+        target=child,
+        args=(
+            mode,
+            remote,
+            incoming,
+            outgoing,
+            slot.name if slot else None,
+            count,
+            rounds,
+        ),
+    )
     started = time.perf_counter()
     process.start()
     remote.close()
@@ -77,8 +89,11 @@ def run(mode, count, rounds):
         if queue:
             queue.close()
             queue.join_thread()
-    return {"startup_s": startup, "median_us": statistics.median(timings[10:]) * 1e6,
-            "p95_us": sorted(timings[10:])[int((rounds - 11) * .95)] * 1e6}
+    return {
+        "startup_s": startup,
+        "median_us": statistics.median(timings[10:]) * 1e6,
+        "p95_us": sorted(timings[10:])[int((rounds - 11) * 0.95)] * 1e6,
+    }
 
 
 def main():
@@ -93,10 +108,14 @@ def main():
             order = order[repeat:] + order[:repeat]
             for mode in order:
                 trials[mode].append(run(mode, size // 4, args.rounds))
-        results[size] = {mode: {"median_us": statistics.median(t["median_us"] for t in samples),
-                                "p95_us": statistics.median(t["p95_us"] for t in samples),
-                                "startup_s": statistics.median(t["startup_s"] for t in samples)}
-                         for mode, samples in trials.items()}
+        results[size] = {
+            mode: {
+                "median_us": statistics.median(t["median_us"] for t in samples),
+                "p95_us": statistics.median(t["p95_us"] for t in samples),
+                "startup_s": statistics.median(t["startup_s"] for t in samples),
+            }
+            for mode, samples in trials.items()
+        }
         print(json.dumps({"bytes": size, **results[size]}), flush=True)
 
 

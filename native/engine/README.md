@@ -1,6 +1,6 @@
 # Rust 原生规则引擎
 
-crate 输出 `haojie-engine` 可信开发验证程序及 `haojie_native` 动态库/rlib。旧训练系统已移除；新 `learning/` 提供普通局完整命令候选、实体编码和 Python 进程内接口，`ai/` 等价移植网页三档手工 AI 的普通局路径。
+crate 输出 `haojie-engine` 可信开发验证程序及 `haojie_native` 动态库/rlib。`learning/` 提供普通局合法参数解码树、实体/局部记录/几何编码和 Python 进程内接口，`ai/` 等价移植网页三档手工 AI 的普通局路径。
 
 | 位置                                      | 职责                                     |
 | ----------------------------------------- | ---------------------------------------- |
@@ -30,4 +30,4 @@ PowerShell 中若 npm 包装命令吞掉 `--output`，使用 `npm.cmd`，或直�
 
 所有正式命令经过共用规则内核，成功后提交新分支。公开视图不包含真实 RNG。状态中的 `Rc` 保持线程所有权，不跨线程共享可变局面。
 
-新训练运行方式见[训练入口](../../training/README.md)，旧接口按[清理前版本](https://github.com/Loremmlel/haojie2/blob/fa59a66a0c0aeef219f5eaf871532eab24434eb5/native/engine/README.md)读取。
+训练运行方式见[训练入口](../../training/README.md)。

@@ -17,7 +17,9 @@ class Slot:
     def array(self, count, offset=0, dtype=np.float32):
         size = np.dtype(dtype).itemsize * count
         if offset + size > self.memory.size:
-            raise BufferError(f"共享槽需要 {offset + size} 字节，当前 {self.memory.size}")
+            raise BufferError(
+                f"共享槽需要 {offset + size} 字节，当前 {self.memory.size}"
+            )
         return np.ndarray((count,), dtype=dtype, buffer=self.memory.buf, offset=offset)
 
     def close(self):

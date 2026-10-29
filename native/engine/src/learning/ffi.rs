@@ -1,5 +1,5 @@
 //! 句柄仅由创建它的 worker 使用；JSON 只传控制/快照，模型张量通过调用者缓冲复制。
-use super::{encoding, proposal};
+use super::encoding;
 use crate::{
     model::{Catalog, Command, State},
     runtime,
@@ -12,7 +12,8 @@ use std::{
 
 struct Position {
     state: State,
-    commands: Vec<Command>,
+    encoding: Option<encoding::Compact>,
+    decoder: Option<super::decoder::Decoder>,
 }
 pub struct Host {
     catalog: Catalog,
@@ -50,6 +51,67 @@ impl Host {
     fn handle(&mut self, request: Value) -> Result<Value, String> {
         let id = request["id"].as_u64().unwrap_or(0);
         match request["op"].as_str().unwrap_or("") {
+            "encode" => {
+                let p = self.positions.get_mut(&id).ok_or("unknown position")?;
+                if p.encoding.is_none() {
+                    p.encoding = Some(encoding::Compact::new(&p.state, &self.catalog)?);
+                }
+                let e = p.encoding.as_ref().unwrap();
+                self.tensor.clear();
+                self.tensor.extend_from_slice(&e.states);
+                self.tensor.extend_from_slice(&e.records);
+                self.tensor.extend_from_slice(&e.owners);
+                self.tensor.extend_from_slice(&e.relations);
+                let n = e.states.len() / encoding::STATE_WIDTH;
+                let m = e.owners.len();
+                let mut info = self.info(id)?;
+                info["entities"] = json!(n);
+                info["records"] = json!(m);
+                info["floats"] = json!(self.tensor.len());
+                Ok(info)
+            }
+            "decode" | "trace" => {
+                let p = self.positions.get_mut(&id).ok_or("unknown position")?;
+                let view = runtime::public_view(&p.state, runtime::viewer(&p.state))?;
+                if p.decoder.is_none() {
+                    p.decoder = Some(super::decoder::Decoder::new(
+                        view.position(),
+                        &self.catalog,
+                    )?);
+                }
+                let decoder = p.decoder.as_mut().unwrap();
+                if request["op"] == "trace" {
+                    let command: Command = serde_json::from_value(request["command"].clone())
+                        .map_err(|e| e.to_string())?;
+                    return Ok(json!(decoder.trace(
+                        view.position(),
+                        &self.catalog,
+                        &command
+                    )?));
+                }
+                let mut front = decoder.choices(
+                    view.position(),
+                    &self.catalog,
+                    request["prefix"].as_u64().unwrap_or(0) as usize,
+                )?;
+                if front["leaf"] != true {
+                    if p.encoding.is_none() {
+                        p.encoding = Some(encoding::Compact::new(&p.state, &self.catalog)?);
+                    }
+                    let commands: Vec<Command> = serde_json::from_value(front["choices"].take())
+                        .map_err(|e| e.to_string())?;
+                    self.tensor = p.encoding.as_ref().unwrap().options(
+                        &self.catalog,
+                        &commands,
+                        front["stage"].as_u64().unwrap() as usize,
+                        front["focus"].as_str().unwrap(),
+                    )?;
+                    front.as_object_mut().unwrap().remove("choices");
+                    front["count"] = json!(commands.len());
+                    front["floats"] = json!(self.tensor.len());
+                }
+                Ok(front)
+            }
             "teacher-next" => {
                 let observation = if let Some(o) = request.get("observation") {
                     o.clone()
@@ -70,12 +132,6 @@ impl Host {
             "teacher-restore" => {
                 self.teacher = request["teacher"].clone();
                 Ok(json!(true))
-            }
-            "apply" => {
-                let command: Command = serde_json::from_value(request["command"].clone())
-                    .map_err(|e| e.to_string())?;
-                self.positions.get_mut(&0).unwrap().commands = vec![command];
-                self.handle(json!({"op":"step","action":0}))
             }
             "info" => self.info(id),
             "observe" => {
@@ -103,70 +159,18 @@ impl Host {
                     0,
                     Position {
                         state,
-                        commands: vec![],
+                        encoding: None,
+                        decoder: None,
                     },
                 );
                 self.next = 1;
                 self.info(0)
             }
-            "prepare" => {
-                let position = self.positions.get_mut(&id).ok_or("unknown position")?;
-                let view = runtime::public_view(&position.state, runtime::viewer(&position.state))?;
-                let count = request["count"].as_u64().unwrap_or(32) as usize;
-                if !(1..=512).contains(&count) {
-                    return Err("candidate count must be 1..512".into());
-                }
-                position.commands = proposal::generate(
-                    view.position(),
-                    &self.catalog,
-                    request["seed"].as_u64().unwrap_or(1) as u32,
-                    count,
-                )?;
-                if let Some(value) = request.get("include") {
-                    let command: Command =
-                        serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
-                    if crate::options::inspect(
-                        view.position(),
-                        view.viewer,
-                        &command,
-                        &self.catalog,
-                        &mut crate::inspection::Queries::default(),
-                    )? == "invalid"
-                    {
-                        return Err("included command is illegal".into());
-                    }
-                    if !position
-                        .commands
-                        .iter()
-                        .any(|c| serde_json::to_value(c).ok() == Some(value.clone()))
-                    {
-                        position.commands.push(command);
-                    }
-                }
-                let (states, actions) =
-                    encoding::encode(&position.state, &self.catalog, &position.commands)?;
-                let n = states.len() / encoding::STATE_WIDTH;
-                let k = position.commands.len();
-                self.tensor = states;
-                self.tensor.extend(actions);
-                let mut info = self.info(id)?;
-                info["rows"] = json!(n);
-                info["actions"] = json!(k);
-                info["floats"] = json!(self.tensor.len());
-                Ok(info)
-            }
-            "commands" => Ok(json!(
-                self.positions.get(&id).ok_or("unknown position")?.commands
-            )),
-            "step" | "sample" => {
+            "apply" | "sample-command" => {
                 let position = self.positions.get(&id).ok_or("unknown position")?;
-                let index = request["action"].as_u64().ok_or("action required")? as usize;
-                let command = position
-                    .commands
-                    .get(index)
-                    .ok_or("action index out of range")?
-                    .clone();
-                let simulation = request["op"] == "sample";
+                let command: Command = serde_json::from_value(request["command"].clone())
+                    .map_err(|e| e.to_string())?;
+                let simulation = request["op"] == "sample-command";
                 if !simulation && id != 0 {
                     return Err("only root can commit".into());
                 }
@@ -209,17 +213,13 @@ impl Host {
                     next_id,
                     Position {
                         state: next,
-                        commands: vec![],
+                        encoding: None,
+                        decoder: None,
                     },
                 );
                 let mut info = self.info(next_id)?;
                 info["command"] = json!(command);
                 Ok(info)
-            }
-            "clear-search" => {
-                self.positions.retain(|id, _| *id == 0);
-                self.next = 1;
-                Ok(json!(true))
             }
             _ => Err("unknown classic operation".into()),
         }
@@ -237,7 +237,8 @@ pub extern "C" fn hc_new(seed: u32) -> *mut Host {
                 0,
                 Position {
                     state,
-                    commands: vec![],
+                    encoding: None,
+                    decoder: None,
                 },
             )]),
             next: 1,

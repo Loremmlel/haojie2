@@ -53,7 +53,7 @@ jobs:
       - run: npm run native:check
       - run: npm run native:build
       - run: node --import tsx scripts/native/engine/validation/run.ts --output artifacts/native-rules
-      - run: node --import tsx scripts/native/learning/validate.ts --evaluation --candidates --search
+      - run: node --import tsx scripts/native/learning/validate.ts --evaluation --candidates --search --decoder
       - run: node --import tsx scripts/native/learning/teacher-validation.ts
       - uses: actions/setup-python@v5
         with:

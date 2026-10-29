@@ -6,7 +6,8 @@ import { combatFixtures } from '../engine/fixtures/combat';
 import { completeFixtures } from '../engine/fixtures/phases';
 import { preparationFixtures } from '../engine/fixtures/preparation';
 import { observe, decisionOwner } from '../../../src/ai/observation';
-import { propose } from '../../../src/ai/classic/proposal';
+import { decoderFrontier } from '../../../src/ai/classic/decoder';
+import { classicRelations } from '../../../src/ai/classic/relations';
 import { imagined, positionKey, fingerprint } from '../../../src/ai/observation';
 import { explainEvaluation } from '../../../src/ai/evaluation/evaluate';
 import { definition } from '../../../src/engine/catalog';
@@ -20,7 +21,8 @@ const executable =
     process.platform === 'win32' ? 'haojie-engine.exe' : 'haojie-engine',
   );
 const native = await nativeClient(executable);
-let checked = 0;
+let checked = 0,
+  invalidDomains = 0;
 try {
   for (const { name, job } of [
     ...fixtures(),
@@ -55,20 +57,40 @@ try {
     )
       continue;
     const observation = observe(job.state, decisionOwner(job.state));
-    const seed = 179 + checked,
-      count = 8;
-    let expected;
-    try {
-      expected = propose(observation, seed, count);
-    } catch (error) {
-      await assert.rejects(
-        native.request({ op: 'classic-propose', observation, seed, count }),
+    if (job.state.summonSlots < 0) {
+      // 负召唤次数是故意构造的非法状态，两端都应拒绝生成完整命令。
+      const expected = { leaf: false, stage: 0, focus: 'source', choices: [] };
+      assert.deepEqual(decoderFrontier(observation, []), expected, name);
+      assert.deepEqual(
+        await native.request({ op: 'classic-decode', observation, path: [] }),
+        expected,
         name,
       );
+      invalidDomains++;
       continue;
     }
-    const actual = await native.request({ op: 'classic-propose', observation, seed, count });
-    assert.deepEqual(actual, expected, name);
+    if (process.argv.includes('--decoder')) {
+      for (const last of [false, true]) {
+        const path: number[] = [];
+        for (let depth = 0; depth < 260; depth++) {
+          const left = decoderFrontier(observation, path);
+          const right = await native.request({ op: 'classic-decode', observation, path });
+          assert.deepEqual(right, left, `${name} decoder ${path}`);
+          if (left.leaf) break;
+          if (!left.choices?.length) throw new Error(`${name}: empty decoder`);
+          path.push(last ? left.choices.length - 1 : 0);
+        }
+      }
+      const left = classicRelations(observation),
+        right = await native.request({ op: 'classic-relations', observation });
+      assert.equal(right.entities, left.entities, `${name}: compact entities`);
+      assert.equal(right.relations.length, left.relations.length);
+      for (let i = 0; i < left.relations.length; i++)
+        assert.ok(
+          Math.abs(left.relations[i] - right.relations[i]) < 1e-6,
+          `${name}: geometry ${i} TS=${left.relations[i]} Rust=${right.relations[i]}`,
+        );
+    }
     if (process.argv.includes('--search')) {
       const keys = await native.request({ op: 'classic-keys', observation });
       assert.equal(keys.position, positionKey(imagined(observation)), `${name}: position key`);
@@ -110,7 +132,7 @@ try {
     }
     checked++;
   }
-  console.log(JSON.stringify({ classicProposalFixtures: checked }));
+  console.log(JSON.stringify({ classicFixtures: checked, invalidDomains }));
 } finally {
   native.close();
 }

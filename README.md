@@ -4,7 +4,7 @@
 
 React + TypeScript 回合制战棋，支持经典 / 神龛模式、同屏双人和三档本地 AI。游戏发行物是一个可离线打开的 HTML，React、样式、棋子、特效和 AI Worker 全部内联。
 
-本分支重写普通局训练为 Python 多进程、进程内 Rust 规则/三档手工 AI、PyTorch 原生 BF16，网络约 5.34M。安装与运行见[训练入口](training/README.md)，研究依据与数据语义见[训练设计](docs/ai/TRAINING.md)。网页继续使用现有手工搜索 AI。
+本分支重写普通局训练为 Python 多进程、进程内 Rust 规则/三档手工 AI、PyTorch 原生 BF16，网络约 5.50M，支持分层动作解码与图搜索。安装与运行见[训练入口](training/README.md)，研究依据与数据语义见[训练设计](docs/ai/TRAINING.md)。网页继续使用现有手工搜索 AI。
 
 ## 游戏开发与发行
 
@@ -45,8 +45,6 @@ CLI 对局与回放使用 `npm run play:cli`，参数见[CLI 手册](docs/CLI.md
 | `docs/`                           | 当前接口、规则与维护说明                  |
 
 职责与接入边界见[架构说明](docs/ARCHITECTURE.md)；TS / Rust 的状态所有权和采样对应见[运行内核](docs/ai/RUNTIME.md)。
-
-旧训练与实验代码见[清理前固定版本](https://github.com/Loremmlel/haojie2/tree/fa59a66a0c0aeef219f5eaf871532eab24434eb5)。`artifacts/` 中已有的模型、轨迹、构建和诊断产物保留原样。
 
 ## 嵌入现有网站
 

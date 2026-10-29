@@ -1,13 +1,11 @@
 node_modules/
 dist/
 artifacts/
-/native/engine-prototype/target/
 /native/engine/target/
 *.tsbuildinfo
 .DS_Store
 .venv/
 __pycache__/
 *.egg-info/
-/training/build/
 .ruff_cache/
 /.codex-remote-attachments/

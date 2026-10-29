@@ -15,27 +15,39 @@ def main():
     run.add_argument("--resume", action="store_true")
     defaults = Config()
     for field in fields(Config):
-        run.add_argument("--" + field.name.replace("_", "-"), type=type(getattr(defaults, field.name)))
+        run.add_argument(
+            "--" + field.name.replace("_", "-"),
+            type=type(getattr(defaults, field.name)),
+        )
     evaluate = commands.add_parser("evaluate")
     evaluate.add_argument("--checkpoint", required=True)
     evaluate.add_argument("--opponent", default="easy")
     evaluate.add_argument("--output", required=True)
     evaluate.add_argument("--games", type=int, default=20)
     evaluate.add_argument("--simulations", type=int, default=64)
-    evaluate.add_argument("--candidates", type=int, default=32)
     evaluate.add_argument("--max-commands", type=int, default=20000)
     evaluate.add_argument("--seed", type=int, default=709901)
     evaluate.add_argument("--device", default="cuda")
     args = parser.parse_args()
     if args.command == "run":
         from .runtime.trainer import Trainer
+
         if args.resume:
             import torch
-            saved = torch.load(Path(args.directory) / "checkpoint.pt", map_location="cpu", weights_only=False)
+
+            saved = torch.load(
+                Path(args.directory) / "checkpoint.pt",
+                map_location="cpu",
+                weights_only=False,
+            )
+            if saved.get("format") != "haojie-classic-training-v2":
+                raise ValueError(
+                    "分层解码 v2 使用新模型和样本格式；请新建训练目录，旧结果保留"
+                )
             config = Config(**saved["config"])
             config.seconds = config.games = config.updates = 0
         else:
-            config = Config(workers=min(4, cpu_limit()))
+            config = Config(workers=min(defaults.workers, cpu_limit()))
         for field in fields(Config):
             value = getattr(args, field.name)
             if value is not None:
@@ -43,6 +55,7 @@ def main():
         Trainer(args.directory, config, args.resume).run()
     else:
         from .evaluation import evaluate
+
         evaluate(args)
 
 

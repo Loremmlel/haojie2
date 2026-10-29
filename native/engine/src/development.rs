@@ -205,16 +205,29 @@ fn handle(
                 catalog,
             ))
         }
-        "classic-propose" => {
+        "classic-relations" => {
             let catalog = catalog.as_ref().ok_or("initialize first")?;
             let state = crate::options::position(&request["observation"])?;
-            let commands = crate::learning::proposal::generate(
-                &state,
-                catalog,
-                request["seed"].as_u64().unwrap_or(1) as u32,
-                request["count"].as_u64().unwrap_or(32) as usize,
-            )?;
-            Ok(json!(commands))
+            let encoding = crate::learning::encoding::Compact::new(&state, catalog)?;
+            Ok(
+                json!({"entities":encoding.states.len()/crate::learning::encoding::STATE_WIDTH,
+                      "records":encoding.owners.len(),"relations":encoding.relations}),
+            )
+        }
+        "classic-decode" => {
+            let catalog = catalog.as_ref().ok_or("initialize first")?;
+            let state = crate::options::position(&request["observation"])?;
+            let mut decoder = crate::learning::decoder::Decoder::new(&state, catalog)?;
+            let mut prefix = 0;
+            for index in request["path"].as_array().unwrap_or(&vec![]) {
+                let front = decoder.choices(&state, catalog, prefix)?;
+                prefix = front["next"][index.as_u64().ok_or("path index required")? as usize]
+                    .as_u64()
+                    .ok_or("invalid decoder path")? as usize;
+            }
+            let mut front = decoder.choices(&state, catalog, prefix)?;
+            front.as_object_mut().unwrap().remove("next");
+            Ok(front)
         }
         "hash-states" => {
             // 比较类型化局面与 JSON 快照的既有规范表示。

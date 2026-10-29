@@ -7,7 +7,7 @@ import time
 import numpy as np
 import torch
 
-from .model import Network, collate, device_for_bf16
+from .model import Network, collate_states, collate_options, device_for_bf16
 from .native import Environment
 from .opponents import Teacher
 from .search import search
@@ -16,28 +16,42 @@ from .runtime.ipc import search_values
 
 def load(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
-    weights = saved["model"] if saved.get("format") == "haojie-classic-training-v1" else saved
+    if saved.get("format") == "haojie-classic-training-v1":
+        raise ValueError("模型格式不兼容，当前需要分层解码 v2")
+    weights = (
+        saved["model"] if saved.get("format") == "haojie-classic-training-v2" else saved
+    )
     network = Network().to(device)
     network.load_state_dict(weights)
     return network.eval()
 
 
-def infer(network, request, device):
+def infer(network, request, device, contexts):
     with torch.inference_mode():
-        logits, value, aux = network(*collate([request], device))
-        return search_values(logits[0].view(torch.uint16).cpu().numpy()), float(value[0]), search_values(aux[0].view(torch.uint16).cpu().numpy()), 0
+        if request.op == "encode":
+            context, value, aux = network.encode(
+                *collate_states([request.arrays], device)
+            )
+            contexts[request.context] = context
+            output = torch.cat((value[:, None], aux), 1)[0]
+        else:
+            output = network.decode(
+                contexts[request.context], *collate_options([request.arrays[0]], device)
+            )[0]
+        return search_values(output.view(torch.uint16).cpu().numpy()), 0
 
 
-def choose(environment, network, rng, device, simulations, candidates):
-    generator = search(environment, rng, simulations=simulations, candidates=candidates, depth=16, noise=False)
+def choose(environment, network, rng, device, simulations):
+    generator = search(environment, rng, simulations=simulations, depth=16, noise=False)
     answer = None
+    contexts = {}
     while True:
         try:
             request = next(generator) if answer is None else generator.send(answer)
-            answer = infer(network, request, device)
+            answer = infer(network, request, device, contexts)
         except StopIteration as completed:
-            _root, policy, _ = completed.value
-            return int(np.argmax(policy))
+            root, policy, _ = completed.value
+            return root.edges[int(np.argmax(policy))].command
 
 
 def evaluate(args):
@@ -53,13 +67,17 @@ def evaluate(args):
     path.parent.mkdir(parents=True, exist_ok=True)
     frozen = path.with_suffix(".model.pt")
     frozen_other = path.with_suffix(".opponent.pt")
-    if path.exists() or frozen.exists() or (other is not None and frozen_other.exists()):
+    if (
+        path.exists()
+        or frozen.exists()
+        or (other is not None and frozen_other.exists())
+    ):
         raise FileExistsError("评测输出与冻结模型需要新的文件名")
     with frozen.open("xb") as stream:
-        torch.save(model.state_dict(),stream)
+        torch.save(model.state_dict(), stream)
     if other is not None:
         with frozen_other.open("xb") as stream:
-            torch.save(other.state_dict(),stream)
+            torch.save(other.state_dict(), stream)
     summary = {"wins": 0, "losses": 0, "draws": 0, "unknown": 0}
     with path.open("x", encoding="utf-8") as output:
         for pair in range(args.games // 2):
@@ -76,21 +94,40 @@ def evaluate(args):
                             break
                         if result["actor"] == learner or other is not None:
                             network = model if result["actor"] == learner else other
-                            index = choose(environment, network, rng, device, args.simulations, args.candidates)
+                            command = choose(
+                                environment, network, rng, device, args.simulations
+                            )
                         else:
                             command = teacher.next()
-                        result = environment.call("apply", command=command) if teacher and result["actor"] != learner else environment.call("step", action=index)
+                        result = environment.call("apply", command=command)
                         steps += 1
                         if result.get("rejected"):
                             raise RuntimeError(f"评测命令被拒绝: {result}")
                     winner = result["winner"]
-                    category = "unknown" if winner is None else "draws" if winner == "draw" else "wins" if winner == learner else "losses"
+                    category = (
+                        "unknown"
+                        if winner is None
+                        else "draws"
+                        if winner == "draw"
+                        else "wins"
+                        if winner == learner
+                        else "losses"
+                    )
                     summary[category] += 1
-                    record = {"pair": pair, "seed": seed, "learner": learner, "winner": winner,
-                              "steps": steps, "ply": result["ply"], "seconds": time.perf_counter()-started,
-                              "simulations": args.simulations, "candidates":args.candidates,
-                              "checkpoint":str(frozen),"source_checkpoint":args.checkpoint,
-                              "opponent":args.opponent if scripted else str(frozen_other),"dtype":"bfloat16"}
+                    record = {
+                        "pair": pair,
+                        "seed": seed,
+                        "learner": learner,
+                        "winner": winner,
+                        "steps": steps,
+                        "ply": result["ply"],
+                        "seconds": time.perf_counter() - started,
+                        "simulations": args.simulations,
+                        "checkpoint": str(frozen),
+                        "source_checkpoint": args.checkpoint,
+                        "opponent": args.opponent if scripted else str(frozen_other),
+                        "dtype": "bfloat16",
+                    }
                     output.write(json.dumps(record) + "\n")
                     output.flush()
                     print(json.dumps(record), flush=True)

@@ -36,7 +36,9 @@ class Opponents:
 
     def add(self, version, games):
         if not any(e["version"] == version for e in self.entries):
-            self.entries.append({"version": version, "games": games, "wins": 0, "matches": 0})
+            self.entries.append(
+                {"version": version, "games": games, "wins": 0, "matches": 0}
+            )
 
     def choose(self, rng):
         if not self.entries:
@@ -47,8 +49,12 @@ class Opponents:
         for entry in self.entries:
             bucket = max(1, entry["games"]).bit_length()
             anchors.setdefault(bucket, entry)
-        challenging = sorted(self.entries, key=lambda e: (e["wins"] + 1) / (e["matches"] + 2), reverse=True)[:8]
-        bucket = int(rng.choice(3, p=[.4, .4, .2]))
+        challenging = sorted(
+            self.entries,
+            key=lambda e: (e["wins"] + 1) / (e["matches"] + 2),
+            reverse=True,
+        )[:8]
+        bucket = int(rng.choice(3, p=[0.4, 0.4, 0.2]))
         choices = [recent, list(anchors.values()), challenging][bucket]
         return choices[int(rng.integers(len(choices)))]["version"]
 

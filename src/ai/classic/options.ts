@@ -6,21 +6,11 @@ import {
   type ActionSpec,
 } from '../../engine/commands/options';
 import { createCommandInspector, type CommandInspection } from '../../engine/commands/game';
-import { actorCommandError, parseCommand } from '../../engine/online/authority';
-import {
-  ALL_CELLS,
-  targets,
-  expansionAnchors,
-  selectableAttackRoutes,
-} from '../../engine/core/geometry';
+import { actorCommandError } from '../../engine/online/authority';
 import { allPieces, hasTrait } from '../../engine/core/traits';
 import { ensure, getStats } from '../../engine/core/state';
 import { definition } from '../../engine/catalog';
-import {
-  availableSyntheses,
-  SYNTHESIS_RECIPES,
-  synthesisDestinations,
-} from '../../engine/setup/synthesis';
+import { availableSyntheses, SYNTHESIS_RECIPES } from '../../engine/setup/synthesis';
 import { canChooseSummon, commandSummonPool, selectableSummons } from '../../engine/setup/shrines';
 import type { Command, GamePosition, Player } from '../../engine/types';
 import type { Observation } from '../types';
@@ -35,16 +25,7 @@ export function classicPosition(observation: Observation): GamePosition {
   return { ...observation, log: [], events: [] };
 }
 
-/** available/uncertain 都只是公开可尝试提示；uncertain 停在随机边界，绝不偷看实局抽牌。 */
-export function inspectClassicCommand(observation: Observation, actor: Player, input: unknown) {
-  return createClassicInspector(observation, actor)(input);
-}
-/** 同一不可变观察的查询批次；仍逐条校验命令与操作者，不把预检结果当作权威结果。 */
-export function createClassicInspector(observation: Observation, actor: Player) {
-  const inspect = createClassicCommandInspector(observation, actor);
-  return (input: unknown) => inspect(parseCommand(input));
-}
-/** 动作树只提交自己构造的规范命令；不重复 JSON/字段解析，外部输入仍须经过上面的边界。 */
+/** 解码器只提交规范命令；预检停在随机边界，同一观察复用规则查询缓存。 */
 export function createClassicCommandInspector(
   observation: Observation,
   actor: Player,
@@ -77,32 +58,6 @@ export interface ClassicAction extends ActionSpec {
   materialIds?: string[];
   materialCount?: number;
   chosenKinds?: ReturnType<typeof selectableSummons>;
-}
-
-/**
- * 未经策略评分裁剪的分解动作空间，复用引擎 ActionSpec、配方与来源池。
- * targets/points 是参数域，不是完整合法掩码；多参数动作须组合后公开预检并由实局裁决。
- * 路径保留为逐格序列，材料保留完整 ID 集，不把旧 AI 的有界候选当成全部动作。
- */
-export function classicActionSpace(
-  observation: Observation,
-  actor: Player,
-  inspect: (command: Command) => CommandInspection = createClassicCommandInspector(
-    observation,
-    actor,
-  ),
-  attributes: typeof getStats = getStats,
-) {
-  const s = classicPosition(observation);
-  return {
-    representation: 'factorized-unpruned' as const,
-    validation: 'public-precheck' as const,
-    actions: classicActions(s, actor, inspect, attributes),
-    targetIds: targets(s).map((t) => t.id),
-    points: ALL_CELLS.map((p) => ({ ...p })),
-    directions: ['up', 'down', 'left', 'right'] as const,
-    deathIds: s.deaths.map((d) => d.id),
-  };
 }
 
 /** 动作树只消费动作，不为未展开的参数预先构造完整公开域。 */
@@ -197,26 +152,4 @@ export function classicActions(
     }
   }
   return actions;
-}
-
-/** 多参数动作只查询共享几何，不在训练层复写占位、路径或合成规则。 */
-export function classicGeometry(observation: Observation, input: unknown) {
-  const s = classicPosition(observation);
-  const c = parseCommand(input);
-  if (c.type === 'synthesize') {
-    const recipe = SYNTHESIS_RECIPES.find((r) => r.id === c.recipeId);
-    ensure(recipe, '请选择有效配方。');
-    return { points: synthesisDestinations(s, recipe, c.materialIds ?? []).map((p) => ({ ...p })) };
-  }
-  const pieces = allPieces(s);
-  if (c.type === 'skill') {
-    const target = pieces.find((u) => u.id === c.targetId);
-    ensure(target, '请选择巨大化目标。');
-    return { points: expansionAnchors(s, target) };
-  }
-  ensure(c.type === 'attack', '几何查询支持 attack、skill（巨大化）或 synthesize。');
-  const unit = pieces.find((u) => u.id === c.unitId);
-  const target = targets(s).find((t) => t.id === c.targetId);
-  ensure(unit && target, '请选择攻击者和目标。');
-  return { routes: structuredClone(selectableAttackRoutes(s, unit, target)) };
 }

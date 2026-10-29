@@ -104,6 +104,7 @@ struct Encoder<'a> {
     rows: Vec<[f32; STATE_WIDTH]>,
     identities: HashMap<String, usize>,
     indices: HashMap<String, usize>,
+    labels: Vec<String>,
 }
 impl Encoder<'_> {
     fn reference(&mut self, id: &str) -> f32 {
@@ -147,6 +148,7 @@ impl Encoder<'_> {
             self.indices.entry(id.to_owned()).or_insert(index);
         }
         self.rows.push(row);
+        self.labels.push(text(&v["id"]).to_owned());
         index
     }
     fn effect(&mut self, v: &Value, parent: &str, order: usize) {
@@ -213,11 +215,8 @@ impl Encoder<'_> {
     }
 }
 
-pub fn encode(
-    state: &State,
-    catalog: &Catalog,
-    commands: &[Command],
-) -> Result<(Vec<f32>, Vec<f32>), String> {
+type DetailedEncoding = (Vec<[f32; STATE_WIDTH]>, Vec<String>);
+fn detailed(state: &State, catalog: &Catalog) -> Result<DetailedEncoding, String> {
     let viewer = crate::runtime::viewer(state);
     let view = crate::runtime::public_view(state, viewer)?;
     let public = view.position();
@@ -231,6 +230,7 @@ pub fn encode(
         rows: vec![[0.; STATE_WIDTH]],
         identities: HashMap::new(),
         indices: HashMap::new(),
+        labels: vec![String::new()],
     };
     let global = &mut e.rows[0];
     for (i, n) in [
@@ -322,8 +322,22 @@ pub fn encode(
         e.unit(&record["source"], &parent, i, public);
     }
     e.rows[0][9] = e.reference(text(&s["transitUnitId"]));
+    Ok((e.rows, e.labels))
+}
+
+fn command_rows(
+    catalog: &Catalog,
+    commands: &[Command],
+    indices: &HashMap<String, usize>,
+) -> Result<Vec<f32>, String> {
+    let kind = |k: &crate::model::Kind| {
+        catalog
+            .keys()
+            .position(|v| *v == k.key_ref())
+            .map_or(0., |i| (i + 1) as f32)
+    };
     let mut actions = Vec::with_capacity(commands.len() * ACTION_WIDTH);
-    let index = |id: Option<&str>| id.and_then(|id| e.indices.get(id)).copied().unwrap_or(0) as f32;
+    let index = |id: Option<&str>| id.and_then(|id| indices.get(id)).copied().unwrap_or(0) as f32;
     for c in commands {
         let mut row = [0.; ACTION_WIDTH];
         row[0] = category(&c.kind, COMMANDS);
@@ -332,10 +346,7 @@ pub fn encode(
         row[3] = index(c.card_id.as_deref());
         row[4] = index(c.death_id.as_deref());
         row[5] = index(c.second_id.as_deref());
-        row[6] = c
-            .ability
-            .as_ref()
-            .map_or(0., |k| e.kind(&serde_json::json!(k)));
+        row[6] = c.ability.as_ref().map_or(0., kind);
         row[7] = catalog
             .recipes
             .iter()
@@ -348,10 +359,7 @@ pub fn encode(
         );
         row[10] = c.charge.map_or(-1., |v| f32::from(u8::from(v)));
         row[11] = c.ultimate.map_or(-1., |v| f32::from(u8::from(v)));
-        row[12] = c
-            .chosen_kind
-            .as_ref()
-            .map_or(0., |k| e.kind(&serde_json::json!(k)));
+        row[12] = c.chosen_kind.as_ref().map_or(0., kind);
         for (field, ids) in [
             (16, c.material_ids.as_deref()),
             (20, c.card_ids.as_deref()),
@@ -384,5 +392,214 @@ pub fn encode(
         }
         actions.extend_from_slice(&row);
     }
-    Ok((e.rows.into_iter().flatten().collect(), actions))
+    Ok(actions)
+}
+
+pub const RELATION_WIDTH: usize = 8;
+pub const OPTION_WIDTH: usize = ACTION_WIDTH + STATE_WIDTH;
+pub struct Compact {
+    pub states: Vec<f32>,
+    pub records: Vec<f32>,
+    pub owners: Vec<f32>,
+    pub relations: Vec<f32>,
+    indices: HashMap<String, usize>,
+    raw: Vec<[f32; STATE_WIDTH]>,
+    mapping: Vec<usize>,
+}
+impl Compact {
+    pub fn new(state: &State, catalog: &Catalog) -> Result<Self, String> {
+        let public =
+            crate::runtime::public_view(state, crate::runtime::viewer(state))?.into_position();
+        let (raw, labels) = detailed(&public, catalog)?;
+        let entities: Vec<_> = raw
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| *i == 0 || [1., 2., 3.].contains(&r[0]))
+            .map(|(i, _)| i)
+            .collect();
+        let mut identities = HashMap::new();
+        for (i, r) in entities.iter().enumerate() {
+            if raw[*r][3] > 0. {
+                identities.entry(raw[*r][3] as usize).or_insert(i);
+            }
+        }
+        let mut mapping = vec![0; raw.len()];
+        for (i, r) in entities.iter().enumerate() {
+            mapping[*r] = i;
+        }
+        let mut records = vec![];
+        let mut owners = vec![];
+        for (i, row) in raw.iter().enumerate() {
+            if entities.contains(&i) {
+                continue;
+            }
+            let owner = identities.get(&(row[4] as usize)).copied().unwrap_or(0);
+            mapping[i] = owner;
+            records.extend_from_slice(row);
+            owners.push(owner as f32);
+        }
+        let mut indices = HashMap::new();
+        for (i, label) in labels.iter().enumerate() {
+            if !label.is_empty() {
+                indices.entry(label.clone()).or_insert(i);
+            }
+        }
+        let mut targets = vec![];
+        let mut units = vec![];
+        let mut unit_index = 0;
+        for index in &entities {
+            let row = &raw[*index];
+            if row[0] == 1. {
+                let owner = if row[2] > 0. {
+                    crate::runtime::viewer(&public)
+                } else {
+                    3 - crate::runtime::viewer(&public)
+                };
+                targets.push(Some(crate::geometry::Target {
+                    id: format!("base-{owner}"),
+                    owner,
+                    at: crate::geometry::base_point(owner),
+                    unit: None,
+                }));
+                units.push(None);
+            } else if row[0] == 2. {
+                let unit = public.units.get(unit_index).cloned().or_else(|| {
+                    public
+                        .pending
+                        .get(unit_index - public.units.len())
+                        .map(|r| r.source.clone())
+                });
+                unit_index += 1;
+                targets.push(unit.as_ref().map(crate::geometry::Target::from));
+                units.push(unit);
+            } else {
+                targets.push(None);
+                units.push(None);
+            }
+        }
+        let n = entities.len();
+        let mut relations = vec![0.; n * n * RELATION_WIDTH];
+        let mut queries = crate::inspection::Queries::default();
+        let mut open = public.fork();
+        open.units.clear();
+        for i in 0..n {
+            for j in 0..n {
+                let row =
+                    &mut relations[(i * n + j) * RELATION_WIDTH..(i * n + j + 1) * RELATION_WIDTH];
+                row[6] = u8::from(
+                    raw[entities[i]][2] != 0. && raw[entities[i]][2] == raw[entities[j]][2],
+                ) as f32;
+                if let (Some(from), Some(to)) = (&targets[i], &targets[j]) {
+                    row[0] = ((to.at.x - from.at.x) / 9.) as f32;
+                    row[1] = ((to.at.y - from.at.y) / 13.) as f32;
+                    let distance = from
+                        .footprint()
+                        .iter()
+                        .flat_map(|a| {
+                            to.footprint()
+                                .into_iter()
+                                .map(move |b| crate::geometry::distance(*a, b))
+                        })
+                        .fold(f64::INFINITY, f64::min);
+                    row[2] = (distance / 22.) as f32;
+                    if let Some(unit) = &units[i] {
+                        let stats = queries.attributes(&public, unit, catalog);
+                        let range = stats.range;
+                        row[3] = (range / 100.) as f32;
+                        if i != j && distance <= range {
+                            let reachable = queries
+                                .attacks
+                                .path(&public, unit, to, range, None, unit.piercing())
+                                .is_some();
+                            row[4] = u8::from(reachable) as f32;
+                            row[5] = u8::from(
+                                !reachable
+                                    && crate::geometry::attack_path(
+                                        &open,
+                                        unit,
+                                        to,
+                                        range,
+                                        None,
+                                        unit.piercing(),
+                                    )
+                                    .is_some(),
+                            ) as f32;
+                            let mut command = Command::new("attack");
+                            command.unit_id = Some(std::rc::Rc::from(unit.id.as_str()));
+                            command.target_id = Some(std::rc::Rc::from(to.id.as_str()));
+                            row[7] = u8::from(options_available(
+                                &public,
+                                &command,
+                                catalog,
+                                &mut queries,
+                            )?) as f32;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            states: entities.iter().flat_map(|i| raw[*i]).collect(),
+            records,
+            owners,
+            relations,
+            indices,
+            raw,
+            mapping,
+        })
+    }
+    pub fn options(
+        &self,
+        catalog: &Catalog,
+        commands: &[Command],
+        stage: usize,
+        focus: &str,
+    ) -> Result<Vec<f32>, String> {
+        let encoded = command_rows(catalog, commands, &self.indices)?;
+        let mut result = vec![];
+        for (command, source) in commands.iter().zip(encoded.as_chunks::<ACTION_WIDTH>().0) {
+            let mut row = vec![0.; OPTION_WIDTH];
+            row[..ACTION_WIDTH].copy_from_slice(source);
+            for index in 1..=5 {
+                row[index] = self.mapping[source[index] as usize] as f32;
+            }
+            row[41] = stage as f32;
+            let selected = match focus {
+                "source" => command.unit_id.as_deref().or(command.card_id.as_deref()),
+                "material" => command
+                    .material_ids
+                    .as_ref()
+                    .and_then(|v| v.last())
+                    .map(String::as_str),
+                "sacrificeIds" => command
+                    .sacrifice_ids
+                    .as_ref()
+                    .and_then(|v| v.last())
+                    .map(String::as_str),
+                "secondId" => command.second_id.as_deref(),
+                _ => command.target_id.as_deref(),
+            };
+            row[42] = selected
+                .and_then(|id| self.indices.get(id))
+                .map_or(0., |id| self.mapping[*id] as f32);
+            // 被压入实体记录池的死亡对象仍在参数评分时提供完整描述。
+            if let Some(id) = command
+                .death_id
+                .as_ref()
+                .and_then(|id| self.indices.get(id))
+            {
+                row[ACTION_WIDTH..].copy_from_slice(&self.raw[*id]);
+            }
+            result.extend(row);
+        }
+        Ok(result)
+    }
+}
+fn options_available(
+    s: &State,
+    c: &Command,
+    catalog: &Catalog,
+    queries: &mut crate::inspection::Queries,
+) -> Result<bool, String> {
+    Ok(crate::options::inspect(s, crate::runtime::viewer(s), c, catalog, queries)? != "invalid")
 }

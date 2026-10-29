@@ -5,21 +5,10 @@ use crate::{
     options::{self, Action, Step},
 };
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::rc::Rc;
 
-pub fn random(seed: &mut u32) -> u32 {
-    if *seed == 0 {
-        *seed = 0x9e3779b9;
-    }
-    *seed ^= *seed << 13;
-    *seed ^= *seed >> 17;
-    *seed ^= *seed << 5;
-    *seed
-}
-
 /// 枚举一个参数的规则域；最后参数执行完整预检，随机边界仍保留。
-fn expand(
+pub(super) fn expand(
     s: &State,
     c: &Command,
     action: &Action,
@@ -200,133 +189,4 @@ fn expand(
     } else {
         Ok(values)
     }
-}
-
-struct Walk<'a> {
-    state: &'a State,
-    catalog: &'a Catalog,
-    queries: Queries,
-    seed: u32,
-    remaining: usize,
-}
-impl Walk<'_> {
-    fn complete(
-        &mut self,
-        action: &Action,
-        command: Command,
-        steps: &[Step],
-        offset: usize,
-        depth: usize,
-    ) -> Result<Option<Command>, String> {
-        if self.remaining == 0 || depth > 256 {
-            return Ok(None);
-        }
-        self.remaining -= 1;
-        if offset == steps.len() {
-            return Ok((options::inspect(
-                self.state,
-                crate::runtime::viewer(self.state),
-                &command,
-                self.catalog,
-                &mut self.queries,
-            )? != "invalid")
-                .then_some(command));
-        }
-        let mut choices = expand(
-            self.state,
-            &command,
-            action,
-            steps[offset],
-            offset + 1 == steps.len(),
-            self.catalog,
-            &mut self.queries,
-        )?;
-        // 无放回随机遍历，并回溯空分支；参数选择不进入 MCTS 深度。
-        while !choices.is_empty() && self.remaining > 0 {
-            let index = (random(&mut self.seed) as usize) % choices.len();
-            let (next, repeat) = choices.swap_remove(index);
-            if let Some(command) = self.complete(
-                action,
-                next,
-                steps,
-                offset + usize::from(!repeat),
-                depth + 1,
-            )? {
-                return Ok(Some(command));
-            }
-        }
-        Ok(None)
-    }
-}
-
-/// 随机有限候选集是策略输入的一部分；不按手工评分裁剪完整合法域。
-pub fn generate(
-    state: &State,
-    catalog: &Catalog,
-    seed: u32,
-    count: usize,
-) -> Result<Vec<Command>, String> {
-    if state.extra.contains_key("mode") {
-        return Err("training supports classic only".into());
-    }
-    let actor = crate::runtime::viewer(state);
-    let mut walk = Walk {
-        state,
-        catalog,
-        queries: Queries::default(),
-        seed,
-        remaining: 20000,
-    };
-    let actions = options::actions(state, actor, catalog, &mut walk.queries)?;
-    let simple = actions.iter().all(|a| {
-        a.steps.is_empty()
-            && a.materials.is_empty()
-            && a.chosen.is_empty()
-            && a.command.kind != "attack"
-    });
-    let mut commands = Vec::new();
-    let mut seen = HashSet::new();
-    let mut order: Vec<_> = (0..actions.len()).collect();
-    for i in (1..order.len()).rev() {
-        let j = random(&mut walk.seed) as usize % (i + 1);
-        order.swap(i, j);
-    }
-    for attempt in 0..count.saturating_mul(8).max(actions.len()) {
-        if simple && attempt >= actions.len() {
-            break;
-        }
-        if commands.len() >= count || actions.is_empty() || walk.remaining == 0 {
-            break;
-        }
-        let index = if attempt < order.len() {
-            order[attempt]
-        } else {
-            random(&mut walk.seed) as usize % actions.len()
-        };
-        let action = &actions[index];
-        let mut steps = Vec::new();
-        if !action.materials.is_empty() {
-            steps.extend(std::iter::repeat_n(Step::new("material"), 3));
-        }
-        steps.extend_from_slice(&action.steps);
-        if !action.chosen.is_empty() {
-            steps.push(Step::new("chosen"));
-        }
-        if action.command.kind == "attack" && action.command.path.is_none() {
-            steps.push(Step::new("direction"));
-        }
-        if let Some(command) = walk.complete(action, action.command.clone(), &steps, 0, 0)? {
-            let key = serde_json::to_string(&command).map_err(|e| e.to_string())?;
-            if seen.insert(key) {
-                commands.push(command);
-            }
-        }
-    }
-    if commands.is_empty() && !state.extra.contains_key("winner") {
-        return Err(format!(
-            "no complete command; stage={}, budget={}",
-            state.phase, walk.remaining
-        ));
-    }
-    Ok(commands)
 }

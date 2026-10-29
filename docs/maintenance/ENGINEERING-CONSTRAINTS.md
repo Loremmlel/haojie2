@@ -126,9 +126,7 @@ HaojieGame保持本地协议；HaojieOnlineGame只消费PlayerView和宿主回�
 
 见`docs/feedback/FEEDBACK-2026-09-23.md`。部署行改为当前局面实时判定，覆盖此前回合开始快照要求；共用`deploymentRows`，旧存档的deployRows不能授权落子。小屋排除普通20死亡，王城不受影响；普通20反伤20且保持原50%分界。墓地通过allegiance统一视为中立，不能重铸，保留来源owner兼容存档。AI可在原预算内比较移动开行后部署，不以行权奖励代替安全评估。当前CLI回放`docs/playtests/current/cli-feedback5-20260923.jsonl`；9月21日counter-freeze旧回放固定`b49223f9f8f3e8beb55199b963afbd4bf2020126`，不改历史指纹。
 
-历史训练记录按其原版本代码读取；历史实验与规则指纹不改写，缺少结束行不补终局结果。
-
-2026-10-29 普通局重写授权移除旧训练系统，取代 2026-10-24 的唯一 C++ 宿主和固定模型约束。作者随后明确要求训练与推理全部原生 BF16：参数、梯度、优化器动量及神经网络浮点张量使用 BF16，索引和更新计数保留整数；不使用 FP32 主权重或 autocast 混合精度。新训练只考虑 classic，设计见 `docs/ai/TRAINING.md`，实际实现状态见 `docs/ai/STATUS.md`。规则、公开信息与 TS/Rust 对应仍保持；本地旧模型、优化器和原始实验保留，旧格式按原版本读取。
+当前训练与推理全部原生 BF16：参数、梯度、优化器动量及神经网络浮点张量使用 BF16，索引和更新计数保留整数；不使用 FP32 主权重或 autocast 混合精度。训练只考虑 classic，设计见 `docs/ai/TRAINING.md`，实际状态见 `docs/ai/STATUS.md`。规则、公开信息与 TS/Rust 对应保持一致；缺少真实终局的记录不补胜负。
 
 ## 增量存档（2026-09-23）
 

@@ -1,4 +1,5 @@
-//! 普通局完整命令采样与 Python 进程内桥接；规则仍由原内核执行。
-mod encoding;
+//! 普通局分层解码与 Python 进程内桥接；规则仍由原内核执行。
+pub(crate) mod decoder;
+pub(crate) mod encoding;
 mod ffi;
-pub(crate) mod proposal;
+mod parameters;

@@ -31,13 +31,15 @@ TS 外部快照与内部拥有型局面分开；工作分支按写入需要分�
 | 观察键与决策种子           | `src/ai/observation.ts`                      | `ai/keys.rs`                                                  |
 | 回合预算与计划缓存         | `src/ai/budget.ts`、`planning/plan-cache.ts` | `ai/search.rs` 的 `teacher_next`                              |
 | 无评分合法参数域           | `src/ai/classic/options.ts`                  | `commands/options.rs`                                         |
-| 随机完整命令提议           | `src/ai/classic/proposal.ts`                 | `learning/proposal.rs`                                        |
+| 合法参数展开               | `src/ai/classic/parameters.ts`               | `learning/parameters.rs`                                      |
+| 分层合法参数解码           | `src/ai/classic/decoder.ts`                  | `learning/decoder.rs`                                         |
+| 实体关系几何               | `src/ai/classic/relations.ts`                | `learning/encoding.rs`                                        |
 | 公开张量编码与进程内接口   | 新训练专用                                   | `learning/encoding.rs`、`ffi.rs`，`training/haojie/native.py` |
 | 神经网络 PUCT 与 BF16 学习 | 新训练专用                                   | `training/haojie/search.py`、`model.py`、`runtime/`           |
 
 手工 AI 的字段顺序、种子、候选顺序、预算与概率切点对应 TS。Rust 保留原输入字段顺序，新增对象按 TS 构造顺序生成决策键；命令内部顺序仅服务算法键，不改变对外命令。只读几何缓存随局面作用域释放，预览对象不误用原实体缓存。普通局老千仍参与手工评价、召唤候选和训练编码。
 
-训练运行不需要 TS/Node；TS 用于网页和双端开发验收。神经网络搜索是两端手工 AI 之外的新算法，不替换网页三档行为。
+训练运行不需要 TS/Node；TS 用于网页和双端开发验收。神经网络搜索是两端手工 AI 之外的新算法，不替换网页三档行为。训练使用条件解码与渐进扩宽，参数前缀不计入游戏树深度。普通局夹具逐前缀比较首末合法路径，并比较全部实体关系特征。
 
 `scripts/native/engine/fixtures/` 保存规则夹具，`validation/` 比较两端预检、成功/失败命令、完整后继、输入不可变和驻留状态恢复。已有神龛规则夹具仍用于保证原游戏不退化；新训练只做普通局。
 
@@ -47,7 +49,5 @@ npm run native:test
 npm run native:check
 npm run native:build
 npm run native:validate -- --output artifacts/native-rules
-node --import tsx scripts/native/learning/validate.ts --evaluation --candidates --search
+node --import tsx scripts/native/learning/validate.ts --evaluation --candidates --search --decoder
 ```
-
-旧训练和性能实验的具体对应关系在[清理前文档](https://github.com/Loremmlel/haojie2/blob/fa59a66a0c0aeef219f5eaf871532eab24434eb5/docs/ai/RUNTIME.md)中按原版本读取。

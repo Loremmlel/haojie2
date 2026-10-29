@@ -12,7 +12,7 @@ interface CommandWindow {
   state: GameState;
   commands: Command[];
 }
-/** 与 TrainingEnvironment 一样逐步清理表现历史；trace 保留清理前的命令结果供差分。 */
+/** 与训练环境一样逐步清理表现历史；trace 保留命令结果供差分。 */
 function referenceWindow(window: CommandWindow, clearHistory: boolean) {
   let state = window.state;
   const results = [];
