@@ -10,6 +10,7 @@ from dataclasses import asdict
 import torch
 
 from ..native_pool import NativePool
+from ..profiling import Profile, TraceWindow
 from .gpu import Executor, Local, infer_batch
 from .storage import GameWriter, atomic_json
 
@@ -27,6 +28,7 @@ class Coordinator:
         self.finished = threading.Event()
         self.error = None
         self.thread_id = None
+        self.profile = Profile()
         self.local = Local(pool, self.retained)
 
     def retained(self):
@@ -38,11 +40,12 @@ class Coordinator:
         )
 
     def assign(self, lane, game, restored=None):
-        self.active[lane] = game
-        self.writers[lane] = GameWriter(
-            self.trainer.directory, game, restored["metadata"] if restored else None
-        )
-        self.pool.assign(lane, game, restored)
+        with self.profile.stage("coordinator.assign"):
+            self.active[lane] = game
+            self.writers[lane] = GameWriter(
+                self.trainer.directory, game, restored["metadata"] if restored else None
+            )
+            self.pool.assign(lane, game, restored)
 
     def complete_learning(self, block=False):
         self.local.collect(block)
@@ -111,7 +114,8 @@ class Coordinator:
             acknowledged.append(lane)
         self.pool.ack_records(acknowledged)
         if ended:
-            self.local.call("release", lanes=ended)
+            with self.profile.stage("coordinator.gpu_control_wait"):
+                self.local.call("release", lanes=ended)
 
     def native_stats(self):
         status = self.pool.status()
@@ -127,6 +131,9 @@ class Coordinator:
                 self.initial.get("inference_queue_seconds", 0.0)
                 + status["queue_seconds"]
             )
+        if self.profile.enabled:
+            self.trainer.stats["profile_native"] = status.get("profile")
+            self.trainer.stats["profile_coordinator"] = self.profile.report()
         return status
 
     def save(self):
@@ -207,7 +214,8 @@ class Coordinator:
                     config.save_seconds and now - last_save >= config.save_seconds
                 )
                 if stopped or periodic:
-                    self.save()
+                    with self.profile.stage("coordinator.checkpoint"):
+                        self.save()
                     if stopped:
                         break
                     self.pool.resume()
@@ -221,17 +229,22 @@ class Coordinator:
                     trainer.phase == "imitation"
                     or (trainer.phase == "self" and trainer.credit >= config.batch)
                 ):
-                    batch = trainer.replay.batch(config.batch, trainer.rng)
+                    with self.profile.stage("coordinator.replay_batch"):
+                        batch = trainer.replay.batch(config.batch, trainer.rng)
                     if batch:
                         self.local.learn(batch)
-                records = self.pool.take_records(wait_ms=100)
+                with self.profile.stage("coordinator.receive_records"):
+                    records = self.pool.take_records(wait_ms=100)
                 if records:
-                    self.consume(records)
+                    with self.profile.stage("coordinator.record_io"):
+                        self.consume(records)
                 if now - last_status >= 5:
                     trainer.stats.update(self.local.call("stats"))
                     self.native_stats()
                     trainer.status("running", self.started, self.initial)
                     last_status = now
+            if self.profile.enabled:
+                trainer.stats["profile_coordinator"] = self.profile.report()
             trainer.status("saved", self.started, self.initial)
         except BaseException as error:
             self.error = error
@@ -247,6 +260,9 @@ class Coordinator:
 
 
 def run(trainer):
+    # 诊断只描述本次启动；恢复模型时不沿用上次运行的分段计数。
+    for key in ("profile_gpu", "profile_native", "profile_coordinator"):
+        trainer.stats.pop(key, None)
     started = time.perf_counter()
     initial = {
         "model": trainer.model.state_dict(),
@@ -260,6 +276,7 @@ def run(trainer):
         ),
     }
     executor = Executor(trainer.directory, trainer.config, initial)
+    trace = TraceWindow(executor.profile, executor.device)
     pool = NativePool(trainer.config)
     previous = signal.signal(
         signal.SIGINT, lambda *_: setattr(trainer, "stop_requested", True)
@@ -271,13 +288,24 @@ def run(trainer):
     thread.start()
     try:
         while not coordinator.finished.is_set():
-            batch = pool.take_requests(trainer.config.inference_batch, wait_ms=1000)
-            if batch is not None:
-                with batch:
-                    infer_batch(executor, batch)
-            coordinator.local.execute_one(executor)
+            trace.step(executor.stats)
+            with executor.profile.stage("runtime.loop"):
+                batch = pool.take_requests(
+                    trainer.config.inference_batch,
+                    wait_ms=1000,
+                    profile=executor.profile,
+                )
+                if batch is not None:
+                    with executor.profile.stage("runtime.inference"):
+                        with batch:
+                            infer_batch(executor, batch)
+                with executor.profile.stage("runtime.control"):
+                    coordinator.local.execute_one(executor)
+            trace.complete(executor.stats)
         if coordinator.error is not None:
             raise coordinator.error
+        if executor.profile.enabled:
+            trainer.stats["profile_gpu"] = executor.profile.report()
         return trainer.stats
     except BaseException as error:
         trainer.stop_requested = True
@@ -287,5 +315,6 @@ def run(trainer):
     finally:
         thread.join()
         pool.close()
+        trace.close(executor.stats)
         del trainer.remote
         signal.signal(signal.SIGINT, previous)

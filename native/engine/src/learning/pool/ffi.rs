@@ -348,32 +348,71 @@ mod tests {
     use crate::learning::random::BitGenerator;
     use std::time::{Duration, Instant};
 
-    unsafe extern "C" fn gamma(_: *mut BitGenerator, _: f64) -> f64 { 1. }
-    unsafe extern "C" fn bounded(_: *mut BitGenerator, offset: u64, _: u64, _: u64, _: bool) -> u64 { offset }
+    unsafe extern "C" fn gamma(_: *mut BitGenerator, _: f64) -> f64 {
+        1.
+    }
+    unsafe extern "C" fn bounded(
+        _: *mut BitGenerator,
+        offset: u64,
+        _: u64,
+        _: u64,
+        _: bool,
+    ) -> u64 {
+        offset
+    }
 
     fn respond(pool: &Pool, version: i64) {
         let count = unsafe { hc_pool_request_count(pool) };
         let mut views = vec![];
         for i in 0..count {
             let mut view = std::mem::MaybeUninit::uninit();
-            assert_eq!(unsafe { hc_pool_request_view(pool, i, view.as_mut_ptr()) }, 1);
+            assert_eq!(
+                unsafe { hc_pool_request_view(pool, i, view.as_mut_ptr()) },
+                1
+            );
             views.push(unsafe { view.assume_init() });
         }
-        let outputs: Vec<Vec<u16>> = views.iter().map(|v| vec![0; if v.kind == 0 { 5 } else { v.arrays[0].shape[0] }]).collect();
-        let replies: Vec<_> = views.iter().zip(&outputs).map(|(v, output)| ReplyView { id:v.id, data:output.as_ptr(), len:output.len(), version }).collect();
-        assert_eq!(unsafe { hc_pool_reply(pool, replies.as_ptr(), replies.len()) }, 1);
+        let outputs: Vec<Vec<u16>> = views
+            .iter()
+            .map(|v| vec![0; if v.kind == 0 { 5 } else { v.arrays[0].shape[0] }])
+            .collect();
+        let replies: Vec<_> = views
+            .iter()
+            .zip(&outputs)
+            .map(|(v, output)| ReplyView {
+                id: v.id,
+                data: output.as_ptr(),
+                len: output.len(),
+                version,
+            })
+            .collect();
+        assert_eq!(
+            unsafe { hc_pool_reply(pool, replies.as_ptr(), replies.len()) },
+            1
+        );
         assert_eq!(unsafe { hc_pool_release_requests(pool) }, 1);
     }
 
     fn acknowledge(pool: &Pool) -> Vec<Value> {
         let count = unsafe { hc_pool_take_records(pool, 8, 0) };
         assert_ne!(count, usize::MAX);
-        if count == 0 { unsafe { hc_pool_release_records(pool) }; return vec![]; }
-        let bytes = unsafe { std::slice::from_raw_parts(hc_pool_records_meta(pool), hc_pool_records_len(pool)) };
+        if count == 0 {
+            unsafe { hc_pool_release_records(pool) };
+            return vec![];
+        }
+        let bytes = unsafe {
+            std::slice::from_raw_parts(hc_pool_records_meta(pool), hc_pool_records_len(pool))
+        };
         let records: Vec<Value> = serde_json::from_slice(bytes).unwrap();
-        let lanes: Vec<_> = records.iter().map(|r| r["lane"].as_u64().unwrap()).collect();
+        let lanes: Vec<_> = records
+            .iter()
+            .map(|r| r["lane"].as_u64().unwrap())
+            .collect();
         unsafe { hc_pool_release_records(pool) };
-        assert_eq!(unsafe { hc_pool_ack_records(pool, lanes.as_ptr(), lanes.len()) }, 1);
+        assert_eq!(
+            unsafe { hc_pool_ack_records(pool, lanes.as_ptr(), lanes.len()) },
+            1
+        );
         records
     }
 
@@ -391,14 +430,22 @@ mod tests {
             assert!(Instant::now() < deadline, "正常初始局面未进入神经决策");
             let requests = unsafe { hc_pool_take_requests(&pool, 8, 2) };
             assert_ne!(requests, usize::MAX);
-            if requests > 0 { break; }
+            if requests > 0 {
+                break;
+            }
             unsafe { hc_pool_release_requests(&pool) };
             acknowledge(&pool);
         }
         pool.control(json!({"op":"pause"})).unwrap();
-        assert_eq!(pool.control(json!({"op":"barrier"})).unwrap()["ready"], false);
+        assert_eq!(
+            pool.control(json!({"op":"barrier"})).unwrap()["ready"],
+            false
+        );
         respond(&pool, 7);
-        assert_eq!(pool.control(json!({"op":"barrier"})).unwrap()["ready"], true);
+        assert_eq!(
+            pool.control(json!({"op":"barrier"})).unwrap()["ready"],
+            true
+        );
         let snapshot = pool.control(json!({"op":"snapshot"})).unwrap();
         assert_eq!(snapshot["lanes"].as_array().unwrap().len(), 1);
         assert_eq!(snapshot["lanes"][0]["root_version"], 7);
@@ -416,8 +463,11 @@ mod tests {
             assert!(Instant::now() < deadline);
             let requests = unsafe { hc_pool_take_requests(&pool, 8, 2) };
             assert_ne!(requests, usize::MAX);
-            if requests > 0 { respond(&pool, 7); }
-            else { unsafe { hc_pool_release_requests(&pool) }; }
+            if requests > 0 {
+                respond(&pool, 7);
+            } else {
+                unsafe { hc_pool_release_requests(&pool) };
+            }
             let records = acknowledge(&pool);
             if !records.is_empty() {
                 assert_eq!(records[0]["sample"]["version"], 7);

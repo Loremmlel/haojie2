@@ -68,7 +68,7 @@ training/.venv/Scripts/python.exe -m training.haojie evaluate --checkpoint artif
 ## 验证和性能
 
 ```powershell
-training/.venv/Scripts/python.exe -B -m unittest training.tests.test_training training.tests.test_pipeline -v
+training/.venv/Scripts/python.exe -B -m unittest training.tests.test_training training.tests.test_pipeline training.tests.test_profiling -v
 training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-alignment-20261029/phased-closure/checkpoint.pt --baseline artifacts/classic-native-pool-20261029/baseline --output artifacts/classic-native-pool-20261029/benchmark --tasks 256 --commands 8 --trials 3
 node --import tsx scripts/native/learning/validate.ts artifacts/native-target/release/haojie-engine.exe --evaluation --candidates --search --decoder
 node --import tsx scripts/native/learning/teacher-validation.ts artifacts/native-target/release/haojie-engine.exe 64
@@ -83,5 +83,15 @@ node --import tsx scripts/native/learning/teacher-validation.ts artifacts/native
 ```powershell
 training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-alignment-20261029/phased-closure/checkpoint.pt --compare-workers 4 8 --batch 16 --feedback artifacts/classic-native-pool-20261029/benchmark/feedback.pkl --output artifacts/classic-workers-20261029/benchmark --tasks 256 --commands 8 --trials 3
 ```
+
+分段诊断默认关闭。运行前设置 `$env:HAOJIE_PROFILE = '1'`，`status.json` 会增加 `profile_native`、`profile_gpu` 和 `profile_coordinator`。Rust 按线程记录搜索控制、规则推进、合法动作解码、几何与状态编码等阶段；Python 分开记录组批、主机提交、传输等待、学习、回放与保存。嵌套阶段同时保留包含子段和排除子段的时间，比较占比使用后者。Windows 原生 CPU 周期只用于阶段占比；CUDA 抽样流区间包含提交间隙，实际 kernel 执行时间另用短 trace 确认。诊断后用 `Remove-Item Env:HAOJIE_PROFILE` 关闭。
+
+以下命令固定 8×8、batch 16，复用冻结反馈，以 OFF/ON、ON/OFF 两组比较插桩开销：
+
+```powershell
+training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-alignment-20261029/phased-closure/checkpoint.pt --compare-profile --batch 16 --feedback artifacts/classic-native-pool-20261029/benchmark/feedback.pkl --output artifacts/classic-profile-20261029/benchmark --tasks 256 --commands 8
+```
+
+独立短 trace 使用 `$env:HAOJIE_TRACE = 'artifacts/profile/gpu-trace.json'`；GPU 循环第 64–95 次采集 CPU/CUDA 活动及阶段标签，输出 Chrome trace 与同名 `.meta.json` 开始/结束计数。需要支持 CUDA profiler 的 PyTorch 环境。这个窗口含 profiler 开销，单独用于算子归因；上述 OFF/ON 基准会清除子进程的 trace 设置。使用后用 `Remove-Item Env:HAOJIE_TRACE` 关闭。具体计量口径见[分段诊断](../docs/ai/TRAINING-RUNTIME.md#分段诊断口径)，本机结论见[状态入口](../docs/ai/STATUS.md#当前-8-线程瓶颈诊断)。
 
 这些 Node 命令仅用于 TS/Rust 差分开发验收。训练和评测调用同一进程内 Rust 手工 AI。架构、目标定义和研究依据见[训练设计](../docs/ai/TRAINING.md)，实际完成的验收见[状态入口](../docs/ai/STATUS.md)。

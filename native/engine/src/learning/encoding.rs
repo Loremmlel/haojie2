@@ -1,4 +1,5 @@
 //! 普通局实体行与完整命令行；公开状态之外的数据不得进入网络缓冲。
+use super::timing::{self, Phase};
 use crate::{
     model::{Catalog, Command, State},
     options::{array, text},
@@ -218,9 +219,12 @@ impl Encoder<'_> {
 type DetailedEncoding = (Vec<[f32; STATE_WIDTH]>, Vec<String>);
 fn detailed(state: &State, catalog: &Catalog) -> Result<DetailedEncoding, String> {
     let viewer = crate::runtime::viewer(state);
-    let view = crate::runtime::public_view(state, viewer)?;
+    let view = timing::measure(Phase::PublicView, || {
+        crate::runtime::public_view(state, viewer)
+    })?;
     let public = view.position();
-    let s = serde_json::to_value(public).map_err(|e| e.to_string())?;
+    let s = timing::measure(Phase::PublicSerialization, || serde_json::to_value(public))
+        .map_err(|e| e.to_string())?;
     if s.get("rng").is_some() || s.get("seed").is_some() {
         return Err("private RNG in observation".into());
     }
@@ -408,8 +412,11 @@ pub struct Compact {
 }
 impl Compact {
     pub fn new(state: &State, catalog: &Catalog) -> Result<Self, String> {
-        let public =
-            crate::runtime::public_view(state, crate::runtime::viewer(state))?.into_position();
+        let _scope = timing::scope(Phase::StateEncoding);
+        let public = timing::measure(Phase::PublicView, || {
+            crate::runtime::public_view(state, crate::runtime::viewer(state))
+                .map(|view| view.into_position())
+        })?;
         let (raw, labels) = detailed(&public, catalog)?;
         let entities: Vec<_> = raw
             .iter()
@@ -444,6 +451,7 @@ impl Compact {
                 indices.entry(label.clone()).or_insert(i);
             }
         }
+        let geometry_scope = timing::scope(Phase::Geometry);
         let mut targets = vec![];
         let mut units = vec![];
         let mut unit_index = 0;
@@ -538,6 +546,7 @@ impl Compact {
                 }
             }
         }
+        drop(geometry_scope);
         Ok(Self {
             states: entities.iter().flat_map(|i| raw[*i]).collect(),
             records,
@@ -555,6 +564,7 @@ impl Compact {
         stage: usize,
         focus: &str,
     ) -> Result<Vec<f32>, String> {
+        let _scope = timing::scope(Phase::OptionEncoding);
         let encoded = command_rows(catalog, commands, &self.indices)?;
         let mut result = vec![];
         for (command, source) in commands.iter().zip(encoded.as_chunks::<ACTION_WIDTH>().0) {

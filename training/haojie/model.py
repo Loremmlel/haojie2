@@ -1,5 +1,6 @@
 """实体主干只前向一次；局部记录池、几何注意力和条件参数头共享状态表示。"""
 
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 import torch
 from torch import nn
@@ -148,42 +149,52 @@ class Network(nn.Module):
         }
 
 
-def collate_states(items, device, pinned=False):
-    b = len(items)
-    n = max(len(v[0]) for v in items)
-    m = max(len(v[1]) for v in items)
+def collate_states(
+    items, device, pinned=False, profile=None, scope="states", cuda=False
+):
+    with profile.stage(scope + ".collate_cpu") if profile else nullcontext():
+        b = len(items)
+        n = max(len(v[0]) for v in items)
+        m = max(len(v[1]) for v in items)
 
-    def zeros(shape, dtype=torch.bfloat16):
-        return torch.zeros(shape, dtype=dtype, pin_memory=pinned)
+        def zeros(shape, dtype=torch.bfloat16):
+            return torch.zeros(shape, dtype=dtype, pin_memory=pinned)
 
-    states, records = zeros((b, n, STATE_WIDTH)), zeros((b, m, STATE_WIDTH))
-    mask, rmask = zeros((b, n), torch.bool), zeros((b, m), torch.bool)
-    owners = zeros((b, m), torch.int64)
-    sid, rid = zeros((b, n, 2), torch.int64), zeros((b, m, 2), torch.int64)
-    relations = zeros((b, n, n, RELATION_WIDTH))
-    for i, (s, r, o, g) in enumerate(items):
-        states[i, : len(s)].copy_(torch.from_numpy(s))
-        sid[i, : len(s)].copy_(torch.from_numpy(s[:, :2]))
-        mask[i, : len(s)] = True
-        records[i, : len(r)].copy_(torch.from_numpy(r))
-        rid[i, : len(r)].copy_(torch.from_numpy(r[:, :2]))
-        rmask[i, : len(r)] = True
-        owners[i, : len(o)].copy_(torch.from_numpy(o))
-        relations[i, : len(s), : len(s)].copy_(torch.from_numpy(g))
-    return tuple(
-        t.to(device, non_blocking=pinned)
-        for t in (states, mask, records, rmask, owners, sid, rid, relations)
-    )
+        states, records = zeros((b, n, STATE_WIDTH)), zeros((b, m, STATE_WIDTH))
+        mask, rmask = zeros((b, n), torch.bool), zeros((b, m), torch.bool)
+        owners = zeros((b, m), torch.int64)
+        sid, rid = zeros((b, n, 2), torch.int64), zeros((b, m, 2), torch.int64)
+        relations = zeros((b, n, n, RELATION_WIDTH))
+        for i, (s, r, o, g) in enumerate(items):
+            states[i, : len(s)].copy_(torch.from_numpy(s))
+            sid[i, : len(s)].copy_(torch.from_numpy(s[:, :2]))
+            mask[i, : len(s)] = True
+            records[i, : len(r)].copy_(torch.from_numpy(r))
+            rid[i, : len(r)].copy_(torch.from_numpy(r[:, :2]))
+            rmask[i, : len(r)] = True
+            owners[i, : len(o)].copy_(torch.from_numpy(o))
+            relations[i, : len(s), : len(s)].copy_(torch.from_numpy(g))
+    with profile.stage(scope + ".h2d_submit", cuda=cuda) if profile else nullcontext():
+        return tuple(
+            t.to(device, non_blocking=pinned)
+            for t in (states, mask, records, rmask, owners, sid, rid, relations)
+        )
 
 
-def collate_options(items, device, pinned=False):
-    b = len(items)
-    k = max(len(a) for a in items)
-    actions = torch.zeros((b, k, ACTION_WIDTH), dtype=torch.bfloat16, pin_memory=pinned)
-    mask = torch.zeros((b, k), dtype=torch.bool, pin_memory=pinned)
-    ids = torch.zeros((b, k, 3), dtype=torch.int64, pin_memory=pinned)
-    for i, a in enumerate(items):
-        actions[i, : len(a)].copy_(torch.from_numpy(a))
-        mask[i, : len(a)] = True
-        ids[i, : len(a)].copy_(torch.from_numpy(a[:, [1, 2, 42]]))
-    return tuple(t.to(device, non_blocking=pinned) for t in (actions, mask, ids))
+def collate_options(
+    items, device, pinned=False, profile=None, scope="options", cuda=False
+):
+    with profile.stage(scope + ".collate_cpu") if profile else nullcontext():
+        b = len(items)
+        k = max(len(a) for a in items)
+        actions = torch.zeros(
+            (b, k, ACTION_WIDTH), dtype=torch.bfloat16, pin_memory=pinned
+        )
+        mask = torch.zeros((b, k), dtype=torch.bool, pin_memory=pinned)
+        ids = torch.zeros((b, k, 3), dtype=torch.int64, pin_memory=pinned)
+        for i, a in enumerate(items):
+            actions[i, : len(a)].copy_(torch.from_numpy(a))
+            mask[i, : len(a)] = True
+            ids[i, : len(a)].copy_(torch.from_numpy(a[:, [1, 2, 42]]))
+    with profile.stage(scope + ".h2d_submit", cuda=cuda) if profile else nullcontext():
+        return tuple(t.to(device, non_blocking=pinned) for t in (actions, mask, ids))

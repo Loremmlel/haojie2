@@ -2,6 +2,7 @@
 use super::{
     ffi::{Bundle, Front, Host, Info},
     random::Random,
+    timing::{self, Phase},
 };
 use crate::model::Command;
 use indexmap::IndexMap;
@@ -559,6 +560,7 @@ impl Search {
         rng: &mut Random,
         answer: Option<Reply>,
     ) -> Result<Progress, String> {
+        let _scope = timing::scope(Phase::Search);
         if self.finished {
             return Err("搜索已经完成".into());
         }

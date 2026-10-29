@@ -1,5 +1,8 @@
 //! 环境仅由所属线程使用；开发 JSON 入口与原生搜索共用类型化方法。
-use super::encoding;
+use super::{
+    encoding,
+    timing::{self, Phase},
+};
 use crate::{
     model::{Catalog, Command, State},
     runtime,
@@ -95,8 +98,11 @@ impl Host {
     }
 
     pub fn info_typed(&self, id: u64) -> Result<Info, String> {
+        let _scope = timing::scope(Phase::InfoMetrics);
         let s = &self.positions.get(&id).ok_or("unknown position")?.state;
-        let public = runtime::public_view(s, runtime::viewer(s))?;
+        let public = timing::measure(Phase::PublicView, || {
+            runtime::public_view(s, runtime::viewer(s))
+        })?;
         let winner = s.extra.get("winner").filter(|v| !v.is_null()).cloned();
         let mut hp = [0., 0.];
         let mut count = [0., 0.];
@@ -112,7 +118,9 @@ impl Host {
             actor: runtime::viewer(s),
             ply: s.ply,
             winner,
-            key: crate::canonical::hash(public.position()),
+            key: timing::measure(Phase::StateKey, || {
+                crate::canonical::hash(public.position())
+            }),
             metrics: [
                 (s.bases["1"].as_f64().unwrap_or(0.) - s.bases["2"].as_f64().unwrap_or(0.)) / 300.,
                 (count[0] - count[1]) / 32.,
@@ -123,6 +131,7 @@ impl Host {
     }
 
     pub fn encode_typed(&mut self, id: u64) -> Result<(Info, Arc<Bundle>), String> {
+        let _scope = timing::scope(Phase::HostEncode);
         let p = self.positions.get_mut(&id).ok_or("unknown position")?;
         if p.encoding.is_none() {
             p.encoding = Some(encoding::Compact::new(&p.state, &self.catalog)?);
@@ -141,19 +150,23 @@ impl Host {
     }
 
     pub fn decode_typed(&mut self, id: u64, prefix: usize) -> Result<Front, String> {
+        let _scope = timing::scope(Phase::HostDecode);
         let p = self.positions.get_mut(&id).ok_or("unknown position")?;
-        let view = runtime::public_view(&p.state, runtime::viewer(&p.state))?;
-        if p.decoder.is_none() {
-            p.decoder = Some(super::decoder::Decoder::new(
-                view.position(),
-                &self.catalog,
-            )?);
-        }
-        let front = p
-            .decoder
-            .as_mut()
-            .unwrap()
-            .front(view.position(), &self.catalog, prefix)?;
+        let view = timing::measure(Phase::PublicView, || {
+            runtime::public_view(&p.state, runtime::viewer(&p.state))
+        })?;
+        let front = timing::measure(Phase::Decoder, || {
+            if p.decoder.is_none() {
+                p.decoder = Some(super::decoder::Decoder::new(
+                    view.position(),
+                    &self.catalog,
+                )?);
+            }
+            p.decoder
+                .as_mut()
+                .unwrap()
+                .front(view.position(), &self.catalog, prefix)
+        })?;
         if let Some(command) = front.command {
             return Ok(Front {
                 command: Some(command),
@@ -186,18 +199,23 @@ impl Host {
         id: u64,
         command: &Command,
     ) -> Result<Vec<(usize, usize)>, String> {
+        let _scope = timing::scope(Phase::HostDecode);
         let p = self.positions.get_mut(&id).ok_or("unknown position")?;
-        let view = runtime::public_view(&p.state, runtime::viewer(&p.state))?;
-        if p.decoder.is_none() {
-            p.decoder = Some(super::decoder::Decoder::new(
-                view.position(),
-                &self.catalog,
-            )?);
-        }
-        p.decoder
-            .as_mut()
-            .unwrap()
-            .trace(view.position(), &self.catalog, command)
+        let view = timing::measure(Phase::PublicView, || {
+            runtime::public_view(&p.state, runtime::viewer(&p.state))
+        })?;
+        timing::measure(Phase::Decoder, || {
+            if p.decoder.is_none() {
+                p.decoder = Some(super::decoder::Decoder::new(
+                    view.position(),
+                    &self.catalog,
+                )?);
+            }
+            p.decoder
+                .as_mut()
+                .unwrap()
+                .trace(view.position(), &self.catalog, command)
+        })
     }
 
     pub fn snapshot(&self) -> Value {
@@ -223,8 +241,10 @@ impl Host {
     }
 
     pub fn teacher_next(&mut self, difficulty: &str) -> Result<Command, String> {
-        let observation =
-            crate::ai::keys::Keys::new(&Value::Null).observation(&self.positions[&0].state);
+        let _scope = timing::scope(Phase::Teacher);
+        let observation = timing::measure(Phase::PublicView, || {
+            crate::ai::keys::Keys::new(&Value::Null).observation(&self.positions[&0].state)
+        });
         let difficulty = crate::ai::settings::Difficulty::parse(difficulty)?;
         let result = crate::ai::search::teacher_next(
             &observation,
@@ -247,6 +267,7 @@ impl Host {
         command: &Command,
         seed: Option<u32>,
     ) -> Result<Info, TransitionError> {
+        let _scope = timing::scope(Phase::Transition);
         let position = self
             .positions
             .get(&id)
@@ -255,18 +276,21 @@ impl Host {
             return Err(TransitionError::Rule("only root can commit".into()));
         }
         let source = if let Some(seed) = seed {
-            let mut public =
+            let mut public = timing::measure(Phase::PublicView, || {
                 runtime::public_view(&position.state, runtime::viewer(&position.state))
-                    .map_err(TransitionError::Rule)?
-                    .into_position();
+                    .map(|view| view.into_position())
+                    .map_err(TransitionError::Rule)
+            })?;
             public.extra.insert("rng".into(), json!(seed));
             public.extra.insert("seed".into(), json!(seed));
             public
         } else {
-            position.state.fork()
+            timing::measure(Phase::StateFork, || position.state.fork())
         };
-        let result = crate::resolution::without_presentation(|| {
-            crate::command::apply_runtime(&source, command, &self.catalog)
+        let result = timing::measure(Phase::RuleApply, || {
+            crate::resolution::without_presentation(|| {
+                crate::command::apply_runtime(&source, command, &self.catalog)
+            })
         });
         let mut next = match result {
             Ok(next) => next,

@@ -82,7 +82,7 @@ class Executor(Compute):
             and hasattr(torch.cuda.memory, "host_memory_stats")
             else {}
         )
-        return {
+        result = {
             **self.stats,
             "inference_queue_seconds": self.queue_seconds,
             "inference_queue_requests": self.queued_requests,
@@ -95,6 +95,9 @@ class Executor(Compute):
             "pinned_host_bytes": host_stats.get("allocated_bytes.current"),
             "pinned_host_peak_bytes": host_stats.get("allocated_bytes.peak"),
         }
+        if self.profile.enabled:
+            result["profile_gpu"] = self.profile.report()
+        return result
 
     def snapshot(self):
         def cpu(value):
@@ -118,20 +121,22 @@ class Executor(Compute):
 
 
 def infer_batch(executor, batch):
-    jobs, versions = [], []
-    for request in batch.requests:
-        owner = (0, request.lane)
-        version = executor.resolve(
-            owner,
-            {
-                "root": (request.game_id, request.step),
-                "model": "current" if request.model == -1 else request.model,
-            },
-        )
-        jobs.append((version, request, owner))
-        versions.append(version)
+    with executor.profile.stage("inference.resolve"):
+        jobs, versions = [], []
+        for request in batch.requests:
+            owner = (0, request.lane)
+            version = executor.resolve(
+                owner,
+                {
+                    "root": (request.game_id, request.step),
+                    "model": "current" if request.model == -1 else request.model,
+                },
+            )
+            jobs.append((version, request, owner))
+            versions.append(version)
     outputs = executor.infer(jobs)
-    batch.reply(outputs, versions)
+    with executor.profile.stage("inference.reply"):
+        batch.reply(outputs, versions)
     executor.queued_requests += len(jobs)
 
 
@@ -207,7 +212,9 @@ class Local:
                 result = None
             elif op == "drain":
                 while (
-                    batch := self.pool.take_requests(executor.config.inference_batch, 0)
+                    batch := self.pool.take_requests(
+                        executor.config.inference_batch, 0, profile=executor.profile
+                    )
                 ) is not None:
                     with batch:
                         infer_batch(executor, batch)

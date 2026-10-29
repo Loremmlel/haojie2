@@ -7,10 +7,12 @@ import torch
 from torch.nn import functional as F
 
 from ..model import Network, collate_states, collate_options, device_for_bf16
+from ..profiling import Profile
 
 
 class Compute:
     def initialize_network(self, device):
+        self.profile = Profile()
         torch.set_num_threads(1)
         torch.manual_seed(self.config.seed)
         self.device = torch.device(device)
@@ -64,145 +66,199 @@ class Compute:
         return network
 
     def infer(self, jobs):
-        self.activate()
-        output = [None] * len(jobs)
-        grouped = {}
-        for i, (version, request, owner) in enumerate(jobs):
-            grouped.setdefault((version, request.op), []).append(i)
+        with self.profile.stage("inference.activate"):
+            self.activate()
+        with self.profile.stage("inference.group"):
+            output = [None] * len(jobs)
+            grouped = {}
+            for i, (version, request, owner) in enumerate(jobs):
+                grouped.setdefault((version, request.op), []).append(i)
         start = time.perf_counter()
         with torch.inference_mode():
             for (version, op), indices in grouped.items():
-                indices.sort(key=lambda i: len(jobs[i][1].arrays[0]))
-                model = self.inference_model(version)
+                with self.profile.stage("inference.group_sort"):
+                    indices.sort(key=lambda i: len(jobs[i][1].arrays[0]))
+                with self.profile.stage("inference.model_lookup"):
+                    model = self.inference_model(version)
                 for offset in range(0, len(indices), self.config.inference_batch):
                     selection = indices[offset : offset + self.config.inference_batch]
+                    sampled = self.profile.select(op, 32, len(selection))
+                    cuda = sampled and self.device.type == "cuda"
                     if op == "encode":
                         tensors = collate_states(
                             [jobs[i][1].arrays for i in selection],
                             self.device,
                             pinned=self.device.type == "cuda",
+                            profile=self.profile,
+                            scope="inference.encode",
+                            cuda=cuda,
                         )
-                        context, values, aux = model.encode(*tensors)
-                        packed = (
-                            torch.cat((values[:, None], aux), 1)
-                            .view(torch.uint16)
-                            .cpu()
-                            .numpy()
-                        )
-                        for row, i in enumerate(selection):
-                            _, request, owner = jobs[i]
-                            self.contexts[(owner, request.context, version)] = context[
-                                row, : len(request.arrays[0])
-                            ].clone()
-                            output[i] = packed[row].copy()
+                        with self.profile.stage(
+                            "inference.encode.network_submit", cuda=cuda
+                        ):
+                            context, values, aux = model.encode(*tensors)
+                        with self.profile.stage(
+                            "inference.encode.pack_submit", cuda=cuda
+                        ):
+                            packed_tensor = torch.cat((values[:, None], aux), 1).view(
+                                torch.uint16
+                            )
+                        with self.profile.stage("inference.encode.d2h_wait"):
+                            packed = packed_tensor.cpu().numpy()
+                            del packed_tensor
+                        self.profile.collect()
+                        with self.profile.stage(
+                            "inference.encode.scatter_cache", cuda=cuda
+                        ):
+                            for row, i in enumerate(selection):
+                                _, request, owner = jobs[i]
+                                self.contexts[(owner, request.context, version)] = (
+                                    context[row, : len(request.arrays[0])].clone()
+                                )
+                                output[i] = packed[row].copy()
                         self.stats["inference_roots"] += len(selection)
                     else:
-                        contexts = [
-                            self.contexts[(jobs[i][2], jobs[i][1].context, version)]
-                            for i in selection
-                        ]
-                        n = max(len(x) for x in contexts)
-                        context = torch.zeros(
-                            (len(selection), n, self.model.config.width),
-                            dtype=torch.bfloat16,
-                            device=self.device,
-                        )
-                        for row, x in enumerate(contexts):
-                            context[row, : len(x)] = x
+                        with self.profile.stage(
+                            "inference.decode.context_pack", cuda=cuda
+                        ):
+                            contexts = [
+                                self.contexts[(jobs[i][2], jobs[i][1].context, version)]
+                                for i in selection
+                            ]
+                            n = max(len(x) for x in contexts)
+                            context = torch.zeros(
+                                (len(selection), n, self.model.config.width),
+                                dtype=torch.bfloat16,
+                                device=self.device,
+                            )
+                            for row, x in enumerate(contexts):
+                                context[row, : len(x)] = x
                         tensors = collate_options(
                             [jobs[i][1].arrays[0] for i in selection],
                             self.device,
                             pinned=self.device.type == "cuda",
+                            profile=self.profile,
+                            scope="inference.decode",
+                            cuda=cuda,
                         )
-                        packed = (
-                            model.decode(context, *tensors)
-                            .view(torch.uint16)
-                            .cpu()
-                            .numpy()
-                        )
-                        for row, i in enumerate(selection):
-                            output[i] = packed[row, : len(jobs[i][1].arrays[0])].copy()
+                        with self.profile.stage(
+                            "inference.decode.network_submit", cuda=cuda
+                        ):
+                            packed_tensor = model.decode(context, *tensors).view(
+                                torch.uint16
+                            )
+                        with self.profile.stage("inference.decode.d2h_wait"):
+                            packed = packed_tensor.cpu().numpy()
+                            del packed_tensor
+                        self.profile.collect()
+                        with self.profile.stage("inference.decode.scatter_cache"):
+                            for row, i in enumerate(selection):
+                                output[i] = packed[
+                                    row, : len(jobs[i][1].arrays[0])
+                                ].copy()
                         self.stats["inference_decodes"] += len(selection)
                     self.stats["inference_batches"] += 1
         self.stats["inference_seconds"] += time.perf_counter() - start
         return output
 
     def update(self, batch):
-        self.activate()
+        with self.profile.stage("training.activate"):
+            self.activate()
         started = time.perf_counter()
-        tensors = collate_states(
-            [b[0] for b in batch], self.device, pinned=self.device.type == "cuda"
-        )
-        returns = torch.tensor(
-            [b[2] for b in batch], device=self.device, dtype=torch.bfloat16
-        )
-        value_weight = torch.tensor(
-            [b[3] for b in batch], device=self.device, dtype=torch.bfloat16
-        )
-        auxiliary = torch.tensor(
-            np.stack([b[4] for b in batch]), device=self.device, dtype=torch.bfloat16
-        )
-        aux_mask = torch.tensor(
-            [b[5] for b in batch], device=self.device, dtype=torch.bool
-        )
-        self.model.train()
-        self.optimizer.zero_grad(set_to_none=True)
-        context, values, predicted_aux = self.model.encode(*tensors)
-        groups = {}
-        for sample, row in enumerate(batch):
-            for options, target, weight in row[1]:
-                groups.setdefault(max(1, len(options)).bit_length(), []).append(
-                    (sample, options, target, weight)
-                )
-        policy_losses = torch.zeros(
-            len(batch), dtype=torch.bfloat16, device=self.device
-        )
-        for decisions in groups.values():
-            options = collate_options(
-                [d[1] for d in decisions],
+        sampled = self.profile.select("training", 8, len(batch))
+        cuda = sampled and self.device.type == "cuda"
+        with self.profile.stage("training.prepare"):
+            tensors = collate_states(
+                [b[0] for b in batch],
                 self.device,
                 pinned=self.device.type == "cuda",
+                profile=self.profile,
+                scope="training.prepare.states",
+                cuda=cuda,
             )
-            indices = torch.tensor(
-                [d[0] for d in decisions], dtype=torch.int64, device=self.device
+            returns = torch.tensor(
+                [b[2] for b in batch], device=self.device, dtype=torch.bfloat16
             )
-            target = torch.zeros_like(options[1], dtype=torch.bfloat16)
-            for i, d in enumerate(decisions):
-                target[i, : len(d[2])] = torch.from_numpy(d[2]).to(
-                    self.device, dtype=torch.bfloat16
+            value_weight = torch.tensor(
+                [b[3] for b in batch], device=self.device, dtype=torch.bfloat16
+            )
+            auxiliary = torch.tensor(
+                np.stack([b[4] for b in batch]),
+                device=self.device,
+                dtype=torch.bfloat16,
+            )
+            aux_mask = torch.tensor(
+                [b[5] for b in batch], device=self.device, dtype=torch.bool
+            )
+            self.model.train()
+            self.optimizer.zero_grad(set_to_none=True)
+        with self.profile.stage("training.forward_loss", cuda=cuda):
+            context, values, predicted_aux = self.model.encode(*tensors)
+            groups = {}
+            for sample, row in enumerate(batch):
+                for options, target, weight in row[1]:
+                    groups.setdefault(max(1, len(options)).bit_length(), []).append(
+                        (sample, options, target, weight)
+                    )
+            policy_losses = torch.zeros(
+                len(batch), dtype=torch.bfloat16, device=self.device
+            )
+            for decisions in groups.values():
+                options = collate_options(
+                    [d[1] for d in decisions],
+                    self.device,
+                    pinned=self.device.type == "cuda",
+                    profile=self.profile,
+                    scope="training.forward_loss.options",
+                    cuda=cuda,
                 )
-            weight = torch.tensor(
-                [d[3] for d in decisions], dtype=torch.bfloat16, device=self.device
+                indices = torch.tensor(
+                    [d[0] for d in decisions], dtype=torch.int64, device=self.device
+                )
+                target = torch.zeros_like(options[1], dtype=torch.bfloat16)
+                for i, d in enumerate(decisions):
+                    target[i, : len(d[2])] = torch.from_numpy(d[2]).to(
+                        self.device, dtype=torch.bfloat16
+                    )
+                weight = torch.tensor(
+                    [d[3] for d in decisions], dtype=torch.bfloat16, device=self.device
+                )
+                logits = self.model.decode(context.index_select(0, indices), *options)
+                logp = F.log_softmax(logits, -1).masked_fill(~options[1], 0)
+                policy_losses = policy_losses.index_add(
+                    0, indices, -(target * logp).sum(-1) * weight
+                )
+            policy_loss = policy_losses.mean()
+            value_loss = ((values - returns).square() * value_weight).sum() / (
+                value_weight > 0
+            ).sum().clamp_min(1).to(torch.bfloat16)
+            aux_loss = (
+                F.smooth_l1_loss(predicted_aux, auxiliary, reduction="none").mean(-1)
+                * aux_mask
+            ).sum() / aux_mask.sum().clamp_min(1).to(torch.bfloat16)
+            loss = policy_loss + value_loss + 0.1 * aux_loss
+        with self.profile.stage("training.finite_check"):
+            if not torch.isfinite(loss):
+                raise FloatingPointError("非有限损失")
+        self.profile.collect()
+        with self.profile.stage("training.backward", cuda=cuda):
+            loss.backward()
+        with self.profile.stage("training.clip_grad", cuda=cuda):
+            norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), 1.0, error_if_nonfinite=True
             )
-            logits = self.model.decode(context.index_select(0, indices), *options)
-            logp = F.log_softmax(logits, -1).masked_fill(~options[1], 0)
-            policy_losses = policy_losses.index_add(
-                0, indices, -(target * logp).sum(-1) * weight
-            )
-        policy_loss = policy_losses.mean()
-        value_loss = ((values - returns).square() * value_weight).sum() / (
-            value_weight > 0
-        ).sum().clamp_min(1).to(torch.bfloat16)
-        aux_loss = (
-            F.smooth_l1_loss(predicted_aux, auxiliary, reduction="none").mean(-1)
-            * aux_mask
-        ).sum() / aux_mask.sum().clamp_min(1).to(torch.bfloat16)
-        loss = policy_loss + value_loss + 0.1 * aux_loss
-        if not torch.isfinite(loss):
-            raise FloatingPointError("非有限损失")
-        loss.backward()
-        norm = torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(), 1.0, error_if_nonfinite=True
-        )
-        self.optimizer.step()
-        self.stats["updates"] += 1
-        self.stats["trained_samples"] += len(batch)
-        self.stats["value_samples"] += sum(b[6] for b in batch)
-        self.stats["soft_value_samples"] += sum(b[7] for b in batch)
-        self.stats["loss"] = {
-            "policy": float(policy_loss.detach()),
-            "value": float(value_loss.detach()),
-            "auxiliary": float(aux_loss.detach()),
-            "gradient_norm": float(norm),
-        }
+        with self.profile.stage("training.optimizer", cuda=cuda):
+            self.optimizer.step()
+        with self.profile.stage("training.report_sync"):
+            self.stats["updates"] += 1
+            self.stats["trained_samples"] += len(batch)
+            self.stats["value_samples"] += sum(b[6] for b in batch)
+            self.stats["soft_value_samples"] += sum(b[7] for b in batch)
+            self.stats["loss"] = {
+                "policy": float(policy_loss.detach()),
+                "value": float(value_loss.detach()),
+                "auxiliary": float(aux_loss.detach()),
+                "gradient_norm": float(norm),
+            }
+        self.profile.collect()
         self.stats["learning_seconds"] += time.perf_counter() - started

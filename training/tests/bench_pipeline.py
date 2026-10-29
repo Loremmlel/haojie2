@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+from dataclasses import asdict
 import importlib
 import json
 import os
@@ -424,6 +425,9 @@ def execute(args):
             (output / "signature.pkl").write_bytes(pickle.dumps(signature))
             result = {
                 "backend": args.execute,
+                "profile_enabled": os.environ.get("HAOJIE_PROFILE", "0") == "1",
+                "trace_path": os.environ.get("HAOJIE_TRACE"),
+                "config": asdict(config),
                 "workers": config.workers,
                 "games_per_worker": config.games_per_worker,
                 "training_batch": config.batch,
@@ -681,10 +685,12 @@ def main():
     )
     parser.add_argument("--tasks", type=int, default=256)
     parser.add_argument("--commands", type=int, default=8)
-    parser.add_argument("--trials", type=int, default=3)
+    parser.add_argument("--trials", type=int)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--batch", type=int, default=16)
-    parser.add_argument("--compare-workers", type=int, nargs=2, metavar=("A", "B"))
+    comparison = parser.add_mutually_exclusive_group()
+    comparison.add_argument("--compare-workers", type=int, nargs=2, metavar=("A", "B"))
+    comparison.add_argument("--compare-profile", action="store_true")
     parser.add_argument("--execute", choices=("baseline", "native"))
     parser.add_argument("--feedback")
     parser.add_argument("--capture", action="store_true")
@@ -693,6 +699,14 @@ def main():
     if args.sample:
         sample(args.sample)
         return
+    if args.compare_profile:
+        args.workers, args.batch = 8, 16
+        if not args.feedback:
+            parser.error("--compare-profile requires frozen --feedback")
+    if args.trials is None:
+        args.trials = 2 if args.compare_profile else 3
+    if args.compare_profile and args.trials != 2:
+        parser.error("--compare-profile uses two OFF/ON pairs")
     workers = args.compare_workers or [args.workers]
     if any(value < 1 or 64 % value for value in workers):
         parser.error("workers must be positive divisors of 64")
@@ -714,7 +728,7 @@ def main():
     feedback = Path(args.feedback).resolve() if args.feedback else root / "feedback.pkl"
     reference = None
 
-    def invoke(backend, workers, target, capture=False):
+    def invoke(backend, workers, target, profile=False, capture=False):
         command = [
             sys.executable,
             "-B",
@@ -741,17 +755,26 @@ def main():
         ]
         if capture:
             command.append("--capture")
+        environment = {**os.environ, "HAOJIE_PROFILE": str(int(profile))}
+        environment.pop("HAOJIE_TRACE", None)
         with (root / (target.name + ".log")).open("w", encoding="utf-8") as stream:
-            subprocess.run(command, stdout=stream, check=True)
+            subprocess.run(command, stdout=stream, env=environment, check=True)
         return json.loads((target / "result.json").read_text(encoding="utf-8"))
 
-    if args.compare_workers:
-        variants = [(f"native-{n}", "native", n) for n in args.compare_workers]
+    if args.compare_profile:
+        variants = [
+            ("profile-off", "native", 8, False),
+            ("profile-on", "native", 8, True),
+        ]
+    elif args.compare_workers:
+        variants = [(f"native-{n}", "native", n, False) for n in args.compare_workers]
     else:
-        variants = [(name, name, args.workers) for name in ("baseline", "native")]
+        variants = [
+            (name, name, args.workers, False) for name in ("baseline", "native")
+        ]
     if not args.feedback:
-        _, backend, workers = variants[0]
-        captured = invoke(backend, workers, root / "capture", True)
+        _, backend, workers, profile = variants[0]
+        captured = invoke(backend, workers, root / "capture", profile, capture=True)
         print(json.dumps({"event": "captured", **captured}), flush=True)
     else:
         print(
@@ -759,9 +782,9 @@ def main():
         )
     for trial in range(args.trials):
         ordered = variants if trial % 2 == 0 else list(reversed(variants))
-        for label, backend, workers in ordered:
+        for label, backend, workers, profile in ordered:
             target = root / f"{trial}-{label}"
-            result = invoke(backend, workers, target)
+            result = invoke(backend, workers, target, profile)
             signature = pickle.loads((target / "signature.pkl").read_bytes())
             if reference is None:
                 reference = signature

@@ -6,6 +6,7 @@ use crate::learning::{
     ffi::Bundle,
     random::Functions,
     search::{Reply, Request},
+    timing::{self, Phase},
 };
 use lane::{Advanced, Lane};
 use serde_json::{Value, json};
@@ -61,6 +62,7 @@ struct Config {
     temperature: f64,
     max_commands: u64,
     audit: bool,
+    profile: bool,
 }
 impl Config {
     fn read(v: &Value) -> Result<Self, String> {
@@ -74,6 +76,7 @@ impl Config {
             temperature: v["temperature"].as_f64().unwrap_or(1.),
             max_commands: v["max_commands"].as_u64().unwrap_or(20000),
             audit: v["audit"].as_bool().unwrap_or(false),
+            profile: std::env::var("HAOJIE_PROFILE").is_ok_and(|v| v == "1"),
         };
         if result.workers == 0
             || result.games_per_worker == 0
@@ -189,6 +192,7 @@ fn worker(
     config: Arc<Config>,
     functions: Functions,
 ) {
+    timing::initialize(config.profile);
     shared.tids[index].store(thread_id(), Ordering::Release);
     let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
         let mut slots: Vec<Option<Slot>> = (0..config.games_per_worker).map(|_| None).collect();
@@ -197,12 +201,18 @@ fn worker(
         loop {
             let mut controls: Vec<Control> = receiver.try_iter().collect();
             if controls.is_empty() && (paused || ready.is_empty()) {
+                let _waiting = timing::scope(if paused {
+                    Phase::WorkerPaused
+                } else {
+                    Phase::WorkerWait
+                });
                 match receiver.recv() {
                     Ok(value) => controls.push(value),
                     Err(_) => break,
                 }
             }
             for control in controls {
+                let _control = timing::scope(Phase::WorkerControl);
                 match control {
                     Control::Stop => return Ok(()),
                     Control::Pause => paused = true,
@@ -283,7 +293,10 @@ fn worker(
                         } else {
                             Ok(json!({"ready":paused && waiting==0 && records==0,
                                 "active":slots.iter().flatten().count(),"pending_requests":waiting,
-                                "pending_records":records,"versions":versions}))
+                                "pending_records":records,"versions":versions,
+                                "profile":{"index":index,
+                                    "thread_id":shared.tids[index].load(Ordering::Acquire),
+                                    "phases":timing::snapshot()}}))
                         };
                         let _ = answer.send(value);
                     }
@@ -298,6 +311,7 @@ fn worker(
             let Some(local) = ready.pop_front() else {
                 continue;
             };
+            let _active = timing::scope(Phase::WorkerActive);
             let slot = slots[local].as_mut().ok_or("就绪lane不存在")?;
             let lane = index * config.games_per_worker + local;
             match slot.lane.advance()? {
@@ -474,6 +488,10 @@ impl Pool {
                     "versions":groups.iter().flat_map(|g|g["versions"].as_array().unwrap().clone()).collect::<Vec<_>>(),
                     "requests_taken":self.shared.requests_taken.load(Ordering::Relaxed),
                     "queue_seconds":self.shared.queue_nanoseconds.load(Ordering::Relaxed) as f64 / 1e9,
+                    "profile":{"enabled":self.config.profile,
+                        "workers":if self.config.profile {
+                            groups.iter().map(|g|g["profile"].clone()).collect::<Vec<_>>()
+                        } else { vec![] }},
                     "threads":self.shared.tids.iter().map(|id|id.load(Ordering::Acquire)).collect::<Vec<_>>()}),
                 )
             }

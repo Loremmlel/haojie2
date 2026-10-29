@@ -2,6 +2,7 @@
 
 import copy
 import ctypes as C
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from functools import cached_property
 import json
@@ -264,11 +265,15 @@ class NativePool:
             )
         return self.control("assign", lane=lane, game=game, rng=rng, restored=previous)
 
-    def take_requests(self, max_batch=32, wait_ms=2):
-        count = self.lib.hc_pool_take_requests(self.handle, max_batch, wait_ms)
+    def take_requests(self, max_batch=32, wait_ms=2, profile=None):
+        with profile.stage("bridge.request_wait") if profile else nullcontext():
+            count = self.lib.hc_pool_take_requests(self.handle, max_batch, wait_ms)
         if count == C.c_size_t(-1).value:
             self.check(0)
-        return RequestBatch(self, count) if count else None
+        if not count:
+            return None
+        with profile.stage("bridge.request_views") if profile else nullcontext():
+            return RequestBatch(self, count)
 
     def take_records(self, max_records=64, wait_ms=0):
         count = self.lib.hc_pool_take_records(self.handle, max_records, wait_ms)

@@ -5,6 +5,7 @@ use crate::{
         ffi::{Bundle, Host, Info},
         random::{Functions, Random},
         search::{Progress, Reply, Request, Search, SearchResult, Supervision},
+        timing::{self, Phase},
     },
     model::Command,
 };
@@ -201,6 +202,7 @@ impl Lane {
         sample: Option<(Info, Arc<Bundle>, Vec<Supervision>, i64)>,
         result: Option<&SearchResult>,
     ) -> Result<Record, String> {
+        let _scope = timing::scope(Phase::CommitRecord);
         let info = self.host.apply(&command)?;
         self.steps += 1;
         let limit = self.game["ply_limit"].as_u64().unwrap_or(0);
