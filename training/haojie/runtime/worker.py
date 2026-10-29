@@ -1,11 +1,12 @@
 """CPU worker 同时推进多局；只在完整命令边界提交，GPU 请求通过共享槽组批。"""
 
 import copy
+from collections import deque
 import os
 import signal
-import time
 import traceback
 from pathlib import Path
+from multiprocessing.connection import wait
 
 import numpy as np
 
@@ -211,80 +212,101 @@ class Lane:
             self.teacher.close()
 
 
-def worker(index, connection, slot_name, directory, config, games, restored):
+def worker(index, control, inference, directory, config, games, restored):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    slot = Slot(slot_name)
-    lanes = {}
-    answers = {}
-    start = time.perf_counter()
+    lanes, slots, answers = {}, {}, {}
+    ready, waiting = deque(), set()
     commands = 0
+    paused = False
+    saving = False
+    connected = True
+
+    def assign(i, game, previous=None):
+        lanes[i] = Lane(directory, config, game, previous)
+        if i not in slots:
+            slots[i] = Slot(size=256 * 1024)
+        ready.append(i)
+
+    def receive():
+        nonlocal saving, paused, connected
+        while connected:
+            try:
+                if not inference.poll():
+                    break
+                response = inference.recv()
+            except (EOFError, BrokenPipeError):
+                if not paused:
+                    raise
+                connected = False
+                break
+            if response["op"] == "error":
+                raise RuntimeError(response["error"])
+            i = response["lane"]
+            output = unpack(slots[i], response["shapes"], copy=True)[0]
+            answers[i] = (search_values(output), response["version"])
+            lanes[i].root_version = response["version"]
+            waiting.remove(i)
+            ready.append(i)
+        while control.poll():
+            message = control.recv()
+            if message["op"] == "stop":
+                return False
+            if message["op"] == "save":
+                saving = True
+            elif message["op"] == "resume":
+                paused = saving = False
+            for item in message.get("assignments", []):
+                assign(item["lane"], item["game"])
+        return True
+
     try:
         for i, game in enumerate(games):
             if game is not None:
-                lanes[i] = Lane(
-                    directory, config, game, restored[i] if restored else None
-                )
-        while True:
-            requests, arrays, events = [], [], []
-            for i, lane in list(lanes.items()):
+                assign(i, game, restored[i] if restored else None)
+        while receive():
+            if saving and not waiting:
+                snapshots = [
+                    {"lane": i, **lane.snapshot()} for i, lane in lanes.items()
+                ]
+                control.send(("saved", snapshots, commands))
+                paused, saving = True, False
+            if not paused and not saving and ready:
+                i = ready.popleft()
+                lane = lanes[i]
                 previous = lane.writer.metadata["steps"]
-                request, news = lane.advance(answers.pop(i, None))
+                request, events = lane.advance(answers.pop(i, None))
                 commands += lane.writer.metadata["steps"] - previous
-                events.extend({**event, "lane": i} for event in news)
-                if any(event["type"] == "done" for event in news):
+                done = any(event["type"] == "done" for event in events)
+                if events or lane.writer.metadata["steps"] != previous:
+                    control.send(
+                        ("events", [{**event, "lane": i} for event in events], commands)
+                    )
+                if done:
+                    inference.send({"op": "release", "lane": i})
                     lane.close()
                     del lanes[i]
                 elif request is not None:
-                    requests.append(
+                    needed = sum(a.nbytes for a in request.arrays)
+                    if needed > slots[i].memory.size:
+                        slots[i].close()
+                        slots[i] = Slot(size=needed * 2)
+                    inference.send(
                         {
+                            "op": "request",
                             "lane": i,
+                            "slot": slots[i].name,
+                            "shapes": pack(slots[i], request.arrays),
                             "model": lane.owner_model(),
                             "root": f"{lane.game['id']}:{lane.writer.metadata['steps']}",
-                            "op": request.op,
+                            "kind": request.op,
                             "context": request.context,
-                            "arrays": len(request.arrays),
                         }
                     )
-                    arrays.extend(request.arrays)
-            needed = sum(a.nbytes for a in arrays)
-            if needed > slot.memory.size:
-                connection.send(("grow", needed))
-                slot.close()
-                slot = Slot(connection.recv())
-            shapes = pack(slot, arrays)
-            connection.send(
-                (
-                    "work",
-                    requests,
-                    shapes,
-                    events,
-                    {
-                        "commands": commands,
-                        "elapsed": time.perf_counter() - start,
-                        "occupied": list(lanes),
-                    },
-                )
-            )
-            response = connection.recv()
-            if response["op"] in ("pause", "save"):
-                for request, version in zip(requests, response.get("versions", [])):
-                    lanes[request["lane"]].root_version = version
-                snapshots = []
-                for i, lane in lanes.items():
-                    snapshot = lane.snapshot()
-                    snapshots.append({"lane": i, **snapshot})
-                connection.send(("saved", snapshots, commands))
-                if response["op"] == "pause":
-                    break
-                response = connection.recv()
-            outputs = unpack(slot, response["shapes"], copy=True)
-            for request, output, version in zip(
-                requests, outputs, response["versions"]
-            ):
-                output = search_values(output)
-                answers[request["lane"]] = (output, version)
-            for assignment in response.get("assignments", []):
-                lanes[assignment["lane"]] = Lane(directory, config, assignment["game"])
+                    waiting.add(i)
+                else:
+                    ready.append(i)
+            else:
+                wait([control, inference] if connected else [control], timeout=0.1)
     except BaseException:
         failure = traceback.format_exc()
         saved = []
@@ -293,7 +315,6 @@ def worker(index, connection, slot_name, directory, config, games, restored):
                 saved.append({"lane": i, **lane.snapshot()})
             except Exception:
                 pass
-        # 初始化失败时，仍保留尚未成功打开的原检查点局面。
         recovered = {lane["lane"] for lane in saved}
         for i, previous in enumerate(restored or []):
             if previous and i not in recovered:
@@ -302,10 +323,12 @@ def worker(index, connection, slot_name, directory, config, games, restored):
             Path(directory) / f"failed-worker-{index}.json",
             {"pid": os.getpid(), "error": failure, "lanes": saved},
         )
-        connection.send(("error", failure))
+        control.send(("error", failure, saved, commands))
         raise
     finally:
         for lane in lanes.values():
             lane.close()
-        slot.close()
-        connection.close()
+        for slot in slots.values():
+            slot.close()
+        control.close()
+        inference.close()

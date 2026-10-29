@@ -1,4 +1,4 @@
-"""每个 worker 独占一个可复用槽；Pipe 交接所有权，大数组不经过 pickle。"""
+"""逐局与学习批次独占可复用共享槽；Pipe 只交接所有权和数组描述。"""
 
 from multiprocessing.shared_memory import SharedMemory
 
@@ -51,3 +51,27 @@ def unpack(slot, shapes, copy=False):
 def search_values(bits):
     # NumPy 没有原生 BF16；仅在 CPU 搜索边界无损解码 GPU 输出，不参与神经网络计算。
     return (np.asarray(bits, dtype=np.uint32) << 16).view(np.float32)
+
+
+def batch_arrays(batch):
+    arrays, rows = [], []
+    for bundle, decisions, *labels in batch:
+        arrays.extend(bundle)
+        weights = []
+        for options, target, weight in decisions:
+            arrays.extend((options, target))
+            weights.append(weight)
+        arrays.append(np.asarray(labels[2]))
+        rows.append((weights, [*labels[:2], *labels[3:]]))
+    return arrays, rows
+
+
+def restore_batch(arrays, rows):
+    arrays = iter(arrays)
+    result = []
+    for weights, labels in rows:
+        bundle = tuple(next(arrays) for _ in range(4))
+        decisions = [(next(arrays), next(arrays), w) for w in weights]
+        aux = next(arrays)
+        result.append((bundle, decisions, *labels[:2], aux, *labels[2:]))
+    return result

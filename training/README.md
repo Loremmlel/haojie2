@@ -23,10 +23,10 @@ Linux 对应使用 `training/.venv/bin/python`。规则库默认为 `artifacts/n
 ## 运行与恢复
 
 ```powershell
-training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/classic-main --workers 4 --games-per-worker 4
+training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/classic-main
 ```
 
-默认先采集 8 个自然结束的简单档示范局，再完成 512 次独立模仿更新，发布模型后才启动自对弈。正常阶段使用 70% 当前自对弈、20% 历史模型、10% 手工对手；历史为空或选中当前版本时转为自对弈。每个 worker 长期复用，一次交替推进多局。`--warmup-games`、`--warmup-updates` 调整两个预训练阶段；前者为 0 时明确跳过预训练。
+默认先采集 8 个自然结束的简单档示范局，再完成 512 次独立模仿更新，发布模型后才启动自对弈。正常阶段使用 70% 当前自对弈、20% 历史模型、10% 手工对手；历史为空或选中当前版本时转为自对弈。默认 4 个 CPU actor，每个推进 16 局；逐局请求直接送往独占 GPU 的执行进程，CPU 协调进程负责回放和学习批次。`--workers`、`--games-per-worker` 分别调整进程数和每进程在途局数。`--warmup-games`、`--warmup-updates` 调整两个预训练阶段；前者为 0 时明确跳过预训练。
 
 网络为 5,503,366 参数，宽度 256、6 层。主干只处理实体 token，效果/死亡等原有记录在局部编码；加入规则几何注意力偏置。训练、评测、历史模型推理和截断校准统一原生 BF16：权重、梯度、AdamW 一阶/二阶动量、神经浮点输入、输出与损失均为 BF16，没有 FP32 主权重或 autocast。步数、实体引用和类别索引使用整数。GPU 输出按 BF16 原始 16 位经共享内存返回；CPU 规则、搜索统计和落盘事实使用各自的数据类型。CUDA 使用 PyTorch 标准 BF16 算子及其内部累加实现。
 
@@ -65,12 +65,13 @@ training/.venv/Scripts/python.exe -m training.haojie evaluate --checkpoint artif
 
 ```powershell
 training/.venv/Scripts/python.exe -m unittest training.tests.test_training -v
+training/.venv/Scripts/python.exe -m unittest training.tests.test_pipeline -v
 training/.venv/Scripts/python.exe -m training.tests.bench_ipc --rounds 150
 training/.venv/Scripts/python.exe -m training.tests.bench_pipeline --checkpoint artifacts/classic-main/checkpoint.pt --trials 3
 node --import tsx scripts/native/learning/validate.ts artifacts/native-target/release/haojie-engine.exe --evaluation --candidates --search --decoder
 node --import tsx scripts/native/learning/teacher-validation.ts artifacts/native-target/release/haojie-engine.exe 64
 ```
 
-流水线基准需要四局已有轨迹，逐局抽取四个中后期起点；执行正式 64/16 搜索和同量 BF16 学习，比较 16 局总并发下的 worker 分配。基准目录自动清理，源检查点和轨迹只读。
+流水线基准需要四局已有轨迹，逐局抽取四个中后期起点；执行正式 64/16 搜索和同量 BF16 学习，分别测量 16、64 局供给。加 `--baseline <基线导出目录>` 可与提交 `d2eb7a4` 的旧运行时交错比较。基准目录自动清理，源检查点和轨迹只读。进程职责、协议和验收顺序见[运行时架构](../docs/ai/TRAINING-RUNTIME.md)。
 
 这些 Node 命令仅用于 TS/Rust 差分开发验收。训练和评测调用同一进程内 Rust 手工 AI。架构、目标定义和研究依据见[训练设计](../docs/ai/TRAINING.md)，实际完成的验收见[状态入口](../docs/ai/STATUS.md)。

@@ -1,20 +1,27 @@
-"""真实轨迹的中后期窗口；固定 64/16 搜索、反馈和学习样本，比较完整流水线。"""
+"""整体架构验收：冻结同一搜索反馈、命令与学习工作量，最后交错比较旧/新运行时。"""
 
 import argparse
 import copy
 import json
 import multiprocessing as mp
 from multiprocessing.connection import wait
+import os
 from pathlib import Path
+import pickle
+import subprocess
+import sys
 import tempfile
 import time
 
-from training.haojie.runtime.config import Config
-from training.haojie.runtime.ipc import Slot, pack, unpack
-from training.haojie.runtime.worker import worker
-from training.haojie.search import Request
+import numpy as np
+import torch
+
 from training.haojie.native import Environment
+from training.haojie.runtime.config import Config
+from training.haojie.runtime.gpu import Executor, Remote, serve
 from training.haojie.runtime.storage import GameWriter, Replay
+from training.haojie.runtime.trainer import Trainer
+from training.haojie.runtime.worker import worker
 
 
 def starting_positions(directory):
@@ -51,54 +58,109 @@ def starting_positions(directory):
     return positions, [str(p) for p in paths[:4]]
 
 
-def run(
-    workers, lanes, commands, updates, saved, starts, replay, workset, record=False
-):
-    import numpy as np
-    import torch
-    from training.haojie.runtime.trainer import Trainer
+def benchmark_gpu(control, actors, directory, config, initial, workset_path, record):
+    # 仅基准替换反馈；GPU 仍执行所有真实推理。正式服务没有录制逻辑。
+    workset = {} if record else pickle.loads(Path(workset_path).read_bytes())
+    positions = {}
+    initialize, infer = Executor.__init__, Executor.infer
 
+    def setup(self, *args):
+        initialize(self, *args)
+        self.inference_models[0] = copy.deepcopy(self.model).eval()
+
+    def controlled(self, jobs):
+        outputs = infer(self, jobs)
+        for i, (_, request, owner) in enumerate(jobs):
+            root = self.bindings[owner][0]
+            number = positions.get(root, 0)
+            positions[root] = number + 1
+            key = root, number
+            descriptor = (
+                request.op,
+                request.context,
+                tuple((v.shape, v.dtype.str) for v in request.arrays),
+            )
+            if record:
+                workset[key] = (*descriptor, outputs[i].copy())
+            else:
+                if descriptor != workset[key][:3]:
+                    raise AssertionError("架构改变了公开状态键或请求形状")
+                outputs[i] = workset[key][3]
+        return outputs
+
+    Executor.__init__, Executor.infer = setup, controlled
+    try:
+        serve(control, actors, directory, config, initial)
+    finally:
+        if record:
+            Path(workset_path).write_bytes(pickle.dumps(workset))
+
+
+def run_async(saved, starts, replay, workset, commands, updates, record=False):
     config = Config(
-        workers=workers,
-        games_per_worker=lanes,
+        workers=4,
+        games_per_worker=len(starts) // 4,
         warmup_games=0,
         teacher_fraction=0,
         history_fraction=0,
         max_commands=commands,
         sample_reuse=0,
-        publish_updates=updates + 1,
         save_seconds=0,
+        publish_updates=updates + 1,
     )
     ctx = mp.get_context("spawn")
-    with tempfile.TemporaryDirectory(prefix="haojie-pipeline-") as directory:
+    with tempfile.TemporaryDirectory(prefix="haojie-async-bench-") as directory:
         trainer = Trainer(directory, config)
         trainer.model.load_state_dict(saved["model"])
-        trainer.optimizer.load_state_dict(copy.deepcopy(saved["optimizer"]))
-        for state in trainer.optimizer.state.values():
-            state["step"] = state["step"].to(device="cpu", dtype=torch.int64)
-        trainer.inference_models[0] = copy.deepcopy(trainer.model).eval()
+        trainer.restore_optimizer(copy.deepcopy(saved["optimizer"]))
         trainer.replay = Replay(games=replay)
         trainer.rng = np.random.default_rng(818031)
-        torch.cuda.reset_peak_memory_stats()
-        processes, pipes, slots = [], [], []
-        done, finished, outcomes = set(), set(), {}
+        controls, processes, outcomes = {}, {}, {}
+        parent, child = ctx.Pipe()
+        pairs = [ctx.Pipe() for _ in range(4)]
+        remote = Remote(parent, lambda: {0})
+        payload = {
+            "model": trainer.model.state_dict(),
+            "optimizer": trainer.optimizer.state_dict(),
+            "torch_rng": torch.get_rng_state(),
+            "cuda_rng": None,
+            "stats": trainer.stats,
+            "published": 0,
+            "retained": [0],
+        }
+        gpu = ctx.Process(
+            target=benchmark_gpu,
+            args=(
+                child,
+                [p[0] for p in pairs],
+                directory,
+                config,
+                payload,
+                str(workset),
+                record,
+            ),
+        )
+        gpu.start()
+        child.close()
+        if remote.receive()["op"] != "ready":
+            raise RuntimeError("GPU 初始化失败")
+        # 与旧基准一致：模型准备不计时，actor 启动及之后全部计时。
         started = time.perf_counter()
         first_ready = None
-        positions, progress_commands = {}, {}
+        progress, snapshots = {}, {}
         try:
-            for i in range(workers):
-                parent, child = ctx.Pipe()
-                slot = Slot()
+            for index in range(4):
+                local, other = ctx.Pipe()
                 games = [
                     {
-                        "id": i * lanes + j,
-                        "seed": 910001 + i * lanes + j,
+                        "id": index * config.games_per_worker + lane,
+                        "seed": 910001 + index * config.games_per_worker + lane,
                         "learner": 1,
                         "opponent": "self",
                         "difficulty": "easy",
                         "ply_limit": 0,
                     }
-                    for j in range(lanes)
+                    for lane in range(config.games_per_worker)
                 ]
                 restored = [
                     {
@@ -115,168 +177,194 @@ def run(
                 ]
                 process = ctx.Process(
                     target=worker,
-                    args=(i, child, slot.name, directory, config, games, restored),
+                    args=(
+                        index,
+                        other,
+                        pairs[index][1],
+                        directory,
+                        config,
+                        games,
+                        restored,
+                    ),
                 )
                 process.start()
-                child.close()
-                processes.append(process)
-                pipes.append(parent)
-                slots.append(slot)
-            while len(finished) < workers:
-                jobs, replies, keys = [], [], []
-                for pipe in wait(
-                    [p for i, p in enumerate(pipes) if i not in finished], 30
+                other.close()
+                controls[index], processes[index] = local, process
+                pairs[index][0].close()
+                pairs[index][1].close()
+            while (
+                len(outcomes) < len(starts)
+                or remote.learning
+                or trainer.stats["updates"] < updates
+            ):
+                for connection in wait([parent, *controls.values()], 0.01):
+                    if connection is parent:
+                        remote.receive()
+                    else:
+                        index = next(i for i, c in controls.items() if c is connection)
+                        message = connection.recv()
+                        first_ready = first_ready or time.perf_counter()
+                        if message[0] == "error":
+                            raise RuntimeError(message[1])
+                        if message[0] == "events":
+                            progress[index] = message[2]
+                            for event in message[1]:
+                                if event["type"] == "done":
+                                    outcomes[event["game"]["id"]] = {
+                                        k: event[k] for k in ("steps", "ply", "winner")
+                                    }
+                while remote.completed:
+                    trainer.stats.update(remote.completed.popleft()["stats"])
+                due = (
+                    updates
+                    if len(outcomes) == len(starts)
+                    else min(
+                        updates,
+                        sum(progress.values()) * updates // (len(starts) * commands),
+                    )
+                )
+                if not remote.learning and trainer.stats["updates"] < due:
+                    remote.learn(trainer.replay.batch(config.batch, trainer.rng))
+            # 计时覆盖与旧入口对应的 actor 静止确认。
+            for connection in controls.values():
+                connection.send({"op": "save"})
+            while len(snapshots) < 4:
+                for connection in wait(
+                    [c for i, c in controls.items() if i not in snapshots], 10
                 ):
-                    index = pipes.index(pipe)
-                    message = pipe.recv()
+                    index = next(i for i, c in controls.items() if c is connection)
+                    message = connection.recv()
                     if message[0] == "error":
                         raise RuntimeError(message[1])
                     if message[0] == "saved":
-                        finished.add(index)
-                        continue
-                    if message[0] == "grow":
-                        slots[index].close()
-                        slots[index] = Slot(size=message[1] * 2)
-                        pipe.send(slots[index].name)
-                        continue
-                    first_ready = first_ready or time.perf_counter()
-                    _, requests, shapes, events, progress = message
-                    progress_commands[index] = progress["commands"]
-                    for event in events:
-                        if event["type"] == "done":
-                            game = event["game"]["id"]
-                            done.add(game)
-                            # 保留逐局实际工作量与结果，确保并发拓扑未偷偷减少任务。
-                            outcomes[game] = {
-                                k: event[k] for k in ("steps", "ply", "winner")
-                            }
-                    if all(
-                        i in done for i in range(index * lanes, (index + 1) * lanes)
-                    ):
-                        pipe.send({"op": "pause", "versions": []})
-                        continue
-                    arrays = unpack(slots[index], shapes)
-                    first = len(jobs)
-                    at = 0
-                    for j, request in enumerate(requests):
-                        end = at + request["arrays"]
-                        values = tuple(arrays[at:end])
-                        at = end
-                        trainer.resolve(index, request)
-                        jobs.append(
-                            (
-                                0,
-                                Request(request["op"], request["context"], values),
-                                (index, request["lane"]),
-                            )
-                        )
-                        root = request["root"]
-                        number = positions.get(root, 0)
-                        positions[root] = number + 1
-                        key = (root, number)
-                        keys.append(key)
-                        if record:
-                            workset[key] = (
-                                request["op"],
-                                request["context"],
-                                tuple((v.shape, v.dtype.str) for v in values),
-                                None,
-                            )
-                        else:
-                            expected = workset[key]
-                            if (
-                                request["op"] != expected[0]
-                                or request["context"] != expected[1]
-                                or tuple((v.shape, v.dtype.str) for v in values)
-                                != expected[2]
-                            ):
-                                raise AssertionError(
-                                    "并发拓扑改变了公开状态键或请求形状"
-                                )
-                    replies.append((index, first, len(requests)))
-                outputs = trainer.infer(jobs) if jobs else []
-                for i, key in enumerate(keys):
-                    if record:
-                        workset[key] = (*workset[key][:3], outputs[i].copy())
-                    else:
-                        # 批大小会造成 BF16 舍入差异；控制搜索路径，实际 GPU 工作照常执行。
-                        outputs[i] = workset[key][3]
-                for index, first, count in replies:
-                    pipes[index].send(
-                        {
-                            "op": "work",
-                            "shapes": pack(
-                                slots[index], outputs[first : first + count]
-                            ),
-                            "versions": [0] * count,
-                            "assignments": [],
-                        }
-                    )
-                due = min(
-                    updates,
-                    sum(progress_commands.values())
-                    * updates
-                    // (len(starts) * commands),
-                )
-                while trainer.stats["updates"] < due:
-                    trainer.credit = config.batch
-                    trainer.learn()
-            # 自然终局可能提前结束窗口，仍执行约定的同量学习。
-            while trainer.stats["updates"] < updates:
-                trainer.credit = config.batch
-                trainer.learn()
+                        snapshots[index] = message[1]
+            stats = remote.call({"op": "stats"})["stats"]
             elapsed = time.perf_counter() - started
-            result = {
-                "workers": workers,
-                "lanes": lanes,
-                "seconds": elapsed,
-                "startup_seconds": first_ready - started,
-                "commands": sum(g["steps"] for g in outcomes.values()),
-                "inference_positions": trainer.stats["inference_roots"],
-                "decoder_calls": trainer.stats["inference_decodes"],
-                "inference_batches": trainer.stats["inference_batches"],
-                "inference_seconds": trainer.stats["inference_seconds"],
-                "learning_seconds": trainer.stats["learning_seconds"],
-                "updates": trainer.stats["updates"],
-                "trained_samples": trainer.stats["trained_samples"],
-                "value_samples": trainer.stats["value_samples"],
-                "cuda_peak_bytes": torch.cuda.max_memory_allocated(),
-                "games": dict(sorted(outcomes.items())),
-            }
             trace = {}
             for game in sorted(outcomes):
                 root = Path(directory) / "games" / str(game)
-                metadata = json.loads((root / "game.json").read_text())
+                meta = json.loads((root / "game.json").read_text(encoding="utf-8"))
                 trace[game] = [
                     json.loads(line)
-                    for name in metadata["command_segments"]
+                    for name in meta["command_segments"]
                     for line in (root / name).read_text(encoding="utf-8").splitlines()
                 ]
-            result["_trace"] = trace
-            result["_learning_rng"] = trainer.rng.bit_generator.state
-            result["commands_per_second"] = result["commands"] / elapsed
-            result["trained_samples_per_second"] = result["trained_samples"] / elapsed
-            return result
+            return {
+                "workers": 4,
+                "lanes": config.games_per_worker,
+                "seconds": elapsed,
+                "startup_seconds": first_ready - started,
+                "commands": sum(g["steps"] for g in outcomes.values()),
+                "inference_positions": stats["inference_roots"],
+                "decoder_calls": stats["inference_decodes"],
+                **{
+                    k: stats[k]
+                    for k in (
+                        "inference_batches",
+                        "inference_seconds",
+                        "learning_seconds",
+                        "updates",
+                        "trained_samples",
+                        "value_samples",
+                        "cuda_peak_bytes",
+                    )
+                },
+                "queue_seconds": stats["inference_queue_seconds"],
+                "games": dict(sorted(outcomes.items())),
+                "_trace": trace,
+                "_learning_rng": trainer.rng.bit_generator.state,
+                "commands_per_second": sum(g["steps"] for g in outcomes.values())
+                / elapsed,
+                "trained_samples_per_second": stats["trained_samples"] / elapsed,
+            }
         finally:
-            for process in processes:
+            if gpu.is_alive():
+                parent.send({"op": "stop"})
+            gpu.join(10)
+            if gpu.is_alive():
+                gpu.terminate()
+                gpu.join()
+            for index, process in processes.items():
+                if process.is_alive():
+                    controls[index].send({"op": "stop"})
                 process.join(5)
                 if process.is_alive():
                     process.terminate()
                     process.join()
-            for pipe in pipes:
-                pipe.close()
-            for slot in slots:
-                slot.close()
+            for connection in controls.values():
+                connection.close()
+            remote.close()
+
+
+def run_baseline(root, checkpoint, workset, commands, updates, count, record):
+    # 基线来自已提交代码的独立导出目录；不把旧实现重新放进生产包。
+    program = """
+import json, pickle, sys, torch
+from pathlib import Path
+from training.tests.bench_pipeline import starting_positions, run
+checkpoint, workset, commands, updates, count, record, output = sys.argv[1:]
+commands, updates, count, record = map(int, (commands, updates, count, record))
+saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
+starts, replay = starting_positions(Path(checkpoint).parent)
+starts *= count // 16
+feedback = {} if record else pickle.loads(Path(workset).read_bytes())
+result = run(4, count // 4, commands, updates, saved, starts, replay, feedback, record=bool(record))
+if record:
+    Path(workset).write_bytes(pickle.dumps(feedback))
+Path(output).write_bytes(pickle.dumps(result))
+"""
+    with tempfile.TemporaryDirectory(prefix="haojie-baseline-result-") as directory:
+        path = Path(directory) / "result.pkl"
+        subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                program,
+                str(checkpoint),
+                str(workset),
+                str(commands),
+                str(updates),
+                str(count),
+                str(int(record)),
+                str(path),
+            ],
+            cwd=root,
+            env={
+                **os.environ,
+                "HAOJIE_ENGINE": str(
+                    Path(
+                        os.environ.get(
+                            "HAOJIE_ENGINE",
+                            "artifacts/native-target/release/haojie_native.dll",
+                        )
+                    ).resolve()
+                ),
+            },
+            check=True,
+        )
+        return pickle.loads(path.read_bytes())
+
+
+def signature(result):
+    return (
+        result.pop("_trace"),
+        result.pop("_learning_rng"),
+        result["games"],
+        result["inference_positions"],
+        result["decoder_calls"],
+        result["updates"],
+        result["trained_samples"],
+        result["value_samples"],
+    )
 
 
 def main():
-    import torch
-
     parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--baseline")
     parser.add_argument("--commands", type=int, default=8)
     parser.add_argument("--updates", type=int, default=8)
     parser.add_argument("--trials", type=int, default=3)
-    parser.add_argument("--checkpoint", required=True)
     args = parser.parse_args()
     checkpoint = Path(args.checkpoint).resolve()
     saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
@@ -287,8 +375,8 @@ def main():
                 "event": "workload",
                 "simulations": [64, 16],
                 "full_fraction": 0.25,
-                "commands_per_position": args.commands,
-                "learning_updates": args.updates,
+                "commands": args.commands,
+                "learning_updates_per_16_games": args.updates,
                 "starts": [
                     {k: v for k, v in s.items() if k != "environment"} for s in starts
                 ],
@@ -296,41 +384,59 @@ def main():
         ),
         flush=True,
     )
-    workset = {}
-    captured = run(
-        1, 16, args.commands, args.updates, saved, starts, replay, workset, record=True
-    )
+    with tempfile.TemporaryDirectory(prefix="haojie-frozen-feedback-") as directory:
+        for count in (16, 64):
+            path = Path(directory) / f"{count}.pkl"
+            updates = args.updates * (count // 16)
 
-    def signature(result):
-        return (
-            result.pop("_trace"),
-            result.pop("_learning_rng"),
-            result["games"],
-            result["inference_positions"],
-            result["decoder_calls"],
-            result["updates"],
-            result["trained_samples"],
-            result["value_samples"],
-        )
+            def execute(backend, record=False):
+                if backend == "baseline":
+                    return run_baseline(
+                        Path(args.baseline).resolve(),
+                        checkpoint,
+                        path,
+                        args.commands,
+                        updates,
+                        count,
+                        record,
+                    )
+                return run_async(
+                    saved,
+                    starts * (count // 16),
+                    replay,
+                    path,
+                    args.commands,
+                    updates,
+                    record,
+                )
 
-    baseline = signature(captured)
-    print(json.dumps({"event": "captured", **captured}), flush=True)
-    configurations = [(1, 16), (2, 8), (4, 4)]
-    for trial in range(args.trials):
-        for workers, lanes in configurations[trial % 3 :] + configurations[: trial % 3]:
-            result = run(
-                workers,
-                lanes,
-                args.commands,
-                args.updates,
-                saved,
-                starts,
-                replay,
-                workset,
+            reference = execute("baseline" if args.baseline else "asynchronous", True)
+            expected = signature(reference)
+            print(
+                json.dumps({"event": "captured", "concurrency": count, **reference}),
+                flush=True,
             )
-            if signature(result) != baseline:
-                raise AssertionError("拓扑改变了冻结轨迹、搜索或学习工作量")
-            print(json.dumps({"trial": trial, **result}), flush=True)
+            for trial in range(args.trials):
+                backends = (
+                    ["baseline", "asynchronous"] if args.baseline else ["asynchronous"]
+                )
+                if trial % 2:
+                    backends.reverse()
+                for backend in backends:
+                    result = execute(backend)
+                    if signature(result) != expected:
+                        raise AssertionError("整体改造改变了冻结轨迹、搜索或学习工作量")
+                    print(
+                        json.dumps(
+                            {
+                                "trial": trial,
+                                "backend": backend,
+                                "concurrency": count,
+                                **result,
+                            }
+                        ),
+                        flush=True,
+                    )
 
 
 if __name__ == "__main__":

@@ -15,13 +15,13 @@
 
 ## 进程与 IPC
 
-常驻 Python CPU worker，每个交替推进多局；Rust 动态库通过 ctypes 在 worker 内执行规则、合法解码与三档手工 AI。单个 Python 主进程持有 GPU，合批推理并穿插短学习批次。CPU worker 不导入 PyTorch，不逐局新建进程，也不另开引擎进程。
+CPU 协调进程负责对局分配、阶段、回放抽样与检查点；常驻 Python actor 在进程内通过 ctypes 调用 Rust 规则、合法解码与三档手工 AI；独立 GPU 进程持有模型和优化器，统一调度推理与学习。actor 不导入 PyTorch，协调进程不创建 CUDA 上下文。完整职责、协议和恢复设计见[运行时架构](TRAINING-RUNTIME.md)。
 
-当前默认 **4 worker × 每 worker 4 局**，CLI 会按可用 CPU 数下调 worker。此分配由本机 RTX 3060 Laptop 上的正式预算、中后期局面和学习混合测量选定；其他设备可用同一基准复测并显式调整。
+默认 **4 actor × 每 actor 16 局**，CLI 会按可用 CPU 数下调 actor。进程数量与在途对局数量分开：每局独立等待 GPU，等待期间 actor 推进其他就绪局，不再等待整组回复。旧 v2 检查点恢复时沿用原并发。
 
-每个 worker 独占可复用的 16 MiB `multiprocessing.shared_memory` 槽，Pipe 只传形状、模型版本、事件和所有权交接。超过容量时显式扩容。大张量不经 Queue/pickle，不跨进程共享 CUDA 张量。GPU 输出按 BF16 原始 16 位传输。依据：[Python SharedMemory](https://docs.python.org/3/library/multiprocessing.shared_memory.html)、[PyTorch 多进程说明](https://docs.pytorch.org/docs/stable/notes/multiprocessing.html)。
+每个 lane 独占可复用的 `multiprocessing.shared_memory` 槽，初始 256 KiB，按实际负载扩容。推理 Pipe 直接连接 actor 与 GPU，协调事件走另一条 Pipe；学习批次使用独立共享槽。每个槽确认交还后才能覆盖，大张量不经 Queue/pickle，不跨进程共享 CUDA 张量。GPU 输出按 BF16 原始 16 位传输。低频检查点通过 PyTorch 的 CPU 张量共享传回协调进程落盘。依据：[Python SharedMemory](https://docs.python.org/3/library/multiprocessing.shared_memory.html)、[PyTorch 多进程说明](https://docs.pytorch.org/docs/stable/notes/multiprocessing.html)。
 
-主进程按模型版本、encode/decode 类型与长度分桶，推理模型缓存最多 3 个版本。单次搜索绑定同一发布版本，历史对手整局固定。实体主干结果按 worker、局、搜索起点和版本缓存；换命令时释放该局旧搜索上下文。
+GPU 跨 actor 收集请求，达到 32 个请求或最老请求等待 2 ms 时执行；按模型版本、encode/decode 分组，组内按长度排序。每轮推理后可执行一个已准备的学习批次。推理模型缓存最多 3 个版本；单次搜索绑定同一发布版本，历史对手整局固定。实体主干结果按 actor、局、搜索起点和版本缓存，换命令或结束对局时释放。
 
 2026-10-29 Windows 本机 IPC 测量，3 轮交错、每轮 150 次完整往返，包含负载写入/读取/修改：
 
@@ -34,7 +34,9 @@
 
 本机选共享内存。`training/tests/bench_ipc.py` 可复测。`bench_pipeline.py` 从四局真实轨迹各取 25%、50%、75%、90% 处的非终局状态，形成 16 个中后期起点。使用正式 64/16 搜索、25% 深搜，每个起点推进 8 条命令，同时固定执行 8 次 BF16 学习更新、消费 128 个回放样本。
 
-基准先录制搜索反馈，随后让 1×16、2×8、4×4 对同一工作集执行真实 Rust 搜索、GPU 推理与学习，以录制反馈控制批大小舍入造成的路径分歧。核对已有公开状态键、请求形状、逐条命令、主干/解码次数、学习采样 RNG 及消费数量。推理权重冻结，学习使用独立模型及相同优化器初态。计时包含进程启动、规则、推理、IPC、轨迹落盘、回放读取和学习；源轨迹重放准备在计时前完成。当前测量见状态入口。
+基准先录制搜索反馈，以录制反馈控制批大小舍入造成的路径分歧；每次仍执行真实 Rust 搜索、GPU 推理和学习。分别在 16、64 局供给下比较，64 局重复同一组 16 个起点并同比增加命令和学习量。可通过 `--baseline` 指定 `d2eb7a4` 的独立导出目录，旧/新运行时交错三轮；旧代码只存在于该外部基线目录。
+
+核对已有公开状态键、请求形状、逐条命令、主干/解码次数、学习采样 RNG 及消费数量。推理权重冻结，学习使用独立模型及相同优化器初态。计时包含 actor 启动、规则、推理、IPC、轨迹落盘、回放读取和学习；两端的模型准备与源轨迹重放均在计时前完成。当前测量见状态入口。
 
 ## 模型和精度
 
