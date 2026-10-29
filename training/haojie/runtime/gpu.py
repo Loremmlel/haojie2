@@ -1,18 +1,14 @@
-"""独占 CUDA 的执行服务：跨 actor 组批，学习在推理批次边界执行。"""
+"""单进程 GPU 所有者与本地控制队列；原生线程池直接供给神经请求。"""
 
 import copy
-import signal
-import time
-import traceback
 from collections import deque
-from multiprocessing.connection import wait
+from concurrent.futures import Future
+from queue import Queue, Empty
 from pathlib import Path
 
 import torch
 
-from ..search import Request
 from .compute import Compute
-from .ipc import Slot, pack, unpack, batch_arrays, restore_batch
 
 
 GPU_KEYS = (
@@ -110,197 +106,110 @@ class Executor(Compute):
         }
 
 
-def serve(control, actors, directory, config, initial):
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    slots, pending = {}, deque()
-    learning = None
-    executor = None
-
-    def arrays(owner, message):
-        previous = slots.get(owner)
-        if previous is None or previous.name != message["slot"]:
-            if previous is not None:
-                previous.close()
-            slots[owner] = Slot(message["slot"])
-        return unpack(slots[owner], message["shapes"])
-
-    try:
-        executor = Executor(directory, config, initial)
-        control.send({"op": "ready"})
-        while True:
-            timeout = (
-                max(0, 0.002 - (time.perf_counter() - pending[0][0]))
-                if pending
-                else 0.05
-            )
-            if learning:
-                timeout = 0
-            ready = wait([control, *actors], timeout)
-            if control in ready:
-                message = control.recv()
-                op = message["op"]
-                if op == "stop":
-                    break
-                if op == "learn":
-                    if learning is not None:
-                        raise RuntimeError("学习槽在确认前被重复提交")
-                    learning = message
-                elif op == "publish":
-                    executor.publish(message["version"], message["retained"])
-                    control.send({"op": "published"})
-                elif op == "snapshot":
-                    if pending or learning:
-                        raise RuntimeError("必须排空推理和学习后才能保存")
-                    control.send({"op": "snapshot", "state": executor.snapshot()})
-                elif op == "stats":
-                    control.send({"op": "stats", "stats": executor.report()})
-                elif op == "infer":
-                    values = arrays("boundary", message)
-                    job = (
-                        message["version"],
-                        Request("encode", message["context"], tuple(values)),
-                        ("boundary", 0),
-                    )
-                    output = executor.infer([job])[0]
-                    executor.release(("boundary", 0))
-                    control.send(
-                        {"op": "inferred", "shapes": pack(slots["boundary"], [output])}
-                    )
-            for index, connection in enumerate(actors):
-                if connection not in ready:
-                    continue
-                while connection.poll():
-                    message = connection.recv()
-                    owner = index, message["lane"]
-                    if message["op"] == "release":
-                        executor.release(owner)
-                        continue
-                    version = executor.resolve(owner, message)
-                    values = arrays(owner, message)
-                    pending.append(
-                        (
-                            time.perf_counter(),
-                            index,
-                            message,
-                            (
-                                version,
-                                Request(
-                                    message["kind"], message["context"], tuple(values)
-                                ),
-                                owner,
-                            ),
-                        )
-                    )
-            if pending and (
-                len(pending) >= config.inference_batch
-                or time.perf_counter() - pending[0][0] >= 0.002
-            ):
-                selected = [
-                    pending.popleft()
-                    for _ in range(min(len(pending), config.inference_batch))
-                ]
-                now = time.perf_counter()
-                executor.queue_seconds += sum(now - item[0] for item in selected)
-                executor.queued_requests += len(selected)
-                outputs = executor.infer([item[3] for item in selected])
-                for item, output in zip(selected, outputs):
-                    _, index, message, job = item
-                    actors[index].send(
-                        {
-                            "op": "answer",
-                            "lane": message["lane"],
-                            "version": job[0],
-                            "shapes": pack(slots[job[2]], [output]),
-                        }
-                    )
-            if learning:
-                batch = restore_batch(arrays("learning", learning), learning["rows"])
-                executor.update(batch)
-                control.send(
-                    {"op": "learned", "stats": executor.report(), "samples": len(batch)}
-                )
-                learning = None
-    except BaseException:
-        error = traceback.format_exc()
-        control.send({"op": "error", "error": error})
-        for connection in actors:
-            try:
-                connection.send({"op": "error", "error": error})
-            except (BrokenPipeError, OSError):
-                pass
-        raise
-    finally:
-        for slot in slots.values():
-            slot.close()
-        for connection in actors:
-            connection.close()
-        control.close()
+def infer_batch(executor, batch):
+    jobs, versions = [], []
+    for request in batch.requests:
+        owner = (0, request.lane)
+        version = executor.resolve(
+            owner,
+            {
+                "root": (request.game_id, request.step),
+                "model": "current" if request.model == -1 else request.model,
+            },
+        )
+        jobs.append((version, request, owner))
+        versions.append(version)
+    outputs = executor.infer(jobs)
+    batch.reply(outputs, versions)
+    executor.queued_requests += len(jobs)
 
 
-class Remote:
-    """CPU 协调端；学习只有一个在途批次，其余低频请求使用独立槽。"""
+class Local:
+    """协调线程只提交直接数组引用，GPU 主线程在批次边界执行。"""
 
-    def __init__(self, connection, retained):
-        self.connection, self.retained = connection, retained
-        self.learning = False
+    def __init__(self, pool, retained):
+        self.pool, self.retained = pool, retained
+        self.commands = Queue(maxsize=4)
+        self.pending = None
         self.completed = deque()
-        self.slot = Slot(size=16 * 1024 * 1024)
-        self.boundary = Slot(size=256 * 1024)
+        self.error = None
 
-    def receive(self):
-        message = self.connection.recv()
-        if message["op"] == "error":
-            raise RuntimeError(message["error"])
-        if message["op"] == "learned":
-            self.learning = False
-            self.completed.append(message)
-        return message
+    @property
+    def learning(self):
+        return self.pending is not None
 
-    def call(self, message):
-        self.connection.send(message)
-        while True:
-            result = self.receive()
-            if result["op"] != "learned":
-                return result
+    def submit(self, op, **payload):
+        if self.error is not None:
+            raise RuntimeError("GPU 执行已停止") from self.error
+        future = Future()
+        self.commands.put((op, payload, future))
+        self.pool.wake()
+        return future
 
-    def prepare(self, attribute, arrays):
-        slot = getattr(self, attribute)
-        needed = sum(a.nbytes for a in arrays)
-        if needed > slot.memory.size:
-            slot.close()
-            slot = Slot(size=needed * 2)
-            setattr(self, attribute, slot)
-        return {"slot": slot.name, "shapes": pack(slot, arrays)}
+    def call(self, op, **payload):
+        return self.submit(op, **payload).result()
 
     def learn(self, batch):
-        if self.learning or self.completed:
-            raise RuntimeError("必须先提交上一批学习结果")
-        arrays, rows = batch_arrays(batch)
-        self.connection.send(
-            {"op": "learn", "rows": rows, **self.prepare("slot", arrays)}
-        )
-        self.learning = True
+        if self.pending is not None:
+            raise RuntimeError("上一学习批次尚未确认")
+        self.pending = self.submit("learn", batch=batch)
+
+    def collect(self, block=False):
+        if self.pending is not None and (block or self.pending.done()):
+            self.completed.append(self.pending.result())
+            self.pending = None
 
     def publish(self, version):
-        self.call(
-            {"op": "publish", "version": version, "retained": list(self.retained())}
-        )
+        self.call("publish", version=version, retained=list(self.retained()))
 
     def infer(self, jobs):
-        result = []
-        for version, request, _ in jobs:
-            answer = self.call(
-                {
-                    "op": "infer",
-                    "version": version,
-                    "context": request.context,
-                    **self.prepare("boundary", request.arrays),
-                }
-            )
-            result.append(unpack(self.boundary, answer["shapes"], copy=True)[0])
-        return result
+        return self.call("infer", jobs=jobs)
 
-    def close(self):
-        self.slot.close()
-        self.boundary.close()
-        self.connection.close()
+    def fail(self, error):
+        self.error = error
+        while True:
+            try:
+                _, _, future = self.commands.get_nowait()
+            except Empty:
+                break
+            future.set_exception(error)
+
+    def execute_one(self, executor):
+        try:
+            op, payload, future = self.commands.get_nowait()
+        except Empty:
+            return
+        try:
+            if op == "learn":
+                executor.update(payload["batch"])
+                result = {"stats": executor.report(), "samples": len(payload["batch"])}
+            elif op == "publish":
+                executor.publish(payload["version"], payload["retained"])
+                result = None
+            elif op == "infer":
+                result = executor.infer(payload["jobs"])
+                for _, _, owner in payload["jobs"]:
+                    executor.release(owner)
+            elif op == "release":
+                for lane in payload["lanes"]:
+                    executor.release((0, lane))
+                result = None
+            elif op == "drain":
+                while (
+                    batch := self.pool.take_requests(executor.config.inference_batch, 0)
+                ) is not None:
+                    with batch:
+                        infer_batch(executor, batch)
+                result = None
+            elif op == "snapshot":
+                result = executor.snapshot()
+            elif op == "stats":
+                result = executor.report()
+            else:
+                raise ValueError(f"未知 GPU 控制: {op}")
+            future.set_result(result)
+        except BaseException as error:
+            future.set_exception(error)
+            raise
+        finally:
+            self.pool.wake()

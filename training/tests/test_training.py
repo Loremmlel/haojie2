@@ -1,24 +1,20 @@
 """验收分层概率、图复用、原生 BF16、真实/软目标边界和阶段恢复。"""
 
-import copy
 import json
 import tempfile
 import unittest
-from collections import Counter
+from types import SimpleNamespace
 from pathlib import Path
 import numpy as np
 import torch
 
 from training.haojie.native import Environment
 from training.haojie.model import Network, collate_states, collate_options
-from training.haojie.search import search, Request
 from training.haojie.opponents import Opponents
 from training.haojie.runtime.storage import GameWriter, Replay, atomic_json
 from training.haojie.runtime.config import Config
-from training.haojie.runtime.worker import Lane
 from training.haojie.runtime.trainer import Trainer
 from training.haojie.runtime.targets import Calibration
-from training.haojie.runtime.ipc import Slot, pack, unpack, search_values
 
 
 def bundle(n=3):
@@ -30,130 +26,9 @@ def bundle(n=3):
     )
 
 
-def answer(request):
-    return np.zeros(
-        5 if request.op == "encode" else len(request.arrays[0]), np.float32
-    ), 17
-
-
-class GraphEnvironment:
-    def __init__(self, diamond=False, actions=2):
-        self.diamond = diamond
-        self.actions = actions
-
-    def encode(self, position=0):
-        return {"id": position, "actor": 1, "ply": 1, "key": str(position)}, bundle()
-
-    def decode(self, position, prefix=0):
-        if prefix:
-            return {"leaf": True, "command": {"choice": prefix - 1}}, None
-        return {"leaf": False, "next": list(range(1, self.actions + 1))}, np.zeros(
-            (self.actions, 704), np.float32
-        )
-
-    def call(self, op, **args):
-        position = args["id"]
-        choice = args["command"]["choice"]
-        if self.actions > 2:
-            return {"actor": 2, "winner": 1 if choice == 63 else 2}
-        if position == 0:
-            child = choice + 1
-        elif self.diamond and position in (1, 2):
-            child = 3
-        else:
-            return {
-                "actor": 2,
-                "winner": 1 if (choice == 0 if self.diamond else position == 1) else 2,
-            }
-        return {"id": child, "actor": 1, "winner": None, "key": str(child)}
-
-
-def run_search(env, simulations=80):
-    generator = search(
-        env, np.random.default_rng(3), simulations=simulations, depth=8, noise=False
-    )
-    reply = None
-    encoded = Counter()
-    while True:
-        try:
-            request = next(generator) if reply is None else generator.send(reply)
-            if request.op == "encode":
-                encoded[request.context] += 1
-            reply = answer(request)
-        except StopIteration as result:
-            return (*result.value, encoded)
-
-
 class TrainingTests(unittest.TestCase):
     def setUp(self):
         torch.set_num_threads(1)
-
-    def test_same_player_value_and_transposition(self):
-        root, policy, version, _ = run_search(GraphEnvironment())
-        winning = next(i for i, e in enumerate(root.edges) if e.command["choice"] == 0)
-        self.assertGreater(policy[winning], 0.8)
-        self.assertEqual(version, 17)
-        root, _, _, encoded = run_search(GraphEnvironment(diamond=True), 120)
-        self.assertEqual(encoded["3"], 1)
-        self.assertEqual(root.graph_nodes, 4)
-        self.assertGreater(root.transpositions, 0)
-
-    def test_expansion_reaches_actions_beyond_32(self):
-        root, policy, _, encoded = run_search(GraphEnvironment(actions=64), 1100)
-        self.assertEqual({e.command["choice"] for e in root.edges}, set(range(64)))
-        self.assertAlmostEqual(sum(e.prior for e in root.edges), 1)
-        self.assertEqual(encoded, {"0": 1})
-        options, target, mass = root.supervision(policy)[0]
-        self.assertEqual(len(options), 64)
-        self.assertAlmostEqual(float(target.sum()), 1)
-        self.assertAlmostEqual(mass, 1)
-
-    def test_conditional_probability_and_command_depth(self):
-        class Conditional(GraphEnvironment):
-            def decode(self, position, prefix=0):
-                if prefix == 0:
-                    return {"leaf": False, "next": [1, 2]}, np.zeros(
-                        (2, 704), np.float32
-                    )
-                if prefix in (1, 2):
-                    return {
-                        "leaf": False,
-                        "next": list(range(3 + (prefix - 1) * 3, 6 + (prefix - 1) * 3)),
-                    }, np.zeros((3, 704), np.float32)
-                return {
-                    "leaf": True,
-                    "command": {
-                        "source": (prefix - 3) // 3,
-                        "target": (prefix - 3) % 3,
-                    },
-                }, None
-
-            def call(self, op, **args):
-                self_test.assertEqual(set(args["command"]), {"source", "target"})
-                return {"actor": 2, "winner": 1}
-
-        self_test = self
-        generator = search(
-            Conditional(),
-            np.random.default_rng(5),
-            simulations=40,
-            depth=1,
-            noise=False,
-        )
-        reply = None
-        encodes = 0
-        while True:
-            try:
-                request = next(generator) if reply is None else generator.send(reply)
-                encodes += request.op == "encode"
-                reply = answer(request)
-            except StopIteration as result:
-                root, policy, _ = result.value
-                break
-        self.assertEqual(encodes, 1)
-        self.assertEqual(len(root.edges), 6)
-        self.assertTrue(all(abs(e.prior - 1 / 6) < 1e-7 for e in root.edges))
-        self.assertAlmostEqual(sum(d[2] for d in root.supervision(policy)), 2)
 
     def test_public_rng_restore_and_compact_records(self):
         with Environment(713) as env:
@@ -235,27 +110,32 @@ class TrainingTests(unittest.TestCase):
             collate_options([options], "cpu")[2][0, 0].tolist(), [257, 299, 259]
         )
 
-    def test_learning_ipc_and_optimizer_resume(self):
+    def test_learning_bf16_and_optimizer_resume(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Config(device="cpu", batch=2, warmup_games=0)
             trainer = Trainer(directory, config)
             state = bundle()
             options = np.zeros((2, 704), np.float32)
             target = np.array([0.3, 0.7], np.float32)
-            request = Request("encode", "state", state)
+            request = SimpleNamespace(op="encode", context="state", arrays=state)
             bits = trainer.infer([(0, request, (0, 0))])[0]
-            slot = Slot(size=4096)
-            try:
-                packed = unpack(slot, pack(slot, [bits]), copy=True)[0]
-                self.assertEqual(packed.dtype, np.uint16)
-                self.assertEqual(packed.nbytes, 10)
-                self.assertTrue(np.isfinite(search_values(packed)).all())
-            finally:
-                slot.close()
+            self.assertEqual(bits.dtype, np.uint16)
+            self.assertEqual(bits.nbytes, 10)
+            self.assertTrue(
+                torch.isfinite(torch.from_numpy(bits).view(torch.bfloat16)).all()
+            )
             self.assertEqual(
                 len(
                     trainer.infer(
-                        [(0, Request("decode", "state", (options,)), (0, 0))]
+                        [
+                            (
+                                0,
+                                SimpleNamespace(
+                                    op="decode", context="state", arrays=(options,)
+                                ),
+                                (0, 0),
+                            )
+                        ]
                     )[0]
                 ),
                 2,
@@ -428,96 +308,14 @@ class TrainingTests(unittest.TestCase):
             self.assertEqual(restored.imitation_updates, 2)
             self.assertNotEqual(restored.game()["opponent"], "demo")
 
-    def test_ply_limit_reservation_and_resume(self):
+    def test_ply_limit_reservation(self):
         with tempfile.TemporaryDirectory() as directory:
-            config = Config(device="cpu", warmup_games=0, full_game_fraction=0)
-            trainer = Trainer(directory, config)
-            short = trainer.game()
-            self.assertEqual(short["ply_limit"], 50)
+            trainer = Trainer(
+                directory, Config(device="cpu", warmup_games=0, full_game_fraction=0)
+            )
+            self.assertEqual(trainer.game()["ply_limit"], 50)
             trainer.config.full_game_fraction = 1
-            long = trainer.game()
-            self.assertEqual(long["ply_limit"], 0)
-            lanes = []
-            try:
-                for game in (short, long):
-                    lane = Lane(directory, config, game)
-                    lanes.append(lane)
-                    snapshot = lane.environment.call("snapshot")
-                    snapshot["state"]["ply"] = 50
-                    snapshot["state"]["phase"] = "play"
-                    snapshot["state"]["summonSlots"] = 0
-                    lane.environment.call("restore", snapshot=snapshot)
-                    lane.info = lane.environment.call("info")
-                    self.assertFalse(any(e["type"] == "done" for e in lane.events()))
-                    saved = copy.deepcopy(lane.snapshot())
-                    # 改动默认上限不会改变这局已经分配的终止条件。
-                    config.max_ply = 10
-                    resumed = Lane(directory, config, game, saved)
-                    lanes.append(resumed)
-                    result = resumed.environment.call("apply", command={"type": "end"})
-                    self.assertFalse(result.get("rejected"))
-                    resumed.info = result
-                    resumed.writer.transition(result, {"type": "end"})
-                    done = [e for e in resumed.events() if e["type"] == "done"]
-                    self.assertEqual(bool(done), game is short)
-                    if done:
-                        self.assertIsNone(done[0]["winner"])
-                        self.assertEqual(done[0]["truncation"], "ply_limit")
-                        trainer.event(done[0])
-                        self.assertEqual(trainer.stats["ply_truncated"], 1)
-                        self.assertIsNone(resumed.writer.metadata["winner"])
-                    else:
-                        resumed.writer.metadata["steps"] = config.max_commands
-                        done = [e for e in resumed.events() if e["type"] == "done"]
-                        self.assertEqual(done[0]["truncation"], "command_limit")
-                        # 同一命令到达真实终局时，优先保留终局而非截断。
-                        resumed.info["winner"] = 1
-                        done = [e for e in resumed.events() if e["type"] == "done"]
-                        self.assertIsNone(done[0]["truncation"])
-                        self.assertEqual(done[0]["winner"], 1)
-            finally:
-                for lane in lanes:
-                    lane.close()
-
-    def test_teacher_opponent_resume_during_decode(self):
-        with tempfile.TemporaryDirectory() as directory:
-            config = Config(simulations=2, fast_simulations=2)
-            game = {
-                "id": 0,
-                "seed": 91,
-                "learner": 2,
-                "opponent": "teacher",
-                "difficulty": "easy",
-            }
-            original = Lane(directory, config, game)
-            restored = None
-            try:
-                request = None
-                for _ in range(300):
-                    request, _ = original.advance(answer(request) if request else None)
-                    if request is not None and request.op == "decode":
-                        break
-                else:
-                    self.fail("没有进入条件参数解码")
-                snapshot = copy.deepcopy(original.snapshot())
-                self.assertIsNotNone(snapshot["teacher"])
-                restored = Lane(directory, config, game, snapshot)
-                for lane in (original, restored):
-                    before = lane.writer.metadata["steps"]
-                    request = lane.request
-                    while lane.writer.metadata["steps"] == before:
-                        request, _ = lane.advance(answer(request) if request else None)
-                self.assertEqual(
-                    original.environment.call("snapshot"),
-                    restored.environment.call("snapshot"),
-                )
-                self.assertEqual(
-                    original.teacher.snapshot(), restored.teacher.snapshot()
-                )
-            finally:
-                original.close()
-                if restored:
-                    restored.close()
+            self.assertEqual(trainer.game()["ply_limit"], 0)
 
     def test_old_models_remain_reachable(self):
         pool = Opponents()

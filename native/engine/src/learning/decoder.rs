@@ -19,6 +19,14 @@ struct Node {
     stage: Stage,
     children: Option<Vec<usize>>,
 }
+pub struct Choices {
+    pub command: Option<Command>,
+    pub children: Vec<usize>,
+    pub commands: Vec<Command>,
+    pub stage: usize,
+    pub focus: &'static str,
+}
+
 pub struct Decoder {
     actions: Vec<Action>,
     steps: Vec<Vec<Step>>,
@@ -115,12 +123,12 @@ impl Decoder {
         });
         id
     }
-    pub fn choices(
+    pub fn front(
         &mut self,
         s: &State,
         catalog: &Catalog,
         prefix: usize,
-    ) -> Result<Value, String> {
+    ) -> Result<Choices, String> {
         let node = self
             .nodes
             .get(prefix)
@@ -144,7 +152,13 @@ impl Decoder {
             _ => "action",
         };
         if matches!(node.stage, Stage::Leaf) {
-            return Ok(json!({"leaf":true,"command":node.command}));
+            return Ok(Choices {
+                command: Some(node.command),
+                children: vec![],
+                commands: vec![],
+                stage,
+                focus,
+            });
         }
         if node.children.is_none() {
             let mut children = vec![];
@@ -216,10 +230,30 @@ impl Decoder {
             self.nodes[prefix].children = Some(children);
         }
         let children = self.nodes[prefix].children.as_ref().unwrap();
-        Ok(
-            json!({"leaf":false,"next":children,"stage":stage,"focus":focus,
-            "choices":children.iter().map(|id|&self.nodes[*id].command).collect::<Vec<_>>()}),
-        )
+        Ok(Choices {
+            command: None,
+            children: children.clone(),
+            commands: children
+                .iter()
+                .map(|id| self.nodes[*id].command.clone())
+                .collect(),
+            stage,
+            focus,
+        })
+    }
+    pub fn choices(
+        &mut self,
+        s: &State,
+        catalog: &Catalog,
+        prefix: usize,
+    ) -> Result<Value, String> {
+        let front = self.front(s, catalog, prefix)?;
+        Ok(if let Some(command) = front.command {
+            json!({"leaf":true, "command":command})
+        } else {
+            json!({"leaf":false, "next":front.children, "stage":front.stage,
+                   "focus":front.focus, "choices":front.commands})
+        })
     }
     pub fn trace(
         &mut self,

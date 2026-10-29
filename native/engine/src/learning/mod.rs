@@ -3,3 +3,6 @@ pub(crate) mod decoder;
 pub(crate) mod encoding;
 mod ffi;
 mod parameters;
+pub(crate) mod pool;
+pub(crate) mod random;
+pub(crate) mod search;

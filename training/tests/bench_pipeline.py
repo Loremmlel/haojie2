@@ -1,27 +1,22 @@
-"""整体架构验收：冻结同一搜索反馈、命令与学习工作量，最后交错比较旧/新运行时。"""
+"""最终统一验收：正式运行时、同量连续作业、冻结反馈、外部 CPU/GPU 采样。"""
 
 import argparse
 import copy
+import importlib
 import json
-import multiprocessing as mp
-from multiprocessing.connection import wait
 import os
 from pathlib import Path
 import pickle
+import queue
+import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import types
 
 import numpy as np
-import torch
-
-from training.haojie.native import Environment
-from training.haojie.runtime.config import Config
-from training.haojie.runtime.gpu import Executor, Remote, serve
-from training.haojie.runtime.storage import GameWriter, Replay
-from training.haojie.runtime.trainer import Trainer
-from training.haojie.runtime.worker import worker
 
 
 def starting_positions(directory):
@@ -58,385 +53,615 @@ def starting_positions(directory):
     return positions, [str(p) for p in paths[:4]]
 
 
-def benchmark_gpu(control, actors, directory, config, initial, workset_path, record):
-    # 仅基准替换反馈；GPU 仍执行所有真实推理。正式服务没有录制逻辑。
-    workset = {} if record else pickle.loads(Path(workset_path).read_bytes())
-    positions = {}
-    initialize, infer = Executor.__init__, Executor.infer
+def legacy_modules():
+    root = Path(os.environ["HAOJIE_BENCH_BASELINE"])
+    name = "haojie_benchmark_baseline"
+    if name not in sys.modules:
+        module = types.ModuleType(name)
+        module.__path__ = [str(root / "source" / "training")]
+        sys.modules[name] = module
+    return {
+        key: importlib.import_module(name + ".haojie.runtime." + key)
+        for key in ("trainer", "pipeline", "gpu", "worker", "storage")
+    }
 
-    def setup(self, *args):
-        initialize(self, *args)
-        self.inference_models[0] = copy.deepcopy(self.model).eval()
 
-    def controlled(self, jobs):
-        outputs = infer(self, jobs)
-        for i, (_, request, owner) in enumerate(jobs):
-            root = self.bindings[owner][0]
-            number = positions.get(root, 0)
-            positions[root] = number + 1
-            key = root, number
-            descriptor = (
-                request.op,
-                request.context,
-                tuple((v.shape, v.dtype.str) for v in request.arrays),
-            )
-            if record:
-                workset[key] = (*descriptor, outputs[i].copy())
-            else:
-                if descriptor != workset[key][:3]:
-                    raise AssertionError("架构改变了公开状态键或请求形状")
-                outputs[i] = workset[key][3]
-        return outputs
+def write_json(path, value):
+    path = Path(path)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    for attempt in range(20):
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError:
+            # Windows 读句柄短暂阻止替换；采样器读完即释放。
+            if attempt == 19:
+                raise
+            time.sleep(0.001)
 
-    Executor.__init__, Executor.infer = setup, controlled
+
+def read_json(path):
+    for attempt in range(20):
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.001)
+
+
+def role(name, tid=None):
+    directory = Path(os.environ["HAOJIE_BENCH_OUTPUT"]) / "roles"
+    directory.mkdir(exist_ok=True)
+    write_json(
+        directory / (name + ".json"),
+        {
+            "name": name,
+            "pid": os.getpid(),
+            "tid": threading.get_native_id() if tid is None else tid,
+        },
+    )
+
+
+def starting_lane(game, starts):
+    case = game["id"] % len(starts)
+    return {
+        "game": game,
+        "environment": starts[case]["environment"],
+        "rng": np.random.default_rng(game["seed"] ^ 0xA53113).bit_generator.state,
+        "root_version": None,
+        "teacher": None,
+        "steps": 0,
+    }
+
+
+def legacy_worker(*args):
+    modules = legacy_modules()
+    from_cache = pickle.loads(Path(os.environ["HAOJIE_BENCH_STARTS"]).read_bytes())
+    lane = modules["worker"].Lane
+    initialize = lane.__init__
+
+    def restored(self, directory, config, game, previous=None):
+        snapshot = starting_lane(game, from_cache)
+        snapshot["metadata"] = modules["storage"].GameWriter(directory, game).metadata
+        initialize(self, directory, config, game, snapshot)
+
+    lane.__init__ = restored
+    role(f"actor-{args[0]}")
+    modules["worker"].worker(*args)
+
+
+class Feedback:
+    def __init__(self, executor_class, record):
+        self.record = record
+        self.path = Path(os.environ["HAOJIE_BENCH_FEEDBACK"])
+        self.values = {} if record else pickle.loads(self.path.read_bytes())
+        self.positions = {}
+        original = executor_class.infer
+
+        def controlled(executor, jobs):
+            outputs = original(executor, jobs)
+            for i, (_, request, owner) in enumerate(jobs):
+                root = executor.bindings[owner][0]
+                game, step = (
+                    map(int, root.split(":")) if isinstance(root, str) else root
+                )
+                cursor = self.positions.get((game, step), 0)
+                self.positions[game, step] = cursor + 1
+                key = game % 16, step, cursor
+                descriptor = (
+                    request.op,
+                    getattr(request, "key", request.context),
+                    tuple((v.shape, v.dtype.str) for v in request.arrays),
+                )
+                if record and key not in self.values:
+                    self.values[key] = (*descriptor, outputs[i].copy())
+                else:
+                    if descriptor != self.values[key][:3]:
+                        raise AssertionError(
+                            f"冻结请求分岔: {key}: {descriptor[:2]} != {self.values[key][:2]}"
+                        )
+                    outputs[i] = self.values[key][3]
+            return outputs
+
+        executor_class.infer = controlled
+
+    def finish(self):
+        if self.record:
+            self.path.write_bytes(pickle.dumps(self.values))
+
+
+def legacy_gpu(*args):
+    modules = legacy_modules()
+    feedback = Feedback(
+        modules["gpu"].Executor, os.environ["HAOJIE_BENCH_CAPTURE"] == "1"
+    )
+    role("gpu")
     try:
-        serve(control, actors, directory, config, initial)
+        modules["gpu"].serve(*args)
     finally:
-        if record:
-            Path(workset_path).write_bytes(pickle.dumps(workset))
+        feedback.finish()
 
 
-def run_async(saved, starts, replay, workset, commands, updates, record=False):
+def equal_tree(actual, expected, path="root"):
+    if isinstance(expected, np.ndarray):
+        if path.endswith((".targets", ".weights")):
+            np.testing.assert_allclose(
+                actual, expected, rtol=1e-6, atol=1e-7, err_msg=path
+            )
+        else:
+            np.testing.assert_array_equal(actual, expected, err_msg=path)
+    elif isinstance(expected, dict):
+        if actual.keys() != expected.keys():
+            raise AssertionError(f"{path}: 字段不同")
+        for key in expected:
+            equal_tree(actual[key], expected[key], f"{path}.{key}")
+    elif isinstance(expected, (tuple, list)):
+        if len(actual) != len(expected):
+            raise AssertionError(f"{path}: 长度不同")
+        for index, (left, right) in enumerate(zip(actual, expected)):
+            equal_tree(left, right, f"{path}.{index}")
+    elif actual != expected:
+        raise AssertionError(f"{path}: {actual!r} != {expected!r}")
+
+
+def records(directory, count):
+    cases, traces = {}, {}
+    for number in range(count):
+        path = Path(directory) / "games" / str(number)
+        meta = json.loads((path / "game.json").read_text(encoding="utf-8"))
+        trace = [
+            json.loads(line)
+            for name in meta["command_segments"]
+            for line in (path / name).read_text(encoding="utf-8").splitlines()
+        ]
+        chunks = []
+        for name in meta["chunks"]:
+            with np.load(path / name, allow_pickle=False) as data:
+                chunks.append({k: data[k] for k in data.files})
+        case = {
+            "commands": trace,
+            "winner": meta["winner"],
+            "status": meta["status"],
+            "timeline": meta["timeline"],
+            "chunks": chunks,
+        }
+        if number % 16 in cases:
+            equal_tree(case, cases[number % 16], f"repeated-case-{number}")
+        else:
+            cases[number % 16] = case
+        traces[number] = trace
+    return {"cases": cases, "traces": traces}
+
+
+def execute(args):
+    import torch
+    from training.haojie.runtime.config import Config
+
+    global Environment
+    from training.haojie.native import Environment
+
+    output = Path(args.output).resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    baseline = Path(args.baseline).resolve()
+    os.environ.update(
+        HAOJIE_BENCH_BASELINE=str(baseline),
+        HAOJIE_BENCH_OUTPUT=str(output),
+        HAOJIE_BENCH_FEEDBACK=str(Path(args.feedback).resolve()),
+        HAOJIE_BENCH_CAPTURE=str(int(args.capture)),
+    )
+    if args.execute == "baseline":
+        os.environ["HAOJIE_ENGINE"] = str(baseline / "haojie_native.dll")
+    starts, replay = starting_positions(Path(args.checkpoint).resolve().parent)
+    saved = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    updates = args.tasks * args.commands // 16
     config = Config(
         workers=4,
-        games_per_worker=len(starts) // 4,
+        games_per_worker=16,
         warmup_games=0,
         teacher_fraction=0,
         history_fraction=0,
-        max_commands=commands,
+        max_commands=args.commands,
         sample_reuse=0,
         save_seconds=0,
         publish_updates=updates + 1,
     )
-    ctx = mp.get_context("spawn")
-    with tempfile.TemporaryDirectory(prefix="haojie-async-bench-") as directory:
-        trainer = Trainer(directory, config)
+    state = {"assigned": 0, "completed": 0, "full_at": None, "last_write": 0.0}
+    sampler = None
+    feedback = None
+    with tempfile.TemporaryDirectory(prefix="haojie-steady-workload-") as directory:
+        starts_file = Path(directory) / "starts.pkl"
+        starts_file.write_bytes(pickle.dumps(starts))
+        os.environ["HAOJIE_BENCH_STARTS"] = str(starts_file)
+        if args.execute == "baseline":
+            modules = legacy_modules()
+            modules["pipeline"].worker = legacy_worker
+            modules["pipeline"].serve = legacy_gpu
+            trainer = modules["trainer"].Trainer(directory, config)
+            replay_class = modules["storage"].Replay
+            role("coordinator")
+        else:
+            from training.haojie.runtime.trainer import Trainer
+            from training.haojie.runtime.storage import Replay
+            from training.haojie.runtime import pipeline, gpu
+            from training.haojie.native_pool import NativePool
+
+            assign = NativePool.assign
+            status = NativePool.status
+
+            def seeded(self, lane, game, restored=None, **kwargs):
+                return assign(self, lane, game, starting_lane(game, starts), **kwargs)
+
+            def tracked_status(self):
+                result = status(self)
+                for index, tid in enumerate(result.get("threads", [])):
+                    if tid:
+                        role(f"rust-{index}", tid)
+                return result
+
+            run_coordinator = pipeline.Coordinator.run
+
+            def coordinated(self):
+                role("coordinator")
+                return run_coordinator(self)
+
+            NativePool.assign, NativePool.status = seeded, tracked_status
+            pipeline.Coordinator.run = coordinated
+            feedback = Feedback(gpu.Executor, args.capture)
+            trainer = Trainer(directory, config)
+            replay_class = Replay
+            role("gpu")
         trainer.model.load_state_dict(saved["model"])
         trainer.restore_optimizer(copy.deepcopy(saved["optimizer"]))
-        trainer.replay = Replay(games=replay)
+        torch.save(trainer.model.state_dict(), trainer.models / "model-00000000.pt")
+
+        class FixedReplay(replay_class):
+            def add(self, path):
+                pass
+
+        trainer.replay = FixedReplay(games=replay)
         trainer.rng = np.random.default_rng(818031)
-        controls, processes, outcomes = {}, {}, {}
-        parent, child = ctx.Pipe()
-        pairs = [ctx.Pipe() for _ in range(4)]
-        remote = Remote(parent, lambda: {0})
-        payload = {
-            "model": trainer.model.state_dict(),
-            "optimizer": trainer.optimizer.state_dict(),
-            "torch_rng": torch.get_rng_state(),
-            "cuda_rng": None,
-            "stats": trainer.stats,
-            "published": 0,
-            "retained": [0],
-        }
-        gpu = ctx.Process(
-            target=benchmark_gpu,
-            args=(
-                child,
-                [p[0] for p in pairs],
-                directory,
-                config,
-                payload,
-                str(workset),
-                record,
-            ),
-        )
-        gpu.start()
-        child.close()
-        if remote.receive()["op"] != "ready":
-            raise RuntimeError("GPU 初始化失败")
-        # 与旧基准一致：模型准备不计时，actor 启动及之后全部计时。
-        started = time.perf_counter()
-        first_ready = None
-        progress, snapshots = {}, {}
-        try:
-            for index in range(4):
-                local, other = ctx.Pipe()
-                games = [
+        trainer.credit = updates * config.batch
+
+        def progress(force=False):
+            now = time.perf_counter()
+            if force or now - state["last_write"] >= 0.5:
+                state["last_write"] = now
+                write_json(
+                    output / "monitor.json",
                     {
-                        "id": index * config.games_per_worker + lane,
-                        "seed": 910001 + index * config.games_per_worker + lane,
-                        "learner": 1,
-                        "opponent": "self",
-                        "difficulty": "easy",
-                        "ply_limit": 0,
-                    }
-                    for lane in range(config.games_per_worker)
-                ]
-                restored = [
-                    {
-                        "game": game,
-                        "environment": starts[game["id"]]["environment"],
-                        "metadata": GameWriter(directory, game).metadata,
-                        "rng": np.random.default_rng(
-                            game["seed"] ^ 0xA53113
-                        ).bit_generator.state,
-                        "root_version": None,
-                        "teacher": None,
-                    }
-                    for game in games
-                ]
-                process = ctx.Process(
-                    target=worker,
-                    args=(
-                        index,
-                        other,
-                        pairs[index][1],
-                        directory,
-                        config,
-                        games,
-                        restored,
-                    ),
+                        "time": now,
+                        "assigned": state["assigned"],
+                        "completed": state["completed"],
+                        "live": state["assigned"] - state["completed"],
+                        "backlog": args.tasks - state["assigned"],
+                        "full_at": state["full_at"],
+                    },
                 )
-                process.start()
-                other.close()
-                controls[index], processes[index] = local, process
-                pairs[index][0].close()
-                pairs[index][1].close()
-            while (
-                len(outcomes) < len(starts)
-                or remote.learning
-                or trainer.stats["updates"] < updates
-            ):
-                for connection in wait([parent, *controls.values()], 0.01):
-                    if connection is parent:
-                        remote.receive()
-                    else:
-                        index = next(i for i, c in controls.items() if c is connection)
-                        message = connection.recv()
-                        first_ready = first_ready or time.perf_counter()
-                        if message[0] == "error":
-                            raise RuntimeError(message[1])
-                        if message[0] == "events":
-                            progress[index] = message[2]
-                            for event in message[1]:
-                                if event["type"] == "done":
-                                    outcomes[event["game"]["id"]] = {
-                                        k: event[k] for k in ("steps", "ply", "winner")
-                                    }
-                while remote.completed:
-                    trainer.stats.update(remote.completed.popleft()["stats"])
-                due = (
-                    updates
-                    if len(outcomes) == len(starts)
-                    else min(
-                        updates,
-                        sum(progress.values()) * updates // (len(starts) * commands),
-                    )
-                )
-                if not remote.learning and trainer.stats["updates"] < due:
-                    remote.learn(trainer.replay.batch(config.batch, trainer.rng))
-            # 计时覆盖与旧入口对应的 actor 静止确认。
-            for connection in controls.values():
-                connection.send({"op": "save"})
-            while len(snapshots) < 4:
-                for connection in wait(
-                    [c for i, c in controls.items() if i not in snapshots], 10
-                ):
-                    index = next(i for i, c in controls.items() if c is connection)
-                    message = connection.recv()
-                    if message[0] == "error":
-                        raise RuntimeError(message[1])
-                    if message[0] == "saved":
-                        snapshots[index] = message[1]
-            stats = remote.call({"op": "stats"})["stats"]
-            elapsed = time.perf_counter() - started
-            trace = {}
-            for game in sorted(outcomes):
-                root = Path(directory) / "games" / str(game)
-                meta = json.loads((root / "game.json").read_text(encoding="utf-8"))
-                trace[game] = [
-                    json.loads(line)
-                    for name in meta["command_segments"]
-                    for line in (root / name).read_text(encoding="utf-8").splitlines()
-                ]
+            if state["completed"] == args.tasks and trainer.stats["updates"] >= updates:
+                trainer.stop_requested = True
+
+        class Stats(dict):
+            def __reduce__(self):
+                # 旧架构 spawn 只接收普通统计字典，回调留在协调进程。
+                return dict, (dict(self),)
+
+            def update(self, *values, **keywords):
+                super().update(*values, **keywords)
+                progress()
+
+        trainer.stats = Stats(trainer.stats)
+
+        def game():
+            if state["assigned"] == args.tasks:
+                return None
+            number = state["assigned"]
+            state["assigned"] += 1
+            trainer.next_game = state["assigned"]
+            if state["assigned"] == 64:
+                state["full_at"] = time.perf_counter()
+            # 完成事件可能刚记录短暂空位；补满后立即发布真实供给状态。
+            progress(
+                state["assigned"] - state["completed"] == 64
+                or state["assigned"] == args.tasks
+            )
             return {
-                "workers": 4,
-                "lanes": config.games_per_worker,
-                "seconds": elapsed,
-                "startup_seconds": first_ready - started,
-                "commands": sum(g["steps"] for g in outcomes.values()),
-                "inference_positions": stats["inference_roots"],
-                "decoder_calls": stats["inference_decodes"],
-                **{
-                    k: stats[k]
-                    for k in (
-                        "inference_batches",
-                        "inference_seconds",
-                        "learning_seconds",
-                        "updates",
-                        "trained_samples",
-                        "value_samples",
-                        "cuda_peak_bytes",
-                    )
-                },
-                "queue_seconds": stats["inference_queue_seconds"],
-                "games": dict(sorted(outcomes.items())),
-                "_trace": trace,
-                "_learning_rng": trainer.rng.bit_generator.state,
-                "commands_per_second": sum(g["steps"] for g in outcomes.values())
-                / elapsed,
-                "trained_samples_per_second": stats["trained_samples"] / elapsed,
+                "id": number,
+                "seed": 910001 + number % 16,
+                "learner": 1,
+                "opponent": "self",
+                "difficulty": "easy",
+                "ply_limit": 0,
             }
+
+        old_event = trainer.event
+
+        def event(message):
+            credit = trainer.credit
+            old_event(message)
+            if message["type"] == "done":
+                # 基准的学习量固定，真实终局奖励仍通过冻结源回放进入学习。
+                trainer.credit = credit
+                state["completed"] += 1
+                progress(state["completed"] == args.tasks)
+
+        trainer.game, trainer.event = game, event
+        progress(True)
+        if not args.capture:
+            sampler = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "training.tests.bench_pipeline",
+                    "--sample",
+                    str(output),
+                ],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        started = time.perf_counter()
+        try:
+            trainer.run()
+            elapsed = time.perf_counter() - started
+            if trainer.stats["updates"] != updates:
+                raise AssertionError("学习更新数量改变")
+            signature = records(directory, args.tasks)
+            signature["learning_rng"] = trainer.rng.bit_generator.state
+            signature["counts"] = {
+                k: trainer.stats[k]
+                for k in (
+                    "commands",
+                    "inference_roots",
+                    "inference_decodes",
+                    "updates",
+                    "trained_samples",
+                    "value_samples",
+                    "soft_value_samples",
+                )
+            }
+            (output / "signature.pkl").write_bytes(pickle.dumps(signature))
+            result = {
+                "backend": args.execute,
+                "tasks": args.tasks,
+                "seconds": elapsed,
+                **trainer.stats,
+                "commands_per_second": trainer.stats["commands"] / elapsed,
+                "trained_samples_per_second": trainer.stats["trained_samples"]
+                / elapsed,
+            }
+            write_json(output / "result.json", result)
         finally:
-            if gpu.is_alive():
-                parent.send({"op": "stop"})
-            gpu.join(10)
-            if gpu.is_alive():
-                gpu.terminate()
-                gpu.join()
-            for index, process in processes.items():
-                if process.is_alive():
-                    controls[index].send({"op": "stop"})
-                process.join(5)
-                if process.is_alive():
-                    process.terminate()
-                    process.join()
-            for connection in controls.values():
-                connection.close()
-            remote.close()
+            (output / "STOP-MONITOR").touch()
+            if sampler is not None:
+                sampler.wait(timeout=15)
+            if feedback is not None:
+                feedback.finish()
 
 
-def run_baseline(root, checkpoint, workset, commands, updates, count, record):
-    # 基线来自已提交代码的独立导出目录；不把旧实现重新放进生产包。
-    program = """
-import json, pickle, sys, torch
-from pathlib import Path
-from training.tests.bench_pipeline import starting_positions, run
-checkpoint, workset, commands, updates, count, record, output = sys.argv[1:]
-commands, updates, count, record = map(int, (commands, updates, count, record))
-saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
-starts, replay = starting_positions(Path(checkpoint).parent)
-starts *= count // 16
-feedback = {} if record else pickle.loads(Path(workset).read_bytes())
-result = run(4, count // 4, commands, updates, saved, starts, replay, feedback, record=bool(record))
-if record:
-    Path(workset).write_bytes(pickle.dumps(feedback))
-Path(output).write_bytes(pickle.dumps(result))
-"""
-    with tempfile.TemporaryDirectory(prefix="haojie-baseline-result-") as directory:
-        path = Path(directory) / "result.pkl"
-        subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                program,
-                str(checkpoint),
-                str(workset),
-                str(commands),
-                str(updates),
-                str(count),
-                str(int(record)),
-                str(path),
-            ],
-            cwd=root,
-            env={
-                **os.environ,
-                "HAOJIE_ENGINE": str(
-                    Path(
-                        os.environ.get(
-                            "HAOJIE_ENGINE",
-                            "artifacts/native-target/release/haojie_native.dll",
-                        )
-                    ).resolve()
-                ),
-            },
-            check=True,
-        )
-        return pickle.loads(path.read_bytes())
+def summarize(values):
+    values = sorted(v for v in values if v is not None)
+    if not values:
+        return None
+    return {
+        "mean": statistics.mean(values),
+        "median": statistics.median(values),
+        "p90": values[int((len(values) - 1) * 0.9)],
+        "max": max(values),
+    }
 
 
-def signature(result):
-    return (
-        result.pop("_trace"),
-        result.pop("_learning_rng"),
-        result["games"],
-        result["inference_positions"],
-        result["decoder_calls"],
-        result["updates"],
-        result["trained_samples"],
-        result["value_samples"],
+def sample(directory):
+    import psutil
+
+    directory = Path(directory)
+    output = queue.Queue()
+    command = [
+        "nvidia-smi",
+        "--query-gpu=utilization.gpu,utilization.memory,power.draw,clocks.sm,temperature.gpu",
+        "--format=csv,noheader,nounits",
+        "--loop-ms=500",
+    ]
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+
+    def read_gpu():
+        for line in process.stdout:
+            try:
+                output.put(
+                    dict(
+                        zip(
+                            (
+                                "active_percent",
+                                "memory_active_percent",
+                                "watts",
+                                "sm_mhz",
+                                "temperature",
+                            ),
+                            [
+                                float(v) if v.strip() != "[N/A]" else None
+                                for v in line.split(",")
+                            ],
+                        )
+                    )
+                )
+            except ValueError:
+                pass
+
+    reader = threading.Thread(target=read_gpu, daemon=True)
+    reader.start()
+    previous, rows, gpu = {}, [], None
+    psutil.cpu_percent(percpu=True)
+    try:
+        while not (directory / "STOP-MONITOR").exists():
+            at = time.perf_counter()
+            while not output.empty():
+                gpu = output.get()
+            state = read_json(directory / "monitor.json")
+            roles = [read_json(p) for p in (directory / "roles").glob("*.json")]
+            processes = {}
+            for role in roles:
+                pid = role["pid"]
+                if pid not in processes:
+                    try:
+                        p = psutil.Process(pid)
+                        times = p.cpu_times()
+                        processes[pid] = (
+                            times.user + times.system,
+                            {t.id: t.user_time + t.system_time for t in p.threads()},
+                        )
+                    except psutil.Error:
+                        continue
+            current = {}
+            for pid, (total, threads) in processes.items():
+                if pid in previous:
+                    old_at, old_total, old_threads = previous[pid]
+                    dt = at - old_at
+                    current[pid] = {
+                        "process": (total - old_total) / dt,
+                        "threads": {
+                            tid: (value - old_threads[tid]) / dt
+                            for tid, value in threads.items()
+                            if tid in old_threads
+                        },
+                    }
+                previous[pid] = at, total, threads
+            thread_cores = {
+                r["name"]: current[r["pid"]]["threads"].get(r["tid"], 0)
+                for r in roles
+                if r["pid"] in current
+            }
+            steady = bool(
+                state["full_at"]
+                and at >= state["full_at"] + 5
+                and state["live"] == 64
+                and state["backlog"] > 0
+            )
+            rows.append(
+                {
+                    "time": at,
+                    "steady": steady,
+                    "state": state,
+                    "gpu": gpu,
+                    "thread_cores": thread_cores,
+                    "process_cores": {
+                        str(pid): value["process"] for pid, value in current.items()
+                    },
+                    "system_cpu_percent": psutil.cpu_percent(percpu=True),
+                }
+            )
+            time.sleep(max(0, 0.5 - (time.perf_counter() - at)))
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+    active = [r for r in rows if r["steady"] and r["gpu"] is not None]
+    names = {name for r in active for name in r["thread_cores"]}
+    report = {
+        "samples": rows,
+        "steady_samples": len(active),
+        "steady_seconds": len(active) * 0.5,
+        "cpu_threads": {
+            name: summarize([r["thread_cores"].get(name) for r in active])
+            for name in names
+        },
+        "gpu": {
+            name: summarize([r["gpu"][name] for r in active])
+            for name in (
+                "active_percent",
+                "memory_active_percent",
+                "watts",
+                "sm_mhz",
+                "temperature",
+            )
+        },
+    }
+    write_json(directory / "utilization.json", report)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--baseline")
-    parser.add_argument("--commands", type=int, default=8)
-    parser.add_argument("--updates", type=int, default=8)
-    parser.add_argument("--trials", type=int, default=3)
-    args = parser.parse_args()
-    checkpoint = Path(args.checkpoint).resolve()
-    saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    starts, replay = starting_positions(checkpoint.parent)
-    print(
-        json.dumps(
-            {
-                "event": "workload",
-                "simulations": [64, 16],
-                "full_fraction": 0.25,
-                "commands": args.commands,
-                "learning_updates_per_16_games": args.updates,
-                "starts": [
-                    {k: v for k, v in s.items() if k != "environment"} for s in starts
-                ],
-            }
-        ),
-        flush=True,
+    parser.add_argument("--checkpoint")
+    parser.add_argument(
+        "--baseline", default="artifacts/classic-native-pool-20261029/baseline"
     )
-    with tempfile.TemporaryDirectory(prefix="haojie-frozen-feedback-") as directory:
-        for count in (16, 64):
-            path = Path(directory) / f"{count}.pkl"
-            updates = args.updates * (count // 16)
+    parser.add_argument(
+        "--output", default="artifacts/classic-native-pool-20261029/benchmark"
+    )
+    parser.add_argument("--tasks", type=int, default=256)
+    parser.add_argument("--commands", type=int, default=8)
+    parser.add_argument("--trials", type=int, default=3)
+    parser.add_argument("--execute", choices=("baseline", "native"))
+    parser.add_argument("--feedback")
+    parser.add_argument("--capture", action="store_true")
+    parser.add_argument("--sample")
+    args = parser.parse_args()
+    if args.sample:
+        sample(args.sample)
+        return
+    if args.execute:
+        execute(args)
+        return
+    if not args.checkpoint:
+        parser.error("--checkpoint is required")
+    if args.tasks < 128 or args.tasks % 16:
+        parser.error("--tasks must be a multiple of 16 and at least 128")
+    root = Path(args.output).resolve()
+    root.mkdir(parents=True, exist_ok=False)
+    feedback = root / "feedback.pkl"
+    reference = None
 
-            def execute(backend, record=False):
-                if backend == "baseline":
-                    return run_baseline(
-                        Path(args.baseline).resolve(),
-                        checkpoint,
-                        path,
-                        args.commands,
-                        updates,
-                        count,
-                        record,
-                    )
-                return run_async(
-                    saved,
-                    starts * (count // 16),
-                    replay,
-                    path,
-                    args.commands,
-                    updates,
-                    record,
-                )
+    def invoke(backend, target, capture=False):
+        command = [
+            sys.executable,
+            "-B",
+            "-m",
+            "training.tests.bench_pipeline",
+            "--execute",
+            backend,
+            "--checkpoint",
+            str(Path(args.checkpoint).resolve()),
+            "--baseline",
+            str(Path(args.baseline).resolve()),
+            "--output",
+            str(target),
+            "--feedback",
+            str(feedback),
+            "--tasks",
+            str(64 if capture else args.tasks),
+            "--commands",
+            str(args.commands),
+        ]
+        if capture:
+            command.append("--capture")
+        with (root / (target.name + ".log")).open("w", encoding="utf-8") as stream:
+            subprocess.run(command, stdout=stream, check=True)
+        return json.loads((target / "result.json").read_text(encoding="utf-8"))
 
-            reference = execute("baseline" if args.baseline else "asynchronous", True)
-            expected = signature(reference)
-            print(
-                json.dumps({"event": "captured", "concurrency": count, **reference}),
-                flush=True,
+    captured = invoke("baseline", root / "capture", True)
+    print(json.dumps({"event": "captured", **captured}), flush=True)
+    for trial in range(args.trials):
+        backends = ["baseline", "native"] if trial % 2 == 0 else ["native", "baseline"]
+        for backend in backends:
+            target = root / f"{trial}-{backend}"
+            result = invoke(backend, target)
+            signature = pickle.loads((target / "signature.pkl").read_bytes())
+            if reference is None:
+                reference = signature
+            else:
+                equal_tree(signature, reference)
+            utilization = json.loads(
+                (target / "utilization.json").read_text(encoding="utf-8")
             )
-            for trial in range(args.trials):
-                backends = (
-                    ["baseline", "asynchronous"] if args.baseline else ["asynchronous"]
-                )
-                if trial % 2:
-                    backends.reverse()
-                for backend in backends:
-                    result = execute(backend)
-                    if signature(result) != expected:
-                        raise AssertionError("整体改造改变了冻结轨迹、搜索或学习工作量")
-                    print(
-                        json.dumps(
-                            {
-                                "trial": trial,
-                                "backend": backend,
-                                "concurrency": count,
-                                **result,
-                            }
-                        ),
-                        flush=True,
-                    )
+            utilization.pop("samples")
+            report = {"trial": trial, **result, "utilization": utilization}
+            with (root / "results.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(report) + "\n")
+            print(json.dumps(report), flush=True)
 
 
 if __name__ == "__main__":

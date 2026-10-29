@@ -1,6 +1,6 @@
 # 普通局训练
 
-新入口采用 Python 多进程、进程内 Rust 规则/手工 AI、单 GPU PyTorch 推理与学习。只接受普通局；普通局的终极召唤、合成、老千自选、死亡反应和随机机制均保留。分层解码 v2 模型为 5,503,366 参数。
+新入口采用单进程、Rust 固定工作线程池和 PyTorch。Rust 负责规则、三档手工 AI、搜索与请求组织，Python 主线程负责 GPU 推理与学习，协调/I/O 线程负责回放、阶段和保存。只接受普通局；普通局的终极召唤、合成、老千自选、死亡反应和随机机制均保留。分层解码 v2 模型为 5,503,366 参数。
 
 ## 安装
 
@@ -20,15 +20,17 @@ training/.venv/Scripts/python.exe -c "import torch; print(torch.__version__, tor
 
 Linux 对应使用 `training/.venv/bin/python`。规则库默认为 `artifacts/native-target/release/haojie_native.dll` 或 `libhaojie_native.so`，自定义路径用 `HAOJIE_ENGINE`。CPU 功能验收可显式选择 `--device cpu`。
 
+NumPy 固定为 **2.5.3**。原生搜索直接使用 `_generator` 导出的分布函数及 `numpy_1.24_ufunc_call_info` capsule 提供的无 GIL f32 exp 内核，以保持原来的随机消耗和浮点舍入。这些属于 NumPy 私有 C ABI，启动时检查精确版本，不匹配就报错。此次功能验收使用 NumPy 2.5.3、PyTorch 2.14.0+cu130。
+
 ## 运行与恢复
 
 ```powershell
 training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/classic-main
 ```
 
-默认先采集 8 个自然结束的简单档示范局，再完成 512 次独立模仿更新，发布模型后才启动自对弈。正常阶段使用 70% 当前自对弈、20% 历史模型、10% 手工对手；历史为空或选中当前版本时转为自对弈。默认 4 个 CPU actor，每个推进 16 局；逐局请求直接送往独占 GPU 的执行进程，CPU 协调进程负责回放和学习批次。`--workers`、`--games-per-worker` 分别调整进程数和每进程在途局数。`--warmup-games`、`--warmup-updates` 调整两个预训练阶段；前者为 0 时明确跳过预训练。
+默认先采集 8 个自然结束的简单档示范局，再完成 512 次独立模仿更新，发布模型后才启动自对弈。正常阶段使用 70% 当前自对弈、20% 历史模型、10% 手工对手；历史为空或选中当前版本时转为自对弈。默认 4 个 Rust 工作线程，每个推进 16 局；一局等待神经响应或记录确认时，线程继续推进其他就绪局。`--workers`、`--games-per-worker` 分别调整原生线程数和每线程在途局数。`--warmup-games`、`--warmup-updates` 调整两个预训练阶段；前者为 0 时明确跳过预训练。
 
-网络为 5,503,366 参数，宽度 256、6 层。主干只处理实体 token，效果/死亡等原有记录在局部编码；加入规则几何注意力偏置。训练、评测、历史模型推理和截断校准统一原生 BF16：权重、梯度、AdamW 一阶/二阶动量、神经浮点输入、输出与损失均为 BF16，没有 FP32 主权重或 autocast。步数、实体引用和类别索引使用整数。GPU 输出按 BF16 原始 16 位经共享内存返回；CPU 规则、搜索统计和落盘事实使用各自的数据类型。CUDA 使用 PyTorch 标准 BF16 算子及其内部累加实现。
+网络为 5,503,366 参数，宽度 256、6 层。主干只处理实体 token，效果/死亡等原有记录在局部编码；加入规则几何注意力偏置。训练、评测、历史模型推理和截断校准统一原生 BF16：权重、梯度、AdamW 一阶/二阶动量、神经浮点输入、输出与损失均为 BF16，没有 FP32 主权重或 autocast。步数、实体引用和类别索引使用整数。GPU 输出按 BF16 原始 16 位经进程内批量 FFI 回填；CPU 规则、搜索统计和落盘事实使用各自的数据类型。CUDA 使用 PyTorch 标准 BF16 算子及其内部累加实现。
 
 来源 → 动作 → 参数按网络条件分布解码，共用一次状态主干；搜索的一条边是一条完整命令。候选随访问量渐进扩宽，无固定 32 命令上限，同次搜索内复用转置局面。默认 25% 决策搜索 64 次，其余 16 次，最大深度 16 条完整命令；唯一合法命令直接执行。仅深搜步和示范步形成策略监督。`--simulations`、`--fast-simulations`、`--full-fraction`、`--depth` 可调整；主干评估与条件头解码分别计数。
 
@@ -38,7 +40,7 @@ training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/c
 training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/classic-main --resume
 ```
 
-每 300 秒自动保存，`--save-seconds` 可调整。恢复模型、AdamW、随机数、预训练阶段/进度、校准器、历史池、数据进度、手工 AI 预算与缓存计划，以及所有尚未完成的对局。未完成搜索按原命令起点和固定模型重新计算。恢复保持原 worker 数、每 worker 局数。
+每 300 秒自动保存，`--save-seconds` 可调整。保存先暂停原生推进，收回已发出的神经响应并排空正式记录，再通过屏障取得恢复状态。恢复模型、AdamW、随机数、预训练阶段/进度、校准器、历史池、数据进度、手工 AI 预算与缓存计划，以及所有尚未完成的对局。未完成搜索按原命令起点和固定模型重新计算。恢复保持原 worker/lane 映射，旧 v2 中的 worker 数现在对应 Rust 线程数。
 
 当前检查点为 `haojie-classic-training-v2`，样本为 `autoregressive-v2`；启动训练须使用新目录，续训只接受该格式。
 
@@ -53,7 +55,7 @@ training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/c
 - `checkpoint.pt`：完整恢复点；`models/`：发布的推理模型与历史对手。
 - `games/<id>/`：完整命令片段、实体/局部记录/几何张量、条件策略标签、元数据及必要的超限快照。
 - `status.json`：阶段、更新、自然终局、两类截断、真实/软价值采样、主干/解码次数、推理/学习耗时与显存峰值。
-- `results.jsonl`：逐局结果；失败时保留 `failed-worker-*.json`。
+- `results.jsonl`：逐局结果；原生运行时失败时保留 `failed-native.json`。
 
 ```powershell
 training/.venv/Scripts/python.exe -m training.haojie evaluate --checkpoint artifacts/classic-main/checkpoint.pt --opponent easy --output artifacts/classic-main/eval-easy.jsonl --games 20
@@ -64,14 +66,14 @@ training/.venv/Scripts/python.exe -m training.haojie evaluate --checkpoint artif
 ## 验证和性能
 
 ```powershell
-training/.venv/Scripts/python.exe -m unittest training.tests.test_training -v
-training/.venv/Scripts/python.exe -m unittest training.tests.test_pipeline -v
-training/.venv/Scripts/python.exe -m training.tests.bench_ipc --rounds 150
-training/.venv/Scripts/python.exe -m training.tests.bench_pipeline --checkpoint artifacts/classic-main/checkpoint.pt --trials 3
+training/.venv/Scripts/python.exe -B -m unittest training.tests.test_training training.tests.test_pipeline -v
+training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-alignment-20261029/phased-closure/checkpoint.pt --baseline artifacts/classic-native-pool-20261029/baseline --output artifacts/classic-native-pool-20261029/benchmark --tasks 256 --commands 8 --trials 3
 node --import tsx scripts/native/learning/validate.ts artifacts/native-target/release/haojie-engine.exe --evaluation --candidates --search --decoder
 node --import tsx scripts/native/learning/teacher-validation.ts artifacts/native-target/release/haojie-engine.exe 64
 ```
 
-流水线基准需要四局已有轨迹，逐局抽取四个中后期起点；执行正式 64/16 搜索和同量 BF16 学习，分别测量 16、64 局供给。加 `--baseline <基线导出目录>` 可与提交 `d2eb7a4` 的旧运行时交错比较。基准目录自动清理，源检查点和轨迹只读。进程职责、协议和验收顺序见[运行时架构](../docs/ai/TRAINING-RUNTIME.md)。
+正确性测试从 Git 提交 `7cc4ba9` 读取冻结的 Python 搜索，核对原生搜索的请求、命令、访问统计、监督和 RNG，并验证暂停恢复、阶段和 BF16。
+
+统一基准需要四局已有轨迹，逐局抽取四个中后期起点；默认连续分配 256 个窗口，每个推进 8 条命令，保持 64 局在途，执行正式 64/16 搜索和同量 BF16 学习。与提交 `7cc4ba9` 的独立源码和 DLL 交错三轮，使用冻结反馈核对相同工作量。外部 CPU/GPU 采样另需 `psutil` 和 `nvidia-smi`；利用率只统计预热后仍有待分配窗口的满供给区间。`--output` 必须是新目录，保留报告和采样；运行用临时目录自动清理，源检查点和轨迹只读。线程职责、数组生命周期和验收顺序见[运行时架构](../docs/ai/TRAINING-RUNTIME.md)。
 
 这些 Node 命令仅用于 TS/Rust 差分开发验收。训练和评测调用同一进程内 Rust 手工 AI。架构、目标定义和研究依据见[训练设计](../docs/ai/TRAINING.md)，实际完成的验收见[状态入口](../docs/ai/STATUS.md)。

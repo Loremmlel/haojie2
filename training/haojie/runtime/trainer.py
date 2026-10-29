@@ -9,7 +9,7 @@ from dataclasses import asdict
 import numpy as np
 import torch
 
-from ..search import Request
+from ..native_pool import Request, search_values
 from ..native import Environment
 from .targets import Calibration
 from ..opponents import Opponents
@@ -286,8 +286,6 @@ class Trainer(Compute):
                 )
                 info, bundle = env.encode()
                 owner = ("boundary", event["game"]["id"])
-                from .ipc import search_values
-
                 bits = self.infer(
                     [(self.published, Request("encode", info["key"], bundle), owner)]
                 )[0]
@@ -314,7 +312,7 @@ class Trainer(Compute):
         self.credit += self.config.batch
 
     def checkpoint(self, workers):
-        # 学习暂停且所有 worker 已交还槽；未完成搜索在恢复时用原命令 RNG 重算。
+        # 学习与原生线程均已暂停；未完成搜索在恢复时用原命令 RNG 重算。
         for lanes in workers.values():
             for lane in lanes:
                 self.event(

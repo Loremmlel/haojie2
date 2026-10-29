@@ -1,47 +1,54 @@
-"""CPU 协调循环；神经请求从 actor 直接流向 GPU，不经过此循环。"""
+"""单进程运行时：GPU 主线程、一个协调/I/O 线程、固定归属的 Rust 线程池。"""
 
 import copy
 import json
-import multiprocessing as mp
-from multiprocessing.connection import wait
 import signal
+import threading
 import time
 from dataclasses import asdict
 
 import torch
 
-from .gpu import Remote, serve
-from .worker import worker
+from ..native_pool import NativePool
+from .gpu import Executor, Local, infer_batch
+from .storage import GameWriter, atomic_json
 
 
-def run(trainer):
-    config = trainer.config
-    ctx = mp.get_context("spawn")
-    controls, actors, snapshots, active_games = {}, {}, {}, {}
-    totals = {}
-    gpu_connections, worker_connections = [], []
-    parent, child = ctx.Pipe()
-    initial = copy.deepcopy(trainer.stats)
-    started = last_status = last_save = time.perf_counter()
-    mode = None
-    gpu = None
-    completed_run = False
-    previous_handler = signal.signal(
-        signal.SIGINT, lambda *_: setattr(trainer, "stop_requested", True)
-    )
+class Coordinator:
+    def __init__(self, trainer, pool, started):
+        self.trainer, self.pool, self.started = trainer, pool, started
+        self.initial = copy.deepcopy(trainer.stats)
+        self.active, self.writers = {}, {}
+        self.lane_order = [
+            worker * trainer.config.games_per_worker + slot
+            for slot in range(trainer.config.games_per_worker)
+            for worker in range(trainer.config.workers)
+        ]
+        self.finished = threading.Event()
+        self.error = None
+        self.thread_id = None
+        self.local = Local(pool, self.retained)
 
-    def retained():
+    def retained(self):
+        trainer = self.trainer
         return (
             trainer.checkpoint_versions
             | {e["version"] for e in trainer.pool.entries}
-            | {game["version"] for game in active_games.values() if "version" in game}
+            | {game["version"] for game in self.active.values() if "version" in game}
         )
 
-    remote = Remote(parent, retained)
+    def assign(self, lane, game, restored=None):
+        self.active[lane] = game
+        self.writers[lane] = GameWriter(
+            self.trainer.directory, game, restored["metadata"] if restored else None
+        )
+        self.pool.assign(lane, game, restored)
 
-    def complete_learning():
-        while remote.completed:
-            result = remote.completed.popleft()
+    def complete_learning(self, block=False):
+        self.local.collect(block)
+        trainer, config = self.trainer, self.trainer.config
+        while self.local.completed:
+            result = self.local.completed.popleft()
             trainer.stats.update(result["stats"])
             trainer.credit = max(0, trainer.credit - result["samples"])
             publish = trainer.stats["updates"] % config.publish_updates == 0
@@ -54,231 +61,231 @@ def run(trainer):
             if publish:
                 trainer.publish()
 
-    def handle(index, message):
-        kind = message[0]
-        if kind == "error":
-            snapshots[index] = message[2]
-            totals[index] = message[3]
-            raise RuntimeError(message[1])
-        if kind == "saved":
-            snapshots[index], totals[index] = message[1:]
-        elif kind == "events":
-            totals[index] = message[2]
-            for event in message[1]:
-                trainer.event(event)
-                if event["type"] == "done":
-                    active_games.pop((index, event["lane"]), None)
-        trainer.stats["commands"] = initial["commands"] + sum(totals.values())
+    def consume(self, records):
+        trainer, config = self.trainer, self.trainer.config
+        ended, acknowledged = [], []
+        for record in records:
+            lane = record["lane"]
+            writer = self.writers[lane]
+            if (
+                writer.game["id"] != record["game"]["id"]
+                or record["steps"] != writer.metadata["steps"] + 1
+            ):
+                raise RuntimeError("原生正式命令顺序与记录不一致")
+            sample = record.get("sample")
+            if sample:
+                writer.sample(
+                    sample["bundle"],
+                    sample["decisions"],
+                    sample["actor"],
+                    sample["ply"],
+                    sample["version"],
+                )
+            info, command = record["info"], record["command"]
+            writer.transition(info, command)
+            trainer.stats["commands"] += 1
+            done = record["done"]
+            if done and info["winner"] is None:
+                writer.metadata["status"] = "truncated"
+                writer.metadata["truncation"] = record["truncation"]
+                atomic_json(writer.path / "environment.json", record["environment"])
+            if done or writer.metadata["steps"] % config.chunk_commands == 0:
+                trainer.event({"type": "data", "path": writer.flush()})
+            if done:
+                trainer.event(
+                    {
+                        "type": "done",
+                        "game": writer.game,
+                        "winner": info["winner"],
+                        "steps": writer.metadata["steps"],
+                        "ply": info["ply"],
+                        "path": str(writer.path / "game.json"),
+                        "actor": info["actor"],
+                        "metrics": info["metrics"],
+                        "truncation": record.get("truncation"),
+                    }
+                )
+                ended.append(lane)
+                del self.active[lane]
+                del self.writers[lane]
+            acknowledged.append(lane)
+        self.pool.ack_records(acknowledged)
+        if ended:
+            self.local.call("release", lanes=ended)
 
-    def checkpoint():
-        state = remote.call({"op": "snapshot"})["state"]
-        complete_learning()
+    def native_stats(self):
+        status = self.pool.status()
+        if status.get("error"):
+            raise RuntimeError(status["error"])
+        self.trainer.stats["runtime_threads"] = {
+            "gpu": self.gpu_thread_id,
+            "coordinator": self.thread_id,
+            "workers": status.get("threads", []),
+        }
+        if "queue_seconds" in status:
+            self.trainer.stats["inference_queue_seconds"] = (
+                self.initial.get("inference_queue_seconds", 0.0)
+                + status["queue_seconds"]
+            )
+        return status
+
+    def save(self):
+        self.pool.pause()
+        self.complete_learning(block=True)
+        while True:
+            self.local.call("drain")
+            records = self.pool.take_records()
+            if records:
+                self.consume(records)
+            if self.pool.barrier()["ready"]:
+                break
+        snapshots = {i: [] for i in range(self.trainer.config.workers)}
+        for value in self.pool.snapshot():
+            lane = value["lane"]
+            writer = self.writers[lane]
+            writer.flush()
+            value["metadata"] = writer.metadata
+            value["lane"] = lane % self.trainer.config.games_per_worker
+            snapshots[lane // self.trainer.config.games_per_worker].append(value)
+        state = self.local.call("snapshot")
+        trainer = self.trainer
         trainer.model.load_state_dict(state["model"])
         trainer.restore_optimizer(state["optimizer"])
         trainer.remote_torch_rng = state["torch_rng"]
         trainer.remote_cuda_rng = state["cuda_rng"]
         trainer.stats.update(state["stats"])
+        self.native_stats()
         trainer.checkpoint(snapshots)
 
-    try:
-        for _ in range(config.workers):
-            a, b = ctx.Pipe()
-            gpu_connections.append(a)
-            worker_connections.append(b)
-        payload = {
-            "model": trainer.model.state_dict(),
-            "optimizer": trainer.optimizer.state_dict(),
-            "torch_rng": getattr(trainer, "remote_torch_rng", torch.get_rng_state()),
-            "cuda_rng": getattr(trainer, "remote_cuda_rng", None),
-            "stats": trainer.stats,
-            "published": trainer.published,
-            "retained": list(retained()),
-        }
-        gpu = ctx.Process(
-            target=serve,
-            args=(child, gpu_connections, str(trainer.directory), config, payload),
-            name="haojie-gpu",
-        )
-        gpu.start()
-        child.close()
-        message = remote.receive()
-        if message["op"] != "ready":
-            raise RuntimeError("GPU 服务未完成初始化")
-        trainer.remote = remote
-        for index in range(config.workers):
-            local, other = ctx.Pipe()
+    def run(self):
+        trainer, config = self.trainer, self.trainer.config
+        self.thread_id = threading.get_native_id()
+        last_status = last_save = time.perf_counter()
+        try:
             previous = {
-                v["lane"]: v for v in (trainer.saved_workers or {}).get(index, [])
+                worker * config.games_per_worker + value["lane"]: value
+                for worker, values in (trainer.saved_workers or {}).items()
+                for value in values
             }
-            games = [
-                previous[i]["game"] if i in previous else trainer.game()
-                for i in range(config.games_per_worker)
-            ]
-            for i, game in enumerate(games):
+            for lane in self.lane_order:
+                restored = previous.get(lane)
+                game = restored["game"] if restored else trainer.game()
                 if game is not None:
-                    active_games[index, i] = game
-            process = ctx.Process(
-                target=worker,
-                args=(
-                    index,
-                    other,
-                    worker_connections[index],
-                    str(trainer.directory),
-                    config,
-                    games,
-                    [previous.get(i) for i in range(config.games_per_worker)],
+                    self.assign(lane, game, restored)
+            print(
+                json.dumps(
+                    {
+                        "event": "started",
+                        "directory": str(trainer.directory),
+                        "config": asdict(config),
+                        "runtime": "native-thread-pool",
+                        **trainer.model.description(),
+                    },
+                    ensure_ascii=False,
                 ),
-                name=f"haojie-cpu-{index}",
+                flush=True,
             )
-            process.start()
-            other.close()
-            controls[index], actors[index] = local, process
-            worker_connections[index].close()
-            gpu_connections[index].close()
-        print(
-            json.dumps(
-                {
-                    "event": "started",
-                    "directory": str(trainer.directory),
-                    "config": asdict(config),
-                    "runtime": "asynchronous",
-                    **trainer.model.description(),
-                },
-                ensure_ascii=False,
-            ),
-            flush=True,
-        )
-        while True:
-            now = time.perf_counter()
-            stopped = (
-                trainer.stop_requested
-                or (config.seconds and now - started >= config.seconds)
-                or (
-                    config.games
-                    and trainer.stats["completed"] - initial["completed"]
-                    >= config.games
+            while True:
+                self.complete_learning()
+                now = time.perf_counter()
+                stopped = (
+                    trainer.stop_requested
+                    or (config.seconds and now - self.started >= config.seconds)
+                    or (
+                        config.games
+                        and trainer.stats["completed"] - self.initial["completed"]
+                        >= config.games
+                    )
+                    or (
+                        config.updates
+                        and trainer.stats["updates"] - self.initial["updates"]
+                        >= config.updates
+                    )
+                    or (trainer.directory / "STOP").exists()
                 )
-                or (
-                    config.updates
-                    and trainer.stats["updates"] - initial["updates"] >= config.updates
+                periodic = (
+                    config.save_seconds and now - last_save >= config.save_seconds
                 )
-                or (trainer.directory / "STOP").exists()
-            )
-            if mode is None and (
-                stopped
-                or (config.save_seconds and now - last_save >= config.save_seconds)
-            ):
-                mode = "pause" if stopped else "save"
-                for connection in controls.values():
-                    connection.send({"op": "save"})
-            connections = [c for i, c in controls.items() if i not in snapshots]
-            for connection in wait([parent, *connections], timeout=0.01):
-                if connection is parent:
-                    remote.receive()
-                else:
-                    index = next(i for i, c in controls.items() if c is connection)
-                    handle(index, connection.recv())
-            complete_learning()
-            for index, process in actors.items():
-                if process.exitcode is not None and index not in snapshots:
-                    raise RuntimeError(f"actor {index} 意外退出 {process.exitcode}")
-            if gpu.exitcode is not None:
-                raise RuntimeError(f"GPU 服务意外退出 {gpu.exitcode}")
-            if mode:
-                if len(snapshots) == len(actors) and not remote.learning:
-                    checkpoint()
-                    if mode == "pause":
+                if stopped or periodic:
+                    self.save()
+                    if stopped:
                         break
-                    for connection in controls.values():
-                        connection.send({"op": "resume"})
-                    snapshots.clear()
-                    mode = None
+                    self.pool.resume()
                     last_save = time.perf_counter()
-            else:
-                for index, connection in controls.items():
-                    assignments = []
-                    for lane in range(config.games_per_worker):
-                        if (index, lane) not in active_games:
-                            game = trainer.game()
-                            if game is not None:
-                                active_games[index, lane] = game
-                                assignments.append({"lane": lane, "game": game})
-                    if assignments:
-                        connection.send({"op": "assign", "assignments": assignments})
-                allowed = trainer.phase == "imitation" or (
-                    trainer.phase == "self" and trainer.credit >= config.batch
-                )
-                reached = (
-                    config.updates
-                    and trainer.stats["updates"] - initial["updates"] >= config.updates
-                )
-                if allowed and not reached and not remote.learning:
+                for lane in self.lane_order:
+                    if lane not in self.active:
+                        game = trainer.game()
+                        if game is not None:
+                            self.assign(lane, game)
+                if not self.local.learning and (
+                    trainer.phase == "imitation"
+                    or (trainer.phase == "self" and trainer.credit >= config.batch)
+                ):
                     batch = trainer.replay.batch(config.batch, trainer.rng)
                     if batch:
-                        remote.learn(batch)
-            if now - last_status >= 5:
-                trainer.stats.update(remote.call({"op": "stats"})["stats"])
-                complete_learning()
-                trainer.status("running", started, initial)
-                last_status = now
-        trainer.status("saved", started, initial)
-        completed_run = True
+                        self.local.learn(batch)
+                records = self.pool.take_records(wait_ms=100)
+                if records:
+                    self.consume(records)
+                if now - last_status >= 5:
+                    trainer.stats.update(self.local.call("stats"))
+                    self.native_stats()
+                    trainer.status("running", self.started, self.initial)
+                    last_status = now
+            trainer.status("saved", self.started, self.initial)
+        except BaseException as error:
+            self.error = error
+            trainer.stop_requested = True
+            trainer.status("failed", self.started, self.initial, error=str(error))
+            # 故障时不以缺失原生状态的快照覆盖上一次完整检查点。
+            atomic_json(
+                trainer.directory / "failed-native.json", {"error": repr(error)}
+            )
+        finally:
+            self.finished.set()
+            self.pool.wake()
+
+
+def run(trainer):
+    started = time.perf_counter()
+    initial = {
+        "model": trainer.model.state_dict(),
+        "optimizer": trainer.optimizer.state_dict(),
+        "torch_rng": getattr(trainer, "remote_torch_rng", torch.get_rng_state()),
+        "cuda_rng": getattr(trainer, "remote_cuda_rng", None),
+        "stats": trainer.stats,
+        "published": trainer.published,
+        "retained": list(
+            trainer.checkpoint_versions | {e["version"] for e in trainer.pool.entries}
+        ),
+    }
+    executor = Executor(trainer.directory, trainer.config, initial)
+    pool = NativePool(trainer.config)
+    previous = signal.signal(
+        signal.SIGINT, lambda *_: setattr(trainer, "stop_requested", True)
+    )
+    coordinator = Coordinator(trainer, pool, started)
+    coordinator.gpu_thread_id = threading.get_native_id()
+    trainer.remote = coordinator.local
+    thread = threading.Thread(target=coordinator.run, name="haojie-io")
+    thread.start()
+    try:
+        while not coordinator.finished.is_set():
+            batch = pool.take_requests(trainer.config.inference_batch, wait_ms=1000)
+            if batch is not None:
+                with batch:
+                    infer_batch(executor, batch)
+            coordinator.local.execute_one(executor)
+        if coordinator.error is not None:
+            raise coordinator.error
         return trainer.stats
     except BaseException as error:
-        trainer.status("failed", started, initial, error=str(error))
-        # 其他 actor 尽量交还正式命令边界；GPU 不可用时保留上一完整检查点。
-        for index, connection in controls.items():
-            if index not in snapshots and actors[index].is_alive():
-                try:
-                    connection.send({"op": "save"})
-                except OSError:
-                    pass
-        deadline = time.perf_counter() + 10
-        while (
-            gpu is not None
-            and gpu.is_alive()
-            and len(snapshots) < len(actors)
-            and time.perf_counter() < deadline
-        ):
-            for connection in wait(
-                [c for i, c in controls.items() if i not in snapshots], 0.1
-            ):
-                index = next(i for i, c in controls.items() if c is connection)
-                try:
-                    handle(index, connection.recv())
-                except (RuntimeError, EOFError, OSError):
-                    pass
-        if gpu is not None and gpu.is_alive() and len(snapshots) == len(actors):
-            while remote.learning:
-                remote.receive()
-            complete_learning()
-            checkpoint()
+        trainer.stop_requested = True
+        coordinator.local.fail(error)
+        pool.wake()
         raise
     finally:
-        if gpu is not None and gpu.is_alive():
-            try:
-                parent.send({"op": "stop"})
-            except OSError:
-                pass
-            gpu.join(5)
-            if gpu.is_alive():
-                gpu.terminate()
-                gpu.join()
-        for index, process in actors.items():
-            if process.is_alive():
-                try:
-                    controls[index].send({"op": "stop"})
-                except OSError:
-                    pass
-            process.join(5)
-            if process.is_alive():
-                process.terminate()
-                process.join()
-        for connection in [*controls.values(), *gpu_connections, *worker_connections]:
-            connection.close()
-        remote.close()
-        if hasattr(trainer, "remote"):
-            del trainer.remote
-        signal.signal(signal.SIGINT, previous_handler)
-        if completed_run and any(p.exitcode != 0 for p in [gpu, *actors.values()]):
-            raise RuntimeError("检查点已保存，但子进程未正常退出")
+        thread.join()
+        pool.close()
+        del trainer.remote
+        signal.signal(signal.SIGINT, previous)

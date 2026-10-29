@@ -8,10 +8,8 @@ import numpy as np
 import torch
 
 from .model import Network, collate_states, collate_options, device_for_bf16
-from .native import Environment
-from .opponents import Teacher
-from .search import search
-from .runtime.ipc import search_values
+from .native_pool import NativePool
+from .runtime.config import Config
 
 
 def load(path, device):
@@ -38,20 +36,7 @@ def infer(network, request, device, contexts):
             output = network.decode(
                 contexts[request.context], *collate_options([request.arrays[0]], device)
             )[0]
-        return search_values(output.view(torch.uint16).cpu().numpy()), 0
-
-
-def choose(environment, network, rng, device, simulations):
-    generator = search(environment, rng, simulations=simulations, depth=16, noise=False)
-    answer = None
-    contexts = {}
-    while True:
-        try:
-            request = next(generator) if answer is None else generator.send(answer)
-            answer = infer(network, request, device, contexts)
-        except StopIteration as completed:
-            root, policy, _ = completed.value
-            return root.edges[int(np.argmax(policy))].command
+        return output.view(torch.uint16).cpu().numpy()
 
 
 def evaluate(args):
@@ -84,25 +69,61 @@ def evaluate(args):
             seed = int(root_rng.integers(1, 2**32))
             for learner in (1, 2):
                 started = time.perf_counter()
-                rng = np.random.default_rng(seed ^ 0x98AA)
-                with Environment(seed) as environment:
-                    teacher = Teacher(args.opponent, environment) if scripted else None
-                    result = environment.call("info")
-                    steps = 0
-                    for step in range(args.max_commands):
-                        if result["winner"] is not None:
+                config = Config(
+                    workers=1,
+                    games_per_worker=1,
+                    warmup_games=0,
+                    simulations=args.simulations,
+                    fast_simulations=args.simulations,
+                    temperature=0,
+                    max_commands=args.max_commands,
+                    device=args.device,
+                )
+                game = {
+                    "id": pair * 2 + learner - 1,
+                    "seed": seed,
+                    "learner": learner,
+                    "opponent": "teacher" if scripted else "history",
+                    "difficulty": args.opponent if scripted else "easy",
+                    "evaluation": True,
+                    "ply_limit": 0,
+                }
+                if not scripted:
+                    game["version"] = 1
+                with NativePool(config) as pool:
+                    pool.assign(
+                        0,
+                        game,
+                        rng=np.random.default_rng(seed ^ 0x98AA).bit_generator.state,
+                    )
+                    contexts = {}
+                    current_root = None
+                    while True:
+                        batch = pool.take_requests(wait_ms=10)
+                        if batch is not None:
+                            with batch:
+                                outputs, versions = [], []
+                                for request in batch.requests:
+                                    root = request.game_id, request.step
+                                    if current_root != root:
+                                        contexts.clear()
+                                        current_root = root
+                                    version = 1 if request.model == 1 else 0
+                                    network = other if version == 1 else model
+                                    outputs.append(
+                                        infer(network, request, device, contexts)
+                                    )
+                                    versions.append(version)
+                                batch.reply(outputs, versions)
+                        records = pool.take_records()
+                        ended = None
+                        for record in records:
+                            if record["done"]:
+                                ended = record
+                        pool.ack_records([record["lane"] for record in records])
+                        if ended is not None:
+                            result, steps = ended["info"], ended["steps"]
                             break
-                        if result["actor"] == learner or other is not None:
-                            network = model if result["actor"] == learner else other
-                            command = choose(
-                                environment, network, rng, device, args.simulations
-                            )
-                        else:
-                            command = teacher.next()
-                        result = environment.call("apply", command=command)
-                        steps += 1
-                        if result.get("rejected"):
-                            raise RuntimeError(f"评测命令被拒绝: {result}")
                     winner = result["winner"]
                     category = (
                         "unknown"
@@ -131,6 +152,4 @@ def evaluate(args):
                     output.write(json.dumps(record) + "\n")
                     output.flush()
                     print(json.dumps(record), flush=True)
-                if teacher:
-                    teacher.close()
     print(json.dumps(summary), flush=True)
