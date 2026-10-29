@@ -21,6 +21,20 @@ class Profile:
         self.sampling = {}
         self.pending = []
         self.stack = []
+        self.observations = {}
+
+    def observe(self, name, value):
+        if not self.enabled:
+            return
+        row = self.observations.setdefault(
+            name, {"count": 0, "sum": 0, "max": 0, "histogram": {}}
+        )
+        row["count"] += 1
+        row["sum"] += value
+        row["max"] = max(row["max"], value)
+        bucket = value if value <= 32 else 1 << (value - 1).bit_length()
+        key = str(bucket)
+        row["histogram"][key] = row["histogram"].get(key, 0) + 1
 
     def stage(self, name, cuda=False):
         if not self.enabled and not self.annotate:
@@ -70,6 +84,7 @@ class Profile:
             "stream_stages": copy.deepcopy(self.stream_stages),
             "sampling": copy.deepcopy(self.sampling),
             "pending_events": len(self.pending),
+            "observations": copy.deepcopy(self.observations),
             "stream_time_scope": "sampled current-stream intervals, including host launch gaps; not kernel active time",
         }
 
@@ -137,13 +152,23 @@ class TraceWindow:
         self.completed_loops = 0
         self.last_completed_iteration = None
         self.finished = False
+        self.start_seconds = float(os.environ.get("HAOJIE_TRACE_START_SECONDS", "0"))
+        self.first_step = None
 
     def step(self, stats):
         if self.path is None or self.finished:
             return
         self.calls += 1
         self.last_stats = copy.deepcopy(stats)
-        if self.calls == 64:
+        now = time.perf_counter()
+        if self.first_step is None:
+            self.first_step = now
+        ready = (
+            now - self.first_step >= self.start_seconds
+            if self.start_seconds
+            else self.calls >= 64
+        )
+        if self.profiler is None and ready:
             activities = [torch.profiler.ProfilerActivity.CPU]
             if self.device.type == "cuda":
                 activities.append(torch.profiler.ProfilerActivity.CUDA)
@@ -160,7 +185,7 @@ class TraceWindow:
                 "wall_time": time.time(),
                 "stats": self.last_stats,
             }
-        elif self.calls == 96:
+        elif self.completed_loops == 32:
             self.close()
 
     def complete(self, stats):

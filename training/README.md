@@ -92,6 +92,8 @@ training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoi
 training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-alignment-20261029/phased-closure/checkpoint.pt --compare-profile --batch 16 --feedback artifacts/classic-native-pool-20261029/benchmark/feedback.pkl --output artifacts/classic-profile-20261029/benchmark --tasks 256 --commands 8
 ```
 
-独立短 trace 使用 `$env:HAOJIE_TRACE = 'artifacts/profile/gpu-trace.json'`；GPU 循环第 64–95 次采集 CPU/CUDA 活动及阶段标签，输出 Chrome trace 与同名 `.meta.json` 开始/结束计数。需要支持 CUDA profiler 的 PyTorch 环境。这个窗口含 profiler 开销，单独用于算子归因；上述 OFF/ON 基准会清除子进程的 trace 设置。使用后用 `Remove-Item Env:HAOJIE_TRACE` 关闭。具体计量口径见[分段诊断](../docs/ai/TRAINING-RUNTIME.md#分段诊断口径)，本机结论见[状态入口](../docs/ai/STATUS.md#当前-8-线程瓶颈诊断)。
+独立短 trace 使用 `$env:HAOJIE_TRACE = 'artifacts/profile/gpu-trace.json'`；默认 GPU 循环第 64–95 次采集 CPU/CUDA 活动及阶段标签。也可设置 `$env:HAOJIE_TRACE_START_SECONDS = '20'`，运行满 20 秒后再采集 32 个完整循环，避开启动阶段。输出 Chrome trace 和同名 `.meta.json` 开始/结束计数，CUDA API 的提交、拷贝和同步调用可分别归因。需要支持 CUDA profiler 的 PyTorch 环境。这个窗口含 profiler 开销，单独用于归因；上述 OFF/ON 基准会清除子进程的 trace 设置。使用后移除 `HAOJIE_TRACE` 和自行设置的 `HAOJIE_TRACE_START_SECONDS` 环境变量。具体计量口径见[分段诊断](../docs/ai/TRAINING-RUNTIME.md#分段诊断口径)，本机结论见[状态入口](../docs/ai/STATUS.md#当前-8-线程瓶颈诊断)。
+
+开启 `HAOJIE_PROFILE=1` 时，`profile_native.batching` 记录原生取批大小、encode/decode 混合、互斥出队原因、队列最老请求年龄、锁和条件变量等待时间；`profile_gpu.observations` 记录输入批次、拆组数和实际神经批次，以及实体、记录、注意力配对和动作的有效／padding 数量。直方图小于等于 32 时为精确值，更大值向上归入二次幂桶；原生批次末桶为 32 及以上。
 
 这些 Node 命令仅用于 TS/Rust 差分开发验收。训练和评测调用同一进程内 Rust 手工 AI。架构、目标定义和研究依据见[训练设计](../docs/ai/TRAINING.md)，实际完成的验收见[状态入口](../docs/ai/STATUS.md)。

@@ -125,6 +125,27 @@ struct Queues {
     error: Option<String>,
     wake_requests: bool,
     wake_records: bool,
+    batching: Batching,
+}
+
+/// 只在诊断开启时累加；出队原因互斥，直方图末桶为 32 个及以上。
+#[derive(Clone, Default, serde::Serialize)]
+struct Batching {
+    calls: u64,
+    empty: u64,
+    wake: u64,
+    full: u64,
+    age_deadline: u64,
+    caller_deadline: u64,
+    lock_ns: u64,
+    wait_ns: u64,
+    available: u64,
+    taken: u64,
+    remaining: u64,
+    oldest_age_ns: u64,
+    oldest_age_max_ns: u64,
+    mixed_operations: u64,
+    sizes: [u64; 32],
 }
 struct Shared {
     queues: Mutex<Queues>,
@@ -468,13 +489,10 @@ impl Pool {
                 )
             }
             "status" | "barrier" | "active_versions" => {
-                let error = self
-                    .shared
-                    .queues
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .error
-                    .clone();
+                let (error, batching) = {
+                    let queues = self.shared.queues.lock().unwrap_or_else(|e| e.into_inner());
+                    (queues.error.clone(), self.config.profile.then(|| queues.batching.clone()))
+                };
                 if let Some(error) = error {
                     return Ok(json!({"error":error,
                     "threads":self.shared.tids.iter().map(|id|id.load(Ordering::Acquire)).collect::<Vec<_>>()}));
@@ -488,7 +506,7 @@ impl Pool {
                     "versions":groups.iter().flat_map(|g|g["versions"].as_array().unwrap().clone()).collect::<Vec<_>>(),
                     "requests_taken":self.shared.requests_taken.load(Ordering::Relaxed),
                     "queue_seconds":self.shared.queue_nanoseconds.load(Ordering::Relaxed) as f64 / 1e9,
-                    "profile":{"enabled":self.config.profile,
+                    "profile":{"enabled":self.config.profile,"batching":batching,
                         "workers":if self.config.profile {
                             groups.iter().map(|g|g["profile"].clone()).collect::<Vec<_>>()
                         } else { vec![] }},
@@ -507,12 +525,16 @@ impl Pool {
     }
 
     fn take_requests(&self, maximum: usize, wait_ms: u64) -> Result<usize, String> {
+        let locking = self.config.profile.then(Instant::now);
         let mut held = self.requests.lock().unwrap();
         if !held.is_empty() {
             return Err("前一请求批次尚未释放".into());
         }
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         let mut queues = self.shared.queues.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(locking) = locking {
+            queues.batching.lock_ns += locking.elapsed().as_nanos() as u64;
+        }
         loop {
             if let Some(error) = &queues.error {
                 return Err(error.clone());
@@ -522,6 +544,26 @@ impl Pool {
                 (r.at + Duration::from_millis(2)).min(deadline)
             });
             if queues.wake_requests || queues.requests.len() >= maximum || now >= batch_deadline {
+                if self.config.profile {
+                    let available = queues.requests.len();
+                    let count = maximum.min(available);
+                    let age = queues.requests.front().map_or(0, |r| now.duration_since(r.at).as_nanos() as u64);
+                    let wake = queues.wake_requests;
+                    let encode = queues.requests.iter().take(count).filter(|r| r.request.kind == 0).count();
+                    let row = &mut queues.batching;
+                    row.calls += 1;
+                    row.available += available as u64;
+                    row.taken += count as u64;
+                    row.remaining += (available - count) as u64;
+                    row.oldest_age_ns += age;
+                    row.oldest_age_max_ns = row.oldest_age_max_ns.max(age);
+                    row.mixed_operations += u64::from(encode > 0 && encode < count);
+                    if count == 0 { row.empty += 1; } else { row.sizes[count.min(32) - 1] += 1; }
+                    if wake { row.wake += 1; }
+                    else if available >= maximum { row.full += 1; }
+                    else if now >= deadline { row.caller_deadline += 1; }
+                    else { row.age_deadline += 1; }
+                }
                 queues.wake_requests = false;
                 let count = maximum.min(queues.requests.len());
                 held.extend(queues.requests.drain(..count));
@@ -536,12 +578,16 @@ impl Pool {
                 );
                 return Ok(count);
             }
+            let waiting = self.config.profile.then(Instant::now);
             queues = self
                 .shared
                 .changed
                 .wait_timeout(queues, batch_deadline - now)
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
+            if let Some(waiting) = waiting {
+                queues.batching.wait_ns += waiting.elapsed().as_nanos() as u64;
+            }
         }
     }
 

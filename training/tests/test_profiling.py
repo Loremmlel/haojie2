@@ -31,6 +31,7 @@ class ProfilingTests(unittest.TestCase):
         ):
             profile = Profile()
             self.assertFalse(profile.select("encode", 32, 4))
+            profile.observe("batch", 16)
             with profile.stage("encode", cuda=True):
                 pass
             report = profile.report()
@@ -38,6 +39,47 @@ class ProfilingTests(unittest.TestCase):
         self.assertEqual(report["stream_stages"], {})
         self.assertEqual(report["sampling"], {})
         self.assertEqual(report["pending_events"], 0)
+        self.assertEqual(report["observations"], {})
+
+    def test_batch_observations_and_delayed_trace(self):
+        with patch.dict(os.environ, {"HAOJIE_PROFILE": "1"}):
+            profile = Profile()
+            for value in (2, 32, 33):
+                profile.observe("batch", value)
+            self.assertEqual(
+                profile.report()["observations"]["batch"],
+                {
+                    "count": 3,
+                    "sum": 67,
+                    "max": 33,
+                    "histogram": {"2": 1, "32": 1, "64": 1},
+                },
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "delayed.json"
+            with (
+                patch.dict(
+                    os.environ,
+                    {"HAOJIE_TRACE": str(path), "HAOJIE_TRACE_START_SECONDS": "20"},
+                ),
+                patch(
+                    "training.haojie.profiling.time.perf_counter",
+                    side_effect=[0, 19, 20],
+                ),
+                patch("training.haojie.profiling.torch.profiler.profile"),
+            ):
+                trace = TraceWindow(Profile(), "cpu")
+                trace.step({})
+                trace.step({})
+                self.assertIsNone(trace.profiler)
+                trace.step({})
+                trace.complete({"updates": 1})
+                trace.close()
+            meta = json.loads(
+                path.with_suffix(".meta.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(meta["start"]["iteration"], 3)
+            self.assertEqual(meta["completed_loops"], 1)
 
     def test_nested_exclusive_times_do_not_count_children_twice(self):
         with (

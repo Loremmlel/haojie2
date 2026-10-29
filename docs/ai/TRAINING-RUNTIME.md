@@ -107,3 +107,5 @@ Python 分别记录 GPU 主线程与协调线程的 wall 和 thread CPU 时间�
 CUDA Events 按 encode/decode 各每 32 个批次、训练每 8 次抽样，并保存总/样本次数与样本数。只在原有同步之后 query 已完成事件，不增加逐段 synchronize。事件给出的流时间范围可能包含主机提交间隙，按 `stream_elapsed_seconds` 单列，不当作 kernel 活跃时间，也不与 CPU 时间相加。[CUDA Event 口径](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__EVENT.html)、[Windows CPU 周期口径](https://learn.microsoft.com/en-us/windows/win32/api/realtimeapiset/nf-realtimeapiset-querythreadcycletime)。
 
 使用同一冻结反馈和 256×8 工作量，按 OFF/ON、ON/OFF 对照插桩开销，逐轮核对命令、监督、RNG 和搜索/学习数量，并记录实际组批变化。独立 `HAOJIE_TRACE=<路径>` 运行在 GPU 循环第 64–95 次采集一个短 CPU/CUDA trace，记录阶段标签、真实 kernel/copy 与启动/同步调用；trace 和开始/结束计数单独落盘。该运行包含 profiler 自身的开销，不进入吞吐对照。诊断结束后据实际分项归因，不在同轮追加优化。
+
+2026-10-30 细化：增加原生出队原因、锁/条件变量等待、队列年龄、原生批次与神经批次分布、实际/padding 元素计数。`HAOJIE_TRACE_START_SECONDS` 可将 32 循环窗口移到稳态；CUDA API 的同步、拷贝与启动调用分别分析，主线程占用不能全部归为有效提交。Windows 线程 CPU 时钟有量化；CPU 调度/SMT 竞争需要独立证据，不由总占用率直接认定。只追加诊断，不改组批期限、调度、算子或搜索。

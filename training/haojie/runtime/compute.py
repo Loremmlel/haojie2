@@ -73,6 +73,8 @@ class Compute:
             grouped = {}
             for i, (version, request, owner) in enumerate(jobs):
                 grouped.setdefault((version, request.op), []).append(i)
+            self.profile.observe("inference.input_batch", len(jobs))
+            self.profile.observe("inference.groups", len(grouped))
         start = time.perf_counter()
         with torch.inference_mode():
             for (version, op), indices in grouped.items():
@@ -82,6 +84,27 @@ class Compute:
                     model = self.inference_model(version)
                 for offset in range(0, len(indices), self.config.inference_batch):
                     selection = indices[offset : offset + self.config.inference_batch]
+                    if self.profile.enabled:
+                        arrays = [jobs[i][1].arrays for i in selection]
+                        self.profile.observe(op + ".batch", len(selection))
+                        sizes = [len(a[0]) for a in arrays]
+                        self.profile.observe(op + ".elements", sum(sizes))
+                        self.profile.observe(
+                            op + ".padded_elements", len(sizes) * max(sizes)
+                        )
+                        if op == "encode":
+                            self.profile.observe(
+                                "encode.attention_pairs", sum(n * n for n in sizes)
+                            )
+                            self.profile.observe(
+                                "encode.padded_attention_pairs",
+                                len(sizes) * max(sizes) ** 2,
+                            )
+                            records = [len(a[1]) for a in arrays]
+                            self.profile.observe("encode.records", sum(records))
+                            self.profile.observe(
+                                "encode.padded_records", len(records) * max(records)
+                            )
                     sampled = self.profile.select(op, 32, len(selection))
                     cuda = sampled and self.device.type == "cuda"
                     if op == "encode":
