@@ -76,6 +76,12 @@ class Executor(Compute):
                 candidate.unlink()
 
     def report(self):
+        host_stats = (
+            torch.cuda.memory.host_memory_stats()
+            if self.device.type == "cuda"
+            and hasattr(torch.cuda.memory, "host_memory_stats")
+            else {}
+        )
         return {
             **self.stats,
             "inference_queue_seconds": self.queue_seconds,
@@ -83,6 +89,11 @@ class Executor(Compute):
             "cuda_peak_bytes": torch.cuda.max_memory_allocated()
             if self.device.type == "cuda"
             else 0,
+            "cuda_peak_reserved_bytes": torch.cuda.max_memory_reserved()
+            if self.device.type == "cuda"
+            else 0,
+            "pinned_host_bytes": host_stats.get("allocated_bytes.current"),
+            "pinned_host_peak_bytes": host_stats.get("allocated_bytes.peak"),
         }
 
     def snapshot(self):

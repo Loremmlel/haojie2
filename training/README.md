@@ -28,9 +28,11 @@ NumPy 固定为 **2.5.3**。原生搜索直接使用 `_generator` 导出的分�
 training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/classic-main
 ```
 
-默认先采集 8 个自然结束的简单档示范局，再完成 512 次独立模仿更新，发布模型后才启动自对弈。正常阶段使用 70% 当前自对弈、20% 历史模型、10% 手工对手；历史为空或选中当前版本时转为自对弈。默认 4 个 Rust 工作线程，每个推进 16 局；一局等待神经响应或记录确认时，线程继续推进其他就绪局。`--workers`、`--games-per-worker` 分别调整原生线程数和每线程在途局数。`--warmup-games`、`--warmup-updates` 调整两个预训练阶段；前者为 0 时明确跳过预训练。
+默认先采集 8 个自然结束的简单档示范局，再完成 512 次独立模仿更新，发布模型后才启动自对弈。正常阶段使用 70% 当前自对弈、20% 历史模型、10% 手工对手；历史为空或选中当前版本时转为自对弈。默认 8 个 Rust 工作线程，每个推进 8 局，总在途仍为 64 局；一局等待神经响应或记录确认时，线程继续推进其他就绪局。`--workers`、`--games-per-worker` 分别调整原生线程数和每线程在途局数。`--warmup-games`、`--warmup-updates` 调整两个预训练阶段；前者为 0 时明确跳过预训练。
 
 网络为 5,503,366 参数，宽度 256、6 层。主干只处理实体 token，效果/死亡等原有记录在局部编码；加入规则几何注意力偏置。训练、评测、历史模型推理和截断校准统一原生 BF16：权重、梯度、AdamW 一阶/二阶动量、神经浮点输入、输出与损失均为 BF16，没有 FP32 主权重或 autocast。步数、实体引用和类别索引使用整数。GPU 输出按 BF16 原始 16 位经进程内批量 FFI 回填；CPU 规则、搜索统计和落盘事实使用各自的数据类型。CUDA 使用 PyTorch 标准 BF16 算子及其内部累加实现。
+
+默认学习批量为 **16**（`--batch`），推理批量上限为 **32**（`--inference-batch`）。状态记录 PyTorch 已分配峰值 `cuda_peak_bytes`、预留峰值 `cuda_peak_reserved_bytes` 及锁页主机内存当前/峰值 `pinned_host_bytes` / `pinned_host_peak_bytes`（含缓存）；不支持锁页统计的 PyTorch 版本记 null。整卡显存和 Windows 共享 GPU 内存占用在性能采样中另记。
 
 来源 → 动作 → 参数按网络条件分布解码，共用一次状态主干；搜索的一条边是一条完整命令。候选随访问量渐进扩宽，无固定 32 命令上限，同次搜索内复用转置局面。默认 25% 决策搜索 64 次，其余 16 次，最大深度 16 条完整命令；唯一合法命令直接执行。仅深搜步和示范步形成策略监督。`--simulations`、`--fast-simulations`、`--full-fraction`、`--depth` 可调整；主干评估与条件头解码分别计数。
 
@@ -75,5 +77,11 @@ node --import tsx scripts/native/learning/teacher-validation.ts artifacts/native
 正确性测试从 Git 提交 `7cc4ba9` 读取冻结的 Python 搜索，核对原生搜索的请求、命令、访问统计、监督和 RNG，并验证暂停恢复、阶段和 BF16。
 
 统一基准需要四局已有轨迹，逐局抽取四个中后期起点；默认连续分配 256 个窗口，每个推进 8 条命令，保持 64 局在途，执行正式 64/16 搜索和同量 BF16 学习。与提交 `7cc4ba9` 的独立源码和 DLL 交错三轮，使用冻结反馈核对相同工作量。外部 CPU/GPU 采样另需 `psutil` 和 `nvidia-smi`；利用率只统计预热后仍有待分配窗口的满供给区间。`--output` 必须是新目录，保留报告和采样；运行用临时目录自动清理，源检查点和轨迹只读。线程职责、数组生命周期和验收顺序见[运行时架构](../docs/ai/TRAINING-RUNTIME.md)。
+
+比较当前单进程的线程数时使用 `--compare-workers 4 8`，固定总在途为 64 局，即 4×16 与 8×8；`--batch 16` 固定学习批量。可用已有 `--feedback` 跳过重新录制。Windows 采样另需 `pwsh.exe`，记录受测 PID 的共享/专用 GPU 内存，保留各适配器实例；无有效计数时记 null。本机复现命令：
+
+```powershell
+training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-alignment-20261029/phased-closure/checkpoint.pt --compare-workers 4 8 --batch 16 --feedback artifacts/classic-native-pool-20261029/benchmark/feedback.pkl --output artifacts/classic-workers-20261029/benchmark --tasks 256 --commands 8 --trials 3
+```
 
 这些 Node 命令仅用于 TS/Rust 差分开发验收。训练和评测调用同一进程内 Rust 手工 AI。架构、目标定义和研究依据见[训练设计](../docs/ai/TRAINING.md)，实际完成的验收见[状态入口](../docs/ai/STATUS.md)。

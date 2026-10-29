@@ -255,10 +255,11 @@ def execute(args):
         os.environ["HAOJIE_ENGINE"] = str(baseline / "haojie_native.dll")
     starts, replay = starting_positions(Path(args.checkpoint).resolve().parent)
     saved = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    updates = args.tasks * args.commands // 16
+    updates = args.tasks * args.commands // args.batch
     config = Config(
-        workers=4,
-        games_per_worker=16,
+        workers=args.workers,
+        games_per_worker=64 // args.workers,
+        batch=args.batch,
         warmup_games=0,
         teacher_fraction=0,
         history_fraction=0,
@@ -423,6 +424,9 @@ def execute(args):
             (output / "signature.pkl").write_bytes(pickle.dumps(signature))
             result = {
                 "backend": args.execute,
+                "workers": config.workers,
+                "games_per_worker": config.games_per_worker,
+                "training_batch": config.batch,
                 "tasks": args.tasks,
                 "seconds": elapsed,
                 **trainer.stats,
@@ -451,6 +455,47 @@ def summarize(values):
     }
 
 
+def start_windows_gpu_memory():
+    if os.name != "nt":
+        return None
+    command = (
+        "Get-Counter -Counter '\\GPU Process Memory(*)\\Shared Usage',"
+        "'\\GPU Process Memory(*)\\Dedicated Usage' "
+        "-SampleInterval 1 -Continuous -ErrorAction Stop | ForEach-Object { "
+        "ConvertTo-Json -InputObject @($_.CounterSamples | "
+        "Select-Object InstanceName,Path,CookedValue) -Compress }"
+    )
+    return subprocess.Popen(
+        ["pwsh.exe", "-NoProfile", "-Command", command],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+
+
+def process_gpu_memory(counters, pids):
+    if counters is None:
+        return None
+    selected = [
+        row
+        for row in counters
+        if row["InstanceName"].startswith("pid_")
+        and int(row["InstanceName"].split("_", 2)[1]) in pids
+    ]
+    result = {"instances": selected}
+    for kind in ("shared", "dedicated"):
+        values = [
+            row["CookedValue"]
+            for row in selected
+            if row["Path"].lower().endswith(f"\\{kind} usage")
+        ]
+        # 无对应计数器保持未知，不能以零冒充已测量。
+        result[f"{kind}_bytes"] = sum(values) if values else None
+    return result
+
+
 def sample(directory):
     import psutil
 
@@ -458,7 +503,7 @@ def sample(directory):
     output = queue.Queue()
     command = [
         "nvidia-smi",
-        "--query-gpu=utilization.gpu,utilization.memory,power.draw,clocks.sm,temperature.gpu",
+        "--query-gpu=utilization.gpu,utilization.memory,power.draw,clocks.sm,temperature.gpu,memory.used,memory.free",
         "--format=csv,noheader,nounits",
         "--loop-ms=500",
     ]
@@ -482,6 +527,8 @@ def sample(directory):
                                 "watts",
                                 "sm_mhz",
                                 "temperature",
+                                "memory_used_mib",
+                                "memory_free_mib",
                             ),
                             [
                                 float(v) if v.strip() != "[N/A]" else None
@@ -495,14 +542,30 @@ def sample(directory):
 
     reader = threading.Thread(target=read_gpu, daemon=True)
     reader.start()
-    previous, rows, gpu = {}, [], None
+    memory_process = None
+    memory_output = queue.Queue()
+
+    def read_gpu_memory():
+        try:
+            for line in memory_process.stdout:
+                memory_output.put(json.loads(line))
+        finally:
+            memory_output.put(None)
+
+    previous, rows, gpu, memory_counters = {}, [], None, None
     psutil.cpu_percent(percpu=True)
     try:
         while not (directory / "STOP-MONITOR").exists():
             at = time.perf_counter()
             while not output.empty():
                 gpu = output.get()
+            while not memory_output.empty():
+                memory_counters = memory_output.get()
             state = read_json(directory / "monitor.json")
+            if os.name == "nt" and state["full_at"] and memory_process is None:
+                # CUDA 初始化后才枚举计数器，避免遗漏新出现的训练 PID 实例。
+                memory_process = start_windows_gpu_memory()
+                threading.Thread(target=read_gpu_memory, daemon=True).start()
             roles = [read_json(p) for p in (directory / "roles").glob("*.json")]
             processes = {}
             for role in roles:
@@ -548,6 +611,9 @@ def sample(directory):
                     "steady": steady,
                     "state": state,
                     "gpu": gpu,
+                    "windows_gpu_memory": process_gpu_memory(
+                        memory_counters, {r["pid"] for r in roles}
+                    ),
                     "thread_cores": thread_cores,
                     "process_cores": {
                         str(pid): value["process"] for pid, value in current.items()
@@ -559,6 +625,10 @@ def sample(directory):
     finally:
         process.terminate()
         process.wait(timeout=5)
+        if memory_process is not None:
+            if memory_process.poll() is None:
+                memory_process.terminate()
+            memory_process.wait(timeout=5)
     active = [r for r in rows if r["steady"] and r["gpu"] is not None]
     names = {name for r in active for name in r["thread_cores"]}
     report = {
@@ -577,7 +647,24 @@ def sample(directory):
                 "watts",
                 "sm_mhz",
                 "temperature",
+                "memory_used_mib",
+                "memory_free_mib",
             )
+        },
+        "windows_gpu_memory": {
+            scope: {
+                "sample_count": sum(
+                    (r["windows_gpu_memory"] or {}).get("shared_bytes") is not None
+                    for r in samples
+                ),
+                **{
+                    name: summarize(
+                        [(r["windows_gpu_memory"] or {}).get(name) for r in samples]
+                    )
+                    for name in ("shared_bytes", "dedicated_bytes")
+                },
+            }
+            for scope, samples in (("steady", active), ("whole_run", rows))
         },
     }
     write_json(directory / "utilization.json", report)
@@ -595,6 +682,9 @@ def main():
     parser.add_argument("--tasks", type=int, default=256)
     parser.add_argument("--commands", type=int, default=8)
     parser.add_argument("--trials", type=int, default=3)
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument("--compare-workers", type=int, nargs=2, metavar=("A", "B"))
     parser.add_argument("--execute", choices=("baseline", "native"))
     parser.add_argument("--feedback")
     parser.add_argument("--capture", action="store_true")
@@ -603,6 +693,15 @@ def main():
     if args.sample:
         sample(args.sample)
         return
+    workers = args.compare_workers or [args.workers]
+    if any(value < 1 or 64 % value for value in workers):
+        parser.error("workers must be positive divisors of 64")
+    if args.compare_workers and workers[0] == workers[1]:
+        parser.error("--compare-workers requires two different counts")
+    if args.batch < 1 or args.tasks * args.commands % args.batch:
+        parser.error("--batch must divide the fixed training sample count")
+    if args.feedback and not args.capture and not Path(args.feedback).is_file():
+        parser.error("--feedback must name an existing frozen feedback file")
     if args.execute:
         execute(args)
         return
@@ -612,10 +711,10 @@ def main():
         parser.error("--tasks must be a multiple of 16 and at least 128")
     root = Path(args.output).resolve()
     root.mkdir(parents=True, exist_ok=False)
-    feedback = root / "feedback.pkl"
+    feedback = Path(args.feedback).resolve() if args.feedback else root / "feedback.pkl"
     reference = None
 
-    def invoke(backend, target, capture=False):
+    def invoke(backend, workers, target, capture=False):
         command = [
             sys.executable,
             "-B",
@@ -635,6 +734,10 @@ def main():
             str(64 if capture else args.tasks),
             "--commands",
             str(args.commands),
+            "--workers",
+            str(workers),
+            "--batch",
+            str(args.batch),
         ]
         if capture:
             command.append("--capture")
@@ -642,13 +745,23 @@ def main():
             subprocess.run(command, stdout=stream, check=True)
         return json.loads((target / "result.json").read_text(encoding="utf-8"))
 
-    captured = invoke("baseline", root / "capture", True)
-    print(json.dumps({"event": "captured", **captured}), flush=True)
+    if args.compare_workers:
+        variants = [(f"native-{n}", "native", n) for n in args.compare_workers]
+    else:
+        variants = [(name, name, args.workers) for name in ("baseline", "native")]
+    if not args.feedback:
+        _, backend, workers = variants[0]
+        captured = invoke(backend, workers, root / "capture", True)
+        print(json.dumps({"event": "captured", **captured}), flush=True)
+    else:
+        print(
+            json.dumps({"event": "reused_feedback", "path": str(feedback)}), flush=True
+        )
     for trial in range(args.trials):
-        backends = ["baseline", "native"] if trial % 2 == 0 else ["native", "baseline"]
-        for backend in backends:
-            target = root / f"{trial}-{backend}"
-            result = invoke(backend, target)
+        ordered = variants if trial % 2 == 0 else list(reversed(variants))
+        for label, backend, workers in ordered:
+            target = root / f"{trial}-{label}"
+            result = invoke(backend, workers, target)
             signature = pickle.loads((target / "signature.pkl").read_bytes())
             if reference is None:
                 reference = signature
