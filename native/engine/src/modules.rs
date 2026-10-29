@@ -1,15 +1,15 @@
 #[path = "commands/abilities.rs"]
 mod abilities;
-#[path = "training/actions.rs"]
-mod actions;
+#[path = "ai/mod.rs"]
+mod ai;
 #[path = "core/allocation.rs"]
-mod allocation;
-#[path = "training/boundary.rs"]
-mod boundary;
-#[path = "training/canonical.rs"]
+pub mod allocation;
+#[path = "core/canonical.rs"]
 mod canonical;
 #[path = "setup/catalog.rs"]
-mod catalog;
+pub mod catalog;
+#[path = "core/chance.rs"]
+mod chance;
 #[path = "commands/combat.rs"]
 mod combat;
 #[path = "core/command.rs"]
@@ -17,20 +17,22 @@ mod command;
 #[path = "commands/damage.rs"]
 mod damage;
 mod development;
-#[path = "training/encoding.rs"]
-mod encoding;
 #[path = "core/entities.rs"]
 mod entities;
 #[path = "core/geometry.rs"]
-mod geometry;
+pub mod geometry;
 mod identity;
 #[path = "commands/inspection.rs"]
-mod inspection;
+pub mod inspection;
+#[path = "learning/mod.rs"]
+mod learning;
 #[path = "commands/lifecycle.rs"]
 mod lifecycle;
-mod model;
+pub mod model;
 #[path = "commands/movement.rs"]
-mod movement;
+pub mod movement;
+#[path = "commands/options.rs"]
+pub mod options;
 #[path = "commands/preparation.rs"]
 mod preparation;
 #[cfg(feature = "kernel-profile")]
@@ -38,24 +40,20 @@ mod preparation;
 mod profile;
 #[path = "commands/reactions.rs"]
 mod reactions;
-#[path = "training/records.rs"]
-mod records;
 #[path = "core/resolution.rs"]
-mod resolution;
+pub mod resolution;
 #[path = "setup/runtime.rs"]
-mod runtime;
+pub mod runtime;
 #[path = "core/shared.rs"]
 mod shared;
 #[path = "setup/shrines.rs"]
 mod shrines;
 #[path = "commands/spells.rs"]
-mod spells;
+pub mod spells;
 #[path = "core/stats.rs"]
 mod stats;
 #[path = "setup/synthesis.rs"]
-mod synthesis;
-#[path = "training/tree.rs"]
-mod tree;
+pub mod synthesis;
 
 use std::io;
 

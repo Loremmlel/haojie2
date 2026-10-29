@@ -920,212 +920,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_revival_point_domains_preserve_large_clone_and_landmark_history() {
-        let catalog = crate::catalog::embedded().unwrap();
-        for owner in [1, 2] {
-            for size in [1, 2] {
-                for range in [1.5, 4.0] {
-                    let mut source = crate::runtime::create(73127, false, &catalog).unwrap();
-                    source.phase = "play".into();
-                    source.active = owner;
-                    source.summon_slots = 0.0;
-                    source.ply = 5.0;
-                    source.turns.insert("1".into(), 3.0);
-                    source.turns.insert("2".into(), 3.0);
-                    let y = if owner == 1 { 4.0 } else { 8.0 };
-                    let mut mage =
-                        template(&source, "u19", owner, Point { x: 4.0, y }, "mage", &catalog);
-                    mage.born = 0.0;
-                    mage.size = size as f64;
-                    mage.range_bonus = range - 4.0;
-                    source.units = vec![mage];
-                    for (kind, side, at, id) in [
-                        ("u25", owner, Point { x: 6.0, y }, "clone-a"),
-                        ("u25", owner, Point { x: 6.0, y }, "clone-b"),
-                        ("wall", 3 - owner, Point { x: 7.0, y }, "wall"),
-                    ] {
-                        let unit = template(&source, kind, side, at, id, &catalog);
-                        source.units.push(unit);
-                    }
-                    source.landmarks = Some(vec![template(
-                        &source,
-                        "s1",
-                        3 - owner,
-                        Point { x: 6.0, y: y + 1.0 },
-                        "landmark",
-                        &catalog,
-                    )]);
-                    source.deaths = Rc::new(
-                        ["1", "5", "u25", "s1"]
-                            .into_iter()
-                            .enumerate()
-                            .map(|(i, kind)| {
-                                Rc::new(json!({"id":format!("record-{i}"),"kind":catalog[kind].id,
-                                    "owner":owner,"ply":4,"revived":false}))
-                            })
-                            .collect(),
-                    );
-                    let before = serde_json::to_value(&source).unwrap();
-                    let mut batch = crate::inspection::Queries::default();
-                    for record in source.deaths.iter() {
-                        let prefix: Command = serde_json::from_value(json!({
-                            "type":"skill","unitId":"mage","deathId":record["id"]
-                        }))
-                        .unwrap();
-                        let mut expected = vec![];
-                        let mut inspector = crate::inspection::Queries::default();
-                        for at in crate::geometry::all_cells() {
-                            let candidate = Command {
-                                x: Some(at.x),
-                                y: Some(at.y),
-                                ..prefix.clone()
-                            };
-                            let status = crate::actions::inspect(
-                                &source,
-                                owner,
-                                &candidate,
-                                &catalog,
-                                &mut inspector,
-                            )
-                            .unwrap();
-                            if status != "invalid" {
-                                expected.push((at, status));
-                            }
-                        }
-                        assert_eq!(
-                            crate::actions::points(&source, owner, &prefix, &catalog, &mut batch)
-                                .unwrap()
-                                .unwrap(),
-                            expected,
-                            "{owner}:{size}:{range}:{}",
-                            record["kind"]
-                        );
-                    }
-                    assert_eq!(serde_json::to_value(&source).unwrap(), before);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn final_skill_point_domains_match_individual_inspections_and_keep_prefix_failures() {
-        let catalog = crate::catalog::embedded().unwrap();
-        for ability in ["u19", "19", "u24"] {
-            for inherited in [false, true] {
-                for max_hp in if ability == "u19" {
-                    &[5.0, 25.0][..]
-                } else {
-                    &[25.0][..]
-                } {
-                    let mut source = crate::runtime::create(73127, false, &catalog).unwrap();
-                    source.phase = "play".into();
-                    source.summon_slots = 0.0;
-                    source.ply = 5.0;
-                    source.turns.insert("1".into(), 3.0);
-                    let mut mage = template(
-                        &source,
-                        if inherited { "4" } else { ability },
-                        1,
-                        Point { x: 4.0, y: 4.0 },
-                        "mage",
-                        &catalog,
-                    );
-                    mage.born = 0.0;
-                    mage.hp = *max_hp;
-                    mage.max_hp = *max_hp;
-                    mage.traits = Some(vec![catalog[ability].id.clone()]);
-                    if ability == "u19" {
-                        mage.traits
-                            .as_mut()
-                            .unwrap()
-                            .push(crate::model::Kind::Number(20));
-                    }
-                    source.units = vec![mage];
-                    source.deaths = Rc::new(vec![
-                        Rc::new(json!({"id":"recent","kind":1,"owner":1,"ply":4,"revived":false})),
-                        Rc::new(json!({"id":"used","kind":1,"owner":1,"ply":4,"revived":true})),
-                        Rc::new(json!({"id":"old","kind":1,"owner":1,"ply":0,"revived":false})),
-                        Rc::new(json!({"id":"enemy","kind":1,"owner":2,"ply":4,"revived":false})),
-                    ]);
-                    let command: Command = serde_json::from_value(
-                        json!({"type":"skill","unitId":"mage","ability":catalog[ability].id}),
-                    )
-                    .unwrap();
-                    for phase in ["play", "summon"] {
-                        source.phase = phase.into();
-                        let before = serde_json::to_value(&source).unwrap();
-                        for death_id in if ability == "u19" {
-                            &["recent", "used", "old", "enemy", "missing"][..]
-                        } else {
-                            &[""][..]
-                        } {
-                            let mut prefix = command.clone();
-                            if ability == "u19" {
-                                prefix.death_id = Some((*death_id).into());
-                            }
-                            let mut expected = vec![];
-                            let mut inspector = crate::inspection::Queries::default();
-                            for at in crate::geometry::all_cells() {
-                                let candidate = Command {
-                                    x: Some(at.x),
-                                    y: Some(at.y),
-                                    ..prefix.clone()
-                                };
-                                let status = crate::actions::inspect(
-                                    &source,
-                                    1,
-                                    &candidate,
-                                    &catalog,
-                                    &mut inspector,
-                                )
-                                .unwrap();
-                                if status != "invalid" {
-                                    expected.push((at, status));
-                                }
-                            }
-                            let actual = crate::actions::points(
-                                &source,
-                                1,
-                                &prefix,
-                                &catalog,
-                                &mut crate::inspection::Queries::default(),
-                            )
-                            .unwrap()
-                            .unwrap();
-                            assert_eq!(
-                                actual, expected,
-                                "{ability}:{inherited}:{max_hp}:{phase}:{death_id}"
-                            );
-                            assert!(
-                                crate::actions::points(
-                                    &source,
-                                    2,
-                                    &prefix,
-                                    &catalog,
-                                    &mut crate::inspection::Queries::default()
-                                )
-                                .unwrap()
-                                .unwrap()
-                                .is_empty()
-                            );
-                            if phase == "play" && ability == "u19" && *death_id == "recent" {
-                                assert!(!actual.is_empty());
-                                assert!(actual.iter().all(|(_, status)| *status
-                                    == if *max_hp > 20.0 {
-                                        "available"
-                                    } else {
-                                        "uncertain"
-                                    }));
-                            }
-                        }
-                        assert_eq!(serde_json::to_value(&source).unwrap(), before);
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
     fn deep_death_history_revival_keeps_branches_public_views_and_hashes_independent() {
         let catalog = crate::catalog::embedded().unwrap();
         let mut source = crate::runtime::create(8137, false, &catalog).unwrap();
@@ -1189,7 +983,7 @@ mod tests {
         );
         assert_eq!(
             crate::canonical::hash(&next),
-            crate::records::hash(&serde_json::to_value(&next).unwrap())
+            crate::canonical::hash(&serde_json::to_value(&next).unwrap())
         );
 
         // 继承跑得快后，只有付费死亡才触发随机；旧旗帜镜像也必须计入存活下界。
@@ -1207,14 +1001,15 @@ mod tests {
             mage.extra.insert("bannerHp".into(), json!(banner_hp));
             let view = crate::runtime::public_view(&changed, 1).unwrap();
             assert_eq!(
-                crate::actions::inspect(
+                match crate::inspection::Queries::default().inspect(
                     view.position(),
-                    1,
                     &command,
-                    &catalog,
-                    &mut crate::inspection::Queries::default(),
-                )
-                .unwrap(),
+                    &catalog
+                ) {
+                    Ok(()) => "available",
+                    Err(Failure::Uncertain) => "uncertain",
+                    Err(error) => panic!("预检失败: {error:?}"),
+                },
                 expected,
             );
         }

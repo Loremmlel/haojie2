@@ -399,7 +399,7 @@ pub fn kill(
         return Ok(());
     }
     let enabled = !u.silenced;
-    let deny = enabled && u.has("20") && s.random(ctx.preview)? < 0.5;
+    let deny = enabled && u.has("20") && s.random_with(ctx.preview, &[0., 0.5, 1.])? < 0.5;
     let enemy = u.side() != 0
         && source.owner != 0
         && source.owner != u.owner
@@ -628,7 +628,11 @@ pub fn damage(
     if protected(s, &t, source, catalog, ctx)? {
         return Ok(0.0);
     }
-    if !u.silenced && u.has("17p") && s.random(ctx.preview)? < catalog.rule("/littleGoldImmunity") {
+    if !u.silenced
+        && u.has("17p")
+        && s.random_with(ctx.preview, &[0., catalog.rule("/littleGoldImmunity"), 1.])?
+            < catalog.rule("/littleGoldImmunity")
+    {
         ctx.emit(s,json!({"type":"shield","to":u.actor_event(),"owner":u.owner,"action":"ward","stage":"blocked","text":"小金耶 · 免疫"}),None);
         return Ok(0.0);
     }

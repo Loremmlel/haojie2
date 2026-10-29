@@ -1,5 +1,5 @@
 {
-  "sourceRoots": ["src", "training/colab/assets"],
+  "sourceRoots": ["src"],
   "locale": "zh-CN",
   "canonicalMap": "DESIGN.md",
   "ownership": { "Select/Listbox": "native" }

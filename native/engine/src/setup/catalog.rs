@@ -1,8 +1,5 @@
-//! 共用规则包边界：完整校验后返回不可变目录，开发会话与训练宿主分别持有它。
-use crate::{
-    encoding,
-    model::{self, Catalog, Definition, PROTOCOL, RULESET},
-};
+//! 共用规则包边界：完整校验后返回不可变目录。
+use crate::model::{self, Catalog, Definition, PROTOCOL, RULESET};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -111,42 +108,13 @@ pub fn from_request(mut request: Value) -> Result<Catalog, String> {
     {
         return Err("invalid synthesis recipes".into());
     }
-    let encoding = request["encoding"].take();
-    if !encoding.is_null() {
-        encoding::validate_schema(&encoding)?;
-    }
     Ok(Catalog {
         numbers: std::array::from_fn(|i| entries.get(&i.to_string()).cloned()),
-        kind_codes: encoding
-            .get("kinds")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .map(|(i, k)| (crate::preparation::kind(k), i + 1))
-            .collect(),
-        vocab_codes: encoding
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter_map(|(key, value)| {
-                value.as_array().map(|vs| {
-                    (
-                        key.clone(),
-                        vs.iter()
-                            .enumerate()
-                            .filter_map(|(i, v)| v.as_str().map(|v| (v.to_owned(), i + 1)))
-                            .collect(),
-                    )
-                })
-            })
-            .collect(),
         entries,
         combat,
         rule_values,
         pools,
         recipes,
-        encoding,
     })
 }
 

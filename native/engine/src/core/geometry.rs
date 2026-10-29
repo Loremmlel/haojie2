@@ -698,7 +698,6 @@ impl AttackQuery {
             .map(|route| route.direction)
             .collect()
     }
-    #[cfg(test)]
     pub fn routes(
         &mut self,
         s: &State,

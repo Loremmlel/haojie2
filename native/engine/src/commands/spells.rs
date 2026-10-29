@@ -239,7 +239,7 @@ fn resolve(
         } else {
             1.0 / 3.0
         };
-        if s.random(ctx.preview)? < chance {
+        if s.random_with(ctx.preview, &[0., chance, 1.])? < chance {
             if mage.has("archmage") {
                 s.unit_mut(&mage.id).unwrap().max_hp += catalog.rule("/archmageCounterHealth");
                 heal(

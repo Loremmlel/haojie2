@@ -1,29 +1,33 @@
-# Rust 原生引擎与训练运行时
+# Rust 原生规则引擎
 
-同一 crate 输出 `haojie-engine` 开发验证程序和 `haojie_native` 共享库。独立 C++ / LibTorch 宿主使用进程内共享库；旧 Python 和 `--training` 子进程宿主已删除。
+crate 输出 `haojie-engine` 可信开发验证程序及 `haojie_native` 动态库/rlib。旧训练系统已移除；新 `learning/` 提供普通局完整命令候选、实体编码和 Python 进程内接口，`ai/` 等价移植网页三档手工 AI 的普通局路径。
 
-| 位置                               | 职责                                           |
-| ---------------------------------- | ---------------------------------------------- |
-| `src/main.rs`、`modules.rs`        | 开发 CLI、模块声明和构建身份                   |
-| `src/library.rs`、`online/`        | 逐局类型化 FFI、可停放 actor 与动作状态机      |
-| `src/development.rs`               | 可信开发协议、规则与公开输入差分、历史记录审核 |
-| `src/core/`、`commands/`、`setup/` | 正式规则、原子提交、状态所有权与公开观察       |
-| `src/training/`                    | 公开输入边界、惰性动作树、编码与旧记录审核     |
+| 位置                                      | 职责                                     |
+| ----------------------------------------- | ---------------------------------------- |
+| `src/main.rs`、`modules.rs`、`library.rs` | CLI、库模块与构建身份                    |
+| `src/development.rs`                      | 可信开发协议与规则差分                   |
+| `src/core/`、`commands/`、`setup/`        | 正式规则、原子提交、状态所有权与公开观察 |
+| `data/`                                   | 随源码交付的规则包与规范表示向量         |
+| `../../scripts/native/engine/`            | 规则包生成、TS/Rust 差分与规则夹具       |
 
 ## 构建与验证
 
 需要 Rust 1.98.1 和平台链接器。Windows/Linux 使用同一实现。
 
 ```sh
-cargo build --locked --release --manifest-path native/engine/Cargo.toml --target-dir artifacts/native-target
-cargo test --locked --manifest-path native/engine/Cargo.toml --target-dir artifacts/native-target
-cargo clippy --locked --all-targets --manifest-path native/engine/Cargo.toml --target-dir artifacts/native-target -- -D warnings
+npm run native:rules:check
+npm run native:test
+npm run native:check
+npm run native:build
+npm run native:validate -- --output artifacts/native-rules
 ```
 
-输出位于 `artifacts/native-target/release`：Windows 为 `haojie_native.dll`，Linux 为 `libhaojie_native.so`。C++ 宿主在构建时链接该库，运行时由系统动态库路径定位。`haojie-engine --version` 返回规则、源码内容哈希和训练协议身份。
+输出位于 `artifacts/native-target/release`：Windows CLI 为 `haojie-engine.exe`，Linux 为 `haojie-engine`；动态库为 `haojie_native.dll` / `libhaojie_native.so`。公开模块供仓库内部复用，不承诺稳定的外部 Rust API。
 
-`hj_actor_create` 在调用它的 C++ lane 上创建目录与持久 actor 句柄，不将 `Rc` 所有权声明为线程安全。`hj_actor_call` 每次只操作指定一局：创建、推进、快照、停放、恢复、删除。停放返回自包含快照并释放整局及树；恢复保留正式状态、两类 RNG、路径和每层排除 frontier。`hj_actor_close` 在拥有线程释放句柄；`hj_memory_bytes` 提供活动分配计数。返回字节视图只在下次调用前有效，panic 和错误不会越过 FFI。
+PowerShell 中若 npm 包装命令吞掉 `--output`，使用 `npm.cmd`，或直接运行 `node --import tsx scripts/native/engine/validation/run.ts --output artifacts/native-rules`。
 
-所有正式命令通过共享规则内核提交。公开树只接收白名单观察；正式 RNG 仅供规则执行，采样 RNG 独立保存。模型发布由 C++ 宿主统一管理，不绑定长根或训练数据。
+`haojie-engine --version` 返回规则与构建身份；`--development` 接收受信任的规范状态和规则包，用于预检、命令执行、观察、驻留恢复和差分。它不是联网服务的输入鉴权边界。
 
-TS/Rust 的状态、候选及规范公开编码对应由 `scripts/training/native/validation/run.ts` 和 `scripts/training/native/sampling/validate.ts` 验证，共用 `fixtures/` 中的规则夹具。类型化训练行在编码源头保留整数、布尔与存在位；连续值才转为 BF16。历史记录只审核；验证方法和历史测量入口见[验收记录](../../training/native/VALIDATION.md)。
+所有正式命令经过共用规则内核，成功后提交新分支。公开视图不包含真实 RNG。状态中的 `Rc` 保持线程所有权，不跨线程共享可变局面。
+
+新训练运行方式见[训练入口](../../training/README.md)，旧接口按[清理前版本](https://github.com/Loremmlel/haojie2/blob/fa59a66a0c0aeef219f5eaf871532eab24434eb5/native/engine/README.md)读取。

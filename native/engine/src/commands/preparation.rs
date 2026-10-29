@@ -68,16 +68,22 @@ pub fn draw(
     let mut k = if let Some(k) = selected {
         k.clone()
     } else {
-        pool[(s.random(ctx.preview)? * pool.len() as f64).floor() as usize].clone()
+        let cuts: Vec<_> = (0..=pool.len())
+            .map(|i| i as f64 / pool.len() as f64)
+            .collect();
+        pool[(s.random_with(ctx.preview, &cuts)? * pool.len() as f64).floor() as usize].clone()
     };
     if selected.is_none() {
-        if k.is("3") && s.random(ctx.preview)? >= 1.0 / 3.0 {
+        if k.is("3") && s.random_with(ctx.preview, &[0., 1. / 3., 1.])? >= 1.0 / 3.0 {
             k = Kind::Text("3p".into());
         }
-        if k.is("17") && s.random(ctx.preview)? >= catalog.rule("/goldSpellChance") {
+        if k.is("17")
+            && s.random_with(ctx.preview, &[0., catalog.rule("/goldSpellChance"), 1.])?
+                >= catalog.rule("/goldSpellChance")
+        {
             k = Kind::Text("17p".into());
         }
-        if k.is("u12") && s.random(ctx.preview)? >= 0.1 {
+        if k.is("u12") && s.random_with(ctx.preview, &[0., 0.1, 1.])? >= 0.1 {
             k = Kind::Text("u12p".into());
         }
     }
@@ -160,7 +166,7 @@ fn summon_prepared(
         && s.extra.get("regularSummons").and_then(Value::as_f64) == Some(2.0)
         && s.aura(s.active, "s13")
     {
-        let count = if s.random(ctx.preview)? < 1.0 / 3.0 {
+        let count = if s.random_with(ctx.preview, &[0., 1. / 3., 1.])? < 1.0 / 3.0 {
             4
         } else {
             3

@@ -16,17 +16,12 @@ pub fn describe() -> Value {
         "ruleset": crate::model::RULESET,
         "rulesPackage": "haojie-rules-package-v1",
         "rulesHash": crate::catalog::rules_hash(),
-        "encoding": "haojie-public-tables-v3",
-        "record": crate::records::FORMAT,
-        "auditor": crate::records::AUDITOR,
-        "protocols": {"training": "haojie-native-actor-v3", "development": crate::model::PROTOCOL},
-        "capabilities": ["create", "observe", "query", "preflight", "execute", "public-encoding", "record-audit", "native-actor", "typed-frontier", "inflight-resume"],
+        "protocols": {"development": crate::model::PROTOCOL},
+        "capabilities": ["create", "observe", "preflight", "execute"],
         "interfaces": {
-            "training": "single-game-typed-ffi",
             "development": "trusted-canonical-state-and-rule-package",
             "rust": "internal"
-        },
-        "resume": "atomic-rule-and-optimizer-boundary"
+        }
     })
 }
 
@@ -36,7 +31,7 @@ mod tests {
     fn identity_preserves_protocol_versions() {
         let identity = super::describe();
         assert_eq!(identity["name"], "haojie-engine");
-        assert_eq!(identity["record"], "haojie-native-record-v1");
+        assert_eq!(identity["protocols"]["development"], crate::model::PROTOCOL);
         assert_eq!(
             identity["build"]["sourceSha256"].as_str().unwrap().len(),
             64

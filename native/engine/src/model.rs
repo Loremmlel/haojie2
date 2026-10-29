@@ -43,8 +43,6 @@ pub struct Point {
 #[derive(Deserialize)]
 pub struct Definition {
     #[serde(skip)]
-    pub printed_features: std::cell::OnceCell<[Option<f64>; 10]>,
-    #[serde(skip)]
     pub printed_mage: Option<bool>,
     #[serde(skip)]
     pub printed_aura: Option<bool>,
@@ -70,13 +68,10 @@ pub struct Definition {
 pub struct Catalog {
     pub entries: BTreeMap<String, Rc<Definition>>,
     pub numbers: [Option<Rc<Definition>>; 32],
-    pub kind_codes: std::collections::HashMap<Kind, usize>,
-    pub vocab_codes: std::collections::HashMap<String, std::collections::HashMap<String, usize>>,
     pub combat: Value,
     pub rule_values: rustc_hash::FxHashMap<&'static str, f64>,
     pub pools: BTreeMap<String, Vec<Kind>>,
     pub recipes: Vec<Value>,
-    pub encoding: Value,
 }
 impl Deref for Catalog {
     type Target = BTreeMap<String, Rc<Definition>>;
@@ -490,8 +485,14 @@ impl State {
             .is_some_and(|a| a.iter().any(|v| v["kind"] == kind))
     }
     pub fn random(&mut self, preview: bool) -> Result<f64, Failure> {
+        self.random_with(preview, &[0., 1.])
+    }
+    pub fn random_with(&mut self, preview: bool, boundaries: &[f64]) -> Result<f64, Failure> {
         if preview {
             return Err(Failure::Uncertain);
+        }
+        if let Some(value) = crate::chance::supplied(boundaries) {
+            return value;
         }
         let mut x = self
             .extra
@@ -547,6 +548,8 @@ pub fn extra_number(u: &Unit, key: &str) -> f64 {
 /// 序列化仍使用原平面字段与顺序，外部输入不接受内部 extra 字段作为规则参数。
 #[derive(Clone, Default)]
 pub struct Command {
+    /// 手工策略的 JS 对象构造顺序，仅用于原有场景种子；不进入规则协议。
+    pub(crate) ai_order: Option<Rc<Vec<String>>>,
     pub kind: CommandKind,
     pub unit_id: Option<Rc<str>>,
     pub x: Option<f64>,
@@ -691,6 +694,7 @@ impl<'de> Deserialize<'de> for Command {
             && e.card_ids.is_none()
             && e.sacrifice_ids.is_none();
         Ok(Self {
+            ai_order: None,
             kind: wire.kind,
             unit_id: wire.unit_id,
             x: wire.x,

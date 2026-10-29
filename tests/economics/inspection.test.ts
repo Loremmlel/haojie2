@@ -23,9 +23,7 @@ import {
   withRuleInspection,
 } from '../../src/engine/core/state';
 import { eventActor, withEventFacts } from '../../src/engine/core/event-facts';
-import { observe } from '../../src/ai/observation';
-import { createTrainingCommandInspector, trainingPosition } from '../../src/ai/training/queries';
-import { TrainingActionTree } from '../../src/ai/training/action-tree';
+import { imagined, observe } from '../../src/ai/observation';
 import type { Command, GameState, Kind } from '../../src/engine/types';
 import { add, card, fixture } from '../helpers';
 
@@ -130,7 +128,7 @@ test('惰性事实不跳过冰痕提前坐标检查和蓄力来源检查', () =>
 /** 使用正式命令入口作为参照；遇到随机请求即中断，不编造随机结果。 */
 function compare(s: GameState, commands: Command[]) {
   const unknown = Symbol('随机边界');
-  const position = trainingPosition(observe(s, s.active));
+  const position = imagined(observe(s, s.active));
   const inspect = createCommandInspector(position);
   const before = structuredClone(s),
     publicBefore = structuredClone(position);
@@ -213,71 +211,6 @@ test('原生与继承复活的批量预检，和正式入口的资格/落点/错
       ),
     );
   }
-});
-
-test('技能最后落点批查询保留完整点序、亡者前缀、继承资格和死亡随机边界', () => {
-  for (const ability of ['u19', 19, 'u24'] as const)
-    for (const inherited of [false, true])
-      for (const maxHp of ability === 'u19' ? [5, 25] : [25]) {
-        const s = fixture(),
-          mage = add(s, inherited ? 4 : ability, 1, 4, 4);
-        mage.hp = mage.maxHp = maxHp;
-        mage.traits = ability === 'u19' ? [ability, 20] : [ability];
-        s.deaths = [
-          { id: 'recent', kind: 1, owner: 1, ply: s.ply - 1, revived: false },
-          { id: 'used', kind: 1, owner: 1, ply: s.ply - 1, revived: true },
-          { id: 'old', kind: 1, owner: 1, ply: s.ply - 5, revived: false },
-          { id: 'enemy', kind: 1, owner: 2, ply: s.ply - 1, revived: false },
-        ];
-        const command: Command = { type: 'skill', unitId: mage.id, ability };
-        const prefixes =
-          ability === 'u19'
-            ? ['recent', 'used', 'old', 'enemy', 'missing'].map((deathId) => ({
-                ...command,
-                deathId,
-              }))
-            : [command];
-        for (const state of [s, { ...s, phase: 'summon' as const }]) {
-          const before = structuredClone(state),
-            inspect = createCommandInspector(state);
-          for (const prefix of prefixes) {
-            const expected = ALL_CELLS.flatMap((point) => {
-              const inspection = inspectCommand(state, { ...prefix, ...point });
-              return inspection.status === 'invalid' ? [] : [{ point, inspection }];
-            });
-            assert.deepEqual(inspect.points(prefix), expected);
-            assert.deepEqual(
-              createTrainingCommandInspector(observe(state, 1), 1).points(prefix),
-              expected,
-            );
-            assert.deepEqual(
-              createTrainingCommandInspector(observe(state, 2), 2).points(prefix),
-              [],
-            );
-          }
-          assert.deepEqual(state, before);
-        }
-        if (ability === 'u19') {
-          const tree = new TrainingActionTree(observe(s, 1), 1),
-            root = tree.node(),
-            revive = root.choices.findIndex(
-              (choice) =>
-                choice.command.type === 'skill' && (choice.command.ability ?? mage.kind) === 'u19',
-            );
-          assert.ok(revive >= 0);
-          const records = tree.node([revive]);
-          assert.deepEqual(
-            records.choices.map((choice) => choice.command.deathId),
-            s.deaths.map((d) => d.id),
-          );
-          assert.equal(tree.node([revive, 1]).choices.length, 0);
-          const points = tree.node([revive, 0]).choices;
-          assert.ok(points.length > 0);
-          assert.ok(
-            points.every((choice) => choice.status === (maxHp > 20 ? 'available' : 'uncertain')),
-          );
-        }
-      }
 });
 
 test('复活批点域的共享模板与射程场保留双方、大体型、克隆和地标历史', () => {
@@ -367,7 +300,7 @@ test('攻击预检保留随机边界，不消耗正式随机数', () => {
   u.chargeType = 'attack';
   const c: Command = { type: 'attack', unitId: u.id, targetId: t.id };
   compare(s, [c]);
-  assert.equal(inspectCommand(trainingPosition(observe(s, 1)), c).status, 'uncertain');
+  assert.equal(inspectCommand(imagined(observe(s, 1)), c).status, 'uncertain');
 });
 
 test('攻击窄预检仅直接通过无有效标记和随机被动的友方治疗', () => {

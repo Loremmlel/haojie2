@@ -321,7 +321,6 @@ mod raw_attribute_tests {
         state.unit_mut("runner").unwrap().hp = attack + 1.0;
         let before = serde_json::to_value(&state).unwrap();
         let mut queries = Queries::default();
-        crate::actions::actions(&state, 1, &catalog, &mut queries).unwrap();
         let source = state.unit("source").unwrap();
         let original = queries.attributes(&state, source, &catalog);
         let mut kill = Command::new("attack");
@@ -345,7 +344,7 @@ mod raw_attribute_tests {
             .as_ref()
             .unwrap();
         assert!(Rc::ptr_eq(&original, &projected.1));
-        assert_eq!(queries.attributes.len(), 2);
+        assert_eq!(queries.attributes.len(), 1);
         assert!(
             queries
                 .attributes
@@ -364,23 +363,5 @@ mod raw_attribute_tests {
         ));
         assert!(queries.inspect(&state, &probe, &catalog).is_ok());
         assert_eq!(serde_json::to_value(&state).unwrap(), before);
-
-        // 根自疗和攻击方向都会读属性，再借用空间查询时不得发生 RefCell 重借。
-        let view = crate::runtime::public_view(&state, 1).unwrap();
-        let mut tree = crate::tree::Tree::from_view(&view, &catalog).unwrap();
-        let root = tree.node(&[]).unwrap();
-        let attack = root
-            .choices
-            .iter()
-            .position(|c| {
-                c.command.kind == "attack" && c.command.unit_id.as_deref() == Some("source")
-            })
-            .unwrap();
-        let target = tree.node(&[attack]).unwrap();
-        for (i, choice) in target.choices.iter().enumerate() {
-            if choice.next.is_some() {
-                tree.node(&[attack, i]).unwrap();
-            }
-        }
     }
 }

@@ -1,12 +1,12 @@
-//! 可信开发协议与诊断会话；正式训练只使用共用规则包和执行内核，不经过这个入口。
+//! 可信开发协议与规则差分会话。
 #[cfg(feature = "kernel-profile")]
 use crate::profile;
 use crate::{
     canonical, catalog as rules_catalog,
     command::apply_runtime,
-    encoding, geometry, inspection,
+    geometry, inspection,
     model::{COMMANDS, Catalog, Command, Failure, PROTOCOL, RULESET, State},
-    records, runtime, tree,
+    runtime,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -156,13 +156,68 @@ fn handle(
                 json!({"protocol":PROTOCOL,"ruleset":RULESET,"commands":COMMANDS,"completeEngine":true}),
             )
         }
-        "audit-record" => records::audit(
-            std::path::Path::new(request["record"].as_str().ok_or("record required")?),
-            catalog.as_ref().ok_or("initialize first")?,
-            |_, _| Ok(()),
-        ),
+        "classic-teacher" => {
+            let catalog = catalog.as_ref().ok_or("initialize first")?;
+            let mut record = request["record"].take();
+            let decision = crate::ai::search::teacher_next(
+                &request["observation"],
+                crate::ai::settings::Difficulty::parse(
+                    request["difficulty"].as_str().unwrap_or("easy"),
+                )?,
+                &mut record,
+                catalog,
+            )?;
+            Ok(json!({"decision":decision,"record":record}))
+        }
+        "classic-decide" => {
+            let catalog = catalog.as_ref().ok_or("initialize first")?;
+            crate::ai::search::decide(
+                &request["observation"],
+                request["side"].as_u64().unwrap_or(1) as usize,
+                crate::ai::settings::Difficulty::parse(
+                    request["difficulty"].as_str().unwrap_or("easy"),
+                )?,
+                request["simulations"].as_u64().map(|n| n as usize),
+                catalog,
+            )
+        }
+        "classic-keys" => {
+            let state = crate::options::position(&request["observation"])?;
+            let keys = crate::ai::keys::Keys::new(&request["observation"]);
+            Ok(json!({"position":keys.position(&state),"fingerprint":keys.fingerprint(&state)}))
+        }
+        "classic-candidates" => {
+            let catalog = catalog.as_ref().ok_or("initialize first")?;
+            let state = crate::options::position(&request["observation"])?;
+            let d = crate::ai::settings::Difficulty::parse(
+                request["difficulty"].as_str().unwrap_or("easy"),
+            )?;
+            let groups =
+                crate::ai::candidates::groups(&state, d, request["lean"] == true, catalog)?;
+            Ok(json!(groups.into_iter().map(|mut g|{let commands=g.commands(&state,catalog).to_vec();json!({"family":g.family,"keep":g.keep,"priority":g.priority,"commands":commands})}).collect::<Vec<_>>()))
+        }
+        "classic-evaluate" => {
+            let catalog = catalog.as_ref().ok_or("initialize first")?;
+            let state = crate::options::position(&request["observation"])?;
+            Ok(crate::ai::evaluation::breakdown(
+                &state,
+                request["side"].as_u64().unwrap_or(1) as usize,
+                catalog,
+            ))
+        }
+        "classic-propose" => {
+            let catalog = catalog.as_ref().ok_or("initialize first")?;
+            let state = crate::options::position(&request["observation"])?;
+            let commands = crate::learning::proposal::generate(
+                &state,
+                catalog,
+                request["seed"].as_u64().unwrap_or(1) as u32,
+                request["count"].as_u64().unwrap_or(32) as usize,
+            )?;
+            Ok(json!(commands))
+        }
         "hash-states" => {
-            // 可信开发入口的差分参照；正式训练仍只接收已校验起点与命令记录。
+            // 比较类型化局面与 JSON 快照的既有规范表示。
             let states: Vec<State> =
                 serde_json::from_value(request["states"].take()).map_err(|e| e.to_string())?;
             Ok(json!(
@@ -170,30 +225,10 @@ fn handle(
                     .iter()
                     .map(|s| {
                         let value = serde_json::to_value(s).unwrap();
-                        json!({"typed":canonical::hash(s),"value":records::hash(&value)})
+                        json!({"typed":canonical::hash(s),"value":canonical::hash(&value)})
                     })
                     .collect::<Vec<_>>()
             ))
-        }
-        "training-nodes" => {
-            let catalog = catalog.as_ref().ok_or("initialize first")?;
-            let actor = request["actor"].as_u64().ok_or("actor required")? as usize;
-            let cursors: Vec<Vec<usize>> =
-                serde_json::from_value(request["cursors"].take()).map_err(|e| e.to_string())?;
-            let mut tree = tree::Tree::new(&request["observation"], actor, catalog)?;
-            let mut nodes = vec![];
-            let mut encoded = vec![];
-            for cursor in cursors {
-                let node = tree.node(&cursor)?;
-                if request["encode"] == true && !node.choices.is_empty() {
-                    let input = encoding::encode(&tree, &node)?;
-                    encoded.push(json!(input));
-                } else if request["encode"] == true {
-                    encoded.push(Value::Null);
-                }
-                nodes.push(node.wire());
-            }
-            Ok(json!({"nodes":nodes,"encoded":encoded}))
         }
         "run" | "load" => {
             let catalog = catalog.as_ref().ok_or("initialize first")?;

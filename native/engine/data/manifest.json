@@ -1,6 +1,5 @@
 {
   "format": "haojie-rules-package-v1",
-  "sha256": "f05f678686e14dad593cab86600d1e1b348762fa3ae137cff368df0330b87bbd",
-  "ruleset": "3.0-feedback5-live-deployment-2026-09-23",
-  "encoding": "haojie-public-tables-v3"
+  "sha256": "4af58f7b3f7da65023d7a66d0986cbc33101723e1b64448e966866872b768f25",
+  "ruleset": "3.0-feedback5-live-deployment-2026-09-23"
 }

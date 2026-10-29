@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixtures } from '../../scripts/training/native/fixtures/movement';
-import { combatFixtures } from '../../scripts/training/native/fixtures/combat';
-import { completeFixtures } from '../../scripts/training/native/fixtures/phases';
-import { preparationFixtures } from '../../scripts/training/native/fixtures/preparation';
+import { fixtures } from '../../scripts/native/engine/fixtures/movement';
+import { combatFixtures } from '../../scripts/native/engine/fixtures/combat';
+import { completeFixtures } from '../../scripts/native/engine/fixtures/phases';
+import { preparationFixtures } from '../../scripts/native/engine/fixtures/preparation';
 import {
   applyCommand,
   applyRuntimeCommand,
@@ -16,8 +16,6 @@ import {
   entityHandle,
 } from '../../src/engine/runtime/position';
 import { publicPositionView, observe } from '../../src/ai/observation';
-import { TrainingActionTree } from '../../src/ai/training/action-tree';
-import { createDecisionEncoder } from '../../src/ai/training/encoding/decision';
 import { createPlacementQuery, movementPath, ALL_CELLS } from '../../src/engine/core/geometry';
 import { allPieces } from '../../src/engine/core/traits';
 import type { GameState } from '../../src/engine/types';
@@ -53,7 +51,7 @@ test('实体句柄跨分支、同长度替换、删除与重排均指向当前�
   assert.equal(entityAt(s, handles[2]), c);
 });
 
-test('新运行分支在全部规则夹具保留成功、失败原子性和公开候选/编码', () => {
+test('新运行分支在全部规则夹具保留成功、失败原子性和公开观察', () => {
   for (const { name, job } of cases) {
     const original = plain(job.state);
     const runtime = importRuntimePosition(job.state);
@@ -74,15 +72,6 @@ test('新运行分支在全部规则夹具保留成功、失败原子性和公�
       const view = publicPositionView(runtime, actor);
       assert.deepEqual(plain(view), plain(exported), name);
       assert.ok(!('rng' in view) && !('seed' in view) && !('log' in view));
-      const reference = new TrainingActionTree(exported, actor).node([]);
-      const actual = new TrainingActionTree(view, actor).node([]);
-      assert.deepEqual(plain(actual), plain(reference), name);
-      if (actual.choices.length)
-        assert.deepEqual(
-          createDecisionEncoder(view, actor)(actual),
-          createDecisionEncoder(exported, actor)(reference),
-          name,
-        );
       assert.throws(() => {
         view.bases[1] = 0;
       }, TypeError);

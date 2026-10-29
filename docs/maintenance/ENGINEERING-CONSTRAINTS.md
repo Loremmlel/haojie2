@@ -126,12 +126,12 @@ HaojieGame保持本地协议；HaojieOnlineGame只消费PlayerView和宿主回�
 
 见`docs/feedback/FEEDBACK-2026-09-23.md`。部署行改为当前局面实时判定，覆盖此前回合开始快照要求；共用`deploymentRows`，旧存档的deployRows不能授权落子。小屋排除普通20死亡，王城不受影响；普通20反伤20且保持原50%分界。墓地通过allegiance统一视为中立，不能重铸，保留来源owner兼容存档。AI可在原预算内比较移动开行后部署，不以行权奖励代替安全评估。当前CLI回放`docs/playtests/current/cli-feedback5-20260923.jsonl`；9月21日counter-freeze旧回放固定`b49223f9f8f3e8beb55199b963afbd4bf2020126`，不改历史指纹。
 
-历史 `haojie-training-record-v1` 按种子/起点与命令重放审核，读写复用 `scripts/training/records`，支持 `.jsonl.gz`；实际上限与两个规则版本必须校验。历史实验与规则指纹不改写，缺少结束行不补终局结果。
+历史训练记录按其原版本代码读取；历史实验与规则指纹不改写，缺少结束行不补终局结果。
 
-2026-10-24 原生重构取代旧训练架构限制：唯一宿主为独立 C++ / LibTorch，Rust 负责逐局规则 actor。初始化、推理、学习、调度、优化器和保存恢复不依赖 Python；浮点模型、激活、梯度及优化器状态保持 BF16，离散身份、索引和存在位保持整数/布尔。公开状态、有序参数路径和每层精确排除事实取代完整历史重放；模型发布不绑定长根。检查点保存未完成局和未消费轨迹，缩容停放并释放规则资源。旧模型、优化器和原始实验保留，不添加兼容训练入口。TS/Rust 继续核对正式规则、公开观察和完整候选。当前实现及本机结果见 `training/native/README.md` 和 `training/native/VALIDATION.md`。
+2026-10-29 普通局重写授权移除旧训练系统，取代 2026-10-24 的唯一 C++ 宿主和固定模型约束。作者随后明确要求训练与推理全部原生 BF16：参数、梯度、优化器动量及神经网络浮点张量使用 BF16，索引和更新计数保留整数；不使用 FP32 主权重或 autocast 混合精度。新训练只考虑 classic，设计见 `docs/ai/TRAINING.md`，实际实现状态见 `docs/ai/STATUS.md`。规则、公开信息与 TS/Rust 对应仍保持；本地旧模型、优化器和原始实验保留，旧格式按原版本读取。
 
 ## 增量存档（2026-09-23）
 
 新文件格式为`haojie-record-v1`，保存初始局面、当前路线全部命令及当前局面；网页、自动保存和CLI共用`serializeSession`/`parseSession`。运行时Session仍含60步快照缓存，不能直接JSON.stringify作为新存档。悔棋后另走截断路线，导出不保留重做分支。保持GameState的v2结构和`haojie.session.v2`存储键，旧快照继续兼容，但缺失过程不能伪造；跨越旧档记录起点时重新起录。导入须同版重放校验完整终态，再替换会话，不重播视觉事件。
 
-训练转换只输出实际操作者的Observation，随机状态和初始权威局面仅留在整局元数据；未结束局没有胜负标签，不虚构教师统计。回放RULESET_ID与训练HAOJIE_RULESET分别校验，不改写历史记录。详见`docs/session/SAVES.md`。
+未来训练输入仍只使用实际操作者的公开 Observation；正式随机状态仅保留在权威环境和重放记录中。游戏存档接口见 `docs/session/SAVES.md`。

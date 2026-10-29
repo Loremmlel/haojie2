@@ -232,7 +232,23 @@ fn attack_roll(
     }
     for k in u.kinds() {
         if let Some(roll) = AttackRoll::for_kind(&k) {
-            let r = s.random(ctx.preview)?;
+            let cuts = match roll {
+                AttackRoll::Charger => vec![
+                    0.,
+                    catalog.rule("/charger/heavyChance"),
+                    catalog.rule("/charger/criticalChance"),
+                    1.,
+                ],
+                AttackRoll::SuperCritical => vec![
+                    0.,
+                    catalog.rule("/superCritical/lethalChance"),
+                    catalog.rule("/superCritical/lethalChance")
+                        + catalog.rule("/superCritical/doubleChance"),
+                    1.,
+                ],
+                AttackRoll::Vampire => vec![0., vampire(u, catalog).min(1.), 1.],
+            };
+            let r = s.random_with(ctx.preview, &cuts)?;
             match roll {
                 AttackRoll::Charger => {
                     amount += if r < catalog.rule("/charger/heavyChance") {
@@ -402,7 +418,7 @@ fn perform_prepared(
     }
     if !o.no_pierce && !o.reactive && !u.silenced {
         if u.has("s3") {
-            let convert = s.random(ctx.preview)? < 1.0 / 3.0;
+            let convert = s.random_with(ctx.preview, &[0., 1. / 3., 1.])? < 1.0 / 3.0;
             let victim = s.unit(&t.id).cloned();
             if convert
                 && !u.has("5")
@@ -418,7 +434,7 @@ fn perform_prepared(
                 let v = s.unit(&t.id).unwrap();
                 ctx.emit(s,json!({"type":"skill","to":v.actor_event(),"owner":u.owner,"action":"conversion","text":"CX · 策反"}),None);
             }
-            if s.random(ctx.preview)? < 0.25 {
+            if s.random_with(ctx.preview, &[0., 0.25, 1.])? < 0.25 {
                 s.summon_slots += 1.0;
                 ctx.emit(
                     s,
@@ -427,7 +443,10 @@ fn perform_prepared(
                 );
             }
         }
-        if u.has("s12") && s.random(ctx.preview)? < 3.0 / 5.0 && alive(s, &u.id) {
+        if u.has("s12")
+            && s.random_with(ctx.preview, &[0., 3. / 5., 1.])? < 3.0 / 5.0
+            && alive(s, &u.id)
+        {
             let current = s.unit_mut(&u.id).unwrap();
             let extra_operations = extra_number(current, "extraOperations") + 1.0;
             current

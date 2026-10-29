@@ -2,12 +2,12 @@
 
 ## 运行入口
 
-| 入口             | 调用关系与职责                                                                  |
-| ---------------- | ------------------------------------------------------------------------------- |
-| 离线游戏         | React 提交 Command，TS 引擎原子结算；UI 观察新的局面、事件和战报                |
-| 联机组件         | 宿主保存权威 GameState，按玩家下发 PlayerView；组件提交命令和显示回执           |
-| 本地 AI / TS CLI | 教师搜索仅接收公开 Observation，通过同一引擎执行命令                            |
-| C++ 原生训练宿主 | LibTorch 完成模型、学习、调度与恢复；Rust 持有规则 actor、公开树和搜索 frontier |
+| 入口             | 调用关系与职责                                                        |
+| ---------------- | --------------------------------------------------------------------- |
+| 离线游戏         | React 提交 Command，TS 引擎原子结算；UI 观察新的局面、事件和战报      |
+| 联机组件         | 宿主保存权威 GameState，按玩家下发 PlayerView；组件提交命令和显示回执 |
+| 本地 AI / TS CLI | 手工搜索仅接收公开 Observation，通过同一引擎执行命令                  |
+| 原生规则验证     | Rust 规则库与 TS 参照比较预检、正式命令及公开观察                     |
 
 `src/engine/index.ts` 是纯规则入口，不依赖 React、DOM、存储、音频、网络或系统时钟。公开状态、命令、随机边界和规则数据在 TS / Rust 两端保持对应；语言内部所有权实现见[运行内核](ai/RUNTIME.md)。
 
@@ -20,11 +20,10 @@
 | `src/engine/commands/`、`setup/`                 | 操作、原子结算、召唤、合成、神龛与反应队列                       |
 | `src/engine/session/`、`online/`                 | 存档和增量回放；玩家视图与操作者权限                             |
 | `src/ai/planning/`、`evaluation/`、`simulation/` | AI 规划、缓存、启发式评分与独立概率模拟                          |
-| `src/ai/training/`、`src/match/`                 | 公开编码、分步动作树、采样与轻量对局环境                         |
+| `src/match/`                                     | 本地对局、CLI 与人机设置                                         |
 | `src/ui/`                                        | 按 game、board、inspector、hand、library、session 等功能组织页面 |
-| `native/engine/src/`                             | Rust 类型、规则命令、训练宿主、动作树、编码和记录协议            |
-| `training/native/`                               | 独立 C++ / LibTorch 模型、学习器、调度、控制与保存恢复           |
-| `scripts/training/`                              | CLI、记录转换和开发验证；运行组件独立于已完成实验                |
+| `native/engine/src/`                             | Rust 类型、规则命令、状态分支及公开观察                          |
+| `scripts/native/engine/`                         | 规则包生成、规则夹具与双端差分                                   |
 
 ## 规则与状态
 
@@ -40,7 +39,7 @@
 
 React 的 opponent 控制层负责 Worker 调度、展示节奏和取消。标准构建将 Worker 内联为 Blob；宿主未注入 Worker 时使用相同搜索生成器分片运行。新局、载入、悔棋或卸载会取消旧任务，返回结果在执行前仍须检查当前局面。
 
-Rust lane 持有权威环境、公开动作树、编码缓冲和可保存的路径及排除 frontier；独立 C++ / LibTorch 宿主持有 BF16 模型、补偿优化器、终局轨迹与调度。完成局独立入队，按计算小批汇总完整对局梯度后原子提交一次更新；推理与学习可并行。根缓存按发布版本失效，不绑定长根租约。缩容序列化并释放规则 actor，恢复保留正式状态及两类 RNG。安装与操作见[训练入口](../training/README.md)，验证与历史实测见[验收入口](../training/native/VALIDATION.md)。
+旧训练系统已在普通局重写分支移除。新训练使用 Python 常驻多进程、进程内 Rust 规则/三档手工 AI、共享内存交换和单 GPU PyTorch 原生 BF16 学习/推理。5.34M 网络对完整命令候选评分，随机 PUCT 产生策略监督。实现与数据语义见[普通局训练](ai/TRAINING.md)，命令见[运行入口](../training/README.md)。
 
 ## 页面、样式与表现
 
@@ -80,4 +79,4 @@ export function Match() {
 
 esbuild 将 React、CSS、游戏和 Worker 内联为一个 HTML。构建拒绝运行时外部导入与额外分包，保留第三方许可。Pages 根发行物与源码一同提交，CI 用 `deploy:check` 检查一致性，见[发布说明](PAGES.md)。
 
-行为测试维护可观察规则、非法操作原子性和数据恢复。浏览器测试直接操作离线发行物；原生验证比较 TS / Rust 规则、候选、公开编码及规范哈希，新训练测试检验概率、同席位轨迹、梯度和在途保存恢复。入口见根 [README](../README.md)。
+行为测试维护可观察规则、非法操作原子性和数据恢复。浏览器测试直接操作离线发行物；原生验证比较 TS / Rust 预检、正式规则、完整后继、公开观察及驻留恢复。入口见根 [README](../README.md)。

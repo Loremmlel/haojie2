@@ -4,7 +4,7 @@ use crate::movement::{movement_stats, reserve};
 use serde::Serialize;
 use std::borrow::Cow;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
     pub attack: f64,
