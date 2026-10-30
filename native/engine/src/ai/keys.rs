@@ -271,6 +271,8 @@ pub fn command_value(c: &Command) -> Value {
     let order = match c.kind.as_str() {
         "synthesize" => vec!["type", "recipeId", "materialIds", "x", "y"],
         "deploy" => vec!["type", "cardId", "charge", "x", "y"],
+        // 改判先构造卡牌再追加单位；字段顺序参与独立抽样种子，须与 TS 一致。
+        "reroll" => vec!["type", "cardId", "unitId"],
         "attack"
             if c.target_id.as_deref() == c.unit_id.as_deref()
                 && c.mode.as_deref() == Some("heal") =>
