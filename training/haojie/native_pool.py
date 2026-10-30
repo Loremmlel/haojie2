@@ -328,9 +328,6 @@ class NativePool:
     def status(self):
         return self.control("status")
 
-    def active_versions(self):
-        return self.control("active_versions")
-
     def pause(self):
         return self.control("pause")
 

@@ -108,8 +108,6 @@ impl Catalog {
 pub struct Unit(Rc<UnitData>);
 impl Clone for Unit {
     fn clone(&self) -> Self {
-        #[cfg(feature = "kernel-profile")]
-        let _profile = crate::profile::scope(crate::profile::Phase::UnitCopy);
         Self(Rc::clone(&self.0))
     }
 }
@@ -121,8 +119,6 @@ impl Deref for Unit {
 }
 impl DerefMut for Unit {
     fn deref_mut(&mut self) -> &mut UnitData {
-        #[cfg(feature = "kernel-profile")]
-        let _profile = crate::profile::scope(crate::profile::Phase::UnitCopy);
         Rc::make_mut(&mut self.0)
     }
 }
@@ -409,8 +405,6 @@ impl State {
         self.fork_with_events(false)
     }
     fn fork_with_events(&self, copy_events: bool) -> Self {
-        #[cfg(feature = "kernel-profile")]
-        let _profile = crate::profile::scope(crate::profile::Phase::Branch);
         Self {
             entities: self.entities.clone(),
             version: self.version,

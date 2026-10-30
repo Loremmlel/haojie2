@@ -218,8 +218,6 @@ pub struct PointAttackQuery {
 }
 impl PointAttackQuery {
     pub fn new(s: &State, u: &Unit, limit: f64) -> Self {
-        #[cfg(feature = "kernel-profile")]
-        let _profile = crate::profile::scope(crate::profile::Phase::Paths);
         let mut blocked = [false; 117];
         let mut reached = [false; 117];
         let mut depth = [-1_i16; 117];
@@ -758,8 +756,6 @@ fn attack_search(
     all_routes: bool,
     source: Option<&std::cell::OnceCell<[bool; 117]>>,
 ) -> (Option<Vec<Point>>, Vec<AttackRoute>) {
-    #[cfg(feature = "kernel-profile")]
-    let _profile = crate::profile::scope(crate::profile::Phase::Paths);
     let ends = t.footprint_iter();
     let starts = cell_iter(u, u.at());
     if ends.clone().all(|to| {
@@ -1070,8 +1066,6 @@ fn placement(
     deployment: bool,
     query: Option<&PlacementQuery>,
 ) -> bool {
-    #[cfg(feature = "kernel-profile")]
-    let _profile = crate::profile::scope(crate::profile::Phase::Paths);
     let footprint = cells(u, at);
     if footprint.iter().any(|&p| !inside(p) || base(p)) {
         return false;
@@ -1190,8 +1184,6 @@ pub fn movement_with_place(
     straight: bool,
     place: impl Fn(Point) -> bool,
 ) -> Option<Vec<Point>> {
-    #[cfg(feature = "kernel-profile")]
-    let _profile = crate::profile::scope(crate::profile::Phase::Paths);
     if !inside(to) || u.at() == to || !place(to) {
         return None;
     }

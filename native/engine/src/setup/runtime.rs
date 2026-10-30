@@ -34,8 +34,6 @@ impl PublicPosition {
 }
 
 pub fn public_view(s: &State, viewer: usize) -> Result<PublicPosition, String> {
-    #[cfg(feature = "kernel-profile")]
-    let _profile = crate::profile::scope(crate::profile::Phase::Observe);
     if ![1, 2].contains(&viewer) {
         return Err("viewer must be 1 or 2".into());
     }
@@ -126,8 +124,6 @@ pub fn viewer(s: &State) -> usize {
     s.pending.first().map(|r| r.owner).unwrap_or(s.active)
 }
 pub fn observe(s: &State, viewer: usize) -> Result<Value, String> {
-    #[cfg(feature = "kernel-profile")]
-    let _profile = crate::profile::scope(crate::profile::Phase::Compatibility);
     if ![1, 2].contains(&viewer) {
         return Err("viewer must be 1 or 2".into());
     }

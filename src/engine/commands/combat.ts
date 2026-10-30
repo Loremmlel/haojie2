@@ -81,8 +81,6 @@ export function findTarget(s: GamePosition, id?: string): Target {
   ensure(t, '请选择有效的目标。');
   return t;
 }
-export const hostile = (s: GamePosition, u: Unit, t: Target) =>
-  t.unit ? allegiance(s, t.unit) !== u.owner : t.owner !== u.owner;
 const targetEffects = (s: GamePosition, t: Target) =>
   t.unit ? t.unit.effects : s.baseEffects[t.owner];
 function removeEffect(s: GamePosition, t: Target, e: Effect) {

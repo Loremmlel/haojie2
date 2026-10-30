@@ -34,8 +34,6 @@ pub fn banner_count(s: &State, owner: usize) -> usize {
 
 /// 完整属性查询与 TS getStats 对照；攻击光环只读印刷射程，禁止递归求攻击力。
 pub fn stats(s: &State, u: &Unit, catalog: &Catalog) -> Stats {
-    #[cfg(feature = "kernel-profile")]
-    let _profile = crate::profile::scope(crate::profile::Phase::Attributes);
     let d = catalog.by_kind(&u.kind);
     let enabled = !u.silenced;
     let age = s.turn(u.owner) + u.offset / 2.0 - u.born;

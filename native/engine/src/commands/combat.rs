@@ -42,8 +42,6 @@ fn prepare(
     query: Option<&mut crate::geometry::AttackQuery>,
     attributes: Option<&Stats>,
 ) -> Result<Prepared, Failure> {
-    #[cfg(feature = "kernel-profile")]
-    let _profile = crate::profile::scope(crate::profile::Phase::Preparation);
     let ally = t
         .unit
         .as_ref()
@@ -1025,12 +1023,6 @@ pub fn apply_prepared(
     preview: bool,
     prepared: Option<Prepared>,
 ) -> Result<State, Failure> {
-    #[cfg(feature = "kernel-profile")]
-    let _profile = crate::profile::scope(if preview {
-        crate::profile::Phase::Preview
-    } else {
-        crate::profile::Phase::Settlement
-    });
     let mut s = previous.fork_command();
     normalize_guards(&mut s);
     let mut ctx = Resolution {

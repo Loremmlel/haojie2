@@ -71,8 +71,6 @@ impl EntityIndex {
         layout.count = Some(count);
     }
     pub fn handle(&self, s: &State, id: &str) -> Option<EntityHandle> {
-        #[cfg(feature = "kernel-profile")]
-        let _profile = crate::profile::scope(crate::profile::Phase::Identity);
         self.sync(s, false);
         let locate = || {
             let t = self.0.borrow();

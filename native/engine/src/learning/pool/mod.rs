@@ -282,16 +282,6 @@ fn worker(
                             .filter(|s| s.waiting.is_some())
                             .count();
                         let records = slots.iter().flatten().filter(|s| s.record_pending).count();
-                        let versions: Vec<i64> = slots
-                            .iter()
-                            .flatten()
-                            .flat_map(|s| {
-                                [s.lane.root_version, s.lane.game["version"].as_i64()]
-                                    .into_iter()
-                                    .flatten()
-                            })
-                            .filter(|v| *v >= 0)
-                            .collect();
                         let value = if snapshot {
                             if !paused || waiting != 0 || records != 0 {
                                 Err("池尚未达到保存边界".into())
@@ -314,7 +304,7 @@ fn worker(
                         } else {
                             Ok(json!({"ready":paused && waiting==0 && records==0,
                                 "active":slots.iter().flatten().count(),"pending_requests":waiting,
-                                "pending_records":records,"versions":versions,
+                                "pending_records":records,
                                 "profile":{"index":index,
                                     "thread_id":shared.tids[index].load(Ordering::Acquire),
                                     "phases":timing::snapshot()}}))
@@ -488,7 +478,7 @@ impl Pool {
                     json!({"lanes":groups.into_iter().flat_map(|v| v.as_array().unwrap().clone()).collect::<Vec<_>>()}),
                 )
             }
-            "status" | "barrier" | "active_versions" => {
+            "status" | "barrier" => {
                 let (error, batching) = {
                     let queues = self.shared.queues.lock().unwrap_or_else(|e| e.into_inner());
                     (
@@ -506,7 +496,6 @@ impl Pool {
                     "active":groups.iter().map(|g|g["active"].as_u64().unwrap()).sum::<u64>(),
                     "pending_requests":groups.iter().map(|g|g["pending_requests"].as_u64().unwrap()).sum::<u64>(),
                     "pending_records":groups.iter().map(|g|g["pending_records"].as_u64().unwrap()).sum::<u64>(),
-                    "versions":groups.iter().flat_map(|g|g["versions"].as_array().unwrap().clone()).collect::<Vec<_>>(),
                     "requests_taken":self.shared.requests_taken.load(Ordering::Relaxed),
                     "queue_seconds":self.shared.queue_nanoseconds.load(Ordering::Relaxed) as f64 / 1e9,
                     "profile":{"enabled":self.config.profile,"batching":batching,

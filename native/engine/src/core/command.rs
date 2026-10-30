@@ -60,12 +60,6 @@ impl<'de> Deserialize<'de> for CommandKind {
 
 /// 已完成公共阶段检查；预检与正式连续运行共用同一个规则内核。
 pub fn execute(s: &State, c: &Command, catalog: &Catalog, preview: bool) -> Result<State, Failure> {
-    #[cfg(feature = "kernel-profile")]
-    let _profile = crate::profile::scope(if preview {
-        crate::profile::Phase::Preview
-    } else {
-        crate::profile::Phase::Settlement
-    });
     let mut next = match c.kind.as_str() {
         "attack" | "react" => combat::apply(s, c, catalog, preview),
         "move"

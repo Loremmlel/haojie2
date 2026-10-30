@@ -50,7 +50,7 @@ TS 单文件示例：`node --import tsx --test tests/session/recording.test.ts`�
 
 - `ci.yml`：游戏源码/测试/构建发生变化时运行游戏检查和浏览器；不匹配 Python 训练或训练台文件。当前 79 命令回放及真实 CLI 入口由 arena 测试负责，流程不再重复运行一次 CLI 回放。
 - `native.yml`：原生、TS 规则/AI、差分夹具及其依赖变化时，执行 Windows/Linux 原生和跨端验证；不笼统匹配 training、UI 或全部 tests。
-- `training.yml`：训练后端及原生依赖变化时，双平台构建运行库并执行 4 个训练测试模块，覆盖模型、存储、搜索恢复和诊断；不运行引擎测试。
+- `training.yml`：训练后端及原生依赖变化时，双平台构建运行库并执行 5 个训练测试模块，覆盖模型、存储、搜索恢复、诊断和独立评测；不运行引擎测试。
 - `training-web.yml`：训练台、控制服务、配置和样式依赖变化时执行轻量控制、图表与视图检查，无 PyTorch/CUDA/Rust 安装。
 - `history.yml`：只有手动触发时按记录原版本验证历史回放。
 
@@ -60,4 +60,4 @@ TS 单文件示例：`node --import tsx --test tests/session/recording.test.ts`�
 
 只删已有等价保护的重复、无用或恒真检查。断言较少、测试名字相似、跨语言执行相同规则，都不是单独的删除理由；跨层测试应验证该层独有的接线、资源或失败行为。
 
-本轮核实后删除两个旧 U13 用例、旧部署行用例和重复 96 步历史用例。U13 的实际卡牌种类检查合入 feedback-september17，旧 Session 往返合入 recording 的 79 步用例；实时部署由 feedback4/feedback5 保护。优化器恢复精度归 test_training，阶段屏障归 test_pipeline；并发重分配从 test_web 移到 test_pipeline。图鉴操作归 library 浏览器入口，图表交互归轻量 views。确定性、隐私、随机流、非法命令原子性、BF16、暂停和存储恢复测试保留。
+U13 卡牌种类由 feedback-september17 保护，旧 Session 往返由 recording 的 79 步用例保护；实时部署归 feedback4/feedback5。优化器恢复精度归 test_training，阶段屏障和并发重分配归 test_pipeline，镜像对统计与独立评测归 test_evaluation。图鉴操作归 library 浏览器入口，图表交互归轻量 views。确定性、隐私、随机流、非法命令原子性、BF16、暂停和存储恢复均有对应保护。

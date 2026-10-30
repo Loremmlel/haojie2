@@ -1,6 +1,6 @@
 # 运行内核与双端对应
 
-本分支保留 TS / Rust 游戏规则内核，重写普通局训练，并完整对应三档手工 AI。训练采用单进程、Rust 固定线程池与 PyTorch；方法见[普通局训练](TRAINING.md)，线程及恢复契约见[运行时架构](TRAINING-RUNTIME.md)。
+TS / Rust 游戏规则内核与三档手工 AI 保持对应。普通局训练采用单个训练进程、Rust 固定线程池与 PyTorch；方法见[普通局训练](TRAINING.md)，线程及恢复契约见[运行时架构](TRAINING-RUNTIME.md)。
 
 ## 规则内核
 

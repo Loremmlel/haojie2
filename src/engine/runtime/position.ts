@@ -1,12 +1,7 @@
-import type { GamePosition, Unit, Landmark, Kind, DeathRecord } from '../types';
+import type { GamePosition, Unit, Landmark, DeathRecord } from '../types';
 import { cloneRuleData } from '../core/clone';
-import { CATALOG } from '../catalog';
 
 export type EntityHandle = number & { readonly entityHandle: unique symbol };
-export type KindCode = number & { readonly kindCode: unique symbol };
-const kindCodes = new Map<Kind, KindCode>(
-  Object.values(CATALOG).map((d, i) => [d.id, (i + 1) as KindCode]),
-);
 interface EntitySlot {
   id: string;
   index: number;
@@ -84,10 +79,6 @@ export function entityAt(s: GamePosition, handle: EntityHandle): Unit | undefine
     u = slotUnit(s, t?.slots[handle]);
   }
   return u;
-}
-export function entityKind(s: GamePosition, handle: EntityHandle): KindCode | undefined {
-  const u = entityAt(s, handle);
-  return u && kindCodes.get(u.kind);
 }
 export function pieceById(s: GamePosition, id: string | undefined): Unit | undefined {
   if (id === undefined) return;

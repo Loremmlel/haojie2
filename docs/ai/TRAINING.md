@@ -1,6 +1,6 @@
 # 普通局训练
 
-2026-10-29，分支 `codex/classic-training-rewrite`，当前为分层解码 v2。只训练 classic，包含终极召唤、合成、老千、反应与随机机制。运行命令见 [training/README.md](../../training/README.md)，实际验收见[状态入口](STATUS.md)。
+当前使用分层解码 v2，只训练 classic，包含终极召唤、合成、老千、反应与随机机制。运行命令见 [training/README.md](../../training/README.md)，实际验收见[状态入口](STATUS.md)。
 
 ## 方法与依据
 
@@ -11,7 +11,7 @@
 - [Time Limits in Reinforcement Learning](https://proceedings.mlr.press/v80/pardo18a.html)：资源截断与游戏终局分开，截断时可以在继续任务的意义下自举。
 - [Monte-Carlo Graph Search for AlphaZero](https://arxiv.org/abs/2012.11045)：参考共享局面与父边统计的区分。本实现采用下文明确的节点复用与回传语义。
 
-不从博弈树数量级外推训练局数。对话中的 20–40 层、300–600 子动作和单卡 3–8 秒一局是估算；程序分别记录 ply、完整命令、主干评估、条件解码、自然终局和训练采样次数。
+程序分别记录 ply、完整命令、主干评估、条件解码、自然终局和训练采样次数；性能比较使用固定工作量实测。
 
 ## 单进程运行时
 

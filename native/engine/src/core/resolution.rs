@@ -54,8 +54,6 @@ impl Resolution {
     }
     /// 与 TS enrichEvent 共用字段契约；仅捕获坐标/身份事实，不增加额外 serial 或随机消耗。
     pub fn emit(&mut self, s: &mut State, mut event: Value, message: Option<String>) {
-        #[cfg(feature = "kernel-profile")]
-        let _profile = crate::profile::scope(crate::profile::Phase::Events);
         let id = format!("e{}", s.serial);
         s.serial += 1;
         event["id"] = json!(id);

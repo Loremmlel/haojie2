@@ -1,6 +1,4 @@
 //! 可信开发协议与规则差分会话。
-#[cfg(feature = "kernel-profile")]
-use crate::profile;
 use crate::{
     canonical, catalog as rules_catalog,
     command::apply_runtime,

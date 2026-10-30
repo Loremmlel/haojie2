@@ -34,7 +34,7 @@ training/.venv/Scripts/python.exe -m training.haojie web --port 8765
 
 支持调整搜索线程、每线程并行局数、训练/推理批量、搜索预算、学习率、对手比例、回放内存和保存/停止条件。运行中点击“保存并应用参数”先正常保存，再以新配置继续；缩容时多出的原局排队，扩大时恢复原局并补充新局。种子、设备和预训练配置只在新建时设置，网络保持 5.50M、原生 BF16。
 
-图表默认 60 秒时间加权 EMA 和保形平滑曲线，可切换 15/30/60/120 秒、原始线及 10 分钟至 24 小时时间范围。后台最多保存 17,280 个观测点和 200 条日志，均在服务内存；服务重启后曲线重新采集。资源读数区分训练进程 CPU/RAM 与整卡 GPU/显存，缺测留空，保存/重启区间断线。
+图表默认 60 秒时间加权 EMA 和保形平滑曲线，可切换 15/30/60/120 秒、原始线及 10 分钟至 24 小时时间范围。后台最多保存 17,280 个观测点和 200 条日志，均在服务内存；服务重启后曲线重新采集。CPU/RAM 包含训练及其评测子进程，GPU/显存为整卡读数；缺测留空，保存/重启区间断线。
 
 前端已打包为单个 HTML，运行不需要 Node。修改页面后执行 `npm run training:web:build`；`npm run training:web:check` 核对产物，`npm run training:web:test` 运行本机 GPU 浏览器功能验收，`npm run training:web:views` 使用明确标注的合成数据检查图表与草稿交互。设计与接口边界见[控制台说明](../docs/ai/TRAINING-WEB.md)。
 
@@ -58,7 +58,7 @@ training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/c
 training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/classic-main --resume
 ```
 
-默认每 1800 秒（30 分钟）自动保存，`--save-seconds` 可调整。保存先暂停原生推进，收回已发出的神经响应并排空正式记录，再通过屏障取得固定快照；周期保存随即恢复采集与学习，序列化和写盘由后台线程完成。一次只保留一个在写快照，正常停止等待最新快照落盘。状态中的 `checkpoint_pause_seconds` / `checkpoint_write_seconds` 分别报告取快照暂停 / 后台写盘耗时；写入期间快照持有的旧回放数组暂时保活，不重复复制整份回放。恢复模型、AdamW、随机数、预训练阶段/进度、校准器、历史池、数据进度、手工 AI 预算与缓存计划，以及所有尚未完成的对局。未完成搜索按原命令起点和固定模型重新计算。改变线程或并行局数时重分配原局，多出的局保存在待恢复队列中；学习率同时更新优化器参数组。
+默认每 3600 秒（1 小时）自动保存，`--save-seconds` 可调整。保存先暂停原生推进，收回已发出的神经响应并排空正式记录，再通过屏障取得固定快照；周期保存随即恢复采集与学习，序列化和写盘由后台线程完成。一次只保留一个在写快照，正常停止等待最新快照落盘。状态中的 `checkpoint_pause_seconds` / `checkpoint_write_seconds` 分别报告取快照暂停 / 后台写盘耗时；写入期间快照持有的旧回放数组暂时保活，不重复复制整份回放。恢复模型、AdamW、随机数、预训练阶段/进度、校准器、历史池、数据进度、手工 AI 预算与缓存计划，以及所有尚未完成的对局。未完成搜索按原命令起点和固定模型重新计算。改变线程或并行局数时重分配原局，多出的局保存在待恢复队列中；学习率同时更新优化器参数组。
 
 续训、评测和基准只接受 `haojie-classic-training-v3` 检查点，评测也可读取历史池权重。没有旧格式导入或迁移；新训练使用新目录。网络和监督仍为当前的分层解码 v2。
 
@@ -66,7 +66,7 @@ training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/c
 
 普通发布权重只在内存：当前版本和在途搜索引用版本存活，其余临时版本回收。历史权重有 **256 MiB CPU 缓存**和最多 **3 个 GPU 模型缓存**；活跃版本可超过 CPU 缓存预算，以保证搜索不中途换权重。只有进入历史池的模型单独落盘，历史池仍按原来的跨时期策略保存和抽取。
 
-每次保存只原子替换一个 `checkpoint.pt`，包含当前模型/优化器、必要临时权重、有限回放、在途对局和随机数等完整恢复状态。运行时不再写逐局文件或追加结果日志；异常中断从最近成功保存点恢复。保存期间磁盘会暂时同时存在旧检查点和新临时文件。
+每次保存只原子替换一个 `checkpoint.pt`，包含当前模型/优化器、必要临时权重、有限回放、在途对局和随机数等完整恢复状态。训练采集不写逐局文件；独立评测另存冻结权重和结果。异常中断从最近成功保存点恢复，保存期间磁盘会暂时同时存在旧检查点和新临时文件。
 
 回放数组通过 PyTorch 的独立张量存储逐块写入，避免整份 NumPy 回放在 pickle 编码时产生多份内存副本；加载后仍为原来的 NumPy 数据结构。旧 v3 检查点可直接恢复，回放容量和训练逻辑不变。
 
@@ -80,7 +80,8 @@ training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/c
 
 - `checkpoint.pt`：唯一滚动恢复点，包含有限内存回放和在途状态；`models/`：仅历史池权重。
 - `status.json`：阶段、更新、自然终局、两类截断、真实/软价值采样、主干/解码次数、推理/学习耗时与显存峰值。
-- `failed-native.json`：运行失败时覆盖保存的诊断。日常不生成逐局目录和累计结果文件。
+- `failed-native.json`：运行失败时覆盖保存的诊断。
+- `evaluations/`：定时对弈的冻结权重、逐局结果和状态；默认每 1800 秒一轮，三档各 4 局，共 12 局，镜像局同种子换边。`--evaluation-seconds 0` 关闭定时，已开始的一轮独立完成。调度与统计口径见[定时对弈](../docs/ai/TRAINING-WEB.md#定时对弈与磁盘写入)。
 
 ```powershell
 training/.venv/Scripts/python.exe -m training.haojie evaluate --checkpoint artifacts/classic-main/checkpoint.pt --opponent easy --output artifacts/classic-main/eval-easy.jsonl --games 20
@@ -101,7 +102,7 @@ node --import tsx scripts/native/learning/teacher-validation.ts artifacts/native
 
 正确性测试从 Git 提交 `7cc4ba9` 读取冻结的 Python 搜索，核对原生搜索的请求、命令、访问统计、监督和 RNG，并验证暂停恢复、阶段和 BF16。
 
-统一基准从 v3 检查点的四局回放中各抽取四个中后期起点；默认连续分配 256 个窗口，每个推进 8 条命令，保持 64 局在途，执行正式 64/16 搜索和同量 BF16 学习。使用冻结反馈核对工作量，支持当前运行时的线程数或插桩开关对照；已删除旧文件及旧多进程架构适配。外部 CPU/GPU 采样另需 `psutil` 和 `nvidia-smi`；利用率只统计预热后仍有待分配窗口的满供给区间。`--output` 必须是新目录，保留报告和采样；运行用临时目录自动清理，源检查点只读。线程职责、数组生命周期和验收顺序见[运行时架构](../docs/ai/TRAINING-RUNTIME.md)。
+统一基准从 v3 检查点的四局回放中各抽取四个中后期起点；默认连续分配 256 个窗口，每个推进 8 条命令，保持 64 局在途，执行正式 64/16 搜索和同量 BF16 学习。使用冻结反馈核对工作量，支持当前运行时的线程数或插桩开关对照。外部 CPU/GPU 采样另需 `psutil` 和 `nvidia-smi`；利用率只统计预热后仍有待分配窗口的满供给区间。`--output` 必须是新目录，保留报告和采样；运行用临时目录自动清理，源检查点只读。线程职责、数组生命周期和验收顺序见[运行时架构](../docs/ai/TRAINING-RUNTIME.md)。
 
 比较当前单进程的线程数时使用 `--compare-workers 4 8`，固定总在途为 64 局，即 4×16 与 8×8；`--batch 16` 固定学习批量。可用已有 `--feedback` 跳过重新录制。Windows 采样另需 `pwsh.exe`，记录受测 PID 的共享/专用 GPU 内存，保留各适配器实例；无有效计数时记 null。本机复现命令：
 

@@ -35,9 +35,6 @@ pub mod movement;
 pub mod options;
 #[path = "commands/preparation.rs"]
 mod preparation;
-#[cfg(feature = "kernel-profile")]
-#[path = "core/profile.rs"]
-mod profile;
 #[path = "commands/reactions.rs"]
 mod reactions;
 #[path = "core/resolution.rs"]

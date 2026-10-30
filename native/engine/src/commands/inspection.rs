@@ -123,8 +123,6 @@ impl Queries {
         Ok(Some(points))
     }
     pub fn inspect(&mut self, s: &State, c: &Command, catalog: &Catalog) -> Result<(), Failure> {
-        #[cfg(feature = "kernel-profile")]
-        let _profile = crate::profile::scope(crate::profile::Phase::Preparation);
         movement::stage_with_transit(s, c, || {
             self.transit
                 .get_or_init(|| movement::transit(s, catalog).map(str::to_owned))

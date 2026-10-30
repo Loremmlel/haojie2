@@ -176,41 +176,40 @@ class TrainingTests(unittest.TestCase):
             )
 
     def test_unknown_soft_and_terminal_labels(self):
-        with tempfile.TemporaryDirectory() as directory:
-            writer = GameBuffer({"id": 0, "opponent": "self"})
-            decisions = [
-                (np.zeros((2, 704), np.float32), np.array([0.3, 0.7], np.float32), 1.0)
-            ]
-            writer.sample(bundle(), decisions, 2, 1, 0)
-            writer.transition(
-                {"ply": 1, "winner": None, "metrics": [0.0] * 4}, {"type": "end"}
+        writer = GameBuffer({"id": 0, "opponent": "self"})
+        decisions = [
+            (np.zeros((2, 704), np.float32), np.array([0.3, 0.7], np.float32), 1.0)
+        ]
+        writer.sample(bundle(), decisions, 2, 1, 0)
+        writer.transition(
+            {"ply": 1, "winner": None, "metrics": [0.0] * 4}, {"type": "end"}
+        )
+        replay = Replay()
+        replay.add(writer.flush())
+        rng = np.random.default_rng(1)
+        self.assertTrue(all(b[3] == 0 for b in replay.batch(8, rng)))
+        writer.metadata["soft_target"] = {
+            "actor": 1,
+            "value": 0.6,
+            "weight": 0.25,
+            "kind": "bootstrap",
+        }
+        writer.flush()
+        soft = replay.batch(8, rng)
+        self.assertTrue(
+            all(b[2] == -0.6 and b[3] == 0.25 and not b[6] and b[7] for b in soft)
+        )
+        self.assertIsNone(writer.metadata["winner"])
+        writer.transition(
+            {"ply": 3, "winner": 1, "metrics": [0.1] * 4}, {"type": "attack"}
+        )
+        writer.flush()
+        self.assertTrue(
+            all(
+                b[2] == -1 and b[3] == 1 and b[6] and not b[7]
+                for b in replay.batch(8, rng)
             )
-            replay = Replay()
-            replay.add(writer.flush())
-            rng = np.random.default_rng(1)
-            self.assertTrue(all(b[3] == 0 for b in replay.batch(8, rng)))
-            writer.metadata["soft_target"] = {
-                "actor": 1,
-                "value": 0.6,
-                "weight": 0.25,
-                "kind": "bootstrap",
-            }
-            writer.flush()
-            soft = replay.batch(8, rng)
-            self.assertTrue(
-                all(b[2] == -0.6 and b[3] == 0.25 and not b[6] and b[7] for b in soft)
-            )
-            self.assertIsNone(writer.metadata["winner"])
-            writer.transition(
-                {"ply": 3, "winner": 1, "metrics": [0.1] * 4}, {"type": "attack"}
-            )
-            writer.flush()
-            self.assertTrue(
-                all(
-                    b[2] == -1 and b[3] == 1 and b[6] and not b[7]
-                    for b in replay.batch(8, rng)
-                )
-            )
+        )
 
     def test_calibration_heldout_and_native_bootstrap(self):
         with tempfile.TemporaryDirectory() as directory:

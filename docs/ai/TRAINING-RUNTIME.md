@@ -31,7 +31,7 @@ Web 服务另有一个轻量控制进程，管理唯一训练子进程。HTTP �
 
 ## 批量 FFI 与数组生命周期
 
-控制接口负责 assign、pause、resume、snapshot、status 和 active_versions。请求批次提供 lane、game、step、context、操作、版本及连续数组视图；输出以 BF16 原始 uint16 位和 offsets 整批回填。记录批次提供正式命令、info 和可选监督，确认记录后 lane 才继续。close 先停止并 join 工作线程，再释放池与库引用。
+控制接口负责 assign、pause、resume、barrier、snapshot 和 status。请求批次提供 lane、game、step、context、操作、版本及连续数组视图；输出以 BF16 原始 uint16 位和 offsets 整批回填。记录批次提供正式命令、info 和可选监督，确认记录后 lane 才继续。close 先停止并 join 工作线程，再释放池与库引用。
 
 Python 在请求批次释放前只读借用 Rust 数组，推理返回 CPU 输出后释放请求批次。记录转入 GameBuffer 时复制为 Python 拥有的数组，随后由回放及恢复点持有。队列容量由 lane 数限制，记录消费较慢时对对应 lane 施加背压。
 

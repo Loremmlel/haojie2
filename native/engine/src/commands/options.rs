@@ -62,8 +62,6 @@ pub fn text(v: &Value) -> &str {
 }
 /// 拒绝权威私有字段；预检使用无 RNG 的公开局面，首次概率分支返回 uncertain。
 pub fn position(observation: &Value) -> Result<State, String> {
-    #[cfg(feature = "kernel-profile")]
-    let _profile = crate::profile::scope(crate::profile::Phase::Compatibility);
     for key in ["seed", "rng", "log", "events", "past", "future", "present"] {
         if observation.get(key).is_some() {
             return Err(format!("public observation contains {key}"));
@@ -647,8 +645,6 @@ pub fn actions(
     catalog: &Catalog,
     queries: &mut Queries,
 ) -> Result<Vec<Action>, String> {
-    #[cfg(feature = "kernel-profile")]
-    let _profile = crate::profile::scope(crate::profile::Phase::Candidates);
     let mut candidates = vec![];
     let simple = |id: &'static str, c: Command| action(id, c, &[]);
     if s.extra.contains_key("winner") {

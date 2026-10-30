@@ -2,7 +2,7 @@ import { RULESET_ID } from '../catalog';
 import { applyCommand, createGame } from '../commands/game';
 import { ensure } from '../core/state';
 import { parseCommand } from '../online/authority';
-import type { Command, GamePosition, GameState, Player } from '../types';
+import type { Command, GameState } from '../types';
 import type { MatchSettings } from '../../match/settings';
 import { createSession, validState, type Session } from './history';
 
@@ -49,20 +49,6 @@ export function startRecord(initial: GameState): CommandRecord {
     commands: [],
     cursor: 0,
   };
-}
-
-/** 反应、暗选与回合外巨大化的实际操作者不能一律使用 active。 */
-export function recordedActor(
-  state: Pick<GamePosition, 'pending' | 'active' | 'units' | 'landmarks'>,
-  command: Command,
-): Player {
-  if (state.pending.length) return state.pending[0].owner;
-  if (command.type === 'choose-shrine') return command.player ?? state.active;
-  if (command.unitId) {
-    const unit = [...state.units, ...(state.landmarks ?? [])].find((u) => u.id === command.unitId);
-    if (unit) return unit.owner;
-  }
-  return state.active;
 }
 
 /**

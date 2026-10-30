@@ -119,7 +119,7 @@ export function createPlacementQuery(s: GamePosition) {
   return {
     canPlace: place,
     movementPath: (u: Unit, to: Point, limit: number, straight = false) =>
-      movement(s, u, to, limit, straight, place),
+      movement(u, to, limit, straight, place),
     movementField: (u: Unit, limit: number, straight = false) =>
       movementField(u, limit, straight, (p) => place(u, p)),
   };
@@ -277,10 +277,9 @@ export function movementPath(
   limit: number,
   straight = false,
 ): Point[] | null {
-  return movement(s, u, to, limit, straight, (unit, p) => canPlace(s, unit, p));
+  return movement(u, to, limit, straight, (unit, p) => canPlace(s, unit, p));
 }
 function movement(
-  s: GamePosition,
   u: Unit,
   to: Point,
   limit: number,
@@ -636,7 +635,7 @@ export function expansionAnchors(s: GamePosition, u: Unit): Point[] {
   ].filter((p) => canPlace(s, { ...u, size: 2 }, p));
 }
 /** 棋盘预览与命令验证共用；敌方基地只能作为路径终点。 */
-export function validAttackRoute(s: GamePosition, u: Unit, path: Point[], limit: number): boolean {
+export function validAttackRoute(_s: GamePosition, u: Unit, path: Point[], limit: number): boolean {
   if (!Array.isArray(path) || !path.length || path.length > Math.min(117, limit + 1)) return false;
   if (path.some((p) => !p || !inside(p))) return false;
   if (!covers(u, path[0]) || new Set(path.map(key)).size !== path.length) return false;

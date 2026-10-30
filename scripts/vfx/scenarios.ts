@@ -1,5 +1,5 @@
 /** 仅开发使用的真实命令场景，不进入生产构建。 */
-import { applyCommand, createSession, type Command, type GameState } from '../../src/engine';
+import { applyCommand, type Command, type GameState } from '../../src/engine';
 import { addEffect } from '../../src/engine/core/state';
 import { createGame, definition, type Kind, type Player } from '../../src/engine';
 import { template, random } from '../../src/engine/core/state';
@@ -216,4 +216,3 @@ export function vfxScenarios(): Scenario[] {
   push('虹吸结算', '连接有方向；真实吸取与回复分别呈现', s, { type: 'end' });
   return rows;
 }
-export const savedScenario = (s: Scenario) => JSON.stringify(createSession(s.before));
