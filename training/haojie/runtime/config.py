@@ -54,7 +54,7 @@ class Config:
     seconds: float = 0
     games: int = 0
     updates: int = 0
-    save_seconds: float = 300
+    save_seconds: float = 1800
     temperature: float = 1
 
     def validate(self):
