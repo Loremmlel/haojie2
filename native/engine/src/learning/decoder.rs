@@ -182,7 +182,10 @@ impl Decoder {
                         } else {
                             let mut source = Command::new("");
                             source.unit_id = c.unit_id.clone();
-                            source.card_id = c.card_id.clone();
+                            // 来源按单位归组时，不把某张手牌锁入整组的前缀。
+                            if source.unit_id.is_none() {
+                                source.card_id = c.card_id.clone();
+                            }
                             groups.push((key, source, vec![a]));
                         }
                     }

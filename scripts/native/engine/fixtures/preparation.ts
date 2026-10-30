@@ -236,6 +236,17 @@ export function preparationFixtures(): { name: string; job: Job }[] {
     }
   }
   if (variants.size !== 7) throw new Error('派生召唤专项缺少分支');
+  {
+    const s = fixture(),
+      mage = add(s, 'u13', 1, 4, 6),
+      cards = [card(s, 'u8'), card(s, 6)];
+    s.phase = 'summon';
+    push(
+      'reroll-multiple-cards',
+      s,
+      cards.map((cardId) => ({ type: 'reroll', cardId, unitId: mage.id })),
+    );
+  }
   // 来源字段优先于旧档种类推断；冲突输入也通过 validState，单列既有双端候选域差异。
   for (const [name, kind, pool] of [
     ['explicit-normal', 1, 'normal'],

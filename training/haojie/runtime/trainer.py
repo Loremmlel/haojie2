@@ -1,5 +1,6 @@
 """CPU 协调状态：对局、阶段、回放、模型引用与恢复点。"""
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -286,7 +287,7 @@ class Trainer(Compute):
         event["soft_target"] = target
         self.credit += self.config.batch
 
-    def checkpoint(self, workers, weights=None):
+    def checkpoint_snapshot(self, workers, weights=None):
         # 学习与原生线程均已暂停；未完成搜索在恢复时用原命令 RNG 重算。
         for lanes in workers.values():
             for lane in lanes:
@@ -325,10 +326,29 @@ class Trainer(Compute):
             "credit": self.credit,
             "workers": workers,
         }
+        # 打包数组只读，可跨保存线程共享；复制可变容器并保留回放/在途缓冲别名。
+        buffers = self.replay.games + [
+            lane["buffer"] for lanes in workers.values() for lane in lanes
+        ]
+        memo = {
+            id(array): array
+            for data in buffers
+            for chunk in data["chunks"]
+            for array in chunk.values()
+        }
+        return copy.deepcopy(payload, memo)
+
+    def write_checkpoint(self, payload):
+        started = time.perf_counter()
         path = self.directory / "checkpoint.pt"
         torch.save(payload, path.with_suffix(".tmp"))
         os.replace(path.with_suffix(".tmp"), path)
-        clean_storage(self.directory, {e["version"] for e in self.pool.entries})
+        return time.perf_counter() - started, {e["version"] for e in payload["pool"]}
+
+    def checkpoint(self, workers, weights=None):
+        payload = self.checkpoint_snapshot(workers, weights)
+        _, history = self.write_checkpoint(payload)
+        clean_storage(self.directory, history)
 
     def run(self):
         from .pipeline import run

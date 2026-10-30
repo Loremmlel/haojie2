@@ -6,9 +6,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import numpy as np
@@ -142,6 +144,105 @@ def paused_snapshot(pool):
 
 
 class PipelineTests(unittest.TestCase):
+    def test_collection_continues_during_checkpoint_write_and_stop_saves_latest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(
+                device="cpu",
+                workers=1,
+                games_per_worker=1,
+                warmup_games=0,
+                simulations=1,
+                fast_simulations=1,
+                save_seconds=0.1,
+                seconds=15,
+            )
+            trainer = Trainer(directory, config)
+            writing, release = threading.Event(), threading.Event()
+            progress = []
+            writes = []
+            original = trainer.write_checkpoint
+
+            def slow_write(payload):
+                writes.append(payload["stats"]["commands"])
+                if len(writes) == 1:
+                    writing.set()
+                    if not release.wait(15):
+                        raise TimeoutError("测试没有释放检查点写入")
+                return original(payload)
+
+            def observe_progress():
+                try:
+                    if writing.wait(10):
+                        before = trainer.stats["commands"]
+                        deadline = time.monotonic() + 8
+                        while (
+                            trainer.stats["commands"] < before + 8
+                            and time.monotonic() < deadline
+                        ):
+                            time.sleep(0.01)
+                        progress.extend([before, trainer.stats["commands"]])
+                finally:
+                    trainer.stop_requested = True
+                    release.set()
+
+            observer = threading.Thread(target=observe_progress)
+            observer.start()
+            try:
+                with patch.object(trainer, "write_checkpoint", side_effect=slow_write):
+                    trainer.run()
+            finally:
+                release.set()
+                observer.join()
+            self.assertEqual(len(progress), 2)
+            self.assertGreaterEqual(progress[1] - progress[0], 8)
+            self.assertEqual(len(writes), 2)
+            saved = torch.load(Path(directory) / "checkpoint.pt", weights_only=False)
+            self.assertEqual(saved["stats"]["commands"], trainer.stats["commands"])
+            self.assertGreater(writes[1], writes[0])
+
+    def test_background_checkpoint_failure_preserves_previous_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(
+                device="cpu",
+                workers=1,
+                games_per_worker=1,
+                warmup_games=0,
+                simulations=1,
+                fast_simulations=1,
+                save_seconds=0.1,
+                seconds=10,
+            )
+            trainer = Trainer(directory, config)
+            trainer.checkpoint({})
+            with patch.object(
+                trainer, "write_checkpoint", side_effect=OSError("保存失败")
+            ):
+                with self.assertRaisesRegex(OSError, "保存失败"):
+                    trainer.run()
+            saved = torch.load(Path(directory) / "checkpoint.pt", weights_only=False)
+            self.assertEqual(saved["stats"]["commands"], 0)
+            self.assertTrue((Path(directory) / "failed-native.json").is_file())
+
+    def test_demonstration_traces_second_card_reroll(self):
+        # 默认种子的第六个示范局：同一 U13 改判第二张手牌时不能被来源前缀挡住。
+        with Environment(3424658562) as environment:
+            for step in range(134):
+                command = environment.call("teacher-next", difficulty="easy")["command"]
+                if step == 133:
+                    self.assertEqual(
+                        command, {"type": "reroll", "unitId": "u223", "cardId": "c259"}
+                    )
+                path = environment.call("trace", command=command)
+                prefix = 0
+                for expected_prefix, index in path:
+                    self.assertEqual(prefix, expected_prefix)
+                    front, _ = environment.decode(0, prefix)
+                    prefix = front["next"][index]
+                leaf, _ = environment.decode(0, prefix)
+                self.assertEqual(leaf["command"], command)
+                result = environment.call("apply", command=command)
+                self.assertFalse(result.get("rejected"))
+
     def test_native_threads_and_independent_lane_ownership(self):
         config = Config(
             workers=1,

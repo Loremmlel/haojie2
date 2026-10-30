@@ -33,6 +33,48 @@ def sample(writer, step=1, winner=None):
 
 
 class StorageTests(unittest.TestCase):
+    def test_checkpoint_freezes_mutable_state_without_copying_replay_arrays(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trainer = Trainer(directory, Config(device="cpu", warmup_games=0))
+            writer = GameBuffer(trainer.game())
+            trainer.event({"type": "data", "data": sample(writer)})
+            workers = {
+                0: [
+                    {
+                        "lane": 0,
+                        "game": writer.game,
+                        "buffer": writer.data,
+                        "root_version": 0,
+                    }
+                ]
+            }
+            payload = trainer.checkpoint_snapshot(workers)
+            saved = payload["replay"][0]
+            self.assertIs(saved, payload["workers"][0][0]["buffer"])
+            array = writer.data["chunks"][0]["states"]
+            self.assertIs(saved["chunks"][0]["states"], array)
+            model_key = next(iter(payload["model"]))
+            original = payload["model"][model_key].clone()
+            sample(writer, 3, 1)
+            trainer.replay.capacity = 1
+            trainer.replay.add(sample(GameBuffer({"id": 1, "opponent": "self"})))
+            trainer.stats["commands"] = 99
+            with torch.no_grad():
+                trainer.model.state_dict()[model_key].add_(1)
+            self.assertEqual(saved["metadata"]["steps"], 1)
+            self.assertIsNone(saved["metadata"]["winner"])
+            self.assertEqual(len(saved["chunks"]), 1)
+            self.assertEqual(writer.data["chunks"], [])
+            self.assertEqual(payload["stats"]["commands"], 0)
+            torch.testing.assert_close(payload["model"][model_key], original)
+            trainer.write_checkpoint(payload)
+            restored = Trainer(directory, trainer.config, resume=True)
+            equal_tree(restored.replay.games, payload["replay"])
+            self.assertIs(
+                restored.replay.games[0], restored.saved_workers[0][0]["buffer"]
+            )
+            torch.testing.assert_close(restored.model.state_dict()[model_key], original)
+
     def test_memory_sampling_and_releases_evicted_arrays(self):
         with tempfile.TemporaryDirectory() as directory:
             replay = Replay(capacity=2)

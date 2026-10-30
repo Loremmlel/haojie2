@@ -6,6 +6,7 @@ import signal
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 
 import torch
@@ -13,7 +14,7 @@ import torch
 from ..native_pool import NativePool
 from ..profiling import Profile, TraceWindow
 from .gpu import Executor, Local, infer_batch
-from .storage import GameBuffer, atomic_json
+from .storage import GameBuffer, atomic_json, clean_storage
 
 
 class Coordinator:
@@ -42,6 +43,10 @@ class Coordinator:
         self.thread_id = None
         self.profile = Profile()
         self.local = Local(pool)
+        self.checkpoint_writer = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="haojie-checkpoint"
+        )
+        self.checkpoint_future = None
 
     def assign(self, lane, game, restored=None):
         with self.profile.stage("coordinator.assign"):
@@ -149,7 +154,19 @@ class Coordinator:
             self.trainer.stats["profile_coordinator"] = self.profile.report()
         return status
 
-    def save(self):
+    def finish_checkpoint(self, block=False):
+        future = self.checkpoint_future
+        if future is not None and (block or future.done()):
+            seconds, history = future.result()
+            self.checkpoint_future = None
+            self.trainer.stats["checkpoint_write_seconds"] = seconds
+            # 后台写入期间可能新增历史模型；同时保留最新恢复点和运行中引用。
+            history.update(e["version"] for e in self.trainer.pool.entries)
+            clean_storage(self.trainer.directory, history)
+
+    def save(self, background=False):
+        self.finish_checkpoint(block=True)
+        started = time.perf_counter()
         self.pool.pause()
         self.complete_learning(block=True)
         while True:
@@ -176,7 +193,17 @@ class Coordinator:
         trainer.remote_cuda_rng = state["cuda_rng"]
         trainer.stats.update(state["stats"])
         self.native_stats()
-        trainer.checkpoint(snapshots, state["weights"])
+        payload = trainer.checkpoint_snapshot(snapshots, state["weights"])
+        pause_seconds = time.perf_counter() - started
+        trainer.stats["checkpoint_pause_seconds"] = pause_seconds
+        payload["stats"]["checkpoint_pause_seconds"] = pause_seconds
+        if background:
+            self.pool.resume()
+        self.checkpoint_future = self.checkpoint_writer.submit(
+            trainer.write_checkpoint, payload
+        )
+        if not background:
+            self.finish_checkpoint(block=True)
 
     def run(self):
         trainer, config = self.trainer, self.trainer.config
@@ -201,6 +228,7 @@ class Coordinator:
                 flush=True,
             )
             while True:
+                self.finish_checkpoint()
                 self.complete_learning()
                 now = time.perf_counter()
                 stopped = (
@@ -219,14 +247,15 @@ class Coordinator:
                     or (trainer.directory / "STOP").exists()
                 )
                 periodic = (
-                    config.save_seconds and now - last_save >= config.save_seconds
+                    config.save_seconds
+                    and self.checkpoint_future is None
+                    and now - last_save >= config.save_seconds
                 )
                 if stopped or periodic:
                     with self.profile.stage("coordinator.checkpoint"):
-                        self.save()
+                        self.save(background=not stopped)
                     if stopped:
                         break
-                    self.pool.resume()
                     last_save = time.perf_counter()
                 for lane in self.lane_order:
                     if lane not in self.active:
@@ -261,6 +290,7 @@ class Coordinator:
                 trainer.directory / "failed-native.json", {"error": repr(error)}
             )
         finally:
+            self.checkpoint_writer.shutdown(wait=True)
             self.finished.set()
             self.pool.wake()
 

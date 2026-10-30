@@ -46,8 +46,8 @@ export function decoderFrontier(observation: Observation, path: number[]) {
           groups.set(key, {
             command: {
               type: '',
-              ...(c.unitId ? { unitId: c.unitId } : {}),
-              ...(c.cardId ? { cardId: c.cardId } : {}),
+              // 与来源分组键一致，单位来源不能绑定组内第一张手牌。
+              ...(c.unitId ? { unitId: c.unitId } : c.cardId ? { cardId: c.cardId } : {}),
             } as unknown as Command,
             stage: 1,
             group: [i],
