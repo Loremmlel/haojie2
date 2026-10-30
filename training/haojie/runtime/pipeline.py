@@ -223,7 +223,6 @@ class Coordinator:
                         "runtime": "native-thread-pool",
                         **trainer.model.description(),
                     },
-                    ensure_ascii=False,
                 ),
                 flush=True,
             )

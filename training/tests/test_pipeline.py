@@ -2,6 +2,7 @@
 
 import copy
 import ctypes
+import io
 import os
 import subprocess
 import sys
@@ -201,7 +202,7 @@ class PipelineTests(unittest.TestCase):
             self.assertGreater(writes[1], writes[0])
 
     def test_background_checkpoint_failure_preserves_previous_checkpoint(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(prefix="训练-") as directory:
             config = Config(
                 device="cpu",
                 workers=1,
@@ -214,8 +215,13 @@ class PipelineTests(unittest.TestCase):
             )
             trainer = Trainer(directory, config)
             trainer.checkpoint({})
-            with patch.object(
-                trainer, "write_checkpoint", side_effect=OSError("保存失败")
+            # Windows 非 UTF-8 终端也要完整输出中文路径和错误，不能中断故障落盘。
+            with (
+                io.TextIOWrapper(io.BytesIO(), encoding="cp1252") as output,
+                patch("sys.stdout", output),
+                patch.object(
+                    trainer, "write_checkpoint", side_effect=OSError("保存失败")
+                ),
             ):
                 with self.assertRaisesRegex(OSError, "保存失败"):
                     trainer.run()

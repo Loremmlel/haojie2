@@ -491,7 +491,10 @@ impl Pool {
             "status" | "barrier" | "active_versions" => {
                 let (error, batching) = {
                     let queues = self.shared.queues.lock().unwrap_or_else(|e| e.into_inner());
-                    (queues.error.clone(), self.config.profile.then(|| queues.batching.clone()))
+                    (
+                        queues.error.clone(),
+                        self.config.profile.then(|| queues.batching.clone()),
+                    )
                 };
                 if let Some(error) = error {
                     return Ok(json!({"error":error,
@@ -547,9 +550,17 @@ impl Pool {
                 if self.config.profile {
                     let available = queues.requests.len();
                     let count = maximum.min(available);
-                    let age = queues.requests.front().map_or(0, |r| now.duration_since(r.at).as_nanos() as u64);
+                    let age = queues
+                        .requests
+                        .front()
+                        .map_or(0, |r| now.duration_since(r.at).as_nanos() as u64);
                     let wake = queues.wake_requests;
-                    let encode = queues.requests.iter().take(count).filter(|r| r.request.kind == 0).count();
+                    let encode = queues
+                        .requests
+                        .iter()
+                        .take(count)
+                        .filter(|r| r.request.kind == 0)
+                        .count();
                     let row = &mut queues.batching;
                     row.calls += 1;
                     row.available += available as u64;
@@ -558,11 +569,20 @@ impl Pool {
                     row.oldest_age_ns += age;
                     row.oldest_age_max_ns = row.oldest_age_max_ns.max(age);
                     row.mixed_operations += u64::from(encode > 0 && encode < count);
-                    if count == 0 { row.empty += 1; } else { row.sizes[count.min(32) - 1] += 1; }
-                    if wake { row.wake += 1; }
-                    else if available >= maximum { row.full += 1; }
-                    else if now >= deadline { row.caller_deadline += 1; }
-                    else { row.age_deadline += 1; }
+                    if count == 0 {
+                        row.empty += 1;
+                    } else {
+                        row.sizes[count.min(32) - 1] += 1;
+                    }
+                    if wake {
+                        row.wake += 1;
+                    } else if available >= maximum {
+                        row.full += 1;
+                    } else if now >= deadline {
+                        row.caller_deadline += 1;
+                    } else {
+                        row.age_deadline += 1;
+                    }
                 }
                 queues.wake_requests = false;
                 let count = maximum.min(queues.requests.len());

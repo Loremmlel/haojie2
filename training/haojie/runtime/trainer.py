@@ -376,4 +376,4 @@ class Trainer(Compute):
         if self.device.type == "cuda":
             value["cuda_peak_bytes"] = torch.cuda.max_memory_allocated()
         atomic_json(self.directory / "status.json", value)
-        print(json.dumps(value, ensure_ascii=False), flush=True)
+        print(json.dumps(value), flush=True)
