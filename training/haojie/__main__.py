@@ -28,6 +28,9 @@ def main():
     evaluate.add_argument("--max-commands", type=int, default=20000)
     evaluate.add_argument("--seed", type=int, default=709901)
     evaluate.add_argument("--device", default="cuda")
+    web = commands.add_parser("web", help="本地训练控制台")
+    web.add_argument("--root", default="artifacts/training")
+    web.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     if args.command == "run":
         from .runtime.trainer import Trainer
@@ -52,6 +55,10 @@ def main():
             if value is not None:
                 setattr(config, field.name, value)
         Trainer(args.directory, config, args.resume).run()
+    elif args.command == "web":
+        from .web.server import serve
+
+        serve(args.root, args.port)
     else:
         from .evaluation import evaluate
 

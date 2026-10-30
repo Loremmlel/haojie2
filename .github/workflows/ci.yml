@@ -38,6 +38,7 @@ jobs:
           set -o pipefail
           npm test | tee artifacts/engine-report.txt
       - run: npm run deploy:check
+      - run: npm run training:web:check
       - name: Install browser for acceptance testing
         run: npx playwright install --with-deps chromium
       - run: npm run test:browser

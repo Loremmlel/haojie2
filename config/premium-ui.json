@@ -1,5 +1,5 @@
 {
-  "sourceRoots": ["src"],
+  "sourceRoots": ["src", "training/ui"],
   "locale": "zh-CN",
   "canonicalMap": "DESIGN.md",
   "ownership": { "Select/Listbox": "native" }

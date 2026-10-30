@@ -5,6 +5,7 @@ import json
 import signal
 import threading
 import time
+from collections import deque
 from dataclasses import asdict
 
 import torch
@@ -20,6 +21,17 @@ class Coordinator:
         self.trainer, self.pool, self.started = trainer, pool, started
         self.initial = copy.deepcopy(trainer.stats)
         self.active, self.writers = {}, {}
+        saved = trainer.saved_workers or {}
+        ordered = sorted(
+            (
+                (lane["lane"], worker, lane)
+                for worker, lanes in saved.items()
+                if worker >= 0
+                for lane in lanes
+            ),
+            key=lambda row: row[:2],
+        )
+        self.pending = deque([row[2] for row in ordered] + saved.get(-1, []))
         self.lane_order = [
             worker * trainer.config.games_per_worker + slot
             for slot in range(trainer.config.games_per_worker)
@@ -38,6 +50,12 @@ class Coordinator:
                 game, restored["buffer"] if restored else None
             )
             self.pool.assign(lane, game, restored)
+
+    def fill(self, lane):
+        restored = self.pending.popleft() if self.pending else None
+        game = restored["game"] if restored else self.trainer.game()
+        if game is not None:
+            self.assign(lane, game, restored)
 
     def complete_learning(self, block=False):
         self.local.collect(block)
@@ -118,6 +136,9 @@ class Coordinator:
             "coordinator": self.thread_id,
             "workers": status.get("threads", []),
         }
+        self.trainer.stats.update(
+            active_games=len(self.active), queued_games=len(self.pending)
+        )
         if "queue_seconds" in status:
             self.trainer.stats["inference_queue_seconds"] = (
                 self.initial.get("inference_queue_seconds", 0.0)
@@ -145,6 +166,8 @@ class Coordinator:
             value["buffer"] = writer.flush()
             value["lane"] = lane % self.trainer.config.games_per_worker
             snapshots[lane // self.trainer.config.games_per_worker].append(value)
+        if self.pending:
+            snapshots[-1] = list(self.pending)
         state = self.local.call("snapshot")
         trainer = self.trainer
         trainer.model.load_state_dict(state["model"])
@@ -160,20 +183,10 @@ class Coordinator:
         self.thread_id = threading.get_native_id()
         last_status = last_save = time.perf_counter()
         try:
-            previous = {
-                worker * config.games_per_worker + value["lane"]: value
-                for worker, values in (trainer.saved_workers or {}).items()
-                for value in values
-            }
             for lane in self.lane_order:
-                restored = previous.get(lane)
-                game = restored["game"] if restored else trainer.game()
-                if game is not None:
-                    self.assign(lane, game, restored)
+                self.fill(lane)
             # 缓冲已转交在途局；恢复点不再额外延长旧回放的内存生命周期。
             trainer.saved_workers = None
-            previous.clear()
-            restored = None
             print(
                 json.dumps(
                     {
@@ -217,9 +230,7 @@ class Coordinator:
                     last_save = time.perf_counter()
                 for lane in self.lane_order:
                     if lane not in self.active:
-                        game = trainer.game()
-                        if game is not None:
-                            self.assign(lane, game)
+                        self.fill(lane)
                 if not self.local.learning and (
                     trainer.phase == "imitation"
                     or (trainer.phase == "self" and trainer.credit >= config.batch)

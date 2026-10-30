@@ -54,14 +54,13 @@ class Executor(Compute):
         else:
             version = self.published
         self.bindings[owner] = message["root"], version
-        self.pending_versions.pop(owner, None)
+        self.pending_versions.pop(message["root"][0], None)
         if previous != self.bindings[owner]:
             self.prune_models()
         return version
 
     def release(self, owner):
         self.bindings.pop(owner, None)
-        self.pending_versions.pop(owner, None)
         self.contexts = {k: v for k, v in self.contexts.items() if k[0] != owner}
         self.prune_models()
 

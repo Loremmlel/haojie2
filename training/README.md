@@ -24,6 +24,22 @@ NumPy 固定为 **2.5.3**。原生搜索直接使用 `_generator` 导出的分�
 
 ## 运行与恢复
 
+### Web 控制台
+
+```powershell
+training/.venv/Scripts/python.exe -m training.haojie web --port 8765
+```
+
+打开 `http://127.0.0.1:8765`。默认管理 `artifacts/training/` 下的运行，`--root` 可指定其他根目录。页面提供新建、选择已保存运行、保存停止、继续和运行中应用参数；一个服务管理一个训练进程，刷新/关闭页面不影响训练，服务退出时请求保存停止。
+
+支持调整搜索线程、每线程并行局数、训练/推理批量、搜索预算、学习率、对手比例、回放内存和保存/停止条件。运行中点击“保存并应用参数”先正常保存，再以新配置继续；缩容时多出的原局排队，扩大时恢复原局并补充新局。种子、设备和预训练配置只在新建时设置，网络保持 5.50M、原生 BF16。
+
+图表默认 60 秒时间加权 EMA 和保形平滑曲线，可切换 15/30/60/120 秒、原始线及 10 分钟至 24 小时时间范围。后台最多保存 17,280 个观测点和 200 条日志，均在服务内存；服务重启后曲线重新采集。资源读数区分训练进程 CPU/RAM 与整卡 GPU/显存，缺测留空，保存/重启区间断线。
+
+前端已打包为单个 HTML，运行不需要 Node。修改页面后执行 `npm run training:web:build`；`npm run training:web:check` 核对产物，`npm run training:web:test` 运行本机 GPU 浏览器功能验收，`npm run training:web:views` 使用明确标注的合成数据检查图表与草稿交互。设计与接口边界见[控制台说明](../docs/ai/TRAINING-WEB.md)。
+
+### 命令行
+
 ```powershell
 training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/classic-main
 ```
@@ -42,7 +58,7 @@ training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/c
 training/.venv/Scripts/python.exe -m training.haojie run --directory artifacts/classic-main --resume
 ```
 
-每 300 秒自动保存，`--save-seconds` 可调整。保存先暂停原生推进，收回已发出的神经响应并排空正式记录，再通过屏障取得恢复状态。恢复模型、AdamW、随机数、预训练阶段/进度、校准器、历史池、数据进度、手工 AI 预算与缓存计划，以及所有尚未完成的对局。未完成搜索按原命令起点和固定模型重新计算。恢复保持原 worker/lane 映射。
+每 300 秒自动保存，`--save-seconds` 可调整。保存先暂停原生推进，收回已发出的神经响应并排空正式记录，再通过屏障取得恢复状态。恢复模型、AdamW、随机数、预训练阶段/进度、校准器、历史池、数据进度、手工 AI 预算与缓存计划，以及所有尚未完成的对局。未完成搜索按原命令起点和固定模型重新计算。改变线程或并行局数时重分配原局，多出的局保存在待恢复队列中；学习率同时更新优化器参数组。
 
 续训、评测和基准只接受 `haojie-classic-training-v3` 检查点，评测也可读取历史池权重。没有旧格式导入或迁移；新训练使用新目录。网络和监督仍为当前的分层解码 v2。
 

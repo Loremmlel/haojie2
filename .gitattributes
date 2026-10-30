@@ -1,5 +1,6 @@
 # 发行页面与构建结果按字节核对，检出时保持生成器使用的 LF。
 /index.html text eol=lf
+/training/haojie/web/index.html text eol=lf
 # 跨平台构建入口保持 LF。
 /training/native/*.sh text eol=lf
 /training/colab/*.sh text eol=lf

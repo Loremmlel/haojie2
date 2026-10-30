@@ -69,16 +69,11 @@ class Trainer(Compute):
             saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
             if saved["format"] != "haojie-classic-training-v3":
                 raise ValueError("续训只接受 haojie-classic-training-v3 检查点")
-            old_config = saved["config"]
-            for key in ("workers", "games_per_worker"):
-                if old_config[key] != getattr(config, key):
-                    raise ValueError(
-                        f"续训保持 {key}={old_config[key]}，请先按原并发恢复"
-                    )
             self.model.load_state_dict(saved["model"])
             self.optimizer.load_state_dict(saved["optimizer"])
             for group in self.optimizer.param_groups:
                 group["foreach"] = False
+                group["lr"] = config.learning_rate
             for state in self.optimizer.state.values():
                 state["step"] = state["step"].to(device="cpu", dtype=torch.int64)
             self.rng.bit_generator.state = saved["rng"]
@@ -97,10 +92,8 @@ class Trainer(Compute):
             self.credit = saved["credit"]
             self.saved_workers = saved["workers"]
             self.pending_versions = {
-                (0, worker * config.games_per_worker + lane["lane"]): lane[
-                    "root_version"
-                ]
-                for worker, lanes in self.saved_workers.items()
+                lane["game"]["id"]: lane["root_version"]
+                for lanes in self.saved_workers.values()
                 for lane in lanes
                 if lane["root_version"] is not None and lane["root_version"] >= 0
             }
@@ -181,7 +174,7 @@ class Trainer(Compute):
         else:
             version = self.published
         self.bindings[binding] = (request["root"], version)
-        self.pending_versions.pop(binding, None)
+        self.pending_versions.pop(request["root"][0], None)
         self.prune_models()
         return version
 
@@ -357,6 +350,7 @@ class Trainer(Compute):
             "replay_bytes": self.replay.bytes,
             "replay_games": len(self.replay.games),
             "replay_limit_bytes": self.replay.max_bytes,
+            "config": asdict(self.config),
             **extra,
         }
         if self.device.type == "cuda":
