@@ -6,6 +6,7 @@ on:
       - 'training/ui/**'
       - 'training/haojie/web/**'
       - 'training/haojie/runtime/config.py'
+      - 'training/haojie/runtime/evaluation.py'
       - 'training/haojie/__main__.py'
       - 'training/requirements.txt'
       - 'training/tests/test_web.py'

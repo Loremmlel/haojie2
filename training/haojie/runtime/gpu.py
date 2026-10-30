@@ -223,6 +223,12 @@ class Local:
                 result = None
             elif op == "snapshot":
                 result = executor.snapshot()
+            elif op == "evaluation":
+                # 已发布的 CPU 权重不可变；评测持有引用，不暂停原生池或复制回放。
+                result = {
+                    "version": executor.published,
+                    "model": executor.weights.get(executor.published),
+                }
             elif op == "stats":
                 result = executor.report()
             else:
@@ -230,6 +236,8 @@ class Local:
             future.set_result(result)
         except BaseException as error:
             future.set_exception(error)
-            raise
+            # 评测取权重失败由调度器报告，不终止训练执行循环。
+            if op != "evaluation" or not isinstance(error, Exception):
+                raise
         finally:
             self.pool.wake()

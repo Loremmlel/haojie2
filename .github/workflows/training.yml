@@ -39,4 +39,4 @@ jobs:
       - run: cargo build --locked --release --lib --manifest-path native/engine/Cargo.toml --target-dir artifacts/native-target
       - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: python -m pip install -r training/requirements.txt
-      - run: python -B -m unittest training.tests.test_training training.tests.test_pipeline training.tests.test_storage training.tests.test_profiling -v
+      - run: python -B -m unittest training.tests.test_training training.tests.test_pipeline training.tests.test_storage training.tests.test_profiling training.tests.test_evaluation -v

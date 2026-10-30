@@ -14,6 +14,7 @@ import time
 import psutil
 
 from .settings import defaults, validate
+from ..runtime.evaluation import read_evaluation
 
 
 class Controller:
@@ -99,6 +100,9 @@ class Controller:
                 runs=self.runs(),
                 cpu_count=psutil.cpu_count(),
                 memory_gib=round(psutil.virtual_memory().total / 1024**3, 1),
+                evaluation=(
+                    read_evaluation(self.directory(self.name)) if self.name else None
+                ),
             )
 
     def control(self, action, name=None, config=None, revision=None, session=None):

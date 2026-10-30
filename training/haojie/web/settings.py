@@ -160,6 +160,15 @@ FIELDS = [
         60,
         "0 为不限；每次继续重新计时",
     ),
+    (
+        "evaluation_seconds",
+        "对弈评测间隔 · 秒",
+        "定时评测",
+        0,
+        604800,
+        60,
+        "0 为关闭；每轮三档各 4 局，上一轮未结束时不重叠启动",
+    ),
     ("games", "本次自然终局上限", "保存与停止", 0, 10000000, 1, "0 为不限"),
     ("updates", "本次更新上限", "保存与停止", 0, 100000000, 1, "0 为不限"),
     ("warmup_games", "示范终局数", "新训练初始化", 0, 10000, 1, "仅新建时可调整"),
@@ -195,7 +204,7 @@ def validate(values, previous=None):
     unknown = set(values) - set(defaults())
     if unknown:
         raise ValueError("未知参数：" + ", ".join(sorted(unknown)))
-    config = {**(previous or defaults()), **values}
+    config = {**defaults(), **(previous or {}), **values}
     for field in schema():
         value = config[field["key"]]
         if (

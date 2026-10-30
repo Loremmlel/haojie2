@@ -16,6 +16,10 @@ from training.haojie.web.settings import defaults, schema, validate
 
 class WebTests(unittest.TestCase):
     def test_complete_schema_and_invalid_controls(self):
+        self.assertEqual(defaults()["save_seconds"], 3600)
+        old = defaults()
+        del old["evaluation_seconds"]
+        self.assertEqual(validate({}, old)["evaluation_seconds"], 1800)
         self.assertEqual(
             {f["key"] for f in schema()} | {"device"}, set(asdict(Config()))
         )

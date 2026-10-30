@@ -14,6 +14,7 @@ import torch
 from ..native_pool import NativePool
 from ..profiling import Profile, TraceWindow
 from .gpu import Executor, Local, infer_batch
+from .evaluation import EvaluationSchedule
 from .storage import GameBuffer, atomic_json, clean_storage
 
 
@@ -47,6 +48,7 @@ class Coordinator:
             max_workers=1, thread_name_prefix="haojie-checkpoint"
         )
         self.checkpoint_future = None
+        self.evaluation = EvaluationSchedule(trainer.directory, trainer.config)
 
     def assign(self, lane, game, restored=None):
         with self.profile.stage("coordinator.assign"):
@@ -256,6 +258,8 @@ class Coordinator:
                     if stopped:
                         break
                     last_save = time.perf_counter()
+                if trainer.phase == "self":
+                    self.evaluation.tick(self.local)
                 for lane in self.lane_order:
                     if lane not in self.active:
                         self.fill(lane)
@@ -289,6 +293,7 @@ class Coordinator:
                 trainer.directory / "failed-native.json", {"error": repr(error)}
             )
         finally:
+            self.evaluation.close()
             self.checkpoint_writer.shutdown(wait=True)
             self.finished.set()
             self.pool.wake()

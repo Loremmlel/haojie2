@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Chart, number, type Point, type Series } from './charts';
+import { Evaluation, type EvaluationStatus } from './Evaluation';
 
 type Config = Record<string, number | string>;
 type Field = {
@@ -30,6 +31,7 @@ type Snapshot = {
   runs: { name: string; updated: number }[];
   cpu_count: number;
   memory_gib: number;
+  evaluation?: EvaluationStatus | null;
 };
 const names: Record<string, string> = {
   idle: '待开始',
@@ -50,11 +52,11 @@ const throughput: Series[] = [
   { key: 'sps', label: '训练样本', color: 'var(--ember)' },
 ];
 const utilization: Series[] = [
-  { key: 'cpu', label: '训练 CPU', color: 'var(--teal)' },
+  { key: 'cpu', label: '训练及评测 CPU', color: 'var(--teal)' },
   { key: 'gpu', label: '整卡 GPU', color: 'var(--ember)' },
 ];
 const memory: Series[] = [
-  { key: 'ram', label: '训练 RAM', color: 'var(--teal)' },
+  { key: 'ram', label: '训练及评测 RAM', color: 'var(--teal)' },
   { key: 'vram', label: '整卡显存', color: 'var(--ember)' },
   { key: 'replay', label: '回放', color: 'var(--gold)' },
 ];
@@ -126,7 +128,11 @@ export default function App() {
       } catch {
         /* 损坏草稿不影响服务端训练。 */
       }
-      setDraft(saved.run === (data.run || '') && saved.draft ? saved.draft : data.config);
+      setDraft(
+        saved.run === (data.run || '') && saved.draft
+          ? { ...data.config, ...saved.draft }
+          : data.config,
+      );
       if (saved.run === (data.run || '') && saved.creating != null) {
         setCreating(saved.creating);
         if (saved.name) setName(saved.name);
@@ -419,7 +425,7 @@ export default function App() {
             />
             <Chart
               title="计算资源"
-              subtitle="CPU 为训练进程 / 整机容量，GPU 为整卡"
+              subtitle="CPU 含训练与子进程 / 整机容量，GPU 为整卡"
               unit="%"
               ceiling={100}
               points={activePoints}
@@ -437,6 +443,10 @@ export default function App() {
               raw={raw}
             />
           </div>
+          <Evaluation
+            status={state?.evaluation}
+            interval={Number(state?.config.evaluation_seconds ?? 1800)}
+          />
           <details className="run-log">
             <summary>
               运行记录 <span>{state?.logs.length || 0} 条</span>

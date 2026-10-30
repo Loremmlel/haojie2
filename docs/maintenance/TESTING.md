@@ -28,7 +28,7 @@ training/.venv/Scripts/python.exe -B -m unittest training.tests.test_storage
 训练后端的完整回归为以下 4 个模块；Web 的 2 项轻量协议/配置测试单独运行：
 
 ```powershell
-training/.venv/Scripts/python.exe -B -m unittest training.tests.test_training training.tests.test_pipeline training.tests.test_storage training.tests.test_profiling
+training/.venv/Scripts/python.exe -B -m unittest training.tests.test_training training.tests.test_pipeline training.tests.test_storage training.tests.test_profiling training.tests.test_evaluation
 training/.venv/Scripts/python.exe -B -m unittest training.tests.test_web
 ```
 

@@ -61,6 +61,27 @@ let state = {
   runs: [{ name: '界面验收样例', updated: now }],
   cpu_count: 16,
   memory_gib: 32,
+  evaluation: {
+    state: 'completed',
+    version: 16,
+    started_at: now,
+    completed: 12,
+    total: 12,
+    summary: Object.fromEntries(
+      ['easy', 'medium', 'hard'].map((key) => [
+        key,
+        {
+          pairs: 2,
+          wins: 2,
+          losses: 1,
+          draws: 1,
+          unknown: 0,
+          errors: 0,
+        },
+      ]),
+    ),
+    results: [{ difficulty: 'easy', pair: 0, seed: 12345, learner: 1, winner: 1, steps: 200 }],
+  },
 };
 const browser = await chromium.launch({ headless: true });
 try {
@@ -99,6 +120,13 @@ try {
   });
   await page.goto('http://127.0.0.1:48765/');
   await page.locator('.trend-line').first().waitFor();
+  assert.match(
+    await page.getByRole('region', { name: '手工 AI 对弈', exact: true }).innerText(),
+    /12 \/ 12/,
+  );
+  await page.getByText('逐局记录与镜像种子', { exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await page.getByText('种子 12345 · 200 步', { exact: true }).waitFor();
   assert.ok((await page.locator('.trend-line').first().getAttribute('d')).includes('C'));
   await page.getByLabel('图表时间范围').focus();
   await page.keyboard.press('ArrowDown');
@@ -118,10 +146,11 @@ try {
     path: 'artifacts/training-web/fixture-desktop.png',
     fullPage: true,
   });
-  await page.locator('#workers').fill('4');
+  const changedWorkers = schema.defaults.workers === 1 ? '2' : '1';
+  await page.locator('#workers').fill(changedWorkers);
   await page.getByRole('button', { name: '保存并应用参数' }).click();
   await page.waitForTimeout(3000);
-  assert.equal(await page.locator('#workers').inputValue(), '4');
+  assert.equal(await page.locator('#workers').inputValue(), changedWorkers);
   assert.equal(await page.getByRole('button', { name: '保存并应用参数' }).isDisabled(), true);
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -138,10 +167,12 @@ try {
     running: false,
     stats: {},
     sequence: 0,
+    evaluation: { state: 'failed', started_at: now, error: '合成评测失败' },
   };
   await page.locator('#run-name').waitFor();
   assert.equal(await page.getByRole('button', { name: '开始训练', exact: true }).isEnabled(), true);
   assert.equal(await page.locator('.trend-line').count(), 0);
+  await page.getByRole('alert').filter({ hasText: '合成评测失败' }).waitFor();
   console.log(
     '图表平滑、原始线、时间范围、键盘读数、桌面/手机布局、参数草稿和服务重启重连：通过（合成数据）。',
   );

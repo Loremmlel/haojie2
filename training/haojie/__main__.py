@@ -28,6 +28,10 @@ def main():
     evaluate.add_argument("--max-commands", type=int, default=20000)
     evaluate.add_argument("--seed", type=int, default=709901)
     evaluate.add_argument("--device", default="cuda")
+    evaluation_round = commands.add_parser(
+        "evaluate-round", help="运行一轮三档配对评测"
+    )
+    evaluation_round.add_argument("--directory", required=True)
     web = commands.add_parser("web", help="本地训练控制台")
     web.add_argument("--root", default="artifacts/training")
     web.add_argument("--port", type=int, default=8765)
@@ -59,6 +63,10 @@ def main():
         from .web.server import serve
 
         serve(args.root, args.port)
+    elif args.command == "evaluate-round":
+        from .evaluation import evaluate_round
+
+        evaluate_round(args.directory)
     else:
         from .evaluation import evaluate
 
