@@ -11,7 +11,6 @@ import type { Resolution } from './combat';
 import {
   ALL_CELLS,
   attackPath,
-  basePoint,
   canPlace,
   createPlacementQuery,
   cells,
@@ -28,7 +27,6 @@ import {
   actor,
   addUnit,
   allegiance,
-  asTarget,
   chooseMode,
   emit,
   ensure,
@@ -38,7 +36,6 @@ import {
   hasWeapon,
   isRunner,
   point,
-  template,
 } from '../core/state';
 import type { Command, GamePosition, Point, Reaction, Unit } from '../types';
 export function emptyFor(s: GamePosition, u: Unit, p: Point = u) {

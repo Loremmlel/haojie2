@@ -3,13 +3,12 @@ import { auraValue, shrinePrior } from '../planning/shrines';
 import {
   hasTrait,
   isLandmark,
-  chargeFor,
   abilityKinds,
   allPieces,
   canDeployKind,
 } from '../../engine/core/traits';
 import { COMBAT_RULES } from '../../engine/catalog';
-import { definition, isStored } from '../../engine/catalog';
+import { definition } from '../../engine/catalog';
 import {
   basePoint,
   createPlacementQuery,
@@ -20,7 +19,7 @@ import {
   targets,
   deploymentRows,
 } from '../../engine/core/geometry';
-import { allegiance, asTarget, getStats, has, passive, template } from '../../engine/core/state';
+import { allegiance, asTarget, passive, template } from '../../engine/core/state';
 import type { Card, GameState, Player, Point, Unit } from '../../engine/types';
 import { actionWindow, hitDistance, occupantsAt, statsFor } from './spatial';
 import { baseThreat, incoming, markFollowUp, payloadOpportunity, readyAttack } from './threats';

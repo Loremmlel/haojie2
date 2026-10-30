@@ -1,7 +1,7 @@
 /** 神龛无界面验收使用真实引擎 RNG，AI 只读取公开观察。 */
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { createGame, createSession, validState, type Kind, type Command } from '../../src/engine';
+import { createGame, createSession, validState, type Command } from '../../src/engine';
 import { Arena } from '../../src/match/arena';
 import { observe, decisionOwner } from '../../src/ai/observation';
 import { decide } from '../../src/ai/planning/search';

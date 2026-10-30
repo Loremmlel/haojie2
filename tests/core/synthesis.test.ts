@@ -15,7 +15,6 @@ import {
   synthesisDestinations,
   ULTIMATE_POOL,
   SUMMON_POOL,
-  type GameState,
   type Command,
 } from '../../src/engine';
 import { addEffect } from '../../src/engine/core/state';

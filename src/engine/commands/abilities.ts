@@ -3,7 +3,6 @@ import { cloneRuleData } from '../core/clone';
 import { memoizePreparation } from './preparation';
 import {
   withAbilityCharge,
-  abilityKinds,
   hasTrait,
   isLandmark,
   isMage,
@@ -17,13 +16,11 @@ import { bannerCount, installEquipment } from '../setup/shrines';
 import { synthesize } from '../setup/synthesis';
 import { eventActor, withEventFacts, type EventAction } from '../core/event-facts';
 import { rerollCommands, summonPool } from '../setup/summoning';
-import { COMBAT_RULES, definition, isStored } from '../catalog';
+import { COMBAT_RULES, definition } from '../catalog';
 import {
-  alive,
   areaDamage,
   damage,
   findTarget,
-  freeze,
   heal,
   kill,
   lowerMax,
@@ -45,7 +42,6 @@ import {
   inSquare,
   inside,
   movementPath,
-  occupants,
   ring,
   targets,
   targetById,
@@ -55,7 +51,6 @@ import {
   actor,
   addEffect,
   addUnit,
-  age,
   allegiance,
   asTarget,
   chooseMode,
@@ -68,16 +63,14 @@ import {
   finishOperation,
   getStats,
   has,
-  hasWeapon,
   now,
-  passive,
   point,
   random,
   RuleError,
   template,
 } from '../core/state';
 import { advanceUnit } from './lifecycle';
-import type { Card, Command, GamePosition, Kind, Player, Point, Source, Unit } from '../types';
+import type { Command, GamePosition, Kind, Player, Point, Source, Unit } from '../types';
 export function chargeAction(s: GamePosition, c: Command) {
   const u = findUnit(s, c.unitId);
   return withEventFacts(

@@ -7,28 +7,15 @@ import { firelordStrike } from './firelord';
 import { COMBAT_RULES } from '../catalog';
 import { eventActor, withEventFacts } from '../core/event-facts';
 import { definition, isStored } from '../catalog';
-import {
-  alive,
-  damage,
-  areaDamage,
-  findTarget,
-  freeze,
-  heal,
-  kill,
-  pruneSiphons,
-  resolution,
-} from './combat';
+import { alive, damage, areaDamage, freeze, heal, kill, pruneSiphons } from './combat';
 import type { Resolution } from './combat';
 import {
   ALL_CELLS,
-  attackPath,
-  basePoint,
   canPlace,
   cells,
   equal,
   occupants,
   refreshDeployment,
-  ring,
   targets,
   targetById,
 } from '../core/geometry';
@@ -39,10 +26,7 @@ import {
   emit,
   ensure,
   faction,
-  getStats,
-  has,
   now,
-  passive,
   resetUnit,
   template,
 } from '../core/state';

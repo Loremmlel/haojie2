@@ -1,33 +1,4 @@
-"""进程内 Rust 三档手工对手与跨时期模型池。"""
-
-from .native import Environment
-
-
-class Teacher:
-    def __init__(self, difficulty="easy", environment=None):
-        if difficulty not in ("easy", "medium", "hard"):
-            raise ValueError("未知手工 AI 难度")
-        self.difficulty = difficulty
-        self.owned = environment is None
-        self.environment = environment or Environment(1)
-
-    def next(self, observation=None):
-        args = {"difficulty": self.difficulty}
-        if observation is not None:
-            args["observation"] = observation
-        return self.environment.call("teacher-next", **args)["command"]
-
-    def snapshot(self):
-        return self.environment.call("teacher-snapshot")
-
-    def restore(self, snapshot):
-        if snapshot is not None and not isinstance(snapshot, dict):
-            raise ValueError("手工 AI 快照需要 Rust 对手格式")
-        self.environment.call("teacher-restore", teacher=snapshot)
-
-    def close(self):
-        if self.owned:
-            self.environment.close()
+"""按近期、跨时期锚点与挑战表现抽取历史模型。"""
 
 
 class Opponents:

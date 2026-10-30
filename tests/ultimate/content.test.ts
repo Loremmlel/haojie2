@@ -4,18 +4,14 @@ import {
   applyCommand,
   asTarget,
   attackPath,
-  canPlace,
   commandError,
   createGame,
-  createSession,
   definition,
   getStats,
   has,
-  parseSession,
-  template,
   allegiance,
 } from '../../src/engine';
-import { addEffect, draw, resetUnit } from '../../src/engine/core/state';
+import { addEffect, draw } from '../../src/engine/core/state';
 import { kill, damage, resolution } from '../../src/engine/commands/combat';
 import { add, card, fixture, pass, round, seedFor, strike, unit } from '../helpers';
 
@@ -70,9 +66,9 @@ test('U02 attack charge adds15 per layer, survives movement, resets on hit', () 
   assert.equal(unit(s, u.id).charge, 0);
 });
 test('U03 counterspell consumes the spell but does not apply its effect', () => {
-  const s = fixture(),
-    u = add(s, 'u3', 2, 8, 12),
-    target = add(s, 1, 1, 3, 4),
+  const s = fixture();
+  add(s, 'u3', 2, 8, 12);
+  const target = add(s, 1, 1, 3, 4),
     id = card(s, 17);
   s.rng = seedFor(0, 1 / 3);
   const n = applyCommand(s, { type: 'cast', cardId: id, targetId: target.id });

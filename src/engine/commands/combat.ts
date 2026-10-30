@@ -3,7 +3,6 @@ import { chargeFor, consumeCharge, attackChargeKind } from '../core/traits';
 import { cloneRuleData } from '../core/clone';
 import {
   abilityKinds,
-  allPieces,
   anyTrait,
   canAttackFriend,
   hasTrait,
@@ -17,8 +16,6 @@ import {
   damageBonus,
   demolish,
   healingBlocked,
-  landmarkAt,
-  liveLandmark,
   returnDeathWeapons,
   stealOnKill,
   syncBanners,
@@ -38,10 +35,8 @@ import {
   cells,
   equal,
   frontal,
-  inSquare,
   occupants,
   other,
-  ring,
   targets,
   targetById,
   topTarget,
@@ -56,7 +51,6 @@ import {
   emit,
   ensure,
   faction,
-  findUnit,
   getStats,
   has,
   hasWeapon,
@@ -68,17 +62,7 @@ import {
   resetUnit,
   RuleError,
 } from '../core/state';
-import type {
-  Effect,
-  GamePosition,
-  Kind,
-  Player,
-  Point,
-  Source,
-  Stats,
-  Target,
-  Unit,
-} from '../types';
+import type { Effect, GamePosition, Kind, Point, Source, Stats, Target, Unit } from '../types';
 export interface Resolution {
   retaliations: Set<string>;
   protection: Map<string, boolean>;

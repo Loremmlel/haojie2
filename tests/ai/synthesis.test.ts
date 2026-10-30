@@ -81,9 +81,9 @@ test('2.5 fusion search compares deterministic pre-draw outcomes: merge depleted
 
 test('2.5 AI shares innate piercing, half-speed charge and automatic firelord target geometry with the engine', () => {
   const s = fixture(),
-    killer = add(s, 'slayer', 1, 3, 4),
-    screen = add(s, 'grave', 2, 3, 5),
-    behind = add(s, 'grave', 2, 3, 7),
+    killer = add(s, 'slayer', 1, 3, 4);
+  add(s, 'grave', 2, 3, 5);
+  const behind = add(s, 'grave', 2, 3, 7),
     side = add(s, 'grave', 2, 4, 6);
   assert.ok(Number.isFinite(hitDistance(s, killer, asTarget(behind))));
   assert.equal(Number.isFinite(hitDistance(s, killer, asTarget(side))), false);
@@ -91,8 +91,8 @@ test('2.5 AI shares innate piercing, half-speed charge and automatic firelord ta
   assert.ok(attacks.some((c) => c.targetId === behind.id));
   assert.ok(attacks.every((c) => isLegal(s, c)));
   const slow = fixture(),
-    hook = add(slow, 'formless', 1, 3, 4),
-    victim = add(slow, 'grave', 2, 3, 9);
+    hook = add(slow, 'formless', 1, 3, 4);
+  add(slow, 'grave', 2, 3, 9);
   for (const d of levels) {
     assert.ok(
       options(slow, d).some(

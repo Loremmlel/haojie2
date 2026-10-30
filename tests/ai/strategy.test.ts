@@ -2,15 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { add, card, fixture, round } from '../helpers';
 import { createGame, applyCommand, createSession } from '../../src/engine';
-import { asTarget, resetUnit } from '../../src/engine/core/state';
-import {
-  ALL_CELLS,
-  cells,
-  attackPath,
-  basePoint,
-  distance,
-  targets,
-} from '../../src/engine/core/geometry';
+import { ALL_CELLS, cells, attackPath, basePoint, targets } from '../../src/engine/core/geometry';
 import { attackField, hitDistance, actionWindow } from '../../src/ai/evaluation/spatial';
 import { incoming } from '../../src/ai/evaluation/threats';
 import { evaluate, explainEvaluation } from '../../src/ai/evaluation/evaluate';
@@ -172,9 +164,9 @@ test('upgraded summon comparison enumerates both full public pools including tra
 });
 test('catapults do not mark a damaged unsupported base while a useful full-health unit exists', () => {
   for (const d of levels) {
-    const s = fixture(),
-      cat = add(s, 10, 1, 2, 4),
-      target = add(s, 4, 2, 4, 7);
+    const s = fixture();
+    add(s, 10, 1, 2, 4);
+    const target = add(s, 4, 2, 4, 7);
     target.charge = 2;
     s.bases[2] = 295;
     const result = choose(s, d);
@@ -184,10 +176,10 @@ test('catapults do not mark a damaged unsupported base while a useful full-healt
   }
 });
 test('catapult plus non-catapult follow-up redeems a mark within its lifetime', () => {
-  const s = fixture(),
-    cat = add(s, 10, 1, 2, 4),
-    archer = add(s, 9, 1, 3, 4),
-    target = add(s, 4, 2, 4, 7);
+  const s = fixture();
+  add(s, 10, 1, 2, 4);
+  add(s, 9, 1, 3, 4);
+  const target = add(s, 4, 2, 4, 7);
   target.hp = 30;
   s.bases[2] = 295;
   const result = choose(s, 'medium');
@@ -210,8 +202,8 @@ test('line spells can choose the thirteenth row even at the smallest candidate b
 test('conversion preparation prefers a surviving victim and reachable carrier over lethal overkill', () => {
   const s = fixture(),
     weak = add(s, 9, 1, 4, 4),
-    strong = add(s, 4, 1, 6, 4),
-    victim = add(s, 4, 2, 5, 6);
+    strong = add(s, 4, 1, 6, 4);
+  add(s, 4, 2, 5, 6);
   strong.charge = strong.readyCharge = 2;
   const id = card(s, 22);
   const result = choose(s, 'medium');
@@ -380,9 +372,9 @@ test('a sacrificial deployment screen remains a candidate when it prevents a let
   }
 });
 test('temporary barricades can block a lethal base attack rather than defaulting to the nearest square', () => {
-  const s = fixture(),
-    caster = add(s, 19, 1, 3, 2),
-    gun = add(s, 4, 2, 5, 5);
+  const s = fixture();
+  add(s, 19, 1, 3, 2);
+  const gun = add(s, 4, 2, 5, 5);
   gun.charge = gun.readyCharge = 2;
   s.bases[1] = 40;
   const d = choose(s, 'medium');

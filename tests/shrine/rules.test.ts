@@ -24,7 +24,6 @@ import {
   captureClockFrame,
   demolish,
   rebuildLandmarks,
-  syncBanners,
   installEquipment,
 } from '../../src/engine/setup/shrines';
 import { add, card, fixture, pass, round, strike, unit } from '../helpers';
@@ -108,7 +107,7 @@ test('3.0 landmark coordinates are column-first, own one occupant, and distingui
   assert.ok(canPlace(s, friendly, l, true));
   assert.equal(canPlace(s, enemy, l, true), false);
   assert.ok(canPlace(s, enemy, l, false));
-  const resident = add(s, 1, 1, l.x, l.y);
+  add(s, 1, 1, l.x, l.y);
   assert.equal(canPlace(s, template('u25', 1, 0, l), l, true), false);
   s.units = [];
   demolish(s, l);

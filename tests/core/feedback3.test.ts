@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
   applyCommand,
   commandError,
-  getStats,
   has,
   asTarget,
   attackPath,

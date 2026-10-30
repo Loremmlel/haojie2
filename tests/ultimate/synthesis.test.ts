@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyCommand,
-  asTarget,
   canSkipReaction,
   getStats,
   hitPullDestination,
@@ -13,7 +12,7 @@ import {
   firelordStrike,
 } from '../../src/engine';
 import { addEffect } from '../../src/engine/core/state';
-import { damage, kill, resolution } from '../../src/engine/commands/combat';
+import { kill, resolution } from '../../src/engine/commands/combat';
 import { add, card, fixture, round, strike, unit } from '../helpers';
 import { distribution } from '../../src/ai/simulation/simulate';
 import { unitStatus } from '../../src/ui/inspector/unit-status';

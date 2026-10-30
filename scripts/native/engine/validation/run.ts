@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { applyCommand, createGame, inspectCommand } from '../../../../src/engine/commands/game';
+import { applyCommand, inspectCommand } from '../../../../src/engine/commands/game';
 import { RuleError } from '../../../../src/engine/core/state';
 import { nativeClient } from './client';
 import { fixtures, moveProbes } from '../fixtures/movement';
@@ -20,8 +20,6 @@ const { values } = parseArgs({
       type: 'string',
       default: `artifacts/native-target/release/haojie-engine${process.platform === 'win32' ? '.exe' : ''}`,
     },
-    // 兼容现有 CI 命令；默认已只运行可复现的规则夹具。
-    'fixtures-only': { type: 'boolean', default: false },
     match: { type: 'string' },
   },
 });

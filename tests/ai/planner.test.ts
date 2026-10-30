@@ -86,8 +86,8 @@ test('summon distribution uses independent imaginary samples, not the next real 
 });
 test('all difficulty levels choose an available certain base kill', () => {
   for (const d of ['easy', 'medium', 'hard'] as Difficulty[]) {
-    const s = fixture(),
-      a = add(s, 9, 1, 5, 10);
+    const s = fixture();
+    add(s, 9, 1, 5, 10);
     s.bases[2] = 10;
     const result = plan(s, d);
     assert.ok(result.command);

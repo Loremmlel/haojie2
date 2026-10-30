@@ -6,8 +6,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from '
 import { dirname } from 'node:path';
 import { Arena } from '../../src/match/arena';
 import type { ArenaEntry } from '../../src/match/arena';
-import { parseSession, applyCommand, serializeSession } from '../../src/engine';
-import { fingerprint } from '../../src/ai/observation';
+import { parseSession, serializeSession } from '../../src/engine';
 import { candidateGroups } from '../../src/ai/planning/candidates';
 import { commandError } from '../../src/engine/commands/game';
 import type { Command } from '../../src/engine/types';

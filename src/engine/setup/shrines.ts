@@ -4,7 +4,6 @@ import { cloneRuleData } from '../core/clone';
 import { summonPool } from './summoning';
 import { definition, SHRINE_POOL, SUMMON_POOL, ULTIMATE_POOL } from '../catalog';
 import {
-  ALL_CELLS,
   attackPath,
   canPlace,
   cells,
@@ -17,7 +16,6 @@ import {
 } from '../core/geometry';
 import {
   actor,
-  addEffect,
   allegiance,
   asTarget,
   chooseMode,
@@ -25,9 +23,7 @@ import {
   emit,
   ensure,
   findUnit,
-  finishOperation,
   getStats,
-  now,
   passive,
   random,
   resetUnit,
@@ -37,7 +33,6 @@ import { alive, damage, heal, kill, protectedEffect, type Resolution } from '../
 import {
   abilityKinds,
   allPieces,
-  anyTrait,
   aura,
   hasAura,
   hasTrait,
@@ -52,7 +47,6 @@ import {
 import type {
   Aura,
   Card,
-  ClockFrame,
   Command,
   GamePosition,
   Kind,

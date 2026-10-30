@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Chart, number, type Point, type Series } from "./charts";
+import { useEffect, useRef, useState } from 'react';
+import { Chart, number, type Point, type Series } from './charts';
 
 type Config = Record<string, number | string>;
 type Field = {
@@ -32,43 +32,43 @@ type Snapshot = {
   memory_gib: number;
 };
 const names: Record<string, string> = {
-  idle: "待开始",
-  starting: "正在启动",
-  running: "训练中",
-  stopping: "保存中",
-  restarting: "应用参数中",
-  saved: "已保存",
-  error: "运行异常",
+  idle: '待开始',
+  starting: '正在启动',
+  running: '训练中',
+  stopping: '保存中',
+  restarting: '应用参数中',
+  saved: '已保存',
+  error: '运行异常',
 };
 const loss: Series[] = [
-  { key: "policy", label: "策略", color: "var(--teal)" },
-  { key: "value", label: "价值", color: "var(--ember)" },
-  { key: "aux", label: "辅助", color: "var(--gold)" },
+  { key: 'policy', label: '策略', color: 'var(--teal)' },
+  { key: 'value', label: '价值', color: 'var(--ember)' },
+  { key: 'aux', label: '辅助', color: 'var(--gold)' },
 ];
 const throughput: Series[] = [
-  { key: "cps", label: "命令", color: "var(--teal)" },
-  { key: "sps", label: "训练样本", color: "var(--ember)" },
+  { key: 'cps', label: '命令', color: 'var(--teal)' },
+  { key: 'sps', label: '训练样本', color: 'var(--ember)' },
 ];
 const utilization: Series[] = [
-  { key: "cpu", label: "训练 CPU", color: "var(--teal)" },
-  { key: "gpu", label: "整卡 GPU", color: "var(--ember)" },
+  { key: 'cpu', label: '训练 CPU', color: 'var(--teal)' },
+  { key: 'gpu', label: '整卡 GPU', color: 'var(--ember)' },
 ];
 const memory: Series[] = [
-  { key: "ram", label: "训练 RAM", color: "var(--teal)" },
-  { key: "vram", label: "整卡显存", color: "var(--ember)" },
-  { key: "replay", label: "回放", color: "var(--gold)" },
+  { key: 'ram', label: '训练 RAM', color: 'var(--teal)' },
+  { key: 'vram', label: '整卡显存', color: 'var(--ember)' },
+  { key: 'replay', label: '回放', color: 'var(--gold)' },
 ];
 const freshName = () =>
-  `训练-${new Date().toLocaleString("sv-SE").replace(/[-: ]/g, "").slice(0, 14)}`;
+  `训练-${new Date().toLocaleString('sv-SE').replace(/[-: ]/g, '').slice(0, 14)}`;
 
 async function api(path: string, body?: unknown) {
   const response = await fetch(path, {
     ...(body
       ? {
-          method: "POST",
+          method: 'POST',
           headers: {
-            "Content-Type": "application/json",
-            "X-Haojie-Control": "1",
+            'Content-Type': 'application/json',
+            'X-Haojie-Control': '1',
           },
           body: JSON.stringify(body),
         }
@@ -76,7 +76,7 @@ async function api(path: string, body?: unknown) {
     signal: AbortSignal.timeout(10000),
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "服务请求失败");
+  if (!response.ok) throw new Error(data.error || '服务请求失败');
   return data;
 }
 
@@ -89,7 +89,7 @@ export default function App() {
   const [name, setName] = useState(freshName);
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState('');
   const [range, setRange] = useState(3600);
   const [smoothing, setSmoothing] = useState(60);
   const [raw, setRaw] = useState(false);
@@ -97,11 +97,7 @@ export default function App() {
   const initialized = useRef(false);
 
   const accept = (data: Snapshot) => {
-    if (
-      latest.current?.session === data.session &&
-      data.revision < latest.current.revision
-    )
-      return;
+    if (latest.current?.session === data.session && data.revision < latest.current.revision) return;
     const previous = latest.current;
     latest.current = data;
     if (previous?.run && !data.run) {
@@ -112,10 +108,7 @@ export default function App() {
     setPoints((old) =>
       (previous?.session !== data.session || previous?.run !== data.run
         ? data.history
-        : [
-            ...old,
-            ...data.history.filter((p) => p.id > (previous?.sequence || 0)),
-          ]
+        : [...old, ...data.history.filter((p) => p.id > (previous?.sequence || 0))]
       ).slice(-17280),
     );
     setConnected(true);
@@ -129,18 +122,12 @@ export default function App() {
         name?: string;
       } = {};
       try {
-        saved = JSON.parse(
-          sessionStorage.getItem("haojie-training-draft") || "{}",
-        );
+        saved = JSON.parse(sessionStorage.getItem('haojie-training-draft') || '{}');
       } catch {
         /* 损坏草稿不影响服务端训练。 */
       }
-      setDraft(
-        saved.run === (data.run || "") && saved.draft
-          ? saved.draft
-          : data.config,
-      );
-      if (saved.run === (data.run || "") && saved.creating != null) {
+      setDraft(saved.run === (data.run || '') && saved.draft ? saved.draft : data.config);
+      if (saved.run === (data.run || '') && saved.creating != null) {
         setCreating(saved.creating);
         if (saved.name) setName(saved.name);
       }
@@ -153,7 +140,7 @@ export default function App() {
       try {
         const [data, definitions] = await Promise.all([
           api(`/api/state?since=${latest.current?.sequence || 0}`),
-          schema ? Promise.resolve(null) : api("/api/schema"),
+          schema ? Promise.resolve(null) : api('/api/schema'),
         ]);
         if (!cancelled) {
           accept(data);
@@ -174,8 +161,8 @@ export default function App() {
     if (initialized.current) {
       try {
         sessionStorage.setItem(
-          "haojie-training-draft",
-          JSON.stringify({ run: state?.run || "", draft, creating, name }),
+          'haojie-training-draft',
+          JSON.stringify({ run: state?.run || '', draft, creating, name }),
         );
       } catch {
         /* 页面存储不可用时仍可操作服务。 */
@@ -183,17 +170,15 @@ export default function App() {
     }
   }, [draft, creating, name, state?.run]);
 
-  const pending =
-    busy || ["starting", "stopping", "restarting"].includes(state?.state || "");
+  const pending = busy || ['starting', 'stopping', 'restarting'].includes(state?.state || '');
   const baseline = creating ? schema?.defaults : state?.config;
-  const changed =
-    baseline && Object.keys(draft).some((k) => draft[k] !== baseline[k]);
+  const changed = baseline && Object.keys(draft).some((k) => draft[k] !== baseline[k]);
   const act = async (action: string, selected?: string) => {
-    setError("");
-    if (["start", "resume", "apply"].includes(action) && schema) {
+    setError('');
+    if (['start', 'resume', 'apply'].includes(action) && schema) {
       const invalid = schema.fields.find(
         (f) =>
-          typeof draft[f.key] !== "number" ||
+          typeof draft[f.key] !== 'number' ||
           !Number.isFinite(Number(draft[f.key])) ||
           Number(draft[f.key]) < f.min ||
           Number(draft[f.key]) > f.max ||
@@ -201,7 +186,7 @@ export default function App() {
       );
       if (invalid) {
         setError(
-          `${invalid.label}须在 ${invalid.min}–${invalid.max} 之间${invalid.integer ? "且为整数" : ""}`,
+          `${invalid.label}须在 ${invalid.min}–${invalid.max} 之间${invalid.integer ? '且为整数' : ''}`,
         );
         document.getElementById(invalid.key)?.focus();
         return;
@@ -209,20 +194,20 @@ export default function App() {
     }
     setBusy(true);
     try {
-      const data = await api("/api/control", {
+      const data = await api('/api/control', {
         action,
         name: selected || name,
-        ...(action !== "stop" && action !== "select" ? { config: draft } : {}),
+        ...(action !== 'stop' && action !== 'select' ? { config: draft } : {}),
         revision: latest.current?.revision ?? 0,
         session: latest.current?.session,
       });
       accept(data);
-      if (action !== "stop") {
-        if (action !== "apply") setDraft(data.config);
+      if (action !== 'stop') {
+        if (action !== 'apply') setDraft(data.config);
         setCreating(false);
       }
     } catch (e) {
-      const message = e instanceof Error ? e.message : "操作失败，请重试";
+      const message = e instanceof Error ? e.message : '操作失败，请重试';
       setError(message);
       const field = schema?.fields.find((f) => message.startsWith(f.label));
       if (field) document.getElementById(field.key)?.focus();
@@ -230,13 +215,11 @@ export default function App() {
       setBusy(false);
     }
   };
-  const activePoints = points.filter(
-    (p) => p.t >= (points.at(-1)?.t || Date.now() / 1000) - range,
-  );
+  const activePoints = points.filter((p) => p.t >= (points.at(-1)?.t || Date.now() / 1000) - range);
   const recent = points.at(-1);
   const stat = state?.stats || {};
   const groups = [...new Set(schema?.fields.map((f) => f.group))];
-  const stage = stat.phase || "collect";
+  const stage = stat.phase || 'collect';
 
   return (
     <div className="console-shell">
@@ -253,18 +236,18 @@ export default function App() {
           <label htmlFor="run-select">当前训练</label>
           <select
             id="run-select"
-            value={creating ? "" : state?.run || ""}
+            value={creating ? '' : state?.run || ''}
             disabled={!connected || pending || state?.running}
             onChange={(e) => {
               if (changed) {
-                setError("有未应用的参数修改，请先应用或撤销修改再切换训练。");
+                setError('有未应用的参数修改，请先应用或撤销修改再切换训练。');
                 return;
               }
               if (!e.target.value) {
                 setCreating(true);
                 setDraft(schema?.defaults || {});
                 setName(freshName());
-              } else void act("select", e.target.value);
+              } else void act('select', e.target.value);
             }}
           >
             <option value="">新建训练</option>
@@ -275,13 +258,9 @@ export default function App() {
             ))}
           </select>
         </div>
-        <span className={`state-pill ${state?.state || "idle"}`}>
+        <span className={`state-pill ${state?.state || 'idle'}`}>
           <i />
-          {connected
-            ? names[state?.state || "idle"]
-            : state
-              ? "连接中断"
-              : "正在连接"}
+          {connected ? names[state?.state || 'idle'] : state ? '连接中断' : '正在连接'}
         </span>
         <div className="main-actions">
           {state?.running ? (
@@ -289,7 +268,7 @@ export default function App() {
               className="button outline"
               type="button"
               disabled={!connected || pending}
-              onClick={() => void act("stop")}
+              onClick={() => void act('stop')}
             >
               <span aria-hidden="true">Ⅱ</span> 保存并停止
             </button>
@@ -298,15 +277,9 @@ export default function App() {
               className="button primary"
               form="parameters"
               type="submit"
-              disabled={
-                !connected ||
-                pending ||
-                !schema ||
-                (!creating && !state?.checkpoint)
-              }
+              disabled={!connected || pending || !schema || (!creating && !state?.checkpoint)}
             >
-              <span aria-hidden="true">▶</span>{" "}
-              {creating ? "开始训练" : "继续训练"}
+              <span aria-hidden="true">▶</span> {creating ? '开始训练' : '继续训练'}
             </button>
           )}
         </div>
@@ -319,40 +292,40 @@ export default function App() {
         </div>
         <div className="machine">
           <span>
-            {state?.cpu_count || "—"} 逻辑核心 / {state?.memory_gib || "—"} GiB
+            {state?.cpu_count || '—'} 逻辑核心 / {state?.memory_gib || '—'} GiB
           </span>
           <small>单训练进程 · Rust 线程池 · PyTorch</small>
         </div>
       </div>
       <div
-        className={`feedback ${error || (!connected && state) ? "failure" : ""}`}
-        role={error ? "alert" : "status"}
+        className={`feedback ${error || (!connected && state) ? 'failure' : ''}`}
+        role={error ? 'alert' : 'status'}
         aria-live="polite"
       >
         {error ||
           (!connected && state
-            ? "暂时无法连接控制服务。保留当前读数，恢复连接后可继续操作。"
-            : state?.message || "正在连接本地训练服务…")}
+            ? '暂时无法连接控制服务。保留当前读数，恢复连接后可继续操作。'
+            : state?.message || '正在连接本地训练服务…')}
       </div>
       <div className="workspace">
         <main className="monitor">
           <div className="stage-track" aria-label="训练阶段">
             {[
               [
-                "collect",
-                "示范采集",
+                'collect',
+                '示范采集',
                 `${number(stat.demonstrations, 0)} / ${state?.config.warmup_games ?? 8} 局`,
               ],
               [
-                "imitation",
-                "模仿学习",
+                'imitation',
+                '模仿学习',
                 `${number(stat.imitation_updates, 0)} / ${state?.config.warmup_updates ?? 512} 次`,
               ],
-              ["self", "自对弈", "当前 / 历史 / 手工对手"],
+              ['self', '自对弈', '当前 / 历史 / 手工对手'],
             ].map(([key, label, hint], i) => (
-              <div key={key} className={stage === key ? "current" : ""}>
+              <div key={key} className={stage === key ? 'current' : ''}>
                 <span className="stage-symbol" aria-hidden="true">
-                  {i === 0 ? "◇" : i === 1 ? "◈" : "↔"}
+                  {i === 0 ? '◇' : i === 1 ? '◈' : '↔'}
                 </span>
                 <span>
                   {label}
@@ -421,11 +394,7 @@ export default function App() {
                 </select>
               </label>
               <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={raw}
-                  onChange={(e) => setRaw(e.target.checked)}
-                />
+                <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} />
                 原始线
               </label>
             </div>
@@ -472,7 +441,7 @@ export default function App() {
             <summary>
               运行记录 <span>{state?.logs.length || 0} 条</span>
             </summary>
-            <pre>{state?.logs.join("\n") || "暂无异常或额外运行消息。"}</pre>
+            <pre>{state?.logs.join('\n') || '暂无异常或额外运行消息。'}</pre>
           </details>
           <p className="lifecycle-note">
             刷新或关闭页面不停止训练。服务重启后从最近恢复点继续，曲线重新采集。
@@ -481,7 +450,7 @@ export default function App() {
         <aside className="parameters">
           <div className="parameter-title">
             <h2>训练参数</h2>
-            <span>{state?.running ? "保存后应用" : "启动配置"}</span>
+            <span>{state?.running ? '保存后应用' : '启动配置'}</span>
           </div>
           <div className="concurrency">
             <span>并行对局</span>
@@ -490,12 +459,10 @@ export default function App() {
               <small>目标</small>
             </strong>
             <p>
-              {number(stat.active_games, 0)} 局在途 ·{" "}
-              {number(stat.queued_games, 0)} 局待恢复
+              {number(stat.active_games, 0)} 局在途 · {number(stat.queued_games, 0)} 局待恢复
             </p>
             <div>
-              {draft.workers || "—"} 线程 <b>×</b>{" "}
-              {draft.games_per_worker || "—"} 局 / 线程
+              {draft.workers || '—'} 线程 <b>×</b> {draft.games_per_worker || '—'} 局 / 线程
             </div>
           </div>
           <form
@@ -503,9 +470,7 @@ export default function App() {
             noValidate
             onSubmit={(e) => {
               e.preventDefault();
-              void act(
-                state?.running ? "apply" : creating ? "start" : "resume",
-              );
+              void act(state?.running ? 'apply' : creating ? 'start' : 'resume');
             }}
           >
             {creating && (
@@ -522,11 +487,7 @@ export default function App() {
               </label>
             )}
             {groups.map((group, index) => (
-              <details
-                key={group}
-                open={index === 0}
-                className="parameter-group"
-              >
+              <details key={group} open={index === 0} className="parameter-group">
                 <summary>
                   {group}
                   <span aria-hidden="true">＋</span>
@@ -543,17 +504,14 @@ export default function App() {
                           min={f.min}
                           max={f.max}
                           step={f.step}
-                          value={draft[f.key] ?? ""}
+                          value={draft[f.key] ?? ''}
                           disabled={pending || (!creating && f.initial)}
                           aria-describedby={`${f.key}-help`}
                           aria-invalid={error.startsWith(f.label) || undefined}
                           onChange={(e) =>
                             setDraft((v) => ({
                               ...v,
-                              [f.key]:
-                                e.target.value === ""
-                                  ? ""
-                                  : Number(e.target.value),
+                              [f.key]: e.target.value === '' ? '' : Number(e.target.value),
                             }))
                           }
                         />
@@ -566,8 +524,8 @@ export default function App() {
             <div className="parameter-footer">
               <p>
                 {state?.running
-                  ? "应用时保存并短暂重启。原有对局、回放和优化器状态继续保留。"
-                  : "配置从同一训练引擎读取，精度固定为原生 BF16。"}
+                  ? '应用时保存并短暂重启。原有对局、回放和优化器状态继续保留。'
+                  : '配置从同一训练引擎读取，精度固定为原生 BF16。'}
               </p>
               {state?.running && (
                 <button
@@ -584,7 +542,7 @@ export default function App() {
                 disabled={pending || !schema}
                 onClick={() => {
                   setDraft(creating ? schema!.defaults : state!.config);
-                  setError("");
+                  setError('');
                 }}
               >
                 撤销未应用修改

@@ -10,15 +10,11 @@ import {
   redo,
   parseSession,
   commandError,
-  getStats,
-  definition,
-  ALL_CELLS,
-  isStored,
   deploymentRows,
 } from '../../src/engine';
 import { add, card, fixture, round, seedFor, strike, unit } from '../helpers';
-import { draw, addEffect } from '../../src/engine/core/state';
-import { damage, resolution, kill } from '../../src/engine/commands/combat';
+import { addEffect } from '../../src/engine/core/state';
+import { kill } from '../../src/engine/commands/combat';
 import type { Command, GameState } from '../../src/engine';
 const roundtrip = (s: GameState) =>
   assert.deepEqual(parseSession(JSON.stringify(createSession(s))).present, {
@@ -81,8 +77,8 @@ test('clone stacks, frozen neutrality, equipment and links all survive serializa
 });
 test('a saved SZF collision resumes its compulsory bounce without losing move budget', () => {
   let s = fixture();
-  const u = add(s, 'u12', 1, 3, 4),
-    v = add(s, 1, 2, 3, 5);
+  const u = add(s, 'u12', 1, 3, 4);
+  add(s, 1, 2, 3, 5);
   u.charge = u.readyCharge = 1;
   s = applyCommand(s, { type: 'move', unitId: u.id, x: 3, y: 5 });
   roundtrip(s);
@@ -94,9 +90,9 @@ test('a saved SZF collision resumes its compulsory bounce without losing move bu
 });
 test('a saved small-BW transit disallows unrelated actions until it reaches empty ground', () => {
   let s = fixture();
-  const u = add(s, 'u12p', 1, 3, 4),
-    v = add(s, 1, 2, 3, 5),
-    id = card(s, 17);
+  const u = add(s, 'u12p', 1, 3, 4);
+  add(s, 1, 2, 3, 5);
+  const id = card(s, 17);
   u.charge = u.readyCharge = 1;
   s = applyCommand(s, { type: 'move', unitId: u.id, x: 3, y: 5 });
   roundtrip(s);

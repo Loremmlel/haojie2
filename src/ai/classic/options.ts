@@ -10,7 +10,7 @@ import { actorCommandError } from '../../engine/online/authority';
 import { allPieces, hasTrait } from '../../engine/core/traits';
 import { ensure, getStats } from '../../engine/core/state';
 import { definition } from '../../engine/catalog';
-import { availableSyntheses, SYNTHESIS_RECIPES } from '../../engine/setup/synthesis';
+import { availableSyntheses } from '../../engine/setup/synthesis';
 import { canChooseSummon, commandSummonPool, selectableSummons } from '../../engine/setup/shrines';
 import type { Command, GamePosition, Player } from '../../engine/types';
 import type { Observation } from '../types';

@@ -10,7 +10,6 @@ import {
 } from '../core/geometry';
 import {
   activateAura,
-  captureClockFrame,
   chooseShrine,
   validateShrineChoice,
   chooseSummons,
@@ -30,7 +29,7 @@ import { synthesize } from '../setup/synthesis';
 import { normalizeLegacyGuards } from '../core/protection';
 import { clonePosition } from '../core/clone';
 import { forkPosition, commitPosition, createPositionFork } from '../core/branch';
-import { definition, isStored } from '../catalog';
+import { definition } from '../catalog';
 import {
   chargeAction,
   craft,
@@ -56,7 +55,7 @@ import {
   pruneSiphons,
   resolution,
 } from './combat';
-import { canPlace, refreshDeployment, cells, equal } from '../core/geometry';
+import { canPlace, refreshDeployment } from '../core/geometry';
 import { beginTurn, endTurn, prepareEndTurn, switchTurn } from './lifecycle';
 import {
   finishMode,
@@ -75,7 +74,6 @@ import {
   piercing,
   addUnit,
   chooseMode,
-  draw,
   emit,
   ensure,
   faction,

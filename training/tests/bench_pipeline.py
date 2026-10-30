@@ -611,13 +611,11 @@ def sample(directory):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint")
-    parser.add_argument(
-        "--output", default="artifacts/classic-native-pool-20261029/benchmark"
-    )
+    parser.add_argument("--output", default="artifacts/training-benchmark")
     parser.add_argument("--tasks", type=int, default=256)
     parser.add_argument("--commands", type=int, default=8)
     parser.add_argument("--trials", type=int)
-    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--batch", type=int, default=16)
     comparison = parser.add_mutually_exclusive_group()
     comparison.add_argument("--compare-workers", type=int, nargs=2, metavar=("A", "B"))

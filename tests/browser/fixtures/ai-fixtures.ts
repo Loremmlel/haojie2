@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { fixture, add, card } from '../../helpers';
+import { fixture, add } from '../../helpers';
 import { createDemoGame, createSession } from '../../../src/engine';
 import type { GameState } from '../../../src/engine';
 import type { MatchSettings } from '../../../src/match/settings';

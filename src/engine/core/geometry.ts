@@ -2,7 +2,7 @@ import { allPieces, hasTrait, isLandmark } from './traits';
 import { landmarkAt, landmarkSquare, liveLandmark } from '../setup/shrines';
 import { definition } from '../catalog';
 import { pieceById } from '../runtime/position';
-import { allegiance, getStats, has, passive, piercing, hasWeapon } from './state';
+import { allegiance, getStats, passive, piercing, hasWeapon } from './state';
 import type { AttackDirection, GamePosition, Player, Point, Target, Unit } from '../types';
 export const WIDTH = 9,
   HEIGHT = 13;

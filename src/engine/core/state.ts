@@ -1,11 +1,9 @@
 import { own } from '../runtime/position';
 import { pieceById } from '../runtime/position';
 import {
-  allPieces,
   hasTrait,
   anyTrait,
   isLandmark,
-  isMage,
   signedAttack,
   chargeFor,
   attackChargeKind,
@@ -20,10 +18,9 @@ import {
 import { adjacent, attackPath } from './geometry';
 import { enrichEvent, withoutEventFacts } from './event-facts';
 import { simulationRandom } from './random';
-import { COMBAT_RULES, definition, isStored, SUMMON_POOL, ULTIMATE_POOL } from '../catalog';
+import { COMBAT_RULES, definition, SUMMON_POOL, ULTIMATE_POOL } from '../catalog';
 import type {
   Card,
-  Command,
   Effect,
   GameEvent,
   GamePosition,

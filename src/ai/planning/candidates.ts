@@ -10,7 +10,6 @@ import {
   abilityKinds,
   allPieces,
   isLandmark,
-  signedAttack,
   hasAura,
   canAttackFriend,
   canDeployKind,
@@ -20,7 +19,7 @@ import { availableSyntheses, synthesisDestinations } from '../../engine/setup/sy
 import { canSkipReaction, hutSpawnPoints } from '../../engine/commands/reactions';
 import { piercing, healingAttack } from '../../engine/core/state';
 import { baseCoverValue, payloadCoverValue } from '../evaluation/threats';
-import { definition, isStored } from '../../engine/catalog';
+import { definition } from '../../engine/catalog';
 import {
   unitActions,
   cardActions,
@@ -56,7 +55,7 @@ import {
   readyAttack,
   attackPressure,
 } from '../evaluation/threats';
-import { has, now, passive } from '../../engine/core/state';
+import { has, passive } from '../../engine/core/state';
 import { decisionOwner } from '../observation';
 import { hitDistance } from '../evaluation/spatial';
 export interface CandidateGroup {

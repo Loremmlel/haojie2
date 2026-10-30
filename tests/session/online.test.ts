@@ -17,7 +17,6 @@ import {
   queryCommandError,
   template,
   type Command,
-  type GameState,
   type Player,
 } from '../../src/engine';
 import { observe } from '../../src/ai/observation';

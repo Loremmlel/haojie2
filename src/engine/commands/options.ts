@@ -2,7 +2,6 @@ import {
   chargeFor,
   moveChargeKind,
   attackChargeKind,
-  abilityKinds,
   allPieces,
   canDeployKind,
   hasTrait,
@@ -11,19 +10,11 @@ import {
 } from '../core/traits';
 import { canShatter } from '../setup/shrines';
 /** 与渲染器无关的命令说明；界面负责选值，引擎负责验证。 */
-import { definition, isStored } from '../catalog';
+/** 与渲染器无关的命令说明；界面负责选值，引擎负责验证。 */
+import { definition } from '../catalog';
 import { rerollCommands } from '../setup/summoning';
 import { queryCommandError } from './game';
-import {
-  age,
-  allegiance,
-  getStats,
-  has,
-  now,
-  passive,
-  healingAttack,
-  hasWeapon,
-} from '../core/state';
+import { getStats, now, healingAttack, hasWeapon } from '../core/state';
 import type { Card, Command, GamePosition, Unit } from '../types';
 export interface SelectionStep {
   kind: 'target' | 'point' | 'row' | 'column' | 'death' | 'direction' | 'path';

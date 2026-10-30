@@ -1,6 +1,6 @@
 import { hasTrait } from '../core/traits';
 import { COMBAT_RULES } from '../catalog';
-import { cells, equal, inside, neighbors, other, targets } from '../core/geometry';
+import { cells, equal, inside, neighbors, targets } from '../core/geometry';
 import { allegiance, passive, has } from '../core/state';
 import type { GamePosition, Unit } from '../types';
 /** 精确的目标与落点快照；13×13区域不等同于普通路径射程。 */

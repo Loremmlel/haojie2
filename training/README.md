@@ -89,7 +89,7 @@ training/.venv/Scripts/python.exe -m training.haojie evaluate --checkpoint artif
 ## 验证和性能
 
 ```powershell
-training/.venv/Scripts/python.exe -B -m unittest training.tests.test_training training.tests.test_pipeline training.tests.test_profiling training.tests.test_storage -v
+training/.venv/Scripts/python.exe -B -m unittest discover -s training/tests -v
 training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-main/checkpoint.pt --output artifacts/classic-memory-benchmark --tasks 256 --commands 8 --trials 3
 node --import tsx scripts/native/learning/validate.ts artifacts/native-target/release/haojie-engine.exe --evaluation --candidates --search --decoder
 node --import tsx scripts/native/learning/teacher-validation.ts artifacts/native-target/release/haojie-engine.exe 64

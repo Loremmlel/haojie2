@@ -8,11 +8,9 @@ import {
   canPlace,
   commandError,
   createGame,
-  definition,
   getStats,
   template,
   asTarget,
-  has,
 } from '../../src/engine';
 import { add, card, fixture, pass, round, seedFor, strike, unit } from '../helpers';
 
@@ -107,9 +105,9 @@ test('03 no attacks does not remove movement; movement needs a previous charge r
 });
 test('03 guardian protects once, including itself', () => {
   let s = fixture();
-  const a = add(s, 26, 1, 3, 4),
-    guardian = add(s, 3, 2, 4, 5),
-    friend = add(s, 1, 2, 3, 5);
+  const a = add(s, 26, 1, 3, 4);
+  add(s, 3, 2, 4, 5);
+  const friend = add(s, 1, 2, 3, 5);
   friend.hp = 1;
   s = strike(s, a, friend);
   assert.equal(unit(s, friend.id).hp, 1);
