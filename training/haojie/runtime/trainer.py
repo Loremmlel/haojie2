@@ -14,7 +14,7 @@ from ..native_pool import Request, search_values
 from ..native import Environment
 from .targets import Calibration
 from ..opponents import Opponents
-from .storage import Replay, Weights, atomic_json, clean_storage
+from .storage import CheckpointPickle, Replay, Weights, atomic_json, clean_storage
 from .compute import Compute
 
 
@@ -341,7 +341,7 @@ class Trainer(Compute):
     def write_checkpoint(self, payload):
         started = time.perf_counter()
         path = self.directory / "checkpoint.pt"
-        torch.save(payload, path.with_suffix(".tmp"))
+        torch.save(payload, path.with_suffix(".tmp"), pickle_module=CheckpointPickle)
         os.replace(path.with_suffix(".tmp"), path)
         return time.perf_counter() - started, {e["version"] for e in payload["pool"]}
 

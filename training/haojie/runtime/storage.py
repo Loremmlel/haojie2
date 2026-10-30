@@ -1,11 +1,24 @@
 """有界内存回放、历史权重缓存和单个恢复点的文件管理。"""
 
+import copyreg
 import json
 import os
+import pickle
 from collections import OrderedDict
 from pathlib import Path
 import numpy as np
 import torch
+
+
+def _array_storage(array):
+    # 零拷贝交给 torch 的独立存储记录；加载时还原 NumPy，训练数据结构不变。
+    return np.asarray, (torch.from_numpy(array),)
+
+
+class CheckpointPickle:
+    class Pickler(pickle.Pickler):
+        # 仅作用于本次检查点，不修改进程全局的 NumPy 序列化行为。
+        dispatch_table = {**copyreg.dispatch_table, np.ndarray: _array_storage}
 
 
 def atomic_json(path, value):

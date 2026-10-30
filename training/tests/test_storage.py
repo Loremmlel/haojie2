@@ -4,6 +4,7 @@ import gc
 import tempfile
 import unittest
 import weakref
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,6 +34,34 @@ def sample(writer, step=1, winner=None):
 
 
 class StorageTests(unittest.TestCase):
+    def test_checkpoint_streams_arrays_and_loads_old_and_new_v3(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trainer = Trainer(directory, Config(device="cpu", warmup_games=0))
+            writer = GameBuffer(trainer.game())
+            for step in range(1, 65):
+                trainer.event({"type": "data", "data": sample(writer, step)})
+            payload = trainer.checkpoint_snapshot({})
+            path = Path(directory) / "checkpoint.pt"
+            # 旧版普通 pickle 写出的 v3 仍直接恢复，保存优化不改恢复契约。
+            torch.save(payload, path)
+            legacy = Trainer(directory, trainer.config, resume=True)
+            equal_tree(legacy.replay.games, payload["replay"])
+            trainer.write_checkpoint(payload)
+            with zipfile.ZipFile(path) as archive:
+                metadata = next(
+                    v for v in archive.infolist() if v.filename.endswith("/data.pkl")
+                )
+                self.assertLess(metadata.file_size, trainer.replay.bytes)
+            restored = torch.load(path, map_location="cpu", weights_only=False)
+            equal_tree(restored["replay"], payload["replay"])
+            self.assertIsInstance(
+                restored["replay"][0]["chunks"][0]["states"], np.ndarray
+            )
+            equal_tree(
+                Replay(games=restored["replay"]).batch(8, np.random.default_rng(23)),
+                trainer.replay.batch(8, np.random.default_rng(23)),
+            )
+
     def test_checkpoint_freezes_mutable_state_without_copying_replay_arrays(self):
         with tempfile.TemporaryDirectory() as directory:
             trainer = Trainer(directory, Config(device="cpu", warmup_games=0))
