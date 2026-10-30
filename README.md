@@ -66,19 +66,9 @@ export default function GamePage() {
 
 ## 验证与维护
 
-```sh
-npm run format:check
-npm run check
-npm test
-npm run check:structure
-npm run native:rules:check
-npm run deploy:check
-npx playwright install chromium
-npm run test:browser
-npm run test:pages
-```
+按[测试范围](docs/maintenance/TESTING.md)选择受影响的检查。游戏全套为 `npm run test:game`，训练图表为 `npm run test:training-ui`；Python 训练和 Web 控制分别运行自己的 unittest。只改训练代码无需运行游戏引擎/浏览器测试，只改训练 UI 无需启动 GPU。
 
-原生代码另运行 `npm run native:test`、`npm run native:check`、`npm run native:build`，以及 `npm run native:validate -- --output artifacts/native-rules`。CI 在 Windows/Linux 检查规则库与 TS/Rust 差分。
+`npm run check` 检查类型，`npm run check:structure` 检查目录；格式使用 `config/prettier.json`。`npm run deploy:check` 自身完成游戏构建和发行一致性检查，无需重复先运行 build。原生规则/AI 改动才运行对应 Rust 测试及 TS/Rust 差分。
 
 浏览器验收默认在网络离线的 `file://` 页面执行真实操作；特效开发预览使用 `npm run preview:vfx`。CLI 对局和回放使用 `npm run play:cli`，参数见[CLI 手册](docs/CLI.md)。
 

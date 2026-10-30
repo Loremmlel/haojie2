@@ -5,7 +5,10 @@ import { chromium } from 'playwright';
 
 // 图表视觉与草稿回执验收使用明确标注的合成数据，不作为训练记录。
 const python =
-  process.platform === 'win32' ? 'training/.venv/Scripts/python.exe' : 'training/.venv/bin/python';
+  process.env.PYTHON ||
+  (process.platform === 'win32'
+    ? 'training/.venv/Scripts/python.exe'
+    : 'training/.venv/bin/python');
 const schema = JSON.parse(
   execFileSync(
     python,
@@ -97,8 +100,19 @@ try {
   await page.goto('http://127.0.0.1:48765/');
   await page.locator('.trend-line').first().waitFor();
   assert.ok((await page.locator('.trend-line').first().getAttribute('d')).includes('C'));
+  await page.getByLabel('图表时间范围').focus();
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.getByLabel('图表时间范围').inputValue(), '21600');
+  const initialCurve = await page.locator('.trend-line').first().getAttribute('d');
+  await page.getByLabel('曲线平滑时长').selectOption('120');
+  assert.notEqual(await page.locator('.trend-line').first().getAttribute('d'), initialCurve);
   await page.getByLabel('原始线', { exact: true }).check();
   assert.ok(await page.locator('.raw-line').count());
+  await page.getByRole('group', { name: /学习损失，左右/ }).focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.locator('.chart-tooltip').waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('.chart-tooltip').count(), 0);
   await mkdir('artifacts/training-web', { recursive: true });
   await page.screenshot({
     path: 'artifacts/training-web/fixture-desktop.png',
@@ -129,7 +143,7 @@ try {
   assert.equal(await page.getByRole('button', { name: '开始训练', exact: true }).isEnabled(), true);
   assert.equal(await page.locator('.trend-line').count(), 0);
   console.log(
-    '图表真实曲线路径、原始线、桌面/手机布局、参数草稿和服务重启后重新连接：通过（合成数据）。',
+    '图表平滑、原始线、时间范围、键盘读数、桌面/手机布局、参数草稿和服务重启重连：通过（合成数据）。',
   );
 } finally {
   await browser.close();

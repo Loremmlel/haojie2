@@ -1,28 +1,17 @@
 name: Native engine
 on:
   push:
-    branches: [main, 'codex/**']
-    paths:
-      [
-        'native/**',
-        'training/**',
-        'src/**',
-        'scripts/native/**',
-        'tests/**',
-        'package*.json',
-        '.github/workflows/native.yml',
-      ]
+    branches: [main]
+    paths: &native-paths
+      - 'native/**'
+      - 'src/engine/**'
+      - 'src/ai/**'
+      - 'scripts/native/**'
+      - 'tests/helpers.ts'
+      - 'package*.json'
+      - '.github/workflows/native.yml'
   pull_request:
-    paths:
-      [
-        'native/**',
-        'training/**',
-        'src/**',
-        'scripts/native/**',
-        'tests/**',
-        'package*.json',
-        '.github/workflows/native.yml',
-      ]
+    paths: *native-paths
   workflow_dispatch:
 permissions:
   contents: read
@@ -55,12 +44,6 @@ jobs:
       - run: node --import tsx scripts/native/engine/validation/run.ts --output artifacts/native-rules
       - run: node --import tsx scripts/native/learning/validate.ts --evaluation --candidates --search --decoder
       - run: node --import tsx scripts/native/learning/teacher-validation.ts
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: python -m pip install -r training/requirements.txt
-      - run: python -m unittest training.tests.test_training training.tests.test_web -v
       - uses: actions/upload-artifact@v4
         if: always()
         with:

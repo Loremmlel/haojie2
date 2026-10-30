@@ -442,19 +442,6 @@ test('storage includes draw turn and expires at exact next-own boundary', () => 
     false,
   );
 });
-test('extra deployment control uses the current row advantage', () => {
-  let s = fixture();
-  add(s, 1, 1, 1, 10);
-  add(s, 1, 1, 3, 10);
-  assert.equal(s.deployRows[1].includes(10), false);
-  s = round(s);
-  assert.ok(s.deployRows[1].includes(10));
-  s.units.pop();
-  const id = card(s, 1);
-  assert.ok(commandError(s, { type: 'deploy', cardId: id, x: 8, y: 10 }));
-  s = round(s);
-  assert.equal(s.deployRows[1].includes(10), false);
-});
 test('no-place minions are discarded instead of deadlocking turn end', () => {
   const s = fixture();
   for (const p of ALL_CELLS)

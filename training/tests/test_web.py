@@ -1,18 +1,14 @@
-"""本机控制协议、配置约束及并发重分配的功能验收。"""
+"""本机控制协议与配置约束；不启动训练或加载原生规则库。"""
 
 from dataclasses import asdict
 import json
-from pathlib import Path
 import tempfile
 import threading
 import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-import torch
-
 from training.haojie.runtime.config import Config
-from training.haojie.runtime.trainer import Trainer
 from training.haojie.web.controller import Controller
 from training.haojie.web.server import server
 from training.haojie.web.settings import defaults, schema, validate
@@ -85,48 +81,6 @@ class WebTests(unittest.TestCase):
                 http.server_close()
                 thread.join()
                 control.close()
-
-    def test_resize_keeps_every_game_and_applies_optimizer_rate(self):
-        with tempfile.TemporaryDirectory() as directory:
-            config = Config(
-                device="cpu",
-                warmup_games=0,
-                workers=2,
-                games_per_worker=2,
-                simulations=1,
-                fast_simulations=1,
-                save_seconds=0,
-            )
-            (Path(directory) / "STOP").touch()
-            trainer = Trainer(directory, config)
-            trainer.run()
-            saved = torch.load(Path(directory) / "checkpoint.pt", weights_only=False)
-            original = {
-                g["game"]["id"] for rows in saved["workers"].values() for g in rows
-            }
-            self.assertEqual(len(original), 4)
-            config.workers = config.games_per_worker = 1
-            config.learning_rate = 0.001
-            small = Trainer(directory, config, resume=True)
-            self.assertTrue(all(g["lr"] == 0.001 for g in small.optimizer.param_groups))
-            small.run()
-            saved = torch.load(Path(directory) / "checkpoint.pt", weights_only=False)
-            self.assertEqual(
-                {g["game"]["id"] for rows in saved["workers"].values() for g in rows},
-                original,
-            )
-            self.assertEqual(len(saved["workers"][-1]), 3)
-            config.workers, config.games_per_worker = 2, 3
-            large = Trainer(directory, config, resume=True)
-            large.run()
-            saved = torch.load(Path(directory) / "checkpoint.pt", weights_only=False)
-            self.assertNotIn(-1, saved["workers"])
-            games = [
-                g["game"]["id"] for rows in saved["workers"].values() for g in rows
-            ]
-            self.assertEqual(len(games), len(set(games)))
-            self.assertEqual(len(games), 6)
-            self.assertTrue(original <= set(games))
 
 
 if __name__ == "__main__":

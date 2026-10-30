@@ -88,6 +88,8 @@ training/.venv/Scripts/python.exe -m training.haojie evaluate --checkpoint artif
 
 ## 验证和性能
 
+按[测试范围](../docs/maintenance/TESTING.md)选择模块；以下 discover 用于训练整体回归，日常只运行受影响的测试。Web 协议使用 `training.tests.test_web`，图表使用 `npm run test:training-ui` 和 `npm run training:web:views`，均不需要启动 GPU。
+
 ```powershell
 training/.venv/Scripts/python.exe -B -m unittest discover -s training/tests -v
 training/.venv/Scripts/python.exe -B -m training.tests.bench_pipeline --checkpoint artifacts/classic-main/checkpoint.pt --output artifacts/classic-memory-benchmark --tasks 256 --commands 8 --trials 3

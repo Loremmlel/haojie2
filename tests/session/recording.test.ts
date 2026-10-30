@@ -44,6 +44,7 @@ test('完整79步路线跨越60步缓存，紧凑存档重放、续玩和CLI共�
   assert.deepEqual(restored.present, session.present);
   assert.deepEqual(restored.past, session.past);
   assert.equal(restored.past.length, 60);
+  assert.deepEqual(parseSession(JSON.stringify(session)), session);
   assert.equal(serializeSession(restored), text);
   assert.deepEqual(replayTranscript(text), { state: session.present, commands: 79 });
   assert.deepEqual(redo(undo(restored)).present, session.present);

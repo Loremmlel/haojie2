@@ -1,0 +1,51 @@
+name: Training console
+on:
+  push:
+    branches: [main]
+    paths: &console-paths
+      - 'training/ui/**'
+      - 'training/haojie/web/**'
+      - 'training/haojie/runtime/config.py'
+      - 'training/haojie/__main__.py'
+      - 'training/requirements.txt'
+      - 'training/tests/test_web.py'
+      - 'tests/training/**'
+      - 'tests/browser/console/**'
+      - 'scripts/training/**'
+      - 'src/ui/styles/tokens.css'
+      - 'package*.json'
+      - 'tsconfig.json'
+      - '.gitattributes'
+      - '.github/workflows/training-web.yml'
+  pull_request:
+    paths: *console-paths
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: training-console-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHON: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci --no-audit --no-fund
+      - run: python -m pip install 'psutil>=5.9,<8'
+      - run: npm run format:check
+      - run: npm run check:structure
+      - run: npm run check
+      - run: npm run test:training-ui
+      - run: python -B -m unittest training.tests.test_web -v
+      - run: npm run training:web:check
+      - run: npx playwright install --with-deps chromium
+      - run: npm run training:web:views

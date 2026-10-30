@@ -435,17 +435,6 @@ try {
   scenario(
     'feedback: four-layer charge display clears after first shot and second shot uses base damage',
   );
-  await button('棋子图鉴').click();
-  assert.equal(await page.locator('.codex-card').count(), 82);
-  await page.getByRole('textbox', { name: '搜索图鉴' }).fill('免疫塔');
-  assert.ok(await page.getByRole('heading', { name: '免疫塔', exact: true }).isVisible());
-  await page.getByRole('textbox', { name: '搜索图鉴' }).fill('');
-  await button('终极').click();
-  assert.equal(await page.locator('.codex-card').count(), 28);
-  await button('武器').click();
-  assert.equal(await page.locator('.codex-card').count(), 7);
-  await page.screenshot({ path: 'artifacts/codex.png', fullPage: true });
-  await button('关闭弹窗').click();
   await button('规则').click();
   await page.locator('.interpretations summary').click();
   assert.ok(
@@ -455,9 +444,7 @@ try {
       .isVisible(),
   );
   await button('关闭弹窗').click();
-  scenario(
-    '82-entry searchable codex, 28 ultimate entries, seven weapons and confirmed/deferred rules',
-  );
+  scenario('rule manual exposes confirmed and deferred interpretations');
   const beforeInvalid = await readState();
   await page.locator('input[type=file]').setInputFiles({
     name: 'bad.json',
@@ -549,12 +536,8 @@ try {
   await button('攻击').click();
   await choose(3, 6);
   assert.match(await cell(3, 6).getAttribute('aria-label'), /60生命/);
-  await button('棋子图鉴').click();
-  await button('武器').click();
-  assert.equal(await page.locator('.codex-card').count(), 7);
-  await button('关闭弹窗').click();
   await mobile.context.close();
-  scenario('390px mobile layout, reduced motion, attack controls and weapon codex');
+  scenario('390px mobile layout, reduced motion and attack controls');
   assert.deepEqual(network, []);
   assert.deepEqual(errors, []);
   scenario('no external network requests or uncaught browser errors');

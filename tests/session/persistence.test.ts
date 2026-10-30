@@ -137,14 +137,6 @@ test('old saves and malformed numeric, graph and event fields fail without mutat
   }
   assert.deepEqual(base.present, createDemoGame());
 });
-test('history retains the most recent 60 commands with reversible random state', () => {
-  const initial = fixture();
-  initial.bonus[2] = 100;
-  let session = dispatch(createSession(initial), { type: 'end' });
-  for (let n = 0; n < 96; n++) session = dispatch(session, { type: 'summon' });
-  assert.equal(session.past.length, 60);
-  assert.deepEqual(parseSession(JSON.stringify(session)), session);
-});
 test('gold body also rejects hook, silence, firestorm and hostile inner-fire', () => {
   for (const k of [7, 'u4', 'u9', 'u26'] as const) {
     let s = fixture();

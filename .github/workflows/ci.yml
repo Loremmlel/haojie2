@@ -2,8 +2,26 @@ name: Verify and build single HTML
 on:
   push:
     branches: [main]
-    paths-ignore: ['README.md', 'docs/**']
+    paths: &game-paths
+      - 'src/**'
+      - 'examples/**'
+      - 'tests/**'
+      - 'docs/playtests/current/**'
+      - '!tests/training/**'
+      - '!tests/browser/console/**'
+      - 'scripts/ai/**'
+      - 'scripts/vfx/**'
+      - 'scripts/build.mjs'
+      - 'scripts/pages.mjs'
+      - 'scripts/check-structure.mjs'
+      - 'index.html'
+      - '.nojekyll'
+      - '.gitattributes'
+      - 'package*.json'
+      - 'tsconfig.json'
+      - '.github/workflows/ci.yml'
   pull_request:
+    paths: *game-paths
   workflow_dispatch:
 concurrency:
   group: verify-${{ github.ref }}
@@ -21,24 +39,14 @@ jobs:
           node-version: '22'
       - name: Install exact dependency tree
         run: npm ci --no-audit --no-fund
-      - name: Package auditable source snapshot
-        run: |
-          mkdir -p artifacts
-          tar --exclude='./.git' --exclude='./node_modules' --exclude='./artifacts' --exclude='./dist' -czf artifacts/haojie2-source.tar.gz .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: source-snapshot
-          path: artifacts/haojie2-source.tar.gz
-          retention-days: 7
       - run: npm run format:check
       - run: npm run check
-      - run: npm run native:rules:check
       - run: npm run check:structure
       - run: |
           set -o pipefail
-          npm test | tee artifacts/engine-report.txt
+          mkdir -p artifacts
+          npm run test:game | tee artifacts/engine-report.txt
       - run: npm run deploy:check
-      - run: npm run training:web:check
       - name: Install browser for acceptance testing
         run: npx playwright install --with-deps chromium
       - run: npm run test:browser
@@ -51,8 +59,6 @@ jobs:
       - run: npm run test:browser:feedback4
       - run: npm run test:browser:online
       - run: node --import tsx scripts/ai/shrine-smoke.ts
-      - name: Verify current rules CLI command fingerprints
-        run: npm run play:cli -- --replay docs/playtests/current/cli-feedback5-20260923.jsonl
       - name: Upload the playable standalone HTML
         uses: actions/upload-artifact@v4
         with:

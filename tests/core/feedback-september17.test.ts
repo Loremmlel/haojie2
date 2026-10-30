@@ -270,6 +270,7 @@ test('U13 self-reroll works through turn five, cannot self-chain, and ultimate c
   const after = dispatch(before, choices[0].commands[0]);
   assert.equal(after.present.heads[1], 4);
   assert.ok(after.present.hands[1].every((c) => c.summonPool === 'ultimate'));
+  assert.ok(after.present.hands[1].every((c) => definition(c.kind).tier !== 'normal'));
   assert.deepEqual(redo(undo(after)), after);
   assert.deepEqual(parseSession(JSON.stringify(after)), after);
 });

@@ -81,6 +81,11 @@ try {
     await mage.getByRole('button', { name: '关闭弹窗' }).click();
     await codex.getByRole('button', { name: '清空图鉴搜索' }).click();
     assert.equal(await codex.locator('.codex-card').count(), 82);
+    await codex.getByRole('button', { name: '终极', exact: true }).click();
+    assert.equal(await codex.locator('.codex-card').count(), 28);
+    await codex.getByRole('button', { name: '武器', exact: true }).click();
+    assert.equal(await codex.locator('.codex-card').count(), 7);
+    await codex.getByRole('button', { name: '全部', exact: true }).click();
     assert.equal(await codex.locator('.codex-card h3 a').count(), 0);
     const librarySave = renderOnly ? null : await page.evaluate(() => JSON.stringify(localStorage));
     await codex.getByRole('textbox').fill('冲锋怪');

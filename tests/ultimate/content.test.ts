@@ -248,22 +248,6 @@ test('U12-prime cannot finish inside enemy and locks other operations during tra
   s = applyCommand(s, { type: 'finish-mode', unitId: u.id });
   assert.equal(unit(s, u.id).mode, 'none');
 });
-test('U13 reroll consumes its own per-turn allowance and keeps summon pool', () => {
-  let s = fixture();
-  const u = add(s, 'u13', 1, 2, 4),
-    id = card(s, 'u9');
-  s = applyCommand(s, { type: 'reroll', unitId: u.id, cardId: id });
-  assert.ok(s.hands[1].every((c) => definition(c.kind).tier !== 'normal'));
-  assert.ok(commandError(s, { type: 'reroll', unitId: u.id, cardId: s.hands[1][0].id }));
-});
-test('U13 first-five-turn self-reroll is optional and cannot endlessly reroll itself', () => {
-  const s = fixture(),
-    id = card(s, 'u13'),
-    n = applyCommand(s, { type: 'reroll', cardId: id });
-  assert.ok(n.hands[1].every((c) => c.rerolled));
-  s.turns[1] = 6;
-  assert.ok(commandError(s, { type: 'reroll', cardId: id }));
-});
 test('U14 siphon allows base healing, consumes a skill operation and disconnects out of range', () => {
   let s = fixture();
   const u = add(s, 'u14', 1, 5, 4),

@@ -8,6 +8,8 @@
     "build": "node scripts/build.mjs",
     "check": "tsc --noEmit",
     "test": "tsx --test tests/*/*.test.ts",
+    "test:game": "tsx --test tests/ai/*.test.ts tests/core/*.test.ts tests/economics/*.test.ts tests/kernel/*.test.ts tests/session/*.test.ts tests/shrine/*.test.ts tests/ultimate/*.test.ts",
+    "test:training-ui": "tsx --test tests/training/*.test.ts",
     "test:browser": "node tests/browser/game.mjs",
     "format": "prettier --config config/prettier.json --ignore-path config/prettierignore --write .",
     "format:check": "prettier --config config/prettier.json --ignore-path config/prettierignore --check .",
