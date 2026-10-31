@@ -32,6 +32,7 @@ type Snapshot = {
   cpu_count: number;
   memory_gib: number;
   evaluation?: EvaluationStatus | null;
+  history_evaluation?: EvaluationStatus | null;
 };
 const names: Record<string, string> = {
   idle: '待开始',
@@ -320,12 +321,12 @@ export default function App() {
               [
                 'collect',
                 '示范采集',
-                `${number(stat.demonstrations, 0)} / ${state?.config.warmup_games ?? 8} 局`,
+                `${number(stat.warmup_collected ?? stat.demonstrations, 0)} / ${state?.config.warmup_games ?? 8} 局`,
               ],
               [
                 'imitation',
                 '模仿学习',
-                `${number(stat.imitation_updates, 0)} / ${state?.config.warmup_updates ?? 512} 次`,
+                `${number(stat.imitation_updates, 0)} / ${state?.config.warmup_updates ?? schema?.defaults.warmup_updates ?? '—'} 次`,
               ],
               ['self', '自对弈', '当前 / 历史 / 手工对手'],
             ].map(([key, label, hint], i) => (
@@ -445,7 +446,19 @@ export default function App() {
           </div>
           <Evaluation
             status={state?.evaluation}
-            interval={Number(state?.config.evaluation_seconds ?? 1800)}
+            interval={Number(
+              state?.config.evaluation_seconds ?? schema?.defaults.evaluation_seconds ?? 7200,
+            )}
+          />
+          <Evaluation
+            kind="history"
+            status={state?.history_evaluation}
+            games={Number(
+              state?.config.history_evaluation_games ??
+                schema?.defaults.history_evaluation_games ??
+                32,
+            )}
+            interval={0}
           />
           <details className="run-log">
             <summary>

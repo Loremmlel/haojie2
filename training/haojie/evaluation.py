@@ -1,6 +1,7 @@
 """冻结权重、配对换边评测；超限与失败不计作平局。"""
 
 import json
+import math
 import os
 from pathlib import Path
 import time
@@ -53,9 +54,9 @@ def paired_games(seed, games=4, difficulties=("easy", "medium", "hard")):
                 )
 
 
-def paired_summary(results):
+def paired_summary(results, opponents=("easy", "medium", "hard")):
     summary = {}
-    for difficulty in ("easy", "medium", "hard"):
+    for difficulty in opponents:
         rows = [r for r in results if r["difficulty"] == difficulty]
         counts = dict(
             pairs=0,
@@ -87,6 +88,32 @@ def paired_summary(results):
     return summary
 
 
+def history_summary(results, opponents, games):
+    summary = paired_summary(results, [str(v) for v in opponents])
+    for score in summary.values():
+        n = score["pairs"] * 2
+        rate = (score["wins"] + score["draws"] / 2) / n if n else None
+        # 同种子的两局作为一个独立样本；Hoeffding 界允许镜像局相关及平局。
+        radius = math.sqrt(math.log(40) / (2 * score["pairs"])) if n else 1
+        interval = [max(0, rate - radius), min(1, rate + radius)] if n else [0, 1]
+        complete = n == games
+        score.update(
+            win_rate=score["wins"] / n if n else None,
+            score_rate=rate,
+            score_interval=interval,
+            verdict=(
+                "ahead"
+                if complete and interval[0] > 0.5
+                else (
+                    "behind"
+                    if complete and interval[1] < 0.5
+                    else "uncertain" if complete else "incomplete"
+                )
+            ),
+        )
+    return summary
+
+
 def native_game(row, number, scripted=True):
     game = dict(
         id=number,
@@ -102,7 +129,9 @@ def native_game(row, number, scripted=True):
     return game
 
 
-def play_game(model, other, device, game, simulations, max_commands, progress=None):
+def play_game(
+    model, other, device, game, simulations, max_commands, progress=None, depth=16
+):
     started = time.perf_counter()
     last_progress = started
     config = Config(
@@ -111,6 +140,7 @@ def play_game(model, other, device, game, simulations, max_commands, progress=No
         warmup_games=0,
         simulations=simulations,
         fast_simulations=simulations,
+        depth=depth,
         temperature=0,
         max_commands=max_commands,
         device=str(device),
@@ -163,6 +193,8 @@ def play_game(model, other, device, game, simulations, max_commands, progress=No
 def evaluate_round(directory):
     directory = Path(directory)
     manifest = json.loads((directory / "round.json").read_text(encoding="utf-8"))
+    history = manifest.get("kind") == "history"
+    opponents = manifest["opponents"] if history else ("easy", "medium", "hard")
     status = dict(
         **manifest,
         state="running",
@@ -170,12 +202,16 @@ def evaluate_round(directory):
         pid=os.getpid(),
         process_created=psutil.Process().create_time(),
         completed=0,
-        total=manifest["games"] * 3,
-        results=[]
+        total=manifest["games"] * len(opponents),
+        results=[],
     )
 
     def report():
-        status["summary"] = paired_summary(status["results"])
+        status["summary"] = (
+            history_summary(status["results"], opponents, manifest["games"])
+            if history
+            else paired_summary(status["results"])
+        )
         atomic_json(directory / "status.json", status)
         atomic_json(directory.parent / "status.json", status)
 
@@ -184,10 +220,17 @@ def evaluate_round(directory):
         torch.set_num_threads(1)
         device = device_for_bf16(manifest["device"])
         model = load(directory / "model.pt", device)
+        other = None
+        previous_opponent = None
         with (directory / "results.jsonl").open("x", encoding="utf-8") as output:
             for number, row in enumerate(
-                paired_games(manifest["seed"], manifest["games"])
+                paired_games(
+                    manifest["seed"], manifest["games"], tuple(map(str, opponents))
+                )
             ):
+                if history and previous_opponent != row["difficulty"]:
+                    other = load(directory / f"opponent-{row['difficulty']}.pt", device)
+                    previous_opponent = row["difficulty"]
                 status["current"] = {**row, "steps": 0}
                 report()
 
@@ -198,12 +241,13 @@ def evaluate_round(directory):
                 try:
                     result = play_game(
                         model,
-                        None,
+                        other,
                         device,
-                        native_game(row, number),
+                        native_game(row, number, scripted=not history),
                         manifest["simulations"],
                         manifest["max_commands"],
                         progress,
+                        depth=manifest.get("depth", 16),
                     )
                 except Exception as error:
                     result = {"winner": None, "error": str(error)}
@@ -256,6 +300,7 @@ def evaluate(args):
                 native_game(row, number, scripted),
                 args.simulations,
                 args.max_commands,
+                depth=args.depth,
             )
             winner = result["winner"]
             category = (
@@ -272,6 +317,7 @@ def evaluate(args):
                 **row,
                 **result,
                 "simulations": args.simulations,
+                "depth": args.depth,
                 "checkpoint": str(frozen),
                 "source_checkpoint": args.checkpoint,
                 "opponent": args.opponent if scripted else str(frozen_other),

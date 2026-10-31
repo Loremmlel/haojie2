@@ -157,7 +157,12 @@ struct Shared {
 }
 impl Shared {
     fn fail(&self, error: String) {
-        self.queues.lock().unwrap_or_else(|e| e.into_inner()).error = Some(error);
+        // 线程退出、回复失败和释放失败都可能接踵而至，诊断始终保留首错。
+        self.queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .error
+            .get_or_insert(error);
         self.changed.notify_all();
     }
     fn failed(&self) -> bool {

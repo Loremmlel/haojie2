@@ -13,6 +13,7 @@ enum Stage {
     Parameters(usize, usize, usize),
     Leaf,
 }
+
 #[derive(Clone)]
 struct Node {
     command: Command,
@@ -82,14 +83,23 @@ impl Decoder {
             return Err("command parameter depth exceeds rule representation".into());
         }
         if offset == self.steps[a].len() {
-            return Ok((options::inspect(
-                s,
-                crate::runtime::viewer(s),
-                &c,
-                catalog,
-                &mut self.queries,
-            )? != "invalid")
-                .then_some(c));
+            let status =
+                options::inspect(s, crate::runtime::viewer(s), &c, catalog, &mut self.queries)?;
+            if status == "uncertain" && c.kind == "move" {
+                // 冲撞的落脚检查在随机伤害之后；所有分支都须合法，不以抽样代替保证。
+                let result = crate::ai::distribution::distribution(
+                    s,
+                    &c,
+                    64,
+                    0,
+                    0,
+                    None,
+                    &crate::ai::keys::Keys::new(&Value::Null),
+                    catalog,
+                )?;
+                return Ok((!result.sampled && !result.outcomes.is_empty()).then_some(c));
+            }
+            return Ok((status != "invalid").then_some(c));
         }
         let choices = super::parameters::expand(
             s,
@@ -328,5 +338,63 @@ impl Decoder {
             return Err("legal teacher command absent from decoder".into());
         }
         Ok(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Point;
+
+    #[test]
+    fn rush_decoder_checks_every_random_immunity_outcome() {
+        let catalog = crate::catalog::embedded().unwrap();
+        for moves in [1.0, 2.0] {
+            let mut state = crate::runtime::create(19, false, &catalog).unwrap();
+            state.phase = "play".into();
+            state.summon_slots = 0.0;
+            state.ply = 5.0;
+            state.turns.insert("1".into(), 3.0);
+            state.turns.insert("2".into(), 2.0);
+            let mut runner = crate::resolution::template(
+                &state,
+                "u12p",
+                1,
+                Point { x: 4.0, y: 6.0 },
+                "runner",
+                &catalog,
+            );
+            runner.born = 0.0;
+            runner.mode = "move".into();
+            runner.moves = moves;
+            let mut target = crate::resolution::template(
+                &state,
+                "17p",
+                2,
+                Point { x: 4.0, y: 7.0 },
+                "target",
+                &catalog,
+            );
+            target.hp = 30.0;
+            state.units = vec![runner, target];
+            let command: Command = serde_json::from_value(json!({
+                "type":"move", "unitId":"runner", "x":4, "y":7
+            }))
+            .unwrap();
+            let before = serde_json::to_value(&state).unwrap();
+            let public = crate::runtime::public_view(&state, 1).unwrap();
+            let mut decoder = Decoder::new(public.position(), &catalog).unwrap();
+            assert_eq!(
+                decoder.trace(public.position(), &catalog, &command).is_ok(),
+                moves == 2.0,
+            );
+            for roll in [0.0, 0.99] {
+                let (result, _) = crate::chance::using(&[roll], None, || {
+                    crate::command::apply_runtime(&state, &command, &catalog)
+                });
+                assert_eq!(result.is_ok(), moves == 2.0 || roll == 0.99);
+            }
+            assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        }
     }
 }

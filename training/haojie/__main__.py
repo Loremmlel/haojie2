@@ -25,6 +25,7 @@ def main():
     evaluate.add_argument("--output", required=True)
     evaluate.add_argument("--games", type=int, default=20)
     evaluate.add_argument("--simulations", type=int, default=64)
+    evaluate.add_argument("--depth", type=int, default=16)
     evaluate.add_argument("--max-commands", type=int, default=20000)
     evaluate.add_argument("--seed", type=int, default=709901)
     evaluate.add_argument("--device", default="cuda")

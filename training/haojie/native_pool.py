@@ -160,8 +160,14 @@ class RequestBatch:
     def __enter__(self):
         return self
 
-    def __exit__(self, *_):
-        self.close()
+    def __exit__(self, exc_type, exc, traceback):
+        try:
+            self.close()
+        except RuntimeError as cleanup_error:
+            if exc is None:
+                raise
+            if str(cleanup_error) != str(exc):
+                exc.add_note(f"释放原生请求时: {cleanup_error}")
 
 
 class NativePool:

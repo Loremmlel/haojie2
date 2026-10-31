@@ -19,7 +19,12 @@ class WebTests(unittest.TestCase):
         self.assertEqual(defaults()["save_seconds"], 3600)
         old = defaults()
         del old["evaluation_seconds"]
-        self.assertEqual(validate({}, old)["evaluation_seconds"], 1800)
+        self.assertEqual(validate({}, old)["evaluation_seconds"], 7200)
+        self.assertEqual(validate({})["history_evaluation_games"], 32)
+        self.assertEqual(validate({})["replay_games"], 256)
+        self.assertEqual(validate({})["replay_mib"], 8192)
+        with self.assertRaisesRegex(ValueError, "历史测评每个对手局数须为偶数"):
+            validate({"history_evaluation_games": 3})
         self.assertEqual(
             {f["key"] for f in schema()} | {"device"}, set(asdict(Config()))
         )

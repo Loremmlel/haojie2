@@ -7,6 +7,40 @@ import type { Job } from './movement';
 /** 攻击分别验证不致死、致死、随机免疫/暴击和排队反应，不把专项样本算作对局。 */
 export function combatFixtures(): { name: string; job: Job }[] {
   const cases: { name: string; job: Job }[] = [];
+  for (const random of [false, true]) {
+    const state = fixture(),
+      cannon = add(state, 4, 1, 4, 6),
+      first = add(state, random ? '17p' : 14, 2, 4, 7),
+      second = add(state, 14, 2, 4, 8);
+    cannon.charge = cannon.readyCharge = 2;
+    cannon.chargeType = 'attack';
+    cannon.equipment = ['u28'];
+    first.hp = first.maxHp = second.hp = second.maxHp = 1000;
+    const command: Command = {
+      type: 'attack',
+      unitId: cannon.id,
+      targetId: second.id,
+      path: [
+        { x: 4, y: 6 },
+        { x: 4, y: 7 },
+        { x: 4, y: 8 },
+      ],
+    };
+    cases.push({
+      name: `cannon-piercing-${random ? 'random' : 'fixed'}`,
+      job: { state, probes: [command], command },
+    });
+    const inherited = structuredClone(state);
+    inherited.units[0].kind = 'formless';
+    inherited.units[0].traits = [4];
+    inherited.units[0].abilityCharges = {
+      4: { charge: 2, readyCharge: 2, chargeType: 'attack', lastCharge: 0 },
+    };
+    cases.push({
+      name: `cannon-piercing-inherited-${random ? 'random' : 'fixed'}`,
+      job: { state: inherited, probes: [command], command },
+    });
+  }
   const push = (name: string, state: GameState, u: Unit, target: Unit) => {
     const ids = [target.id, u.id, 'base-1', 'base-2', 'missing'];
     const probes: Command[] = ids.flatMap((targetId) =>

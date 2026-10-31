@@ -14,7 +14,7 @@ import torch
 from ..native_pool import NativePool
 from ..profiling import Profile, TraceWindow
 from .gpu import Executor, Local, infer_batch
-from .evaluation import EvaluationSchedule
+from .evaluation import EvaluationSchedule, HistoryEvaluationSchedule
 from .storage import GameBuffer, atomic_json, clean_storage
 
 
@@ -49,6 +49,18 @@ class Coordinator:
         )
         self.checkpoint_future = None
         self.evaluation = EvaluationSchedule(trainer.directory, trainer.config)
+        self.history_evaluation = HistoryEvaluationSchedule(
+            trainer.directory, trainer.config
+        )
+        self.archived_versions = {e["version"] for e in trainer.pool.entries}
+
+    def evaluate_archives(self):
+        entries = self.trainer.pool.entries
+        for index, entry in enumerate(entries):
+            if entry["version"] not in self.archived_versions:
+                self.history_evaluation.enqueue(entries[: index + 1])
+                self.archived_versions.add(entry["version"])
+        self.history_evaluation.tick()
 
     def assign(self, lane, game, restored=None):
         with self.profile.stage("coordinator.assign"):
@@ -231,6 +243,7 @@ class Coordinator:
             while True:
                 self.finish_checkpoint()
                 self.complete_learning()
+                self.evaluate_archives()
                 now = time.perf_counter()
                 stopped = (
                     trainer.stop_requested
@@ -293,6 +306,8 @@ class Coordinator:
                 trainer.directory / "failed-native.json", {"error": repr(error)}
             )
         finally:
+            self.evaluate_archives()
+            self.history_evaluation.close()
             self.evaluation.close()
             self.checkpoint_writer.shutdown(wait=True)
             self.finished.set()

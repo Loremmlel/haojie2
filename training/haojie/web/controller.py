@@ -103,6 +103,11 @@ class Controller:
                 evaluation=(
                     read_evaluation(self.directory(self.name)) if self.name else None
                 ),
+                history_evaluation=(
+                    read_evaluation(self.directory(self.name), "history-evaluations")
+                    if self.name
+                    else None
+                ),
             )
 
     def control(self, action, name=None, config=None, revision=None, session=None):

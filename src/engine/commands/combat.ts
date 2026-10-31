@@ -628,6 +628,7 @@ export function performAttack(
   // 每次完整攻击只清空一次蓄力，包括免疫、处决和穿透齐射。
   // 非法攻击会在到达此处前抛出异常，不会消耗蓄力。
   if (!options.noPierce) {
+    if (!u.silenced && hasTrait(u, 4)) consumeCharge(u, 4);
     if (hasTrait(u, 15)) consumeCharge(u, 15);
     const charged = attackChargeKind(u);
     if (charged !== undefined) consumeCharge(u, charged);
@@ -788,7 +789,7 @@ function attackGeometry(
     );
   if (!options.reactive) {
     ensure(
-      !hasTrait(u, 4) || u.silenced || chargeFor(u, 4).readyCharge >= 2,
+      options.noPierce || !hasTrait(u, 4) || u.silenced || chargeFor(u, 4).readyCharge >= 2,
       '定炮回合开始至少有2层蓄力才可开炮。',
     );
     ensure(
@@ -1026,7 +1027,6 @@ function resolveAttack(
   // 首次攻击武器作用于这一整次攻击，不是本回合每次命中。
   if (hasWeapon(u, 'u11') && options.weaponFirst === undefined) u.weaponFirstUsed = true;
   if (!u.silenced && hasTrait(u, 'u2')) consumeCharge(u, 'u2');
-  if (!u.silenced && hasTrait(u, 4)) consumeCharge(u, 4);
   const victim = t.unit;
   if (victim && alive(s, victim) && !ally) {
     const conversion = u.effects.find((e) => e.type === 'convert' && activeEffect(s, e, u));

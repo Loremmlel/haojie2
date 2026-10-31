@@ -145,6 +145,40 @@ def paused_snapshot(pool):
 
 
 class PipelineTests(unittest.TestCase):
+    def test_request_cleanup_preserves_first_failure(self):
+        config = Config(workers=1, games_per_worker=1, warmup_games=0)
+        for inference_failure in [False, True]:
+            with (
+                self.subTest(inference_failure=inference_failure),
+                NativePool(config) as pool,
+            ):
+                pool.assign(0, {"id": 0, "seed": 91, "learner": 1, "opponent": "self"})
+                batch = None
+                deadline = time.monotonic() + 5
+                while batch is None and time.monotonic() < deadline:
+                    pool.ack_records([record["lane"] for record in pool.take_records()])
+                    batch = pool.take_requests(wait_ms=10)
+                self.assertIsNotNone(batch)
+                expected = "推理原始错误" if inference_failure else "神经输出长度不匹配"
+                with self.assertRaisesRegex(RuntimeError, expected) as caught:
+                    with batch:
+                        if inference_failure:
+                            raise RuntimeError(expected)
+                        batch.reply(
+                            [np.empty(0, np.uint16)] * len(batch.requests),
+                            [17] * len(batch.requests),
+                        )
+                self.assertEqual(
+                    bool(getattr(caught.exception, "__notes__", [])), inference_failure
+                )
+                # 再次释放的后续错误也不能覆盖池里保存的首错。
+                pool.lib.hc_pool_release_requests(pool.handle)
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "未回应的神经请求不可释放" if inference_failure else expected,
+                ):
+                    pool.status()
+
     def test_collection_continues_during_checkpoint_write_and_stop_saves_latest(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Config(
@@ -573,6 +607,7 @@ class PipelineTests(unittest.TestCase):
             trainer.replay.add(writer.flush())
             trainer.phase = "imitation"
             trainer.stats["demonstrations"] = 1
+            trainer.warmup_collected = 1
             trainer.run()
             self.assertEqual(trainer.imitation_updates, 2)
             self.assertEqual(trainer.stats["updates"], 2)

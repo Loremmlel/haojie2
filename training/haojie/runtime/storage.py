@@ -106,7 +106,7 @@ class GameBuffer:
 
 
 class Replay:
-    def __init__(self, capacity=128, games=None, max_bytes=4 * 1024**3):
+    def __init__(self, capacity=256, games=None, max_bytes=8 * 1024**3):
         self.capacity = capacity
         self.max_bytes = max_bytes
         self.games = []

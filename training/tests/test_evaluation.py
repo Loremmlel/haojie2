@@ -11,15 +11,142 @@ from unittest.mock import Mock, patch
 import psutil
 import torch
 
-from training.haojie.evaluation import evaluate_round, paired_games, paired_summary
+from training.haojie.evaluation import (
+    evaluate_round,
+    paired_games,
+    paired_summary,
+    history_summary,
+)
 from training.haojie.model import Network
 from training.haojie.runtime.config import Config
 from training.haojie.runtime.gpu import Local
-from training.haojie.runtime.evaluation import EvaluationSchedule, read_evaluation
+from training.haojie.runtime.evaluation import (
+    EvaluationSchedule,
+    HistoryEvaluationSchedule,
+    read_evaluation,
+)
 from training.haojie.runtime.storage import atomic_json
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_history_paired_scores_unknowns_and_conservative_interval(self):
+        rows = [dict(**r, winner=r["learner"]) for r in paired_games(71, 32, ("16",))]
+        score = history_summary(rows, [16], 32)["16"]
+        self.assertEqual(
+            (score["win_rate"], score["score_rate"], score["verdict"]), (1, 1, "ahead")
+        )
+        self.assertGreater(score["score_interval"][0], 0.5)
+        for r in rows:
+            r["winner"] = 1
+        self.assertEqual(history_summary(rows, [16], 32)["16"]["verdict"], "uncertain")
+        for r in rows:
+            r["winner"] = "draw"
+        score = history_summary(rows, [16], 32)["16"]
+        self.assertEqual((score["win_rate"], score["score_rate"]), (0, 0.5))
+        rows[0]["winner"] = None
+        score = history_summary(rows, [16], 32)["16"]
+        self.assertEqual(
+            (score["pairs"], score["draws"], score["unknown"], score["verdict"]),
+            (15, 30, 1, "incomplete"),
+        )
+
+    def test_history_queue_freezes_baseline_and_previous_and_resumes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            models = Path(directory) / "models"
+            models.mkdir()
+            for v in (16, 32, 48):
+                (models / f"model-{v:08d}.pt").write_bytes(str(v).encode())
+            config = Config(device="cpu", depth=7, simulations=3)
+            schedule = HistoryEvaluationSchedule(directory, config)
+            entries = [{"version": v} for v in (0, 16, 32, 48)]
+            schedule.enqueue(entries[:2])
+            schedule.enqueue(entries[:3])
+            schedule.enqueue(entries)
+            process = Mock(pid=os.getpid())
+            process.poll.return_value = None
+            with patch(
+                "training.haojie.runtime.evaluation.subprocess.Popen",
+                return_value=process,
+            ) as launch:
+                schedule.close()
+                launch.assert_called_once()
+                current = read_evaluation(directory, "history-evaluations")
+                self.assertEqual(
+                    (current["version"], current["opponents"], current["pending"]),
+                    (32, [16], 1),
+                )
+                self.assertEqual((current["simulations"], current["depth"]), (3, 7))
+                # 训练源文件随后改变或被清理，冻结的队列仍可独立复现。
+                for p in models.iterdir():
+                    p.unlink()
+                resumed = HistoryEvaluationSchedule(directory, config)
+                resumed.tick()
+                launch.assert_called_once()
+                current["state"] = "completed"
+                atomic_json(
+                    Path(directory) / "history-evaluations" / "status.json", current
+                )
+                resumed.close()
+                self.assertEqual(launch.call_count, 2)
+                current = read_evaluation(directory, "history-evaluations")
+                self.assertEqual(
+                    (current["version"], current["opponents"]), (48, [16, 32])
+                )
+                job = Path(directory) / "history-evaluations" / current["round"]
+                self.assertEqual((job / "model.pt").read_bytes(), b"48")
+                self.assertEqual((job / "opponent-16.pt").read_bytes(), b"16")
+                self.assertEqual((job / "opponent-32.pt").read_bytes(), b"32")
+                process.wait.assert_not_called()
+
+    def test_history_native_round_uses_both_networks_same_mcts_and_depth(self):
+        from training.haojie.evaluation import infer
+        from training.haojie.native_pool import NativePool
+
+        with tempfile.TemporaryDirectory() as directory:
+            job = Path(directory) / "history-evaluations" / "round-test"
+            job.mkdir(parents=True)
+            atomic_json(
+                job / "round.json",
+                dict(
+                    kind="history",
+                    version=32,
+                    opponents=[16],
+                    started_at=time.time(),
+                    seed=71,
+                    games=2,
+                    simulations=2,
+                    depth=3,
+                    max_commands=4,
+                    device="cpu",
+                ),
+            )
+            networks = [Network(), Network()]
+            with patch("training.haojie.evaluation.load", side_effect=networks), patch(
+                "training.haojie.evaluation.infer", wraps=infer
+            ) as inference, patch(
+                "training.haojie.evaluation.NativePool", wraps=NativePool
+            ) as pools:
+                evaluate_round(job)
+            self.assertEqual(
+                {id(c.args[0]) for c in inference.call_args_list},
+                set(map(id, networks)),
+            )
+            for call in pools.call_args_list:
+                config = call.args[0]
+                self.assertEqual(
+                    (
+                        config.simulations,
+                        config.fast_simulations,
+                        config.depth,
+                        config.temperature,
+                    ),
+                    (2, 2, 3, 0),
+                )
+            status = read_evaluation(directory, "history-evaluations")
+            self.assertEqual((status["completed"], status["total"]), (2, 2))
+            self.assertEqual(status["summary"]["16"]["unknown"], 2)
+            self.assertTrue(all(not r.get("error") for r in status["results"]))
+
     def test_weight_request_failure_keeps_training_control_alive(self):
         local = Local(Mock())
         executor = Mock(published=7)

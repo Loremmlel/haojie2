@@ -164,7 +164,11 @@ class TrainingTests(unittest.TestCase):
             )
             trainer.checkpoint({})
             restored = Trainer(directory, config, resume=True)
-            restored.credit = 2
+            self.assertEqual(restored.replay.games, [])
+            restored.learn()
+            self.assertEqual(restored.stats["updates"], 2)
+            # 模拟重新采集到题目后，AdamW 接着原来的步数更新。
+            restored.event({"type": "data", "data": writer.flush()})
             restored.learn()
             for state in restored.optimizer.state.values():
                 self.assertEqual(state["step"].dtype, torch.int64)
@@ -284,6 +288,15 @@ class TrainingTests(unittest.TestCase):
             trainer.event({"type": "data", "data": writer.flush()})
             trainer.learn()
             self.assertEqual(trainer.stats["updates"], 0)
+            trainer.checkpoint(
+                {0: [{"game": game, "root_version": None, "buffer": writer.data}]}
+            )
+            collecting = Trainer(directory, config, resume=True)
+            self.assertEqual(collecting.phase, "collect")
+            self.assertEqual(collecting.demonstration_inflight, 0)
+            self.assertEqual(collecting.saved_workers, {})
+            self.assertNotEqual(collecting.game()["id"], game["id"])
+            self.assertGreater(trainer.replay.bytes, 0)
             trainer.event(
                 {
                     "type": "done",
@@ -298,10 +311,32 @@ class TrainingTests(unittest.TestCase):
             trainer.checkpoint({})
             restored = Trainer(directory, config, resume=True)
             self.assertEqual(restored.imitation_updates, 1)
+            self.assertEqual(restored.phase, "collect")
+            self.assertEqual(restored.warmup_collected, 0)
+            self.assertEqual(restored.stats["demonstrations"], 1)
+            replacement = restored.game()
+            self.assertEqual(replacement["opponent"], "demo")
             self.assertIsNone(restored.game())
+            # 重新采集后只做剩余一次更新，累计训练进度不回退。
+            from training.tests.test_storage import sample
+
+            replacement_writer = GameBuffer(replacement)
+            restored.event({"type": "data", "data": sample(replacement_writer, 1, 1)})
+            restored.event(
+                {
+                    "type": "done",
+                    "game": replacement,
+                    "winner": 1,
+                    "data": replacement_writer.data,
+                }
+            )
+            self.assertEqual(restored.warmup_collected, 1)
+            self.assertEqual(restored.stats["demonstrations"], 2)
             restored.learn()
             self.assertEqual(restored.phase, "self")
             self.assertEqual(restored.imitation_updates, 2)
+            self.assertEqual([e["version"] for e in restored.pool.entries], [2])
+            self.assertTrue((restored.models / "model-00000002.pt").is_file())
             self.assertNotEqual(restored.game()["opponent"], "demo")
 
     def test_ply_limit_reservation(self):

@@ -49,7 +49,8 @@ let state = {
     truncated: 16,
     trained_samples: 29440,
     phase: 'self',
-    demonstrations: 8,
+    demonstrations: 16,
+    warmup_collected: 8,
     imitation_updates: 512,
     active_games: 64,
     queued_games: 0,
@@ -81,6 +82,34 @@ let state = {
       ]),
     ),
     results: [{ difficulty: 'easy', pair: 0, seed: 12345, learner: 1, winner: 1, steps: 200 }],
+  },
+  history_evaluation: {
+    state: 'running',
+    version: 1840,
+    opponents: [512, 1536],
+    games: 32,
+    simulations: 64,
+    depth: 16,
+    pending: 1,
+    started_at: now,
+    completed: 32,
+    total: 64,
+    current: { difficulty: '1536', pair: 0, seed: 71, learner: 2, steps: 80 },
+    summary: {
+      512: {
+        pairs: 16,
+        wins: 24,
+        losses: 6,
+        draws: 2,
+        unknown: 0,
+        errors: 0,
+        win_rate: 0.75,
+        score_rate: 0.78125,
+        score_interval: [0.4417, 1],
+        verdict: 'uncertain',
+      },
+    },
+    results: [{ difficulty: '512', pair: 0, seed: 71, learner: 1, winner: 1, steps: 1600 }],
   },
 };
 const browser = await chromium.launch({ headless: true });
@@ -120,11 +149,17 @@ try {
   });
   await page.goto('http://127.0.0.1:48765/');
   await page.locator('.trend-line').first().waitFor();
+  assert.match(await page.locator('.stage-track').innerText(), /8 \/ 8 局/);
   assert.match(
     await page.getByRole('region', { name: '手工 AI 对弈', exact: true }).innerText(),
     /12 \/ 12/,
   );
-  await page.getByText('逐局记录与镜像种子', { exact: true }).focus();
+  const manual = page.getByRole('region', { name: '手工 AI 对弈', exact: true });
+  const historical = page.getByRole('region', { name: '历史模型对弈', exact: true });
+  assert.match(await historical.innerText(), /75.0% \/ 78.1%/);
+  assert.match(await historical.innerText(), /差异未明/);
+  assert.match(await historical.innerText(), /排队 1 轮/);
+  await manual.getByText('逐局记录与镜像种子', { exact: true }).focus();
   await page.keyboard.press('Enter');
   await page.getByText('种子 12345 · 200 步', { exact: true }).waitFor();
   assert.ok((await page.locator('.trend-line').first().getAttribute('d')).includes('C'));
@@ -154,6 +189,9 @@ try {
   assert.equal(await page.getByRole('button', { name: '保存并应用参数' }).isDisabled(), true);
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await historical.getByText('逐局记录与镜像种子', { exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await historical.getByText('种子 71 · 1600 步', { exact: true }).waitFor();
   await page.screenshot({
     path: 'artifacts/training-web/fixture-mobile.png',
     fullPage: true,
@@ -168,11 +206,13 @@ try {
     stats: {},
     sequence: 0,
     evaluation: { state: 'failed', started_at: now, error: '合成评测失败' },
+    history_evaluation: null,
   };
   await page.locator('#run-name').waitFor();
   assert.equal(await page.getByRole('button', { name: '开始训练', exact: true }).isEnabled(), true);
   assert.equal(await page.locator('.trend-line').count(), 0);
   await page.getByRole('alert').filter({ hasText: '合成评测失败' }).waitFor();
+  assert.match(await historical.innerText(), /下一次历史归档后开始对比/);
   console.log(
     '图表平滑、原始线、时间范围、键盘读数、桌面/手机布局、参数草稿和服务重启重连：通过（合成数据）。',
   );

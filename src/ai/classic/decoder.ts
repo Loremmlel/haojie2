@@ -1,4 +1,6 @@
 import { commandDomain } from './parameters';
+import { imagined } from '../observation';
+import { distribution } from '../simulation/simulate';
 import type { Step } from './parameters';
 import type { Command } from '../../engine/types';
 import type { Observation } from '../types';
@@ -29,7 +31,15 @@ export function decoderFrontier(observation: Observation, path: number[]) {
   };
   function possible(a: number, c: Command, offset: number, depth: number): boolean {
     if (depth > 256) throw new Error('命令参数深度超出规则表示');
-    if (offset === steps[a].length) return inspect(c).status !== 'invalid';
+    if (offset === steps[a].length) {
+      const status = inspect(c).status;
+      if (status === 'uncertain' && c.type === 'move') {
+        // 冲撞的落脚检查在随机伤害之后；所有分支都须合法，不以抽样代替保证。
+        const result = distribution(imagined(observation), c, 64, 0);
+        return !result.sampled && result.outcomes.length > 0;
+      }
+      return status !== 'invalid';
+    }
     return expand(c, actions[a], steps[a][offset], offset + 1 === steps[a].length).some(
       ([next, repeat]) => possible(a, next, offset + Number(!repeat), depth + 1),
     );

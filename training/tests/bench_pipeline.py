@@ -27,6 +27,10 @@ def starting_positions(directory):
     )
     if saved["format"] != "haojie-classic-training-v3":
         raise ValueError("基准只接受 v3 检查点")
+    if not saved["replay"]:
+        raise ValueError(
+            "此轻量检查点不含回放；固定工作量基准需要已有的含回放 v3 检查点"
+        )
     games = saved["replay"][:4]
     for game in games:
         meta = game["metadata"]

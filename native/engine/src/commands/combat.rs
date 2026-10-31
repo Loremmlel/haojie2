@@ -115,7 +115,10 @@ fn prepare(
             )?;
         }
         ensure(
-            !u.has("4") || u.silenced || reserve(u, &Kind::Number(4), catalog).ready_charge >= 2.0,
+            o.no_pierce
+                || !u.has("4")
+                || u.silenced
+                || reserve(u, &Kind::Number(4), catalog).ready_charge >= 2.0,
             "定炮回合开始至少有2层蓄力才可开炮。",
         )?;
         ensure(
@@ -407,6 +410,10 @@ fn perform_prepared(
     if !o.no_pierce
         && let Some(current) = s.unit_mut(&u.id)
     {
+        // 定炮按整次攻击消耗蓄力，穿透的后续命中沿用入口已验证的资格。
+        if !current.silenced && current.has("4") {
+            consume(current, &Kind::Number(4), catalog);
+        }
         if current.has("15") {
             consume(current, &Kind::Number(15), catalog);
         }
@@ -726,12 +733,8 @@ fn resolve(
         if u.weapon("u11") && o.weapon_first.is_none() {
             current.weapon_first_used = true;
         }
-        if !u.silenced {
-            for kind in [Kind::Text("u2".into()), Kind::Number(4)] {
-                if u.has(&kind.key()) {
-                    consume(current, &kind, catalog);
-                }
-            }
+        if !u.silenced && u.has("u2") {
+            consume(current, &Kind::Text("u2".into()), catalog);
         }
     }
     if t.unit.is_some() && alive(s, &t.id) && !p.ally {

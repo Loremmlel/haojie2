@@ -35,14 +35,14 @@ class Config:
     sample_reuse: float = 4
     publish_updates: int = 16
     history_games: int = 64
-    replay_games: int = 128
-    replay_mib: int = 4096
+    replay_games: int = 256
+    replay_mib: int = 8192
     chunk_commands: int = 64
     max_commands: int = 20000
     max_ply: int = 50
     full_game_fraction: float = 0.25
     warmup_games: int = 8
-    warmup_updates: int = 512
+    warmup_updates: int = 3072
     calibration_games: int = 16
     bootstrap_after_games: int = 128
     bootstrap_weight: float = 0.25
@@ -55,7 +55,8 @@ class Config:
     games: int = 0
     updates: int = 0
     save_seconds: float = 3600
-    evaluation_seconds: float = 1800
+    evaluation_seconds: float = 7200
+    history_evaluation_games: int = 32
     temperature: float = 1
 
     def validate(self):
@@ -107,3 +108,5 @@ class Config:
             raise ValueError("停止条件、预热局数和温度不能为负")
         if self.learning_rate <= 0:
             raise ValueError("学习率必须为正")
+        if self.history_evaluation_games < 0 or self.history_evaluation_games % 2:
+            raise ValueError("历史测评每个对手局数须为偶数，0 为关闭")

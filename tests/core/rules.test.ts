@@ -13,6 +13,8 @@ import {
   asTarget,
 } from '../../src/engine';
 import { add, card, fixture, pass, round, seedFor, strike, unit } from '../helpers';
+import { combatFixtures } from '../../scripts/native/engine/fixtures/combat';
+import { chargeFor } from '../../src/engine/core/traits';
 
 test('board, pools, staged summons and base values match the source', () => {
   let s = createGame(7);
@@ -458,4 +460,25 @@ test('base loss ends game and rejects later combat', () => {
   const n = applyCommand(s, { type: 'attack', unitId: u.id, targetId: 'base-2' });
   assert.equal(n.winner, 1);
   assert.ok(commandError(n, { type: 'end' }));
+});
+test('定炮穿透整条路径后才清空蓄力，后续命中不重复支付开炮资格', () => {
+  for (const { name, job } of combatFixtures().filter((f) =>
+    f.name.startsWith('cannon-piercing-'),
+  )) {
+    const before = structuredClone(job.state);
+    for (const roll of [0, 0.99]) {
+      const next = applyCommand(job.state, job.command!, () => roll);
+      const cannon = next.units[0];
+      assert.equal(cannon.charge, 0);
+      assert.equal(cannon.readyCharge, 0);
+      assert.equal(chargeFor(cannon, 4).readyCharge, 0);
+      assert.equal(cannon.operations, 1);
+      assert.equal(next.units[1].hp < 1000, !name.endsWith('random') || roll === 0.99);
+      assert.ok(next.units[2].hp < 1000);
+    }
+    const uncharged = structuredClone(job.state);
+    chargeFor(uncharged.units[0], 4).readyCharge = 1;
+    assert.throws(() => applyCommand(uncharged, job.command!), /定炮回合开始至少有2层蓄力/);
+    assert.deepEqual(job.state, before);
+  }
 });

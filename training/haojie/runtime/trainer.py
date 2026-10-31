@@ -36,6 +36,7 @@ class Trainer(Compute):
         self.contexts = {}
         self.phase = "collect" if config.warmup_games else "self"
         self.demonstration_inflight = 0
+        self.warmup_collected = 0
         self.imitation_updates = 0
         self.calibration = Calibration()
         self.bindings = {}
@@ -87,11 +88,22 @@ class Trainer(Compute):
             self.phase = saved["phase"]
             self.demonstration_inflight = saved["demonstration_inflight"]
             self.imitation_updates = saved["imitation_updates"]
+            self.warmup_collected = saved.get(
+                "warmup_collected", self.stats["demonstrations"]
+            )
             self.calibration = Calibration(saved["calibration"])
             self.pool = Opponents(saved["pool"])
             self.published, self.next_game = saved["published"], saved["next_game"]
             self.credit = saved["credit"]
             self.saved_workers = saved["workers"]
+            if saved.get("replay_saved") is False:
+                self.credit = 0.0
+                if self.phase != "self":
+                    # 预训练题库已丢弃，重新采集完整示范；保留已完成的模仿更新。
+                    self.phase = "collect" if config.warmup_games else "self"
+                    self.warmup_collected = 0
+                    self.demonstration_inflight = 0
+                    self.saved_workers = {}
             self.pending_versions = {
                 lane["game"]["id"]: lane["root_version"]
                 for lanes in self.saved_workers.values()
@@ -113,9 +125,17 @@ class Trainer(Compute):
         self.published = self.stats["updates"]
         if hasattr(self, "remote"):
             self.remote.publish(self.published)
-            return
-        self.weights.publish(self.published, self.model)
-        self.prune_models()
+        else:
+            self.weights.publish(self.published, self.model)
+            self.prune_models()
+        # 首个训练后的发布作为长期基线；跳过示范采集期的随机初始化权重。
+        if (
+            self.phase == "self"
+            and self.published > 0
+            and not any(e["version"] > 0 for e in self.pool.entries)
+        ):
+            self.archive(self.published)
+            self.pool.add(self.published, self.stats["completed"])
 
     def archive(self, version):
         if hasattr(self, "remote"):
@@ -128,7 +148,7 @@ class Trainer(Compute):
             return None
         if (
             self.phase == "collect"
-            and self.stats["demonstrations"] + self.demonstration_inflight
+            and self.warmup_collected + self.demonstration_inflight
             >= self.config.warmup_games
         ):
             return None
@@ -227,6 +247,7 @@ class Trainer(Compute):
                 self.stats["completed"] += 1
                 if game["opponent"] == "demo":
                     self.stats["demonstrations"] += 1
+                    self.warmup_collected += 1
                 if game["opponent"] == "self":
                     self.stats["selfplay_terminal"] += 1
                     self.credit += self.config.batch
@@ -241,15 +262,23 @@ class Trainer(Compute):
                     self.pool.record(
                         game["version"], event["winner"] == 3 - game["learner"]
                     )
-                if self.stats["completed"] % self.config.history_games == 0:
+                if (
+                    self.phase == "self"
+                    and self.published > 0
+                    and self.stats["completed"] % self.config.history_games == 0
+                ):
                     self.archive(self.published)
                     self.pool.add(self.published, self.stats["completed"])
             if (
                 self.phase == "collect"
-                and self.stats["demonstrations"] >= self.config.warmup_games
+                and self.warmup_collected >= self.config.warmup_games
                 and self.demonstration_inflight == 0
             ):
-                self.phase = "imitation" if self.config.warmup_updates else "self"
+                self.phase = (
+                    "imitation"
+                    if self.imitation_updates < self.config.warmup_updates
+                    else "self"
+                )
 
     def boundary_target(self, event):
         value = None
@@ -297,11 +326,27 @@ class Trainer(Compute):
                         "data": lane["buffer"],
                     }
                 )
+        # 只保存续局所需的环境与小型元数据，排除在途缓冲中的回放张量。
+        compact_workers = (
+            {
+                worker: [
+                    {
+                        **lane,
+                        "buffer": {**lane["buffer"], "chunks": [], "bytes": 0},
+                    }
+                    for lane in lanes
+                ]
+                for worker, lanes in workers.items()
+            }
+            if self.phase == "self"
+            else {}
+        )
         payload = {
             "format": "haojie-classic-training-v3",
             "config": asdict(self.config),
             "phase": self.phase,
             "demonstration_inflight": self.demonstration_inflight,
+            "warmup_collected": self.warmup_collected,
             "imitation_updates": self.imitation_updates,
             "calibration": self.calibration.snapshot(),
             "model": self.model.state_dict(),
@@ -315,7 +360,8 @@ class Trainer(Compute):
             ),
             "stats": self.stats,
             "pool": self.pool.entries,
-            "replay": self.replay.games,
+            "replay_saved": False,
+            "replay": [],
             "published": self.published,
             "next_game": self.next_game,
             "weights": (
@@ -323,20 +369,11 @@ class Trainer(Compute):
                 if weights is None
                 else weights
             ),
-            "credit": self.credit,
-            "workers": workers,
+            "credit": 0.0,
+            "workers": compact_workers,
         }
-        # 打包数组只读，可跨保存线程共享；复制可变容器并保留回放/在途缓冲别名。
-        buffers = self.replay.games + [
-            lane["buffer"] for lanes in workers.values() for lane in lanes
-        ]
-        memo = {
-            id(array): array
-            for data in buffers
-            for chunk in data["chunks"]
-            for array in chunk.values()
-        }
-        return copy.deepcopy(payload, memo)
+        # 固定模型、优化器和小型状态；周期保存不清空正在使用的内存题库。
+        return copy.deepcopy(payload)
 
     def write_checkpoint(self, payload):
         started = time.perf_counter()
@@ -363,6 +400,7 @@ class Trainer(Compute):
             "elapsed_seconds": elapsed,
             "phase": self.phase,
             "imitation_updates": self.imitation_updates,
+            "warmup_collected": self.warmup_collected,
             "calibration": self.calibration.validation,
             "commands_per_second": (self.stats["commands"] - initial["commands"])
             / max(elapsed, 0.001),

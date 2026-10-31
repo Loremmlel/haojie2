@@ -24,6 +24,15 @@ export function fixtures(): { name: string; job: Job }[] {
   const cases: { name: string; job: Job }[] = [];
   const push = (name: string, state: GameState, u: Unit) =>
     cases.push({ name, job: { state, probes: moveProbes(u.id) } });
+  for (const moves of [1, 2]) {
+    const s = fixture(),
+      u = add(s, 'u12p', 1, 4, 6),
+      target = add(s, '17p', 2, 4, 7);
+    u.mode = 'move';
+    u.moves = moves;
+    target.hp = 30;
+    push(`rush-random-immunity-${moves}`, s, u);
+  }
   for (const d of CATALOG.filter(
     (d) => d.spell === undefined && d.weapon === undefined && !d.aura,
   )) {
