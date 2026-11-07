@@ -257,6 +257,13 @@ impl Host {
     pub fn teacher_snapshot(&self) -> Value {
         self.teacher.clone()
     }
+    /// 只问当前公开局面；不读取或推进同局手工对手的行动计划。
+    pub fn teacher_advice(&mut self) -> Result<Command, String> {
+        let opponent_plan = std::mem::take(&mut self.teacher);
+        let advice = self.teacher_next("easy");
+        self.teacher = opponent_plan;
+        advice
+    }
     pub fn teacher_restore(&mut self, value: &Value) {
         self.teacher = value.clone();
     }

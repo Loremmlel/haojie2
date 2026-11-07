@@ -47,6 +47,7 @@ class Config:
     bootstrap_after_games: int = 128
     bootstrap_weight: float = 0.25
     teacher_fraction: float = 0.1
+    teacher_label_interval: int = 16
     history_fraction: float = 0.2
     learning_rate: float = 0.0003
     device: str = "cuda"
@@ -92,6 +93,8 @@ class Config:
             raise ValueError("采样比例无效")
         if min(self.teacher_fraction, self.history_fraction, self.sample_reuse) < 0:
             raise ValueError("比例不能为负")
+        if self.teacher_label_interval < 0:
+            raise ValueError("教师标注间隔不能为负")
         if (
             min(
                 self.seconds,

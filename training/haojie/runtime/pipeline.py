@@ -112,7 +112,10 @@ class Coordinator:
                     sample["actor"],
                     sample["ply"],
                     sample["version"],
+                    sample["teacher_prefixes"],
                 )
+                if sample["teacher_prefixes"]:
+                    trainer.stats["teacher_labeled_positions"] += 1
             info, command = record["info"], record["command"]
             writer.transition(info, command)
             trainer.stats["commands"] += 1

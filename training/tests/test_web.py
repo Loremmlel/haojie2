@@ -19,7 +19,12 @@ class WebTests(unittest.TestCase):
         self.assertEqual(defaults()["save_seconds"], 3600)
         old = defaults()
         del old["evaluation_seconds"]
+        del old["teacher_label_interval"]
         self.assertEqual(validate({}, old)["evaluation_seconds"], 7200)
+        self.assertEqual(validate({}, old)["teacher_label_interval"], 16)
+        self.assertEqual(
+            validate({"teacher_label_interval": 0}, old)["teacher_label_interval"], 0
+        )
         self.assertEqual(validate({})["history_evaluation_games"], 32)
         self.assertEqual(validate({})["replay_games"], 256)
         self.assertEqual(validate({})["replay_mib"], 8192)

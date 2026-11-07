@@ -48,6 +48,8 @@ let state = {
     completed: 128,
     truncated: 16,
     trained_samples: 29440,
+    teacher_labeled_positions: 318,
+    trained_teacher_positions: 951,
     phase: 'self',
     demonstrations: 16,
     warmup_collected: 8,
@@ -150,6 +152,10 @@ try {
   await page.goto('http://127.0.0.1:48765/');
   await page.locator('.trend-line').first().waitFor();
   assert.match(await page.locator('.stage-track').innerText(), /8 \/ 8 局/);
+  assert.match(
+    await page.locator('.stage-track').innerText(),
+    /教师标注 318 个局面 · 训练抽样 951 次/,
+  );
   assert.match(
     await page.getByRole('region', { name: '手工 AI 对弈', exact: true }).innerText(),
     /12 \/ 12/,

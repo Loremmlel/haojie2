@@ -54,6 +54,8 @@ class Trainer(Compute):
             "demonstrations": 0,
             "selfplay_terminal": 0,
             "samples": 0,
+            "teacher_labeled_positions": 0,
+            "trained_teacher_positions": 0,
             "trained_samples": 0,
             "value_samples": 0,
             "soft_value_samples": 0,

@@ -90,11 +90,11 @@ impl Lane {
                 && self.info.actor as u64 != self.game["learner"].as_u64().unwrap_or(1))
     }
 
-    fn demonstration(
+    fn teacher_decisions(
         &mut self,
         command: &Command,
-    ) -> Result<(Info, Arc<Bundle>, Vec<Supervision>), String> {
-        let (info, bundle) = self.host.encode_typed(0)?;
+        weight: f64,
+    ) -> Result<Vec<Supervision>, String> {
         let mut decisions = vec![];
         for (prefix, index) in self.host.trace_typed(0, command)? {
             let front = self.host.decode_typed(0, prefix)?;
@@ -104,11 +104,11 @@ impl Lane {
                 decisions.push(Supervision {
                     options: front.options,
                     target: target.into(),
-                    weight: 1.,
+                    weight,
                 });
             }
         }
-        Ok((info, bundle, decisions))
+        Ok(decisions)
     }
 
     pub fn advance(&mut self) -> Result<Advanced, String> {
@@ -128,8 +128,8 @@ impl Lane {
                     .to_owned();
                 let command = self.host.teacher_next(&difficulty)?;
                 let sample = if self.game["opponent"] == "demo" && !evaluation {
-                    let (info, bundle, decisions) = self.demonstration(&command)?;
-                    Some((info, bundle, decisions, -1))
+                    let (info, bundle) = self.host.encode_typed(0)?;
+                    Some((info, bundle, self.teacher_decisions(&command, 1.)?, -1, 0))
                 } else {
                     None
                 };
@@ -176,17 +176,40 @@ impl Lane {
                 let learning = self.game["opponent"] == "self"
                     || self.game["opponent"] == "demo"
                     || result.info.actor as u64 == self.game["learner"].as_u64().unwrap_or(1);
-                let sample =
-                    if learning && self.deep && !evaluation && !result.supervision.is_empty() {
-                        Some((
-                            result.info.clone(),
-                            result.bundle.as_ref().unwrap().clone(),
-                            result.supervision.clone(),
-                            result.version,
-                        ))
+                // 落子已由搜索选定。按局号错开绝对步数，暂停恢复无需另存计数或消耗随机数。
+                let mut sample = None;
+                if learning
+                    && !evaluation
+                    && let Some(bundle) = &result.bundle
+                {
+                    let mut decisions = if self.deep {
+                        result.supervision.clone()
                     } else {
-                        None
+                        vec![]
                     };
+                    let interval = self.config.teacher_label_interval;
+                    let mut teacher_prefixes = 0;
+                    if interval > 0
+                        && self
+                            .steps
+                            .wrapping_add(self.game["id"].as_u64().unwrap_or(0))
+                            .is_multiple_of(interval)
+                    {
+                        let advice = self.host.teacher_advice()?;
+                        let labels = self.teacher_decisions(&advice, 0.5)?;
+                        teacher_prefixes = labels.len();
+                        decisions.extend(labels);
+                    }
+                    if !decisions.is_empty() {
+                        sample = Some((
+                            result.info.clone(),
+                            bundle.clone(),
+                            decisions,
+                            result.version,
+                            teacher_prefixes,
+                        ));
+                    }
+                }
                 Ok(Advanced::Record(self.commit(
                     command,
                     sample,
@@ -199,7 +222,7 @@ impl Lane {
     fn commit(
         &mut self,
         command: Command,
-        sample: Option<(Info, Arc<Bundle>, Vec<Supervision>, i64)>,
+        sample: Option<(Info, Arc<Bundle>, Vec<Supervision>, i64, usize)>,
         result: Option<&SearchResult>,
     ) -> Result<Record, String> {
         let _scope = timing::scope(Phase::CommitRecord);
@@ -217,7 +240,7 @@ impl Lane {
         };
         self.done = info.winner.is_some() || truncation.is_some();
         let mut arrays = vec![];
-        let sample = sample.map(|(root, bundle, decisions, version)| {
+        let sample = sample.map(|(root, bundle, decisions, version, teacher_prefixes)| {
             arrays.extend(Array::bundle(&bundle));
             let mut metadata = vec![];
             for decision in decisions {
@@ -227,7 +250,7 @@ impl Lane {
                 arrays.push(Array { values: decision.target, shape: vec![count] });
                 metadata.push(json!({"options":index,"target":index+1,"weight":decision.weight}));
             }
-            json!({"actor":root.actor,"ply":root.ply,"version":version,"bundle":[0,1,2,3],"decisions":metadata})
+            json!({"actor":root.actor,"ply":root.ply,"version":version,"bundle":[0,1,2,3],"decisions":metadata,"teacher_prefixes":teacher_prefixes})
         });
         let mut metadata = json!({"game":self.game,"info":info.value(),"command":command,
             "steps":self.steps,"done":self.done,"truncation":truncation,"sample":sample});

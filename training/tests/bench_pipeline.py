@@ -211,6 +211,7 @@ def execute(args):
         batch=args.batch,
         warmup_games=0,
         teacher_fraction=0,
+        teacher_label_interval=0,
         history_fraction=0,
         max_commands=args.commands,
         sample_reuse=0,

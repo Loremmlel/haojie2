@@ -57,7 +57,7 @@ def decoded(bits):
     return (bits.astype(np.uint32) << 16).view(np.float32)
 
 
-def oracle_command(environment, rng, config, game):
+def oracle_command(environment, rng, config, game, step):
     deep = rng.random() < config.full_fraction
     generator = reference_search().search(
         environment,
@@ -84,10 +84,26 @@ def oracle_command(environment, rng, config, game):
         probability = np.power(policy.astype(np.float64), 1 / config.temperature)
         probability /= probability.sum()
         chosen = int(rng.choice(len(probability), p=probability))
-    info = environment.call("apply", command=root.edges[chosen].command)
     decisions = root.supervision(policy) if deep else []
+    teacher_prefixes = 0
+    if (
+        root.bundle is not None
+        and config.teacher_label_interval
+        and (game["id"] + step) % config.teacher_label_interval == 0
+    ):
+        environment.call("teacher-restore", teacher=None)
+        advice = environment.call("teacher-next", difficulty="easy")["command"]
+        for prefix, index in environment.call("trace", command=advice):
+            front, options = environment.decode(0, prefix)
+            if front["count"] > 1:
+                label = np.zeros(front["count"], np.float32)
+                label[index] = 1
+                decisions.append((options, label, 0.5))
+                teacher_prefixes += 1
+    info = environment.call("apply", command=root.edges[chosen].command)
     return {
         "requests": requests,
+        "teacher_prefixes": teacher_prefixes,
         "info": info,
         "root": root,
         "policy": policy,
@@ -398,6 +414,7 @@ class PipelineTests(unittest.TestCase):
                     games_per_worker=1,
                     warmup_games=0,
                     full_fraction=fraction,
+                    teacher_label_interval=3,
                 )
                 game = {
                     "id": 0,
@@ -409,13 +426,14 @@ class PipelineTests(unittest.TestCase):
                 }
                 rng = np.random.default_rng(game["seed"] ^ 0xA53113)
                 count = 0
+                labeled = 0
                 with (
                     Environment(game["seed"]) as environment,
                     NativePool(config, audit=True) as pool,
                 ):
                     pool.assign(0, game)
                     for step in range(10):
-                        expected = oracle_command(environment, rng, config, game)
+                        expected = oracle_command(environment, rng, config, game, step)
                         pending = iter(expected["requests"])
                         consumed = 0
 
@@ -440,6 +458,11 @@ class PipelineTests(unittest.TestCase):
                         for key in ("actor", "ply", "winner", "metrics", "key"):
                             self.assertEqual(record["info"][key], expected["info"][key])
                         self.assert_sample(record.get("sample"), expected["sample"])
+                        labeled += expected["teacher_prefixes"]
+                        self.assertEqual(
+                            (record.get("sample") or {}).get("teacher_prefixes", 0),
+                            expected["teacher_prefixes"],
+                        )
                         audit, root = record["audit"], expected["root"]
                         self.assertEqual(audit["rng_after"], expected["rng"])
                         self.assertEqual(audit["graph_nodes"], root.graph_nodes)
@@ -459,6 +482,7 @@ class PipelineTests(unittest.TestCase):
                             )
                         if step != 9:
                             pool.ack_records([0])
+                    self.assertGreater(labeled, 0)
                     pool.pause()
                     pool.ack_records([0])
                     self.assertEqual(
@@ -520,6 +544,7 @@ class PipelineTests(unittest.TestCase):
             simulations=4,
             fast_simulations=4,
             warmup_games=0,
+            teacher_label_interval=1,
         )
         game = {
             "id": 0,
@@ -562,6 +587,17 @@ class PipelineTests(unittest.TestCase):
                 actual = next_record(restored)
                 self.assertEqual(actual["command"], expected["command"])
                 self.assertEqual(actual["info"], expected["info"])
+                self.assertGreater(actual["sample"]["teacher_prefixes"], 0)
+                self.assertEqual(
+                    actual["sample"]["teacher_prefixes"],
+                    expected["sample"]["teacher_prefixes"],
+                )
+                for left, right in zip(
+                    actual["sample"]["decisions"],
+                    expected["sample"]["decisions"],
+                    strict=True,
+                ):
+                    np.testing.assert_array_equal(left[1], right[1])
                 self.assertEqual(
                     actual["audit"]["rng_after"], expected["audit"]["rng_after"]
                 )
@@ -571,7 +607,9 @@ class PipelineTests(unittest.TestCase):
                 for pool in (original, restored):
                     pool.pause()
                     pool.ack_records([0])
-                self.assertEqual(paused_snapshot(original), paused_snapshot(restored))
+                after = paused_snapshot(original)
+                self.assertEqual(after, paused_snapshot(restored))
+                self.assertEqual(after[0]["teacher"], saved["teacher"])
 
     def test_phase_barrier_checkpoint_and_idle_shutdown(self):
         with tempfile.TemporaryDirectory() as directory:

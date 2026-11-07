@@ -11,6 +11,9 @@ from ..profiling import Profile
 
 
 class Compute:
+    # 正式续训曾同时引用八个冻结版本；装载和发布共用同一驻留上限。
+    inference_model_limit = 12
+
     def initialize_network(self, device):
         self.profile = Profile()
         torch.set_num_threads(1)
@@ -50,7 +53,7 @@ class Compute:
 
     def inference_model(self, version):
         if version not in self.inference_models:
-            if len(self.inference_models) >= 3:
+            if len(self.inference_models) >= self.inference_model_limit:
                 self.inference_models.pop(next(iter(self.inference_models)))
             network = Network().to(self.device)
             network.load_state_dict(self.weights.get(version))
@@ -286,6 +289,7 @@ class Compute:
             self.stats["trained_samples"] += len(batch)
             self.stats["value_samples"] += sum(b[6] for b in batch)
             self.stats["soft_value_samples"] += sum(b[7] for b in batch)
+            self.stats["trained_teacher_positions"] += sum(b[8] for b in batch)
             self.stats["loss"] = {
                 "policy": float(policy_loss.detach()),
                 "value": float(value_loss.detach()),

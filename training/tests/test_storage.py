@@ -44,6 +44,8 @@ class StorageTests(unittest.TestCase):
             payload = trainer.checkpoint_snapshot({})
             payload.pop("replay_saved")
             payload["replay"] = trainer.replay.games
+            for chunk in payload["replay"][0]["chunks"]:
+                del chunk["teacher_prefixes"]
             payload["credit"] = trainer.credit
             path = Path(directory) / "checkpoint.pt"
             # 旧版包含题库的 v3 仍可读取；下次保存写出轻量恢复点。
@@ -196,6 +198,17 @@ class StorageTests(unittest.TestCase):
             self.assertTrue(
                 all(v.dtype == torch.bfloat16 for v in executor.weights.get(4).values())
             )
+            # 八个同时冻结的根先从 CPU 装载；发布新版后再轮询仍应命中原模型实例。
+            for version in range(5, 13):
+                executor.publish(version)
+                executor.resolve(
+                    (0, version), {"root": (version, 0), "model": "current"}
+                )
+            executor.inference_models.clear()
+            frozen = {v: executor.inference_model(v) for v in range(5, 13)}
+            executor.publish(13)
+            for version, network in frozen.items():
+                self.assertIs(executor.inference_model(version), network)
 
     def test_v3_atomic_save_cleanup_and_reject_other_formats(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -14,6 +14,7 @@ from .storage import Weights
 GPU_KEYS = (
     "updates",
     "trained_samples",
+    "trained_teacher_positions",
     "value_samples",
     "soft_value_samples",
     "inference_roots",
@@ -68,7 +69,7 @@ class Executor(Compute):
         self.published = version
         self.weights.publish(version, self.model)
         self.inference_models[version] = copy.deepcopy(self.model).eval()
-        while len(self.inference_models) > 3:
+        while len(self.inference_models) > self.inference_model_limit:
             self.inference_models.pop(next(iter(self.inference_models)))
         self.prune_models()
 

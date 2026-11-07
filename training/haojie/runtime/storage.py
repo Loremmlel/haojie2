@@ -55,10 +55,18 @@ class GameBuffer:
         if self.metadata.get("format") != "autoregressive-v2":
             raise ValueError("轨迹格式不兼容，请新建训练目录")
 
-    def sample(self, bundle, decisions, actor, ply, version):
+    def sample(self, bundle, decisions, actor, ply, version, teacher_prefixes=0):
         if decisions:
             self.samples.append(
-                (bundle, decisions, actor, ply, version, self.metadata["steps"])
+                (
+                    bundle,
+                    decisions,
+                    actor,
+                    ply,
+                    version,
+                    self.metadata["steps"],
+                    teacher_prefixes,
+                )
             )
 
     def transition(self, info, command):
@@ -72,7 +80,9 @@ class GameBuffer:
 
     def flush(self):
         if self.samples:
-            bundles, decisions, actors, plies, versions, steps = zip(*self.samples)
+            bundles, decisions, actors, plies, versions, steps, teacher_prefixes = zip(
+                *self.samples
+            )
             states, records, owners, relations = zip(*bundles)
 
             def offsets(arrays):
@@ -97,6 +107,7 @@ class GameBuffer:
                 plies=np.asarray(plies),
                 versions=np.asarray(versions),
                 steps=np.asarray(steps),
+                teacher_prefixes=np.asarray(teacher_prefixes, dtype=np.int32),
             )
             self.data["chunks"].append(chunk)
             self.data["bytes"] += sum(a.nbytes for a in chunk.values())
@@ -207,6 +218,11 @@ class Replay:
                     future is not None,
                     valid,
                     soft is not None,
+                    (
+                        bool(data["teacher_prefixes"][i])
+                        if "teacher_prefixes" in data
+                        else False
+                    ),
                 )
             )
         return result

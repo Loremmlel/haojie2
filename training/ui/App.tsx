@@ -328,7 +328,13 @@ export default function App() {
                 '模仿学习',
                 `${number(stat.imitation_updates, 0)} / ${state?.config.warmup_updates ?? schema?.defaults.warmup_updates ?? '—'} 次`,
               ],
-              ['self', '自对弈', '当前 / 历史 / 手工对手'],
+              [
+                'self',
+                '自对弈',
+                stat.teacher_labeled_positions == null
+                  ? '当前 / 历史 / 手工对手'
+                  : `教师标注 ${number(stat.teacher_labeled_positions, 0)} 个局面 · 训练抽样 ${number(stat.trained_teacher_positions, 0)} 次`,
+              ],
             ].map(([key, label, hint], i) => (
               <div key={key} className={stage === key ? 'current' : ''}>
                 <span className="stage-symbol" aria-hidden="true">
