@@ -198,6 +198,7 @@ class NativePool:
             "control": ([C.c_void_p, C.c_char_p, C.c_size_t], C.c_void_p),
             "response_len": ([C.c_void_p], C.c_size_t),
             "take_requests": ([C.c_void_p, C.c_size_t, C.c_uint64], C.c_size_t),
+            "take_wave": ([C.c_void_p, C.c_size_t, C.c_uint64, C.c_int64], C.c_size_t),
             "request_count": ([C.c_void_p], C.c_size_t),
             "request_view": (
                 [C.c_void_p, C.c_size_t, C.POINTER(RequestView)],
@@ -273,9 +274,15 @@ class NativePool:
             previous["rng"] = rng
         return self.control("assign", lane=lane, game=game, rng=rng, restored=previous)
 
-    def take_requests(self, max_batch=32, wait_ms=2, profile=None):
+    def take_requests(self, max_batch=32, wait_ms=2, profile=None, *, published=None):
         with profile.stage("bridge.request_wait") if profile else nullcontext():
-            count = self.lib.hc_pool_take_requests(self.handle, max_batch, wait_ms)
+            count = (
+                self.lib.hc_pool_take_requests(self.handle, max_batch, wait_ms)
+                if published is None
+                else self.lib.hc_pool_take_wave(
+                    self.handle, max_batch, wait_ms, published
+                )
+            )
         if count == C.c_size_t(-1).value:
             self.check(0)
         if not count:

@@ -20,6 +20,7 @@ GPU_KEYS = (
     "inference_roots",
     "inference_decodes",
     "inference_batches",
+    "inference_waves",
     "inference_seconds",
     "learning_seconds",
     "loss",
@@ -30,8 +31,7 @@ class Executor(Compute):
     def __init__(self, directory, config, initial):
         self.config = config
         self.models = Path(directory) / "models"
-        self.initialize_network(config.device)
-        self.model.load_state_dict(initial["model"])
+        self.initialize_network(config.device, initial["model"])
         self.restore_optimizer(initial["optimizer"])
         torch.set_rng_state(initial["torch_rng"])
         if self.device.type == "cuda" and initial["cuda_rng"] is not None:
@@ -216,7 +216,10 @@ class Local:
             elif op == "drain":
                 while (
                     batch := self.pool.take_requests(
-                        executor.config.inference_batch, 0, profile=executor.profile
+                        executor.config.inference_batch,
+                        0,
+                        profile=executor.profile,
+                        published=executor.published,
                     )
                 ) is not None:
                     with batch:

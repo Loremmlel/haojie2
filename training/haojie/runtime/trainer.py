@@ -19,14 +19,21 @@ from .compute import Compute
 
 
 class Trainer(Compute):
-    def __init__(self, directory, config, resume=False):
+    def __init__(self, directory, config, resume=False, *, initial_weights=None):
         self.directory = Path(directory).resolve()
         self.config = config
         config.validate()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.models = self.directory / "models"
         self.models.mkdir(exist_ok=True)
-        self.initialize_network("cpu")
+        checkpoint = self.directory / "checkpoint.pt"
+        if resume:
+            # 旧 v3 的模型和优化器必须以原宽度构造。
+            saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+            if saved["format"] != "haojie-classic-training-v3":
+                raise ValueError("续训只接受 haojie-classic-training-v3 检查点")
+            initial_weights = saved["model"]
+        self.initialize_network("cpu", initial_weights)
         self.rng = np.random.default_rng(config.seed)
         self.replay = Replay(config.replay_games, max_bytes=config.replay_mib * 1024**2)
         self.weights = Weights(self.models)
@@ -62,18 +69,13 @@ class Trainer(Compute):
             "inference_roots": 0,
             "inference_decodes": 0,
             "inference_batches": 0,
+            "inference_waves": 0,
             "inference_seconds": 0.0,
             "learning_seconds": 0.0,
             "commands": 0,
             "parameters": self.model.description()["parameters"],
         }
-        checkpoint = self.directory / "checkpoint.pt"
         if resume:
-            # 仅加载用户指定目录中本程序写出的完整恢复快照。
-            saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
-            if saved["format"] != "haojie-classic-training-v3":
-                raise ValueError("续训只接受 haojie-classic-training-v3 检查点")
-            self.model.load_state_dict(saved["model"])
             self.optimizer.load_state_dict(saved["optimizer"])
             for group in self.optimizer.param_groups:
                 group["foreach"] = False

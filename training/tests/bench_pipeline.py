@@ -249,9 +249,8 @@ def execute(args):
         NativePool.assign, NativePool.status = seeded, tracked_status
         pipeline.Coordinator.run = coordinated
         feedback = Feedback(gpu.Executor, args.capture)
-        trainer = Trainer(directory, config)
+        trainer = Trainer(directory, config, initial_weights=saved["model"])
         role("gpu")
-        trainer.model.load_state_dict(saved["model"])
         trainer.restore_optimizer(copy.deepcopy(saved["optimizer"]))
         trainer.publish()
 

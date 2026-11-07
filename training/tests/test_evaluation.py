@@ -17,7 +17,7 @@ from training.haojie.evaluation import (
     paired_summary,
     history_summary,
 )
-from training.haojie.model import Network
+from training.haojie.model import ModelConfig, Network
 from training.haojie.runtime.config import Config
 from training.haojie.runtime.gpu import Local
 from training.haojie.runtime.evaluation import (
@@ -120,7 +120,7 @@ class EvaluationTests(unittest.TestCase):
                     device="cpu",
                 ),
             )
-            networks = [Network(), Network()]
+            networks = [Network(), Network(ModelConfig(width=256))]
             with patch("training.haojie.evaluation.load", side_effect=networks), patch(
                 "training.haojie.evaluation.infer", wraps=infer
             ) as inference, patch(
@@ -232,7 +232,8 @@ class EvaluationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             job = Path(directory) / "evaluations" / "round-test"
             job.mkdir(parents=True)
-            torch.save(Network().state_dict(), job / "model.pt")
+            weights = Network().state_dict()
+            torch.save(weights, job / "model.pt")
             atomic_json(
                 job / "round.json",
                 dict(
@@ -262,7 +263,11 @@ class EvaluationTests(unittest.TestCase):
                     for s in status["summary"].values()
                 )
             )
-            self.assertLess((job / "model.pt").stat().st_size, 20_000_000)
+            # 冻结文件只需 BF16 权重和序列化头，不应带上优化器或题库。
+            payload_bytes = 2 * sum(t.numel() for t in weights.values())
+            self.assertLess(
+                (job / "model.pt").stat().st_size, payload_bytes + 128 * 1024
+            )
             self.assertFalse((job / "checkpoint.pt").exists())
 
     def test_failed_game_keeps_other_games_and_pair_statistics(self):

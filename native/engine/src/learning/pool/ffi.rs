@@ -132,7 +132,24 @@ pub unsafe extern "C" fn hc_pool_take_requests(
     wait_ms: u64,
 ) -> usize {
     let pool = unsafe { &*pool };
-    checked(pool, usize::MAX, || pool.take_requests(maximum, wait_ms))
+    checked(pool, usize::MAX, || {
+        pool.take_requests(maximum, wait_ms, None)
+    })
+}
+
+/// # Safety
+/// 与 take_requests 共用借用批次；GPU 所有者在本轮结束前不得改变发布版本。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hc_pool_take_wave(
+    pool: *const Pool,
+    maximum: usize,
+    wait_ms: u64,
+    published: i64,
+) -> usize {
+    let pool = unsafe { &*pool };
+    checked(pool, usize::MAX, || {
+        pool.take_requests(maximum, wait_ms, Some(published))
+    })
 }
 
 /// # Safety

@@ -23,7 +23,7 @@ def device_for_bf16(name):
 
 @dataclass
 class ModelConfig:
-    width: int = 256
+    width: int = 384
     layers: int = 6
     heads: int = 8
     expansion: int = 4
@@ -58,6 +58,13 @@ class Block(nn.Module):
 
 
 class Network(nn.Module):
+    @classmethod
+    def from_weights(cls, weights, device):
+        # v3 恢复点与独立历史权重都保留状态投影；先按实际宽度建网，再严格加载。
+        model = cls(ModelConfig(width=weights["state.weight"].shape[0])).to(device)
+        model.load_state_dict(weights)
+        return model
+
     def __init__(self, config=None):
         super().__init__()
         self.config = config or ModelConfig()

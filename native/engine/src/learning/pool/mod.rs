@@ -107,6 +107,51 @@ struct RequestEnvelope {
     at: Instant,
     replied: bool,
 }
+type BatchKey = (i64, u32);
+
+impl RequestEnvelope {
+    fn batch_key(&self, published: i64) -> BatchKey {
+        (
+            if self.model == -1 {
+                published
+            } else {
+                self.model
+            },
+            self.request.kind,
+        )
+    }
+}
+
+/// 同组满批或最老成员到期才取；每轮先照顾最早的就绪组，再取最大的就绪组。
+fn ready_groups(
+    requests: impl Iterator<Item = (BatchKey, Instant)>,
+    batch: usize,
+    now: Instant,
+    flush: bool,
+) -> (indexmap::IndexMap<BatchKey, usize>, bool) {
+    let mut groups = indexmap::IndexMap::new();
+    for (key, at) in requests {
+        let group = groups.entry(key).or_insert((0usize, at));
+        group.0 += 1;
+        group.1 = group.1.min(at);
+    }
+    let full = groups.values().any(|(count, _)| *count >= batch);
+    groups.retain(|_, (count, at)| {
+        flush || *count >= batch || now.duration_since(*at) >= Duration::from_millis(2)
+    });
+    let mut quotas = indexmap::IndexMap::new();
+    if let Some((&first, (count, _))) = groups.first_mut() {
+        let take = batch.min(*count);
+        quotas.insert(first, take);
+        *count -= take;
+        if let Some((&next, &(n, _))) = groups.iter().rev().max_by_key(|(_, (n, _))| *n)
+            && n > 0
+        {
+            *quotas.entry(next).or_default() += batch.min(n);
+        }
+    }
+    (quotas, full)
+}
 impl RequestEnvelope {
     fn arrays(&self) -> Vec<Array> {
         if let Some(bundle) = &self.request.bundle {
@@ -523,7 +568,12 @@ impl Pool {
         self.shared.changed.notify_all();
     }
 
-    fn take_requests(&self, maximum: usize, wait_ms: u64) -> Result<usize, String> {
+    fn take_requests(
+        &self,
+        maximum: usize,
+        wait_ms: u64,
+        published: Option<i64>,
+    ) -> Result<usize, String> {
         let locking = self.config.profile.then(Instant::now);
         let mut held = self.requests.lock().unwrap();
         if !held.is_empty() {
@@ -542,21 +592,41 @@ impl Pool {
             let batch_deadline = queues.requests.front().map_or(deadline, |r| {
                 (r.at + Duration::from_millis(2)).min(deadline)
             });
-            if queues.wake_requests || queues.requests.len() >= maximum || now >= batch_deadline {
+            let flush = queues.wake_requests || now >= deadline;
+            let available = queues.requests.len();
+            let (mut quotas, full) = if let Some(version) = published {
+                ready_groups(
+                    queues.requests.iter().map(|r| (r.batch_key(version), r.at)),
+                    maximum,
+                    now,
+                    flush,
+                )
+            } else {
+                (indexmap::IndexMap::new(), available >= maximum)
+            };
+            if flush || full || now >= batch_deadline || !quotas.is_empty() {
+                if let Some(version) = published {
+                    for _ in 0..available {
+                        let r = queues.requests.pop_front().unwrap();
+                        if let Some(n) = quotas.get_mut(&r.batch_key(version))
+                            && *n > 0
+                        {
+                            *n -= 1;
+                            held.push(r);
+                        } else {
+                            queues.requests.push_back(r);
+                        }
+                    }
+                } else {
+                    held.extend(queues.requests.drain(..maximum.min(available)));
+                }
+                let count = held.len();
                 if self.config.profile {
-                    let available = queues.requests.len();
-                    let count = maximum.min(available);
-                    let age = queues
-                        .requests
-                        .front()
+                    let age = held
+                        .first()
                         .map_or(0, |r| now.duration_since(r.at).as_nanos() as u64);
                     let wake = queues.wake_requests;
-                    let encode = queues
-                        .requests
-                        .iter()
-                        .take(count)
-                        .filter(|r| r.request.kind == 0)
-                        .count();
+                    let encode = held.iter().filter(|r| r.request.kind == 0).count();
                     let row = &mut queues.batching;
                     row.calls += 1;
                     row.available += available as u64;
@@ -572,7 +642,7 @@ impl Pool {
                     }
                     if wake {
                         row.wake += 1;
-                    } else if available >= maximum {
+                    } else if full {
                         row.full += 1;
                     } else if now >= deadline {
                         row.caller_deadline += 1;
@@ -581,8 +651,6 @@ impl Pool {
                     }
                 }
                 queues.wake_requests = false;
-                let count = maximum.min(queues.requests.len());
-                held.extend(queues.requests.drain(..count));
                 self.shared
                     .requests_taken
                     .fetch_add(count as u64, Ordering::Relaxed);
@@ -663,5 +731,51 @@ impl Drop for Pool {
         for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod wave_tests {
+    use super::*;
+
+    #[test]
+    fn batches_match_version_and_operation_with_bounded_wait() {
+        let now = Instant::now();
+        let old = now - Duration::from_millis(3);
+        let (encode, decode, history) = ((7, 0), (7, 1), (3, 0));
+        let rows = [
+            (history, old),
+            (encode, now),
+            (decode, now),
+            (encode, now),
+            (encode, now),
+        ];
+        let (plan, full) = ready_groups(rows.into_iter(), 3, now, false);
+        assert!(full);
+        assert_eq!(
+            plan.into_iter().collect::<Vec<_>>(),
+            [(history, 1), (encode, 3)]
+        );
+        assert!(
+            ready_groups([(decode, now)].into_iter(), 3, now, false)
+                .0
+                .is_empty()
+        );
+        assert_eq!(
+            ready_groups([(decode, now)].into_iter(), 3, now, true).0[&decode],
+            1
+        );
+        // 控制排空时也有上界，过期的冷门版本先得到服务。
+        let expired = [(history, old), (decode, old), (encode, old), (encode, old)];
+        let (plan, _) = ready_groups(expired.into_iter(), 3, now, false);
+        assert_eq!(
+            plan.into_iter().collect::<Vec<_>>(),
+            [(history, 1), (encode, 2)]
+        );
+        let (plan, _) = ready_groups(rows.into_iter(), 1, now, true);
+        assert_eq!(
+            plan.into_iter().collect::<Vec<_>>(),
+            [(history, 1), (encode, 1)]
+        );
     }
 }

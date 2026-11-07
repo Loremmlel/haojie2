@@ -8,7 +8,9 @@ import numpy as np
 import torch
 
 from training.haojie.native import Environment
-from training.haojie.model import Network, collate_states, collate_options
+from training.haojie.native_pool import Request, search_values
+from training.haojie.model import ModelConfig, Network, collate_states, collate_options
+from training.haojie.evaluation import load as load_evaluation_model
 from training.haojie.opponents import Opponents
 from training.haojie.runtime.storage import GameBuffer, Replay
 from training.haojie.runtime.config import Config
@@ -64,7 +66,9 @@ class TrainingTests(unittest.TestCase):
 
     def test_bf16_geometry_and_shared_encoder(self):
         net = Network()
-        self.assertTrue(4_000_000 <= net.description()["parameters"] <= 10_000_000)
+        self.assertEqual(
+            (net.config.width, net.description()["parameters"]), (384, 12_137_734)
+        )
         s, r, o, g = bundle(3)
         s[1, 0] = 2
         s[1, 12] = 0.2
@@ -109,10 +113,38 @@ class TrainingTests(unittest.TestCase):
             collate_options([options], "cpu")[2][0, 0].tolist(), [257, 299, 259]
         )
 
+    def test_mixed_versions_and_variable_logits_return_in_request_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trainer = Trainer(directory, Config(device="cpu", warmup_games=0))
+            trainer.pending_versions = {0: 0, 1: 1}
+            with torch.no_grad():
+                trainer.model.policy[-1].bias.add_(4)
+            trainer.weights.publish(1, trainer.model)
+            states = [(v, Request("encode", 0, bundle(3 + v)), v) for v in (0, 1)]
+            trainer.infer(states)
+            jobs = [
+                (v, Request("decode", 0, (np.zeros((n, 704), np.float32),)), v)
+                for v, n in [(1, 7), (0, 3), (1, 2)]
+            ]
+            jobs.insert(1, (0, Request("encode", 1, bundle()), 2))
+            expected = [trainer.infer([job])[0] for job in jobs]
+            waves, batches = (
+                trainer.stats[key] for key in ("inference_waves", "inference_batches")
+            )
+            actual = trainer.infer(jobs)
+            self.assertEqual(trainer.stats["inference_waves"] - waves, 1)
+            self.assertEqual(trainer.stats["inference_batches"] - batches, 3)
+            for a, b in zip(actual, expected, strict=True):
+                self.assertEqual(a.dtype, np.uint16)
+                np.testing.assert_allclose(
+                    search_values(a), search_values(b), atol=0.032, rtol=0.01
+                )
+
     def test_learning_bf16_and_optimizer_resume(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Config(device="cpu", batch=2, warmup_games=0)
-            trainer = Trainer(directory, config)
+            old_weights = Network(ModelConfig(width=256)).state_dict()
+            trainer = Trainer(directory, config, initial_weights=old_weights)
             state = bundle()
             options = np.zeros((2, 704), np.float32)
             target = np.array([0.3, 0.7], np.float32)
@@ -164,6 +196,12 @@ class TrainingTests(unittest.TestCase):
             )
             trainer.checkpoint({})
             restored = Trainer(directory, config, resume=True)
+            for path in (
+                trainer.models / "model-00000000.pt",
+                Path(directory) / "checkpoint.pt",
+            ):
+                self.assertEqual(load_evaluation_model(path, "cpu").config.width, 256)
+            self.assertEqual(restored.model.config.width, 256)
             self.assertEqual(restored.replay.games, [])
             restored.learn()
             self.assertEqual(restored.stats["updates"], 2)

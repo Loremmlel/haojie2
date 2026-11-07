@@ -355,6 +355,7 @@ def run(trainer):
                     trainer.config.inference_batch,
                     wait_ms=1000,
                     profile=executor.profile,
+                    published=executor.published,
                 )
                 if batch is not None:
                     with executor.profile.stage("runtime.inference"):

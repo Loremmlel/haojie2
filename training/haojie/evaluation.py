@@ -21,9 +21,7 @@ def load(path, device):
     if "format" in saved and saved["format"] != "haojie-classic-training-v3":
         raise ValueError("评测只接受 v3 检查点或历史池权重")
     weights = saved["model"] if "format" in saved else saved
-    network = Network().to(device)
-    network.load_state_dict(weights)
-    return network.eval()
+    return Network.from_weights(weights, device).eval()
 
 
 def infer(network, request, device, contexts):

@@ -14,12 +14,16 @@ class Compute:
     # 正式续训曾同时引用八个冻结版本；装载和发布共用同一驻留上限。
     inference_model_limit = 12
 
-    def initialize_network(self, device):
+    def initialize_network(self, device, weights=None):
         self.profile = Profile()
         torch.set_num_threads(1)
         torch.manual_seed(self.config.seed)
         self.device = torch.device(device)
-        self.model = Network().to(self.device)
+        self.model = (
+            Network().to(self.device)
+            if weights is None
+            else Network.from_weights(weights, self.device)
+        )
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config.learning_rate,
@@ -55,8 +59,7 @@ class Compute:
         if version not in self.inference_models:
             if len(self.inference_models) >= self.inference_model_limit:
                 self.inference_models.pop(next(iter(self.inference_models)))
-            network = Network().to(self.device)
-            network.load_state_dict(self.weights.get(version))
+            network = Network.from_weights(self.weights.get(version), self.device)
             self.inference_models[version] = network.eval()
             self.weights.prune(self.live_versions())
         network = self.inference_models.pop(version)
@@ -82,6 +85,9 @@ class Compute:
             self.activate()
         with self.profile.stage("inference.group"):
             output = [None] * len(jobs)
+            # 各组在同一 CUDA 流上依次提交，整轮共用一次设备到主机回传。
+            parts = []
+            layouts = []
             grouped = {}
             for i, (version, request, owner) in enumerate(jobs):
                 grouped.setdefault((version, request.op), []).append(i)
@@ -138,10 +144,6 @@ class Compute:
                             packed_tensor = torch.cat((values[:, None], aux), 1).view(
                                 torch.uint16
                             )
-                        with self.profile.stage("inference.encode.d2h_wait"):
-                            packed = packed_tensor.cpu().numpy()
-                            del packed_tensor
-                        self.profile.collect()
                         with self.profile.stage(
                             "inference.encode.scatter_cache", cuda=cuda
                         ):
@@ -150,7 +152,6 @@ class Compute:
                                 self.contexts[(owner, request.context, version)] = (
                                     context[row, : len(request.arrays[0])].clone()
                                 )
-                                output[i] = packed[row].copy()
                         self.stats["inference_roots"] += len(selection)
                     else:
                         with self.profile.stage(
@@ -162,7 +163,7 @@ class Compute:
                             ]
                             n = max(len(x) for x in contexts)
                             context = torch.zeros(
-                                (len(selection), n, self.model.config.width),
+                                (len(selection), n, model.config.width),
                                 dtype=torch.bfloat16,
                                 device=self.device,
                             )
@@ -182,17 +183,25 @@ class Compute:
                             packed_tensor = model.decode(context, *tensors).view(
                                 torch.uint16
                             )
-                        with self.profile.stage("inference.decode.d2h_wait"):
-                            packed = packed_tensor.cpu().numpy()
-                            del packed_tensor
-                        self.profile.collect()
-                        with self.profile.stage("inference.decode.scatter_cache"):
-                            for row, i in enumerate(selection):
-                                output[i] = packed[
-                                    row, : len(jobs[i][1].arrays[0])
-                                ].copy()
                         self.stats["inference_decodes"] += len(selection)
+                    parts.append(packed_tensor.reshape(-1))
+                    layouts.append((selection, packed_tensor.shape[1], op))
                     self.stats["inference_batches"] += 1
+            if parts:
+                with self.profile.stage("inference.wave.d2h_wait"):
+                    flat = (
+                        (parts[0] if len(parts) == 1 else torch.cat(parts))
+                        .cpu()
+                        .numpy()
+                    )
+                self.stats["inference_waves"] += 1
+                self.profile.collect()
+                offset = 0
+                for selection, stride, op in layouts:
+                    for i in selection:
+                        size = stride if op == "encode" else len(jobs[i][1].arrays[0])
+                        output[i] = flat[offset : offset + size].copy()
+                        offset += stride
         self.stats["inference_seconds"] += time.perf_counter() - start
         return output
 

@@ -293,7 +293,11 @@ export default function App() {
       </header>
       <div className="page-heading">
         <div>
-          <div className="eyebrow">普通局 · 5.50M · 原生 BF16</div>
+          <div className="eyebrow">
+            普通局 ·{' '}
+            {!creating && stat.parameters ? `${(stat.parameters / 1e6).toFixed(2)}M` : '实体网络'} ·
+            原生 BF16
+          </div>
           <h1>看见每一步学习。</h1>
           <p>观测训练进度，让算力落在合适的位置。</p>
         </div>
