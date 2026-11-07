@@ -11,8 +11,8 @@ from ..profiling import Profile
 
 
 class Compute:
-    # 正式续训曾同时引用八个冻结版本；装载和发布共用同一驻留上限。
-    inference_model_limit = 12
+    # 384 宽模型自对弈可同时用到二十余版；按需装载和发布共用这些槽位。
+    inference_model_limit = 32
 
     def initialize_network(self, device, weights=None):
         self.profile = Profile()

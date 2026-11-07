@@ -25,13 +25,13 @@ def cpu_limit():
 @dataclass
 class Config:
     workers: int = 8
-    games_per_worker: int = 16
+    games_per_worker: int = 32
     simulations: int = 64
     fast_simulations: int = 16
     full_fraction: float = 0.25
     depth: int = 16
     batch: int = 16
-    inference_batch: int = 32
+    inference_batch: int = 64
     sample_reuse: float = 4
     publish_updates: int = 16
     history_games: int = 64

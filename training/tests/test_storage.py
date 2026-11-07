@@ -198,15 +198,16 @@ class StorageTests(unittest.TestCase):
             self.assertTrue(
                 all(v.dtype == torch.bfloat16 for v in executor.weights.get(4).values())
             )
-            # 八个同时冻结的根先从 CPU 装载；发布新版后再轮询仍应命中原模型实例。
-            for version in range(5, 13):
+            # 真实自对弈可同时保留二十个旧根；发布新版后仍应命中原模型实例。
+            versions = range(5, 25)
+            for version in versions:
                 executor.publish(version)
                 executor.resolve(
                     (0, version), {"root": (version, 0), "model": "current"}
                 )
             executor.inference_models.clear()
-            frozen = {v: executor.inference_model(v) for v in range(5, 13)}
-            executor.publish(13)
+            frozen = {v: executor.inference_model(v) for v in versions}
+            executor.publish(25)
             for version, network in frozen.items():
                 self.assertIs(executor.inference_model(version), network)
 

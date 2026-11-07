@@ -17,9 +17,12 @@ from training.haojie.web.settings import defaults, schema, validate
 class WebTests(unittest.TestCase):
     def test_complete_schema_and_invalid_controls(self):
         self.assertEqual(defaults()["save_seconds"], 3600)
-        old = {**defaults(), "games_per_worker": 8}
-        self.assertEqual(defaults()["games_per_worker"], 16)
-        self.assertEqual(validate({}, old)["games_per_worker"], 8)
+        old = {**defaults(), "games_per_worker": 8, "inference_batch": 32}
+        self.assertEqual(defaults()["games_per_worker"], 32)
+        self.assertEqual(defaults()["inference_batch"], 64)
+        restored = validate({}, old)
+        self.assertEqual(restored["games_per_worker"], 8)
+        self.assertEqual(restored["inference_batch"], 32)
         del old["evaluation_seconds"]
         del old["teacher_label_interval"]
         self.assertEqual(validate({}, old)["evaluation_seconds"], 7200)
