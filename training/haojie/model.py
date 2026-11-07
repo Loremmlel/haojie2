@@ -2,6 +2,7 @@
 
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -90,7 +91,7 @@ class Network(nn.Module):
 
     def embed(self, features, ids):
         scaled = features.clone()
-        scaled[..., :11] /= 256
+        scaled[..., :11].div_(256)
         return self.state(scaled) + self.roles(ids[..., 0]) + self.kinds(ids[..., 1])
 
     def encode(
@@ -126,9 +127,9 @@ class Network(nn.Module):
 
     def decode(self, context, actions, mask, indices):
         scaled = actions.clone()
-        scaled[..., :16] /= 256
+        scaled[..., :16].div_(256)
         # 附带的死亡对象描述和状态行采用相同数值尺度。
-        scaled[..., 576:587] /= 256
+        scaled[..., 576:587].div_(256)
         scaled[..., 42] = 0
         focus = context.gather(
             1, indices[..., 2, None].expand(-1, -1, context.shape[-1])
@@ -156,52 +157,70 @@ class Network(nn.Module):
         }
 
 
+def _host_tensor(array, dtype, pinned):
+    source = torch.from_numpy(array)
+    if not pinned:
+        return source.to(dtype=dtype)
+    return torch.empty(array.shape, dtype=dtype, pin_memory=True).copy_(source)
+
+
 def collate_states(
     items, device, pinned=False, profile=None, scope="states", cuda=False
 ):
     with profile.stage(scope + ".collate_cpu") if profile else nullcontext():
         b = len(items)
-        n = max(len(v[0]) for v in items)
-        m = max(len(v[1]) for v in items)
-
-        def zeros(shape, dtype=torch.bfloat16):
-            return torch.zeros(shape, dtype=dtype, pin_memory=pinned)
-
-        states, records = zeros((b, n, STATE_WIDTH)), zeros((b, m, STATE_WIDTH))
-        mask, rmask = zeros((b, n), torch.bool), zeros((b, m), torch.bool)
-        owners = zeros((b, m), torch.int64)
-        sid, rid = zeros((b, n, 2), torch.int64), zeros((b, m, 2), torch.int64)
-        relations = zeros((b, n, n, RELATION_WIDTH))
+        ns = np.array([len(v[0]) for v in items])
+        ms = np.array([len(v[1]) for v in items])
+        n, m = ns.max(), ms.max()
+        states = np.zeros((b, n, STATE_WIDTH), np.float32)
+        records = np.zeros((b, m, STATE_WIDTH), np.float32)
+        owners = np.zeros((b, m), np.int64)
+        relations = np.zeros((b, n, n, RELATION_WIDTH), np.float32)
         for i, (s, r, o, g) in enumerate(items):
-            states[i, : len(s)].copy_(torch.from_numpy(s))
-            sid[i, : len(s)].copy_(torch.from_numpy(s[:, :2]))
-            mask[i, : len(s)] = True
-            records[i, : len(r)].copy_(torch.from_numpy(r))
-            rid[i, : len(r)].copy_(torch.from_numpy(r[:, :2]))
-            rmask[i, : len(r)] = True
-            owners[i, : len(o)].copy_(torch.from_numpy(o))
-            relations[i, : len(s), : len(s)].copy_(torch.from_numpy(g))
-    with profile.stage(scope + ".h2d_submit", cuda=cuda) if profile else nullcontext():
-        return tuple(
-            t.to(device, non_blocking=pinned)
-            for t in (states, mask, records, rmask, owners, sid, rid, relations)
+            states[i, : len(s)] = s
+            records[i, : len(r)] = r
+            owners[i, : len(o)] = o
+            relations[i, : len(s), : len(s)] = g
+        # 先按行拼原始数组，再整批转换；索引从未舍入的输入读取。
+        batch = (
+            _host_tensor(states, torch.bfloat16, pinned),
+            _host_tensor(np.arange(n) < ns[:, None], torch.bool, pinned),
+            _host_tensor(records, torch.bfloat16, pinned),
+            _host_tensor(np.arange(m) < ms[:, None], torch.bool, pinned),
+            _host_tensor(owners, torch.int64, pinned),
+            _host_tensor(states[..., :2], torch.int64, pinned),
+            _host_tensor(records[..., :2], torch.int64, pinned),
+            _host_tensor(relations, torch.bfloat16, pinned),
         )
+    with profile.stage(scope + ".h2d_submit", cuda=cuda) if profile else nullcontext():
+        return tuple(t.to(device, non_blocking=pinned) for t in batch)
 
 
 def collate_options(
     items, device, pinned=False, profile=None, scope="options", cuda=False
 ):
     with profile.stage(scope + ".collate_cpu") if profile else nullcontext():
-        b = len(items)
-        k = max(len(a) for a in items)
+        sizes = np.array([len(a) for a in items])
+        k = sizes.max()
         actions = torch.zeros(
-            (b, k, ACTION_WIDTH), dtype=torch.bfloat16, pin_memory=pinned
+            (len(items), k, ACTION_WIDTH), dtype=torch.bfloat16, pin_memory=pinned
         )
-        mask = torch.zeros((b, k), dtype=torch.bool, pin_memory=pinned)
-        ids = torch.zeros((b, k, 3), dtype=torch.int64, pin_memory=pinned)
+        # 动作数相差很大；只转换有效行，用原始 BF16 位填入已经补零的目标。
+        packed = (
+            torch.from_numpy(np.concatenate(items))
+            .bfloat16()
+            .view(torch.uint16)
+            .numpy()
+        )
+        output = actions.view(torch.uint16).numpy()
+        raw_ids = np.zeros((len(items), k, 3), np.int64)
+        offset = 0
         for i, a in enumerate(items):
-            actions[i, : len(a)].copy_(torch.from_numpy(a))
-            mask[i, : len(a)] = True
-            ids[i, : len(a)].copy_(torch.from_numpy(a[:, [1, 2, 42]]))
+            output[i, : len(a)] = packed[offset : offset + len(a)]
+            raw_ids[i, : len(a), :2] = a[:, 1:3]
+            raw_ids[i, : len(a), 2] = a[:, 42]
+            offset += len(a)
+        mask = _host_tensor(np.arange(k) < sizes[:, None], torch.bool, pinned)
+        ids = _host_tensor(raw_ids, torch.int64, pinned)
     with profile.stage(scope + ".h2d_submit", cuda=cuda) if profile else nullcontext():
         return tuple(t.to(device, non_blocking=pinned) for t in (actions, mask, ids))

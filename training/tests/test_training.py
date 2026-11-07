@@ -113,6 +113,52 @@ class TrainingTests(unittest.TestCase):
             collate_options([options], "cpu")[2][0, 0].tolist(), [257, 299, 259]
         )
 
+    def test_ragged_batches_preserve_padding_and_unrounded_indices(self):
+        rng = np.random.default_rng(17)
+        items, options = [], []
+        for n, m, k in [(4, 0, 3), (2, 3, 1)]:
+            s = rng.normal(size=(n, 128)).astype(np.float32)
+            r = rng.normal(size=(m, 128)).astype(np.float32)
+            g = rng.normal(size=(n, n, 8)).astype(np.float32)
+            s[:, :2] = [257, 299]
+            r[:, :2] = [259, 301]
+            items.append((s, r, np.arange(m, dtype=np.float32) % n, g))
+            a = rng.normal(size=(k, 704)).astype(np.float32)
+            a[:, [1, 2, 42]] = [257, 299, 259]
+            options.append(a)
+        states, masks, records, rmasks, owners, sids, rids, rels = collate_states(
+            items, "cpu"
+        )
+        acts, amasks, refs = collate_options(options, "cpu")
+        for i, (s, r, o, g) in enumerate(items):
+            n, m, k = len(s), len(r), len(options[i])
+            for actual, expected in (
+                (states[i, :n], s),
+                (records[i, :m], r),
+                (rels[i, :n, :n], g),
+                (owners[i, :m], o),
+                (sids[i, :n], s[:, :2]),
+                (rids[i, :m], r[:, :2]),
+                (acts[i, :k], options[i]),
+                (refs[i, :k], options[i][:, [1, 2, 42]]),
+            ):
+                self.assertTrue(
+                    torch.equal(actual, torch.from_numpy(expected).to(actual.dtype))
+                )
+        self.assertEqual(masks.tolist(), [[True] * 4, [True, True, False, False]])
+        self.assertEqual(rmasks.tolist(), [[False] * 3, [True] * 3])
+        self.assertEqual(amasks.tolist(), [[True] * 3, [True, False, False]])
+        for padding in (
+            states[1, 2:],
+            records[0],
+            owners[0],
+            rels[1, 2:],
+            rels[1, :, 2:],
+            acts[1, 1:],
+            refs[1, 1:],
+        ):
+            self.assertEqual(padding.count_nonzero().item(), 0)
+
     def test_mixed_versions_and_variable_logits_return_in_request_order(self):
         with tempfile.TemporaryDirectory() as directory:
             trainer = Trainer(directory, Config(device="cpu", warmup_games=0))

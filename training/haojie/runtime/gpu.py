@@ -47,7 +47,7 @@ class Executor(Compute):
     def resolve(self, owner, message):
         previous = self.bindings.get(owner)
         if previous is not None and previous[0] != message["root"]:
-            self.contexts = {k: v for k, v in self.contexts.items() if k[0] != owner}
+            self.contexts.pop(owner, None)
         if message["model"] != "current":
             version = int(message["model"])
         elif previous is not None and previous[0] == message["root"]:
@@ -62,7 +62,7 @@ class Executor(Compute):
 
     def release(self, owner):
         self.bindings.pop(owner, None)
-        self.contexts = {k: v for k, v in self.contexts.items() if k[0] != owner}
+        self.contexts.pop(owner, None)
         self.prune_models()
 
     def publish(self, version):

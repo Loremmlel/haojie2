@@ -149,26 +149,22 @@ class Compute:
                         ):
                             for row, i in enumerate(selection):
                                 _, request, owner = jobs[i]
-                                self.contexts[(owner, request.context, version)] = (
-                                    context[row, : len(request.arrays[0])].clone()
-                                )
+                                cache = self.contexts.setdefault(owner, {})
+                                cache[request.context, version] = context[
+                                    row, : len(request.arrays[0])
+                                ].clone()
                         self.stats["inference_roots"] += len(selection)
                     else:
                         with self.profile.stage(
                             "inference.decode.context_pack", cuda=cuda
                         ):
                             contexts = [
-                                self.contexts[(jobs[i][2], jobs[i][1].context, version)]
+                                self.contexts[jobs[i][2]][(jobs[i][1].context, version)]
                                 for i in selection
                             ]
-                            n = max(len(x) for x in contexts)
-                            context = torch.zeros(
-                                (len(selection), n, model.config.width),
-                                dtype=torch.bfloat16,
-                                device=self.device,
+                            context = torch.nn.utils.rnn.pad_sequence(
+                                contexts, batch_first=True
                             )
-                            for row, x in enumerate(contexts):
-                                context[row, : len(x)] = x
                         tensors = collate_options(
                             [jobs[i][1].arrays[0] for i in selection],
                             self.device,
@@ -259,11 +255,14 @@ class Compute:
                 indices = torch.tensor(
                     [d[0] for d in decisions], dtype=torch.int64, device=self.device
                 )
-                target = torch.zeros_like(options[1], dtype=torch.bfloat16)
+                # 访问分布先在主机拼齐，避免每个条件前缀单独回等 CUDA。
+                pinned = self.device.type == "cuda"
+                host_target = torch.zeros(
+                    options[1].shape, dtype=torch.bfloat16, pin_memory=pinned
+                )
                 for i, d in enumerate(decisions):
-                    target[i, : len(d[2])] = torch.from_numpy(d[2]).to(
-                        self.device, dtype=torch.bfloat16
-                    )
+                    host_target[i, : len(d[2])].copy_(torch.from_numpy(d[2]))
+                target = host_target.to(self.device, non_blocking=pinned)
                 weight = torch.tensor(
                     [d[3] for d in decisions], dtype=torch.bfloat16, device=self.device
                 )

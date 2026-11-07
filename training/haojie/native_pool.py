@@ -43,7 +43,10 @@ class ArrayView(C.Structure):
     def array(self, copy_array=False):
         shape = tuple(self.shape[: self.ndim])
         value = (
-            np.ctypeslib.as_array(self.data, shape=(self.length,))
+            np.frombuffer(
+                (C.c_float * self.length).from_address(C.addressof(self.data.contents)),
+                dtype=np.float32,
+            )
             if self.length
             else np.empty(0, np.float32)
         )

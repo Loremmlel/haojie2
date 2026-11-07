@@ -265,6 +265,9 @@ class Weights:
         for version in list(self.states):
             if version not in live and version not in self.history:
                 del self.states[version]
+        # 全部版本都在使用时没有可淘汰项，无需在每次换根时遍历权重张量。
+        if self.states.keys() <= live:
+            return
         size = sum(
             v.numel() * v.element_size()
             for s in self.states.values()

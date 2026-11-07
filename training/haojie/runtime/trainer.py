@@ -191,7 +191,7 @@ class Trainer(Compute):
     def resolve(self, index, request):
         binding = (index, request["lane"])
         if binding in self.bindings and self.bindings[binding][0] != request["root"]:
-            self.contexts = {k: v for k, v in self.contexts.items() if k[0] != binding}
+            self.contexts.pop(binding, None)
         if request["model"] != "current":
             version = int(request["model"])
         elif binding in self.bindings and self.bindings[binding][0] == request["root"]:
@@ -302,7 +302,7 @@ class Trainer(Compute):
                 value = float(search_values(bits)[0])
                 version = self.published
                 kind = "bootstrap"
-                self.contexts.pop((owner, info["key"], version), None)
+                self.contexts.pop(owner, None)
         else:
             value = self.calibration.predict(event["metrics"], event["actor"])
         if value is None:
