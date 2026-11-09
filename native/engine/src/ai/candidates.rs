@@ -832,13 +832,7 @@ fn groups_inner(s: &State, d: Difficulty, defer: bool, c: &Catalog) -> Result<Ve
         }
         return Ok(result);
     }
-    if let Some(transit) = s.units.iter().find(|u| {
-        u.owner == s.active
-            && u.has("u12p")
-            && !u.has("u12")
-            && u.mode == "move"
-            && !geometry::can_place(s, u, u.at(), c)
-    }) {
+    if let Some(transit) = crate::movement::transit(s, c).and_then(|id| s.unit(id)) {
         for a in options::unit_actions(s, transit, c, &stats_for(s, transit, c)) {
             if a.id == "move"
                 && let Some(g) = make(s, a, d, defer, c)?

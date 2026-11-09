@@ -46,6 +46,17 @@ export function emptyFor(s: GamePosition, u: Unit, p: Point = u) {
     )
   );
 }
+/** 优先使用实际穿行者；只在旧局面缺少记录时按占位推断。 */
+export function transitUnit(s: GamePosition) {
+  if (s.transitUnitId) return s.units.find((u) => u.id === s.transitUnitId);
+  return s.units.find(
+    (u) =>
+      u.owner === s.active &&
+      (hasTrait(u, 'u12p') || hasTrait(u, 'u12')) &&
+      u.mode === 'move' &&
+      !emptyFor(s, u),
+  );
+}
 function canEnter(s: GamePosition, u: Unit, p: Point) {
   // 大体型不能重叠；单格冲撞者可暂时穿过任意层的占位。
   return u.size > 1 ? canPlace(s, u, p) : inside(p);

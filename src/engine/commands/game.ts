@@ -1,5 +1,5 @@
 import { own, isRuntimePosition, exportOwnedPosition } from '../runtime/position';
-import { emptyFor } from './movement';
+import { emptyFor, transitUnit } from './movement';
 import {
   ALL_CELLS,
   attackPath,
@@ -105,16 +105,6 @@ function projectedAttacker(
   const u = { ...actor(s, unitId, (position, unit) => (stats = attributes(position, unit))) };
   chooseMode(s, u, 'attack', stats);
   return { u, stats };
-}
-function transitUnit(s: GamePosition) {
-  if (s.transitUnitId) return s.units.find((u) => u.id === s.transitUnitId);
-  return s.units.find(
-    (u) =>
-      u.owner === s.active &&
-      (hasTrait(u, 'u12p') || hasTrait(u, 'u12')) &&
-      u.mode === 'move' &&
-      !emptyFor(s, u),
-  );
 }
 function inspectionQueries(s: GamePosition, attributes: typeof getStats = getStats) {
   let deterministicAttack: boolean | undefined;

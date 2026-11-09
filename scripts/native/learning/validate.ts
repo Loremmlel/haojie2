@@ -11,6 +11,7 @@ import { classicRelations } from '../../../src/ai/classic/relations';
 import { imagined, positionKey, fingerprint } from '../../../src/ai/observation';
 import { explainEvaluation } from '../../../src/ai/evaluation/evaluate';
 import { definition } from '../../../src/engine/catalog';
+import { commandError } from '../../../src/engine/commands/game';
 import { iterateCandidateGroups } from '../../../src/ai/planning/candidates';
 import { decide } from '../../../src/ai/planning/search';
 
@@ -107,6 +108,12 @@ try {
           simulations,
         });
         assert.deepEqual(right, left, `${name} ${difficulty} search`);
+        if (job.state.transitUnitId && !job.state.pending.length) {
+          assert.ok(left.command, `${name} ${difficulty}: 冲撞必须能继续移动`);
+          assert.equal(left.command.type, 'move', name);
+          assert.equal(left.command.unitId, job.state.transitUnitId, name);
+          assert.equal(commandError(job.state, left.command), null, name);
+        }
       }
     }
     if (process.argv.includes('--evaluation')) {

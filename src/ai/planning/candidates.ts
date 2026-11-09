@@ -17,6 +17,7 @@ import {
 import { regularSummonCommands, summonChoices } from './shrines';
 import { availableSyntheses, synthesisDestinations } from '../../engine/setup/synthesis';
 import { canSkipReaction, hutSpawnPoints } from '../../engine/commands/reactions';
+import { transitUnit } from '../../engine/commands/movement';
 import { piercing, healingAttack } from '../../engine/core/state';
 import { baseCoverValue, payloadCoverValue } from '../evaluation/threats';
 import { definition } from '../../engine/catalog';
@@ -686,14 +687,7 @@ export function* iterateCandidateGroups(
       for (const a of cardActions(s, c)) if (a.command.type === 'reroll') yield* emit(a);
     return;
   }
-  const transit = allPieces(s).find(
-    (u) =>
-      u.owner === s.active &&
-      hasTrait(u, 'u12p') &&
-      !hasTrait(u, 'u12') &&
-      u.mode === 'move' &&
-      !canPlace(s, u, u),
-  );
+  const transit = transitUnit(s);
   if (transit) {
     for (const a of unitActions(s, transit)) if (a.id === 'move') yield* emit(a);
     return;
