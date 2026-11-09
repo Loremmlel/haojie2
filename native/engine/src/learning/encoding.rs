@@ -5,7 +5,7 @@ use crate::{
     options::{array, text},
 };
 use serde_json::Value;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 pub const STATE_WIDTH: usize = 128;
 pub const ACTION_WIDTH: usize = 576;
@@ -401,17 +401,20 @@ fn command_rows(
 
 pub const RELATION_WIDTH: usize = 8;
 pub const OPTION_WIDTH: usize = ACTION_WIDTH + STATE_WIDTH;
+pub struct Bundle {
+    pub states: Arc<[f32]>,
+    pub records: Arc<[f32]>,
+    pub owners: Arc<[f32]>,
+    pub relations: Arc<[f32]>,
+}
+
 pub struct Compact {
-    pub states: Vec<f32>,
-    pub records: Vec<f32>,
-    pub owners: Vec<f32>,
-    pub relations: Vec<f32>,
     indices: HashMap<String, usize>,
     raw: Vec<[f32; STATE_WIDTH]>,
     mapping: Vec<usize>,
 }
 impl Compact {
-    pub fn new(state: &State, catalog: &Catalog) -> Result<Self, String> {
+    pub fn new(state: &State, catalog: &Catalog) -> Result<(Self, Bundle), String> {
         let _scope = timing::scope(Phase::StateEncoding);
         let public = timing::measure(Phase::PublicView, || {
             crate::runtime::public_view(state, crate::runtime::viewer(state))
@@ -547,15 +550,13 @@ impl Compact {
             }
         }
         drop(geometry_scope);
-        Ok(Self {
+        let bundle = Bundle {
             states: entities.iter().flat_map(|i| raw[*i]).collect(),
-            records,
-            owners,
-            relations,
-            indices,
-            raw,
-            mapping,
-        })
+            records: records.into(),
+            owners: owners.into(),
+            relations: relations.into(),
+        };
+        Ok((Self { indices, raw, mapping }, bundle))
     }
     pub fn options(
         &self,

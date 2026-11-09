@@ -16,6 +16,7 @@ pub trait Environment {
     fn encode(&mut self, id: u64) -> Result<(Info, Arc<Bundle>), String>;
     fn decode(&mut self, id: u64, prefix: usize) -> Result<Front, String>;
     fn sample(&mut self, id: u64, command: &Command, seed: u32) -> Result<Info, String>;
+    fn discard_sample(&mut self, id: u64);
 }
 
 #[cfg(test)]
@@ -31,6 +32,7 @@ mod tests {
         conditional: bool,
         encoded: HashMap<u64, usize>,
         maximum_position: u64,
+        discarded: usize,
     }
     impl Graph {
         fn new(actions: usize) -> Self {
@@ -42,6 +44,7 @@ mod tests {
                 conditional: false,
                 encoded: HashMap::new(),
                 maximum_position: 0,
+                discarded: 0,
             }
         }
         fn front(next: Vec<usize>) -> Front {
@@ -125,6 +128,9 @@ mod tests {
             self.maximum_position = self.maximum_position.max(next);
             self.info(next)
         }
+        fn discard_sample(&mut self, _: u64) {
+            self.discarded += 1;
+        }
     }
     fn run(graph: &mut Graph, simulations: usize, depth: usize) -> SearchResult {
         let mut rng = super::super::random::testing();
@@ -172,6 +178,7 @@ mod tests {
         let result = run(&mut graph, 1100, 8);
         assert_eq!(result.edges.len(), 64);
         assert_eq!(graph.encoded, HashMap::from([(0, 1)]));
+        assert_eq!(graph.discarded, 1100);
         assert!((result.edges.iter().map(|e| e.prior).sum::<f64>() - 1.0).abs() < 1e-7);
         assert_eq!(result.supervision.len(), 1);
         assert_eq!(result.supervision[0].target.len(), 64);
@@ -209,6 +216,7 @@ mod tests {
         graph.cycle = true;
         let result = run(&mut graph, 20, 8);
         assert_eq!(result.transpositions, 20);
+        assert_eq!(graph.discarded, 20);
         assert_eq!(result.graph_nodes, 1);
         assert_eq!(result.edges.iter().map(|e| e.visits).sum::<u64>(), 20);
         assert!((result.edges.iter().map(|e| e.total).sum::<f64>() - 5.0).abs() < 1e-8);
@@ -224,13 +232,16 @@ impl Environment for Host {
         self.info_typed(id)
     }
     fn encode(&mut self, id: u64) -> Result<(Info, Arc<Bundle>), String> {
-        self.encode_typed(id)
+        self.encode_typed(id, id == 0)
     }
     fn decode(&mut self, id: u64, prefix: usize) -> Result<Front, String> {
         self.decode_typed(id, prefix)
     }
     fn sample(&mut self, id: u64, command: &Command, seed: u32) -> Result<Info, String> {
         self.sample(id, command, seed)
+    }
+    fn discard_sample(&mut self, id: u64) {
+        self.discard_sample(id);
     }
 }
 
@@ -276,7 +287,7 @@ pub struct SearchResult {
 
 struct Prefix {
     next: Vec<usize>,
-    options: Arc<[f32]>,
+    options: Option<Arc<[f32]>>,
     prior: Vec<f64>,
     remaining: Vec<f64>,
 }
@@ -289,7 +300,6 @@ struct Edge {
 }
 struct Node {
     info: Info,
-    bundle: Arc<Bundle>,
     value: f64,
     version: i64,
     prefixes: IndexMap<usize, Prefix>,
@@ -299,10 +309,9 @@ struct Node {
     available: f64,
 }
 impl Node {
-    fn new(info: Info, bundle: Arc<Bundle>) -> Self {
+    fn new(info: Info) -> Self {
         Self {
             info,
-            bundle,
             value: 0.0,
             version: -1,
             prefixes: IndexMap::new(),
@@ -312,12 +321,12 @@ impl Node {
             available: 1.0,
         }
     }
-    fn request(&self, kind: u32, options: Arc<[f32]>) -> Request {
+    fn request(&self, kind: u32, bundle: Option<Arc<Bundle>>, options: Arc<[f32]>) -> Request {
         Request {
             kind,
             context: self.info.id,
             key: self.info.key.clone(),
-            bundle: (kind == 0).then(|| self.bundle.clone()),
+            bundle,
             options,
         }
     }
@@ -352,7 +361,7 @@ enum Pending {
         node: usize,
         prefix: usize,
         next: Vec<usize>,
-        options: Arc<[f32]>,
+        options: Option<Arc<[f32]>>,
     },
 }
 
@@ -362,6 +371,7 @@ pub struct Search {
     noise: bool,
     started: bool,
     nodes: Vec<Node>,
+    root_bundle: Option<Arc<Bundle>>,
     graph: HashMap<String, usize>,
     completed: usize,
     current: Option<usize>,
@@ -425,6 +435,7 @@ impl Search {
             noise,
             started: false,
             nodes: vec![],
+            root_bundle: None,
             graph: HashMap::new(),
             completed: 0,
             current: None,
@@ -458,7 +469,7 @@ impl Search {
         node: usize,
         prefix: usize,
         next: Vec<usize>,
-        options: Arc<[f32]>,
+        options: Option<Arc<[f32]>>,
         logits: Option<&[f32]>,
         rng: &mut Random,
     ) -> Result<(), String> {
@@ -523,7 +534,7 @@ impl Search {
             .filter_map(|(prefix, target)| {
                 let total = sum_f64(&target);
                 (total > 0.0).then(|| Supervision {
-                    options: root.prefixes[&prefix].options.clone(),
+                    options: root.prefixes[&prefix].options.as_ref().unwrap().clone(),
                     target: target
                         .into_iter()
                         .map(|v| (v / total) as f32)
@@ -535,7 +546,7 @@ impl Search {
             .collect();
         Ok(SearchResult {
             info: root.info.clone(),
-            bundle: Some(root.bundle.clone()),
+            bundle: self.root_bundle.take(),
             edges: root
                 .edges
                 .iter()
@@ -618,12 +629,13 @@ impl Search {
             }
             let (info, bundle) = environment.encode(0)?;
             self.graph.insert(info.key.clone(), 0);
-            self.nodes.push(Node::new(info, bundle));
+            self.nodes.push(Node::new(info));
+            self.root_bundle = Some(bundle.clone());
             self.pending = Some(Pending::Encode {
                 node: 0,
                 root: true,
             });
-            return Ok(Progress::Request(self.nodes[0].request(0, Arc::from([]))));
+            return Ok(Progress::Request(self.nodes[0].request(0, Some(bundle), Arc::from([]))));
         }
 
         loop {
@@ -698,17 +710,19 @@ impl Search {
                         return Err("合法解码前缀没有后继".into());
                     }
                     if front.next.len() > 1 {
-                        let request = self.nodes[node].request(1, front.options.clone());
+                        // 只有根节点的多选特征会写入监督样本。
+                        let options = (node == 0).then(|| front.options.clone());
+                        let request = self.nodes[node].request(1, None, front.options);
                         self.pending = Some(Pending::Decode {
                             node,
                             prefix,
                             next: front.next,
-                            options: front.options,
+                            options,
                         });
                         self.expansion = Some(expansion);
                         return Ok(Progress::Request(request));
                     }
-                    self.add_prefix(node, prefix, front.next, front.options, None, rng)?;
+                    self.add_prefix(node, prefix, front.next, None, None, rng)?;
                 }
                 let branch = &self.nodes[node].prefixes[&prefix];
                 let mut weights: Vec<_> = branch
@@ -743,6 +757,7 @@ impl Search {
             )?;
             self.path.push((node, edge));
             if let Some(winner) = &result.winner {
+                environment.discard_sample(result.id);
                 let value = if winner == "draw" {
                     0.0
                 } else if winner.as_u64() == Some(result.actor as u64) {
@@ -754,6 +769,8 @@ impl Search {
                 continue;
             }
             if let Some(&child) = self.graph.get(&result.key) {
+                // 转置沿用图里已有的局面；本次样本从未进入图。
+                environment.discard_sample(result.id);
                 self.transpositions += 1;
                 if self.seen.contains(&result.key) {
                     self.backup(self.nodes[child].info.actor, self.nodes[child].value);
@@ -766,13 +783,13 @@ impl Search {
                 let (info, bundle) = environment.encode(result.id)?;
                 let child = self.nodes.len();
                 self.graph.insert(info.key.clone(), child);
-                self.nodes.push(Node::new(info, bundle));
+                self.nodes.push(Node::new(info));
                 self.pending = Some(Pending::Encode {
                     node: child,
                     root: false,
                 });
                 return Ok(Progress::Request(
-                    self.nodes[child].request(0, Arc::from([])),
+                    self.nodes[child].request(0, Some(bundle), Arc::from([])),
                 ));
             }
         }

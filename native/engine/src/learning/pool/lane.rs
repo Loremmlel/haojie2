@@ -128,7 +128,7 @@ impl Lane {
                     .to_owned();
                 let command = self.host.teacher_next(&difficulty)?;
                 let sample = if self.game["opponent"] == "demo" && !evaluation {
-                    let (info, bundle) = self.host.encode_typed(0)?;
+                    let (info, bundle) = self.host.encode_typed(0, true)?;
                     Some((info, bundle, self.teacher_decisions(&command, 1.)?, -1, 0))
                 } else {
                     None

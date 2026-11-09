@@ -30,13 +30,7 @@ impl Info {
     }
 }
 
-#[derive(Clone)]
-pub struct Bundle {
-    pub states: Arc<[f32]>,
-    pub records: Arc<[f32]>,
-    pub owners: Arc<[f32]>,
-    pub relations: Arc<[f32]>,
-}
+pub use encoding::Bundle;
 pub struct Front {
     pub command: Option<Command>,
     pub next: Vec<usize>,
@@ -59,6 +53,15 @@ impl Position {
             bundle: None,
             decoder: None,
         }
+    }
+
+    fn encoding(&mut self, catalog: &Catalog) -> Result<&encoding::Compact, String> {
+        if self.encoding.is_none() {
+            let (encoding, bundle) = encoding::Compact::new(&self.state, catalog)?;
+            self.encoding = Some(encoding);
+            self.bundle = Some(Arc::new(bundle));
+        }
+        Ok(self.encoding.as_ref().unwrap())
     }
 }
 
@@ -130,23 +133,26 @@ impl Host {
         })
     }
 
-    pub fn encode_typed(&mut self, id: u64) -> Result<(Info, Arc<Bundle>), String> {
+    pub fn encode_typed(
+        &mut self,
+        id: u64,
+        keep_bundle: bool,
+    ) -> Result<(Info, Arc<Bundle>), String> {
         let _scope = timing::scope(Phase::HostEncode);
         let p = self.positions.get_mut(&id).ok_or("unknown position")?;
-        if p.encoding.is_none() {
-            p.encoding = Some(encoding::Compact::new(&p.state, &self.catalog)?);
+        p.encoding(&self.catalog)?;
+        let bundle = if keep_bundle {
+            p.bundle.clone()
+        } else {
+            p.bundle.take()
         }
-        if p.bundle.is_none() {
-            let e = p.encoding.as_ref().unwrap();
-            p.bundle = Some(Arc::new(Bundle {
-                states: e.states.clone().into(),
-                records: e.records.clone().into(),
-                owners: e.owners.clone().into(),
-                relations: e.relations.clone().into(),
-            }));
-        }
-        let bundle = p.bundle.as_ref().unwrap().clone();
+        .ok_or("局面张量已交给神经请求")?;
         Ok((self.info_typed(id)?, bundle))
+    }
+
+    pub fn discard_sample(&mut self, id: u64) {
+        debug_assert_ne!(id, 0);
+        self.positions.remove(&id);
     }
 
     pub fn decode_typed(&mut self, id: u64, prefix: usize) -> Result<Front, String> {
@@ -176,10 +182,7 @@ impl Host {
                 focus: front.focus,
             });
         }
-        if p.encoding.is_none() {
-            p.encoding = Some(encoding::Compact::new(&p.state, &self.catalog)?);
-        }
-        let options = p.encoding.as_ref().unwrap().options(
+        let options = p.encoding(&self.catalog)?.options(
             &self.catalog,
             &front.commands,
             front.stage,
@@ -336,7 +339,7 @@ impl Host {
         let id = request["id"].as_u64().unwrap_or(0);
         match request["op"].as_str().unwrap_or("") {
             "encode" => {
-                let (info, bundle) = self.encode_typed(id)?;
+                let (info, bundle) = self.encode_typed(id, true)?;
                 self.tensor.clear();
                 for array in [
                     &bundle.states,

@@ -206,10 +206,10 @@ fn handle(
         "classic-relations" => {
             let catalog = catalog.as_ref().ok_or("initialize first")?;
             let state = crate::options::position(&request["observation"])?;
-            let encoding = crate::learning::encoding::Compact::new(&state, catalog)?;
+            let (_, bundle) = crate::learning::encoding::Compact::new(&state, catalog)?;
             Ok(
-                json!({"entities":encoding.states.len()/crate::learning::encoding::STATE_WIDTH,
-                      "records":encoding.owners.len(),"relations":encoding.relations}),
+                json!({"entities":bundle.states.len()/crate::learning::encoding::STATE_WIDTH,
+                      "records":bundle.owners.len(),"relations":bundle.relations}),
             )
         }
         "classic-decode" => {
